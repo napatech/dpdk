@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017-2019 Intel Corporation
 
+fs = import('fs')
+
 # Defines the order of dependencies evaluation
 subdirs = [
         'common',
@@ -19,6 +21,7 @@ subdirs = [
         'vdpa',           # depends on common, bus and mempool.
         'event',          # depends on common, bus, mempool and net.
         'baseband',       # depends on common and bus.
+        'gpu',            # depends on common and bus.
 ]
 
 if meson.is_cross_build()
@@ -39,6 +42,8 @@ endif
 
 # these drivers must always be enabled, otherwise the build breaks
 always_enable = ['bus/pci', 'bus/vdev']
+# we always need a mempool driver, and ring is default, so make it mandatory
+always_enable += ['mempool/ring']
 enable_drivers += always_enable
 
 default_cflags = machine_args
@@ -48,6 +53,8 @@ default_cflags += ['-DALLOW_INTERNAL_API']
 if cc.has_argument('-Wno-format-truncation')
     default_cflags += '-Wno-format-truncation'
 endif
+
+dpdk_drivers_build_dir = meson.current_build_dir()
 
 foreach subpath:subdirs
     drivers = []
@@ -86,6 +93,7 @@ foreach subpath:subdirs
         name = drv
         sources = []
         headers = []
+        driver_sdk_headers = [] # public headers included by drivers
         objs = []
         cflags = default_cflags
         includes = [include_directories(drv_path)]
@@ -99,6 +107,8 @@ foreach subpath:subdirs
         # static builds.
         ext_deps = []
         pkgconfig_extra_libs = []
+        testpmd_sources = []
+        pmd_supports_disable_iova_as_pa = false
 
         if not enable_drivers.contains(drv_path)
             build = false
@@ -116,6 +126,11 @@ foreach subpath:subdirs
             # pull in driver directory which should update all the local variables
             subdir(drv_path)
 
+            if dpdk_conf.get('RTE_IOVA_AS_PA') == 0 and not pmd_supports_disable_iova_as_pa and not always_enable.contains(drv_path)
+                build = false
+                reason = 'driver does not support disabling IOVA as PA mode'
+            endif
+
             # get dependency objs from strings
             shared_deps = ext_deps
             static_deps = ext_deps
@@ -126,6 +141,9 @@ foreach subpath:subdirs
                 if not is_variable('shared_rte_' + d)
                     build = false
                     reason = 'missing internal dependency, "@0@"'.format(d)
+                    if dpdk_libs_deprecated.contains(d)
+                        reason += ' (deprecated lib)'
+                    endif
                     message('Disabling @1@ [@2@]: missing internal dependency "@0@"'
                             .format(d, name, 'drivers/' + drv_path))
                 else
@@ -154,6 +172,13 @@ foreach subpath:subdirs
         dpdk_extra_ldflags += pkgconfig_extra_libs
 
         install_headers(headers)
+        if get_option('enable_driver_sdk')
+            install_headers(driver_sdk_headers)
+        endif
+
+        if headers.length() > 0
+            dpdk_includes += include_directories(drv_path)
+        endif
 
         # generate pmdinfo sources by building a temporary
         # lib and then running pmdinfogen on the contents of
@@ -183,37 +208,41 @@ foreach subpath:subdirs
         version_map = '@0@/@1@/version.map'.format(meson.current_source_dir(), drv_path)
         implib = 'lib' + lib_name + '.dll.a'
 
-        def_file = custom_target(lib_name + '_def',
-                command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],
-                input: version_map,
-                output: '@0@_exports.def'.format(lib_name))
+        lk_deps = []
+        lk_args = []
+        if fs.is_file(version_map)
+            def_file = custom_target(lib_name + '_def',
+                    command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],
+                    input: version_map,
+                    output: '@0@_exports.def'.format(lib_name))
 
-        mingw_map = custom_target(lib_name + '_mingw',
-                command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],
-                input: version_map,
-                output: '@0@_mingw.map'.format(lib_name))
+            mingw_map = custom_target(lib_name + '_mingw',
+                    command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],
+                    input: version_map,
+                    output: '@0@_mingw.map'.format(lib_name))
 
-        lk_deps = [version_map, def_file, mingw_map]
-        if is_windows
-            if is_ms_linker
-                lk_args = ['-Wl,/def:' + def_file.full_path()]
-                if meson.version().version_compare('<0.54.0')
-                    lk_args += ['-Wl,/implib:drivers\\' + implib]
+            lk_deps = [version_map, def_file, mingw_map]
+            if is_windows
+                if is_ms_linker
+                    lk_args = ['-Wl,/def:' + def_file.full_path()]
+                    if meson.version().version_compare('<0.54.0')
+                        lk_args += ['-Wl,/implib:drivers\\' + implib]
+                    endif
+                else
+                    lk_args = ['-Wl,--version-script=' + mingw_map.full_path()]
                 endif
             else
-                lk_args = ['-Wl,--version-script=' + mingw_map.full_path()]
-            endif
-        else
-            lk_args = ['-Wl,--version-script=' + version_map]
-            if developer_mode
-                # on unix systems check the output of the
-                # check-symbols.sh script, using it as a
-                # dependency of the .so build
-                lk_deps += custom_target(lib_name + '.sym_chk',
-                        command: [check_symbols, version_map, '@INPUT@'],
-                        capture: true,
-                        input: static_lib,
-                        output: lib_name + '.sym_chk')
+                lk_args = ['-Wl,--version-script=' + version_map]
+                if developer_mode
+                    # on unix systems check the output of the
+                    # check-symbols.sh script, using it as a
+                    # dependency of the .so build
+                    lk_deps += custom_target(lib_name + '.sym_chk',
+                            command: [check_symbols, version_map, '@INPUT@'],
+                            capture: true,
+                            input: static_lib,
+                            output: lib_name + '.sym_chk')
+                endif
             endif
         endif
 
@@ -242,7 +271,15 @@ foreach subpath:subdirs
 
         set_variable('shared_@0@'.format(lib_name), shared_dep)
         set_variable('static_@0@'.format(lib_name), static_dep)
+        # for drivers, we only need to add dependency objects for static libs,
+        # shared lib drivers are not linked in
+        dpdk_static_lib_deps += static_dep
+
         dependency_name = ''.join(lib_name.split('rte_'))
+        if testpmd_sources.length() != 0
+            testpmd_drivers_sources += testpmd_sources
+            testpmd_drivers_deps += dependency_name
+        endif
         if developer_mode
             message('drivers/@0@: Defining dependency "@1@"'.format(
                     drv_path, dependency_name))

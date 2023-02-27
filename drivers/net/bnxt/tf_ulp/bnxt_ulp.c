@@ -35,6 +35,7 @@ STAILQ_HEAD(, bnxt_ulp_session_state) bnxt_ulp_session_list =
 static pthread_mutex_t bnxt_ulp_global_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Spin lock to protect context global list */
+uint32_t bnxt_ulp_ctxt_lock_created;
 rte_spinlock_t bnxt_ulp_ctxt_lock;
 TAILQ_HEAD(cntx_list_entry_list, ulp_context_list_entry);
 static struct cntx_list_entry_list ulp_cntx_list =
@@ -301,13 +302,14 @@ bnxt_ulp_tf_shared_session_resources_get(struct bnxt_ulp_context *ulp_ctx,
 }
 
 int32_t
-bnxt_ulp_cntxt_app_caps_init(struct bnxt_ulp_context *ulp_ctx,
+bnxt_ulp_cntxt_app_caps_init(struct bnxt *bp,
 			     uint8_t app_id, uint32_t dev_id)
 {
 	struct bnxt_ulp_app_capabilities_info *info;
 	uint32_t num = 0;
 	uint16_t i;
 	bool found = false;
+	struct bnxt_ulp_context *ulp_ctx = bp->ulp_ctx;
 
 	if (ULP_APP_DEV_UNSUPPORTED_ENABLED(ulp_ctx->cfg_data->ulp_flags)) {
 		BNXT_TF_DBG(ERR, "APP ID %d, Device ID: 0x%x not supported.\n",
@@ -334,6 +336,15 @@ bnxt_ulp_cntxt_app_caps_init(struct bnxt_ulp_context *ulp_ctx,
 		if (info[i].flags & BNXT_ULP_APP_CAP_UNICAST_ONLY)
 			ulp_ctx->cfg_data->ulp_flags |=
 				BNXT_ULP_APP_UNICAST_ONLY;
+		if (info[i].flags & BNXT_ULP_APP_CAP_SOCKET_DIRECT) {
+			/* Enable socket direction only if MR is enabled in fw*/
+			if (BNXT_MULTIROOT_EN(bp)) {
+				ulp_ctx->cfg_data->ulp_flags |=
+					BNXT_ULP_APP_SOCKET_DIRECT;
+				BNXT_TF_DBG(DEBUG,
+					    "Socket Direct feature is enabled");
+			}
+		}
 	}
 	if (!found) {
 		BNXT_TF_DBG(ERR, "APP ID %d, Device ID: 0x%x not supported.\n",
@@ -452,7 +463,7 @@ ulp_ctx_shared_session_open(struct bnxt *bp,
 
 	parms.shadow_copy = true;
 	parms.bp = bp;
-	if (app_id == 0 || app_id == 3)
+	if (app_id == 0)
 		parms.wc_num_slices = TF_WC_TCAM_2_SLICE_PER_ROW;
 	else
 		parms.wc_num_slices = TF_WC_TCAM_1_SLICE_PER_ROW;
@@ -574,7 +585,7 @@ ulp_ctx_session_open(struct bnxt *bp,
 		return rc;
 
 	params.bp = bp;
-	if (app_id == 0 || app_id == 3)
+	if (app_id == 0)
 		params.wc_num_slices = TF_WC_TCAM_2_SLICE_PER_ROW;
 	else
 		params.wc_num_slices = TF_WC_TCAM_1_SLICE_PER_ROW;
@@ -832,7 +843,7 @@ ulp_ctx_init(struct bnxt *bp,
 	}
 	BNXT_TF_DBG(DEBUG, "Ulp initialized with app id %d\n", bp->app_id);
 
-	rc = bnxt_ulp_cntxt_app_caps_init(bp->ulp_ctx, bp->app_id, devid);
+	rc = bnxt_ulp_cntxt_app_caps_init(bp, bp->app_id, devid);
 	if (rc) {
 		BNXT_TF_DBG(ERR, "Unable to set caps for app(%x)/dev(%x)\n",
 			    bp->app_id, devid);
@@ -1010,13 +1021,15 @@ ulp_context_initialized(struct bnxt_ulp_session_state *session, bool *init)
  * pointer, otherwise allocate a new session.
  */
 static struct bnxt_ulp_session_state *
-ulp_get_session(struct rte_pci_addr *pci_addr)
+ulp_get_session(struct bnxt *bp, struct rte_pci_addr *pci_addr)
 {
 	struct bnxt_ulp_session_state *session;
 
+	/* if multi root capability is enabled, then ignore the pci bus id */
 	STAILQ_FOREACH(session, &bnxt_ulp_session_list, next) {
 		if (session->pci_info.domain == pci_addr->domain &&
-		    session->pci_info.bus == pci_addr->bus) {
+		    (BNXT_MULTIROOT_EN(bp) ||
+		    session->pci_info.bus == pci_addr->bus)) {
 			return session;
 		}
 	}
@@ -1044,7 +1057,7 @@ ulp_session_init(struct bnxt *bp,
 
 	pthread_mutex_lock(&bnxt_ulp_global_mutex);
 
-	session = ulp_get_session(pci_addr);
+	session = ulp_get_session(bp, pci_addr);
 	if (!session) {
 		/* Not Found the session  Allocate a new one */
 		session = rte_zmalloc("bnxt_ulp_session",
@@ -1387,16 +1400,16 @@ bnxt_ulp_port_init(struct bnxt *bp)
 	uint32_t ulp_flags;
 	int32_t rc = 0;
 
-	if (!BNXT_PF(bp) && !BNXT_VF_IS_TRUSTED(bp)) {
-		BNXT_TF_DBG(ERR,
-			    "Skip ulp init for port: %d, not a TVF or PF\n",
+	if (!BNXT_TRUFLOW_EN(bp)) {
+		BNXT_TF_DBG(DEBUG,
+			    "Skip ulp init for port: %d, TF is not enabled\n",
 			    bp->eth_dev->data->port_id);
 		return rc;
 	}
 
-	if (!BNXT_TRUFLOW_EN(bp)) {
-		BNXT_TF_DBG(ERR,
-			    "Skip ulp init for port: %d, truflow is not enabled\n",
+	if (!BNXT_PF(bp) && !BNXT_VF_IS_TRUSTED(bp)) {
+		BNXT_TF_DBG(DEBUG,
+			    "Skip ulp init for port: %d, not a TVF or PF\n",
 			    bp->eth_dev->data->port_id);
 		return rc;
 	}
@@ -1481,13 +1494,6 @@ bnxt_ulp_port_init(struct bnxt *bp)
 		goto jump_to_error;
 	}
 
-	if (devid != BNXT_ULP_DEVICE_ID_THOR && BNXT_ACCUM_STATS_EN(bp))
-		bp->ulp_ctx->cfg_data->accum_stats = true;
-
-	BNXT_TF_DBG(DEBUG, "BNXT Port:%d ULP port init, accum_stats:%d\n",
-		    bp->eth_dev->data->port_id,
-		    bp->ulp_ctx->cfg_data->accum_stats);
-
 	/* set the unicast mode */
 	if (bnxt_ulp_cntxt_ptr2_ulp_flags_get(bp->ulp_ctx, &ulp_flags)) {
 		BNXT_TF_DBG(ERR, "Error in getting ULP context flags\n");
@@ -1518,16 +1524,16 @@ bnxt_ulp_port_deinit(struct bnxt *bp)
 	struct rte_pci_device *pci_dev;
 	struct rte_pci_addr *pci_addr;
 
-	if (!BNXT_PF(bp) && !BNXT_VF_IS_TRUSTED(bp)) {
-		BNXT_TF_DBG(ERR,
-			    "Skip ULP deinit port:%d, not a TVF or PF\n",
+	if (!BNXT_TRUFLOW_EN(bp)) {
+		BNXT_TF_DBG(DEBUG,
+			    "Skip ULP deinit for port:%d, TF is not enabled\n",
 			    bp->eth_dev->data->port_id);
 		return;
 	}
 
-	if (!BNXT_TRUFLOW_EN(bp)) {
-		BNXT_TF_DBG(ERR,
-			    "Skip ULP deinit for port:%d, truflow is not enabled\n",
+	if (!BNXT_PF(bp) && !BNXT_VF_IS_TRUSTED(bp)) {
+		BNXT_TF_DBG(DEBUG,
+			    "Skip ULP deinit port:%d, not a TVF or PF\n",
 			    bp->eth_dev->data->port_id);
 		return;
 	}
@@ -1540,14 +1546,11 @@ bnxt_ulp_port_deinit(struct bnxt *bp)
 	BNXT_TF_DBG(DEBUG, "BNXT Port:%d ULP port deinit\n",
 		    bp->eth_dev->data->port_id);
 
-	/* Free the ulp context in the context entry list */
-	bnxt_ulp_cntxt_list_del(bp->ulp_ctx);
-
 	/* Get the session details  */
 	pci_dev = RTE_DEV_TO_PCI(bp->eth_dev->device);
 	pci_addr = &pci_dev->addr;
 	pthread_mutex_lock(&bnxt_ulp_global_mutex);
-	session = ulp_get_session(pci_addr);
+	session = ulp_get_session(bp, pci_addr);
 	pthread_mutex_unlock(&bnxt_ulp_global_mutex);
 
 	/* session not found then just exit */
@@ -1580,6 +1583,9 @@ bnxt_ulp_port_deinit(struct bnxt *bp)
 			bnxt_ulp_deinit(bp, session);
 		}
 	}
+
+	/* Free the ulp context in the context entry list */
+	bnxt_ulp_cntxt_list_del(bp->ulp_ctx);
 
 	/* clean up the session */
 	ulp_session_deinit(session);
@@ -2005,9 +2011,10 @@ bnxt_ulp_cntxt_ha_enabled(struct bnxt_ulp_context *ulp_ctx)
 static int32_t
 bnxt_ulp_cntxt_list_init(void)
 {
-	/* Create the cntxt spin lock */
-	rte_spinlock_init(&bnxt_ulp_ctxt_lock);
-
+	/* Create the cntxt spin lock only once*/
+	if (!bnxt_ulp_ctxt_lock_created)
+		rte_spinlock_init(&bnxt_ulp_ctxt_lock);
+	bnxt_ulp_ctxt_lock_created = 1;
 	return 0;
 }
 
@@ -2046,15 +2053,16 @@ bnxt_ulp_cntxt_list_del(struct bnxt_ulp_context *ulp_ctx)
 }
 
 struct bnxt_ulp_context *
-bnxt_ulp_cntxt_entry_acquire(void)
+bnxt_ulp_cntxt_entry_acquire(void *arg)
 {
 	struct ulp_context_list_entry	*entry;
 
 	/* take a lock and get the first ulp context available */
 	if (rte_spinlock_trylock(&bnxt_ulp_ctxt_lock)) {
 		TAILQ_FOREACH(entry, &ulp_cntx_list, next)
-			if (entry->ulp_ctx)
+			if (entry->ulp_ctx->cfg_data == arg)
 				return entry->ulp_ctx;
+		rte_spinlock_unlock(&bnxt_ulp_ctxt_lock);
 	}
 	return NULL;
 }

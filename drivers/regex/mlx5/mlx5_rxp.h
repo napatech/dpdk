@@ -5,9 +5,14 @@
 #ifndef RTE_PMD_MLX5_REGEX_RXP_H_
 #define RTE_PMD_MLX5_REGEX_RXP_H_
 
+#define MLX5_RXP_BF2_IDENTIFIER 0x0
+#define MLX5_RXP_BF3_IDENTIFIER 0x1
 #define MLX5_RXP_MAX_JOB_LENGTH	16384
 #define MLX5_RXP_MAX_SUBSETS 4095
 #define MLX5_RXP_CSR_NUM_ENTRIES 31
+#define MLX5_RXP_BF2_ROF_VERSION_STRING 0x07055254
+#define MLX5_RXP_BF3_ROF_VERSION_STRING 0x00065254
+#define MLX5_RXP_BF4_ROF_VERSION_STRING 0x00075254
 
 #define MLX5_RXP_CTRL_TYPE_MASK	7
 #define MLX5_RXP_CTRL_TYPE_JOB_DESCRIPTOR 0
@@ -63,7 +68,7 @@ struct mlx5_rxp_match_tuple {
 
 struct mlx5_rxp_response {
 	struct mlx5_rxp_response_desc header;
-	struct mlx5_rxp_match_tuple matches[0];
+	struct mlx5_rxp_match_tuple matches[];
 };
 
 #define MLX5_RXP_MAX_MATCHES 254
@@ -113,7 +118,7 @@ struct mlx5_rxp_rof {
 struct mlx5_rxp_ctl_rules_pgm {
 	struct mlx5_rxp_ctl_hdr hdr;
 	uint32_t count;
-	struct mlx5_rxp_rof_entry rules[0];
+	struct mlx5_rxp_rof_entry rules[];
 } __rte_packed;
 
 /* RXP programming mode setting. */
@@ -129,9 +134,9 @@ enum mlx5_rxp_program_mode {
 #define MLX5_RXP_EM_COUNT 1u /* Extra External Memories to use. */
 #define MLX5_RXP_DB_NOT_ASSIGNED 0xFF
 
-struct mlx5_regex_umem {
+struct mlx5_regex_mkey {
 	struct mlx5dv_devx_umem *umem;
-	uint32_t id;
+	struct mlx5_devx_obj *mkey;
 	uint64_t offset;
 };
 

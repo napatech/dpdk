@@ -158,6 +158,9 @@ int tf_msg_session_qcfg(struct tf *tfp);
  * [out] resv_strategy
  *   Pointer to the reservation strategy
  *
+ * [out] sram_profile
+ *   Pointer to the sram profile
+ *
  * Returns:
  *   0 on Success else internal Truflow error
  */
@@ -166,7 +169,8 @@ int tf_msg_session_resc_qcaps(struct tf *tfp,
 			      enum tf_dir dir,
 			      uint16_t size,
 			      struct tf_rm_resc_req_entry *query,
-			      enum tf_rm_resc_resv_strategy *resv_strategy);
+			      enum tf_rm_resc_resv_strategy *resv_strategy,
+			      uint8_t *sram_profile);
 
 /**
  * Sends session HW resource allocation request to TF Firmware
@@ -652,7 +656,8 @@ int tf_msg_get_tbl_entry(struct tf *tfp,
 			 uint16_t hcapi_type,
 			 uint16_t size,
 			 uint8_t *data,
-			 uint32_t index);
+			 uint32_t index,
+			 bool clear_on_read);
 
 /* HWRM Tunneled messages */
 
@@ -704,7 +709,8 @@ int tf_msg_bulk_get_tbl_entry(struct tf *tfp,
 			      uint32_t starting_idx,
 			      uint16_t num_entries,
 			      uint16_t entry_sz_in_bytes,
-			      uint64_t physical_mem_addr);
+			      uint64_t physical_mem_addr,
+			      bool clear_on_read);
 
 /**
  * Sends Set message of a IF Table Type element to the firmware.
@@ -736,4 +742,23 @@ int tf_msg_set_if_tbl_entry(struct tf *tfp,
 int tf_msg_get_if_tbl_entry(struct tf *tfp,
 			    struct tf_if_tbl_get_parms *params);
 
+/**
+ * Send get version request to the firmware.
+ *
+ * [in] bp
+ *   Pointer to bnxt handle
+ *
+ * [in] dev
+ *   Pointer to the associated device
+ *
+ * [in/out] parms
+ *   Pointer to the version info parameter
+ *
+ * Returns:
+ *  0 on Success else internal Truflow error
+ */
+int
+tf_msg_get_version(struct bnxt *bp,
+		   struct tf_dev_info *dev,
+		   struct tf_get_version_parms *parms);
 #endif  /* _TF_MSG_H_ */

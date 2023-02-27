@@ -20,8 +20,6 @@
 #include "eal_private.h"
 #include "eal_internal_cfg.h"
 
-#ifdef VFIO_PRESENT
-
 #define VFIO_MEM_EVENT_CLB_NAME "vfio_mem_event_clb"
 
 /* hot plug/unplug of VFIO groups may cause all DMA maps to be dropped. we can
@@ -1943,9 +1941,6 @@ container_dma_unmap(struct vfio_config *vfio_cfg, uint64_t vaddr, uint64_t iova,
 	 * mappings, let's just rebuild them using information we have.
 	 */
 
-	/* do we have partial unmap capability? */
-	has_partial_unmap = vfio_cfg->vfio_iommu_type->partial_unmap;
-
 	/*
 	 * first thing to do is check if there exists a mapping that includes
 	 * the start and the end of our requested unmap. We need to collect all
@@ -1960,6 +1955,9 @@ container_dma_unmap(struct vfio_config *vfio_cfg, uint64_t vaddr, uint64_t iova,
 		ret = -1;
 		goto out;
 	}
+
+	/* do we have partial unmap capability? */
+	has_partial_unmap = vfio_cfg->vfio_iommu_type->partial_unmap;
 
 	/*
 	 * if we don't support partial unmap, we must check if start and end of
@@ -2201,111 +2199,3 @@ rte_vfio_container_dma_unmap(int container_fd, uint64_t vaddr, uint64_t iova,
 
 	return container_dma_unmap(vfio_cfg, vaddr, iova, len);
 }
-
-#else
-
-int
-rte_vfio_setup_device(__rte_unused const char *sysfs_base,
-		__rte_unused const char *dev_addr,
-		__rte_unused int *vfio_dev_fd,
-		__rte_unused struct vfio_device_info *device_info)
-{
-	return -1;
-}
-
-int
-rte_vfio_release_device(__rte_unused const char *sysfs_base,
-		__rte_unused const char *dev_addr, __rte_unused int fd)
-{
-	return -1;
-}
-
-int
-rte_vfio_enable(__rte_unused const char *modname)
-{
-	return -1;
-}
-
-int
-rte_vfio_is_enabled(__rte_unused const char *modname)
-{
-	return -1;
-}
-
-int
-rte_vfio_noiommu_is_enabled(void)
-{
-	return -1;
-}
-
-int
-rte_vfio_clear_group(__rte_unused int vfio_group_fd)
-{
-	return -1;
-}
-
-int
-rte_vfio_get_group_num(__rte_unused const char *sysfs_base,
-		__rte_unused const char *dev_addr,
-		__rte_unused int *iommu_group_num)
-{
-	return -1;
-}
-
-int
-rte_vfio_get_container_fd(void)
-{
-	return -1;
-}
-
-int
-rte_vfio_get_group_fd(__rte_unused int iommu_group_num)
-{
-	return -1;
-}
-
-int
-rte_vfio_container_create(void)
-{
-	return -1;
-}
-
-int
-rte_vfio_container_destroy(__rte_unused int container_fd)
-{
-	return -1;
-}
-
-int
-rte_vfio_container_group_bind(__rte_unused int container_fd,
-		__rte_unused int iommu_group_num)
-{
-	return -1;
-}
-
-int
-rte_vfio_container_group_unbind(__rte_unused int container_fd,
-		__rte_unused int iommu_group_num)
-{
-	return -1;
-}
-
-int
-rte_vfio_container_dma_map(__rte_unused int container_fd,
-		__rte_unused uint64_t vaddr,
-		__rte_unused uint64_t iova,
-		__rte_unused uint64_t len)
-{
-	return -1;
-}
-
-int
-rte_vfio_container_dma_unmap(__rte_unused int container_fd,
-		__rte_unused uint64_t vaddr,
-		__rte_unused uint64_t iova,
-		__rte_unused uint64_t len)
-{
-	return -1;
-}
-
-#endif /* VFIO_PRESENT */

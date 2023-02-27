@@ -2,6 +2,7 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
+#include <ctype.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -404,7 +405,7 @@ get_pcpu_to_control(struct policy *pol)
 
 	/*
 	 * So now that we're handling virtual and physical cores, we need to
-	 * differenciate between them when adding them to the branch monitor.
+	 * differentiate between them when adding them to the branch monitor.
 	 * Virtual cores need to be converted to physical cores.
 	 */
 	if (pol->pkt.core_type == RTE_POWER_CORE_TYPE_VIRTUAL) {

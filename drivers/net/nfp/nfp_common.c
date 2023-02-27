@@ -19,7 +19,7 @@
 #include <rte_debug.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_ether.h>
 #include <rte_malloc.h>
 #include <rte_memzone.h>
@@ -37,10 +37,12 @@
 #include "nfpcore/nfp_rtsym.h"
 #include "nfpcore/nfp_nsp.h"
 
+#include "flower/nfp_flower_representor.h"
+
 #include "nfp_common.h"
+#include "nfp_ctrl.h"
 #include "nfp_rxtx.h"
 #include "nfp_logs.h"
-#include "nfp_ctrl.h"
 #include "nfp_cpp_bridge.h"
 
 #include <sys/types.h>
@@ -171,9 +173,16 @@ nfp_net_configure(struct rte_eth_dev *dev)
 
 	/* Checking RX mode */
 	if (rxmode->mq_mode & RTE_ETH_MQ_RX_RSS &&
-	    !(hw->cap & NFP_NET_CFG_CTRL_RSS)) {
+	    !(hw->cap & NFP_NET_CFG_CTRL_RSS_ANY)) {
 		PMD_INIT_LOG(INFO, "RSS not supported");
 		return -EINVAL;
+	}
+
+	/* Checking MTU set */
+	if (rxmode->mtu > NFP_FRAME_SIZE_MAX) {
+		PMD_INIT_LOG(ERR, "MTU (%u) larger than NFP_FRAME_SIZE_MAX (%u) not supported",
+				    rxmode->mtu, NFP_FRAME_SIZE_MAX);
+		return -ERANGE;
 	}
 
 	return 0;
@@ -267,7 +276,7 @@ nfp_net_write_mac(struct nfp_net_hw *hw, uint8_t *mac)
 }
 
 int
-nfp_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
+nfp_net_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
 {
 	struct nfp_net_hw *hw;
 	uint32_t update, ctrl;
@@ -279,10 +288,6 @@ nfp_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
 				  " port enabled");
 		return -EBUSY;
 	}
-
-	if ((hw->ctrl & NFP_NET_CFG_CTRL_ENABLE) &&
-	    !(hw->cap & NFP_NET_CFG_CTRL_LIVE_ADDR))
-		return -EBUSY;
 
 	/* Writing new MAC to the specific port BAR address */
 	nfp_net_write_mac(hw, (uint8_t *)mac_addr);
@@ -409,10 +414,16 @@ nfp_net_promisc_enable(struct rte_eth_dev *dev)
 	uint32_t new_ctrl, update = 0;
 	struct nfp_net_hw *hw;
 	int ret;
+	struct nfp_flower_representor *repr;
 
 	PMD_DRV_LOG(DEBUG, "Promiscuous mode enable");
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	if ((dev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR) != 0) {
+		repr = dev->data->dev_private;
+		hw = repr->app_fw_flower->pf_hw;
+	} else {
+		hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	}
 
 	if (!(hw->cap & NFP_NET_CFG_CTRL_PROMISC)) {
 		PMD_INIT_LOG(INFO, "Promiscuous mode not supported");
@@ -696,7 +707,17 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_rx_queues = (uint16_t)hw->max_rx_queues;
 	dev_info->max_tx_queues = (uint16_t)hw->max_tx_queues;
 	dev_info->min_rx_bufsize = RTE_ETHER_MIN_MTU;
-	dev_info->max_rx_pktlen = hw->max_mtu;
+	/*
+	 * The maximum rx packet length (max_rx_pktlen) is set to the
+	 * maximum supported frame size that the NFP can handle. This
+	 * includes layer 2 headers, CRC and other metadata that can
+	 * optionally be used.
+	 * The maximum layer 3 MTU (max_mtu) is read from hardware,
+	 * which was set by the firmware loaded onto the card.
+	 */
+	dev_info->max_rx_pktlen = NFP_FRAME_SIZE_MAX;
+	dev_info->max_mtu = hw->max_mtu;
+	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	/* Next should change when PF support is implemented */
 	dev_info->max_mac_addrs = 1;
 
@@ -756,7 +777,7 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		.nb_mtu_seg_max = NFP_TX_MAX_MTU_SEG,
 	};
 
-	if (hw->cap & NFP_NET_CFG_CTRL_RSS) {
+	if (hw->cap & NFP_NET_CFG_CTRL_RSS_ANY) {
 		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 		dev_info->flow_type_rss_offloads = RTE_ETH_RSS_IPV4 |
@@ -956,6 +977,13 @@ nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		return -EBUSY;
 	}
 
+	/* MTU larger then current mbufsize not supported */
+	if (mtu > hw->flbufsz) {
+		PMD_DRV_LOG(ERR, "MTU (%u) larger then current mbufsize (%u) not supported",
+			    mtu, hw->flbufsz);
+		return -ERANGE;
+	}
+
 	/* writing to configuration space */
 	nn_cfg_writel(hw, NFP_NET_CFG_MTU, mtu);
 
@@ -969,22 +997,25 @@ nfp_net_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 {
 	uint32_t new_ctrl, update;
 	struct nfp_net_hw *hw;
+	struct rte_eth_conf *dev_conf;
 	int ret;
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	new_ctrl = 0;
+	dev_conf = &dev->data->dev_conf;
+	new_ctrl = hw->ctrl;
 
-	/* Enable vlan strip if it is not configured yet */
-	if ((mask & RTE_ETH_VLAN_STRIP_OFFLOAD) &&
-	    !(hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN))
-		new_ctrl = hw->ctrl | NFP_NET_CFG_CTRL_RXVLAN;
+	/*
+	 * Vlan stripping setting
+	 * Enable or disable VLAN stripping
+	 */
+	if (mask & RTE_ETH_VLAN_STRIP_MASK) {
+		if (dev_conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
+			new_ctrl |= NFP_NET_CFG_CTRL_RXVLAN;
+		else
+			new_ctrl &= ~NFP_NET_CFG_CTRL_RXVLAN;
+	}
 
-	/* Disable vlan strip just if it is configured */
-	if (!(mask & RTE_ETH_VLAN_STRIP_OFFLOAD) &&
-	    (hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN))
-		new_ctrl = hw->ctrl & ~NFP_NET_CFG_CTRL_RXVLAN;
-
-	if (new_ctrl == 0)
+	if (new_ctrl == hw->ctrl)
 		return 0;
 
 	update = NFP_NET_CFG_UPDATE_GEN;
@@ -1057,7 +1088,7 @@ nfp_net_reta_update(struct rte_eth_dev *dev,
 	uint32_t update;
 	int ret;
 
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY))
 		return -EINVAL;
 
 	ret = nfp_net_rss_reta_write(dev, reta_conf, reta_size);
@@ -1085,7 +1116,7 @@ nfp_net_reta_query(struct rte_eth_dev *dev,
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY))
 		return -EINVAL;
 
 	if (reta_size != NFP_NET_CFG_RSS_ITBL_SZ) {
@@ -1183,7 +1214,7 @@ nfp_net_rss_hash_update(struct rte_eth_dev *dev,
 	rss_hf = rss_conf->rss_hf;
 
 	/* Checking if RSS is enabled */
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS)) {
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY)) {
 		if (rss_hf != 0) { /* Enable RSS? */
 			PMD_DRV_LOG(ERR, "RSS unsupported");
 			return -EINVAL;
@@ -1218,7 +1249,7 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY))
 		return -EINVAL;
 
 	rss_hf = rss_conf->rss_hf;
@@ -1297,8 +1328,91 @@ nfp_net_rss_config_default(struct rte_eth_dev *dev)
 	return ret;
 }
 
+void
+nfp_net_stop_rx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_rxq *this_rx_q;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		this_rx_q = (struct nfp_net_rxq *)dev->data->rx_queues[i];
+		nfp_net_reset_rx_queue(this_rx_q);
+	}
+}
+
+void
+nfp_net_close_rx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_rxq *this_rx_q;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		this_rx_q = (struct nfp_net_rxq *)dev->data->rx_queues[i];
+		nfp_net_reset_rx_queue(this_rx_q);
+		nfp_net_rx_queue_release(dev, i);
+	}
+}
+
+void
+nfp_net_stop_tx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_txq *this_tx_q;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		this_tx_q = (struct nfp_net_txq *)dev->data->tx_queues[i];
+		nfp_net_reset_tx_queue(this_tx_q);
+	}
+}
+
+void
+nfp_net_close_tx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_txq *this_tx_q;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		this_tx_q = (struct nfp_net_txq *)dev->data->tx_queues[i];
+		nfp_net_reset_tx_queue(this_tx_q);
+		nfp_net_tx_queue_release(dev, i);
+	}
+}
+
+int
+nfp_net_set_vxlan_port(struct nfp_net_hw *hw,
+		size_t idx,
+		uint16_t port)
+{
+	int ret;
+	uint32_t i;
+
+	if (idx >= NFP_NET_N_VXLAN_PORTS) {
+		PMD_DRV_LOG(ERR, "The idx value is out of range.");
+		return -ERANGE;
+	}
+
+	hw->vxlan_ports[idx] = port;
+
+	for (i = 0; i < NFP_NET_N_VXLAN_PORTS; i += 2) {
+		nn_cfg_writel(hw, NFP_NET_CFG_VXLAN_PORT + i * sizeof(port),
+			(hw->vxlan_ports[i + 1] << 16) | hw->vxlan_ports[i]);
+	}
+
+	rte_spinlock_lock(&hw->reconfig_lock);
+
+	nn_cfg_writel(hw, NFP_NET_CFG_UPDATE, NFP_NET_CFG_UPDATE_VXLAN);
+	rte_wmb();
+
+	ret = __nfp_net_reconfig(hw, NFP_NET_CFG_UPDATE_VXLAN);
+
+	rte_spinlock_unlock(&hw->reconfig_lock);
+
+	return ret;
+}
+
 RTE_LOG_REGISTER_SUFFIX(nfp_logtype_init, init, NOTICE);
 RTE_LOG_REGISTER_SUFFIX(nfp_logtype_driver, driver, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(nfp_logtype_cpp, cpp, NOTICE);
 /*
  * Local variables:
  * c-file-style: "Linux"

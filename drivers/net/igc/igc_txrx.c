@@ -345,7 +345,7 @@ rx_desc_get_pkt_info(struct igc_rx_queue *rxq, struct rte_mbuf *rxm,
 	rxm->packet_type = rx_desc_pkt_info_to_pkt_type(pkt_info);
 }
 
-static uint16_t
+uint16_t
 igc_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
 	struct igc_rx_queue * const rxq = rx_queue;
@@ -488,7 +488,7 @@ igc_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	return nb_rx;
 }
 
-static uint16_t
+uint16_t
 igc_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			uint16_t nb_pkts)
 {
@@ -1397,7 +1397,7 @@ eth_igc_rx_queue_setup(struct rte_eth_dev *dev,
 }
 
 /* prepare packets for transmit */
-static uint16_t
+uint16_t
 eth_igc_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts)
 {
@@ -1604,7 +1604,7 @@ tx_desc_cksum_flags_to_olinfo(uint64_t ol_flags)
 	return tmp;
 }
 
-static uint16_t
+uint16_t
 igc_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 {
 	struct igc_tx_queue * const txq = tx_queue;
@@ -2099,7 +2099,7 @@ eth_igc_tx_done_cleanup(void *txqueue, uint32_t free_cnt)
 				sw_ring[tx_id].mbuf = NULL;
 				sw_ring[tx_id].last_id = tx_id;
 
-				/* Move to next segemnt. */
+				/* Move to next segment. */
 				tx_id = sw_ring[tx_id].next_id;
 			} while (tx_id != tx_next);
 
@@ -2133,7 +2133,7 @@ eth_igc_tx_done_cleanup(void *txqueue, uint32_t free_cnt)
 			 * Walk the list and find the next mbuf, if any.
 			 */
 			do {
-				/* Move to next segemnt. */
+				/* Move to next segment. */
 				tx_id = sw_ring[tx_id].next_id;
 
 				if (sw_ring[tx_id].mbuf)

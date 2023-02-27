@@ -26,6 +26,7 @@
 #include "sfc_tweak.h"
 #include "sfc_sw_stats.h"
 #include "sfc_switch.h"
+#include "sfc_nic_dma.h"
 
 bool
 sfc_repr_supported(const struct sfc_adapter *sa)
@@ -53,10 +54,12 @@ sfc_repr_available(const struct sfc_adapter_shared *sas)
 }
 
 int
-sfc_dma_alloc(const struct sfc_adapter *sa, const char *name, uint16_t id,
-	      size_t len, int socket_id, efsys_mem_t *esmp)
+sfc_dma_alloc(struct sfc_adapter *sa, const char *name, uint16_t id,
+	      efx_nic_dma_addr_type_t addr_type, size_t len, int socket_id,
+	      efsys_mem_t *esmp)
 {
 	const struct rte_memzone *mz;
+	int rc;
 
 	sfc_log_init(sa, "name=%s id=%u len=%zu socket_id=%d",
 		     name, id, len, socket_id);
@@ -69,11 +72,15 @@ sfc_dma_alloc(const struct sfc_adapter *sa, const char *name, uint16_t id,
 			rte_strerror(rte_errno));
 		return ENOMEM;
 	}
-
-	esmp->esm_addr = mz->iova;
-	if (esmp->esm_addr == RTE_BAD_IOVA) {
+	if (mz->iova == RTE_BAD_IOVA) {
 		(void)rte_memzone_free(mz);
 		return EFAULT;
+	}
+
+	rc = sfc_nic_dma_mz_map(sa, mz, addr_type, &esmp->esm_addr);
+	if (rc != 0) {
+		(void)rte_memzone_free(mz);
+		return rc;
 	}
 
 	esmp->esm_mz = mz;
@@ -166,11 +173,6 @@ sfc_check_conf(struct sfc_adapter *sa)
 
 	if (conf->dcb_capability_en != 0) {
 		sfc_err(sa, "Priority-based flow control not supported");
-		rc = EINVAL;
-	}
-
-	if (conf->fdir_conf.mode != RTE_FDIR_MODE_NONE) {
-		sfc_err(sa, "Flow Director not supported");
 		rc = EINVAL;
 	}
 
@@ -364,7 +366,7 @@ sfc_set_drv_limits(struct sfc_adapter *sa)
 
 	/*
 	 * Limits are strict since take into account initial estimation.
-	 * Resource allocation stategy is described in
+	 * Resource allocation strategy is described in
 	 * sfc_estimate_resource_limits().
 	 */
 	lim.edl_min_evq_count = lim.edl_max_evq_count =
@@ -457,6 +459,13 @@ sfc_try_start(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_nic_init;
 
+	sfc_log_init(sa, "reconfigure NIC DMA");
+	rc = efx_nic_dma_reconfigure(sa->nic);
+	if (rc != 0) {
+		sfc_err(sa, "cannot reconfigure NIC DMA: %s", rte_strerror(rc));
+		goto fail_nic_dma_reconfigure;
+	}
+
 	encp = efx_nic_cfg_get(sa->nic);
 
 	/*
@@ -525,6 +534,7 @@ fail_ev_start:
 
 fail_intr_start:
 fail_tunnel_reconfigure:
+fail_nic_dma_reconfigure:
 	efx_nic_fini(sa->nic);
 
 fail_nic_init:
@@ -833,7 +843,9 @@ sfc_rss_attach(struct sfc_adapter *sa)
 	efx_intr_fini(sa->nic);
 
 	rte_memcpy(rss->key, default_rss_key, sizeof(rss->key));
-	rss->dummy_rss_context = EFX_RSS_CONTEXT_DEFAULT;
+	memset(&rss->dummy_ctx, 0, sizeof(rss->dummy_ctx));
+	rss->dummy_ctx.conf.qid_span = 1;
+	rss->dummy_ctx.dummy = true;
 
 	return 0;
 
@@ -955,6 +967,10 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_rss_attach;
 
+	rc = sfc_flow_rss_attach(sa);
+	if (rc != 0)
+		goto fail_flow_rss_attach;
+
 	rc = sfc_filter_attach(sa);
 	if (rc != 0)
 		goto fail_filter_attach;
@@ -1018,6 +1034,9 @@ fail_mae_counter_rxq_attach:
 	sfc_filter_detach(sa);
 
 fail_filter_attach:
+	sfc_flow_rss_detach(sa);
+
+fail_flow_rss_attach:
 	sfc_rss_detach(sa);
 
 fail_rss_attach:
@@ -1072,6 +1091,7 @@ sfc_detach(struct sfc_adapter *sa)
 	sfc_mae_detach(sa);
 	sfc_mae_counter_rxq_detach(sa);
 	sfc_filter_detach(sa);
+	sfc_flow_rss_detach(sa);
 	sfc_rss_detach(sa);
 	sfc_port_detach(sa);
 	sfc_ev_detach(sa);

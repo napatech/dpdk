@@ -9,7 +9,7 @@
 #endif
 
 #include <rte_io.h>
-#include <rte_bus.h>
+#include <bus_driver.h>
 
 #include "virtio_pci.h"
 #include "virtio_logs.h"
@@ -235,7 +235,7 @@ legacy_get_isr(struct virtio_hw *hw)
 	return dst;
 }
 
-/* Enable one vector (0) for Link State Intrerrupt */
+/* Enable one vector (0) for Link State Interrupt */
 static uint16_t
 legacy_set_config_irq(struct virtio_hw *hw, uint16_t vec)
 {

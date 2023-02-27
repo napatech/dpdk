@@ -5,6 +5,10 @@
 #ifndef _RTE_EVENTDEV_PMD_H_
 #define _RTE_EVENTDEV_PMD_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** @file
  * RTE Event PMD APIs
  *
@@ -18,7 +22,7 @@
 #include <rte_common.h>
 #include <rte_compat.h>
 #include <rte_config.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_mbuf.h>
@@ -76,6 +80,9 @@
 /**< Ethernet Rx adapter cap to return If the packet transfers from
  * the ethdev to eventdev use a SW service function
  */
+
+#define RTE_EVENT_TIMER_ADAPTER_SW_CAP \
+		RTE_EVENT_TIMER_ADAPTER_CAP_PERIODIC
 
 #define RTE_EVENTDEV_DETACHED  (0)
 #define RTE_EVENTDEV_ATTACHED  (1)
@@ -164,6 +171,8 @@ struct rte_eventdev {
 	/**< Pointer to PMD dequeue function. */
 	event_dequeue_burst_t dequeue_burst;
 	/**< Pointer to PMD dequeue burst function. */
+	event_maintain_t maintain;
+	/**< Pointer to PMD port maintenance function. */
 	event_tx_adapter_enqueue_t txa_enqueue_same_dest;
 	/**< Pointer to PMD eth Tx adapter burst enqueue function with
 	 * events destined to same Eth port & Tx queue.
@@ -235,7 +244,7 @@ rte_event_pmd_is_valid_dev(uint8_t dev_id)
 
 /**
  * Definitions of all functions exported by a driver through the
- * the generic structure of type *event_dev_ops* supplied in the
+ * generic structure of type *event_dev_ops* supplied in the
  * *rte_eventdev* structure associated with a device.
  */
 
@@ -336,6 +345,26 @@ typedef void (*eventdev_queue_release_t)(struct rte_eventdev *dev,
 		uint8_t queue_id);
 
 /**
+ * Set an event queue attribute at runtime.
+ *
+ * @param dev
+ *   Event device pointer
+ * @param queue_id
+ *   Event queue index
+ * @param attr_id
+ *   Event queue attribute id
+ * @param attr_value
+ *   Event queue attribute value
+ *
+ * @return
+ *  - 0: Success.
+ *  - <0: Error code on failure.
+ */
+typedef int (*eventdev_queue_attr_set_t)(struct rte_eventdev *dev,
+					 uint8_t queue_id, uint32_t attr_id,
+					 uint64_t attr_value);
+
+/**
  * Retrieve the default event port configuration.
  *
  * @param dev
@@ -374,6 +403,23 @@ typedef int (*eventdev_port_setup_t)(struct rte_eventdev *dev,
  *
  */
 typedef void (*eventdev_port_release_t)(void *port);
+
+/**
+ * Quiesce any core specific resources consumed by the event port
+ *
+ * @param dev
+ *   Event device pointer.
+ * @param port
+ *   Event port pointer.
+ * @param flush_cb
+ *   User-provided event flush function.
+ * @param args
+ *   Arguments to be passed to the user-provided event flush function.
+ *
+ */
+typedef void (*eventdev_port_quiesce_t)(struct rte_eventdev *dev, void *port,
+					rte_eventdev_port_flush_t flush_cb,
+					void *args);
 
 /**
  * Link multiple source event queues to destination event port.
@@ -483,7 +529,7 @@ typedef void (*eventdev_dump_t)(struct rte_eventdev *dev, FILE *f);
  */
 typedef int (*eventdev_xstats_get_t)(const struct rte_eventdev *dev,
 		enum rte_event_dev_xstats_mode mode, uint8_t queue_port_id,
-		const unsigned int ids[], uint64_t values[], unsigned int n);
+		const uint64_t ids[], uint64_t values[], unsigned int n);
 
 /**
  * Resets the statistic values in xstats for the device, based on mode.
@@ -491,7 +537,7 @@ typedef int (*eventdev_xstats_get_t)(const struct rte_eventdev *dev,
 typedef int (*eventdev_xstats_reset_t)(struct rte_eventdev *dev,
 		enum rte_event_dev_xstats_mode mode,
 		int16_t queue_port_id,
-		const uint32_t ids[],
+		const uint64_t ids[],
 		uint32_t nb_ids);
 
 /**
@@ -518,7 +564,7 @@ typedef int (*eventdev_xstats_reset_t)(struct rte_eventdev *dev,
 typedef int (*eventdev_xstats_get_names_t)(const struct rte_eventdev *dev,
 		enum rte_event_dev_xstats_mode mode, uint8_t queue_port_id,
 		struct rte_event_dev_xstats_name *xstats_names,
-		unsigned int *ids, unsigned int size);
+		uint64_t *ids, unsigned int size);
 
 /**
  * Get value of one stats and optionally return its id
@@ -536,7 +582,7 @@ typedef int (*eventdev_xstats_get_names_t)(const struct rte_eventdev *dev,
  *   if id pointer is non-NULL
  */
 typedef uint64_t (*eventdev_xstats_get_by_name)(const struct rte_eventdev *dev,
-		const char *name, unsigned int *id);
+		const char *name, uint64_t *id);
 
 
 /**
@@ -749,6 +795,53 @@ typedef int (*eventdev_eth_rx_adapter_stats_get)
 typedef int (*eventdev_eth_rx_adapter_stats_reset)
 			(const struct rte_eventdev *dev,
 			const struct rte_eth_dev *eth_dev);
+
+struct rte_event_eth_rx_adapter_queue_stats;
+
+/**
+ * Retrieve ethernet Rx adapter queue statistics.
+ *
+ * @param dev
+ *   Event device pointer
+ *
+ * @param eth_dev
+ *   Ethernet device pointer
+ *
+ * @param rx_queue_id
+ *  Ethernet device receive queue index.
+ *
+ * @param[out] q_stats
+ *   Pointer to queue stats structure
+ *
+ * @return
+ *   Return 0 on success.
+ */
+typedef int (*eventdev_eth_rx_adapter_q_stats_get)
+			(const struct rte_eventdev *dev,
+			 const struct rte_eth_dev *eth_dev,
+			 uint16_t rx_queue_id,
+			 struct rte_event_eth_rx_adapter_queue_stats *q_stats);
+
+/**
+ * Reset ethernet Rx adapter queue statistics.
+ *
+ * @param dev
+ *   Event device pointer
+ *
+ * @param eth_dev
+ *   Ethernet device pointer
+ *
+ * @param rx_queue_id
+ *  Ethernet device receive queue index.
+ *
+ * @return
+ *   Return 0 on success.
+ */
+typedef int (*eventdev_eth_rx_adapter_q_stats_reset)
+			(const struct rte_eventdev *dev,
+			 const struct rte_eth_dev *eth_dev,
+			 uint16_t rx_queue_id);
+
 /**
  * Start eventdev selftest.
  *
@@ -778,6 +871,26 @@ typedef int (*eventdev_eth_rx_adapter_vector_limits_get_t)(
 	const struct rte_eventdev *dev, const struct rte_eth_dev *eth_dev,
 	struct rte_event_eth_rx_adapter_vector_limits *limits);
 
+/**
+ * Get Rx adapter instance ID for Rx queue
+ *
+ * @param eth_dev_id
+ *  Port identifier of ethernet device
+ *
+ * @param rx_queue_id
+ *  Ethernet device Rx queue index
+ *
+ * @param[out] rxa_inst_id
+ *  Pointer to Rx adapter instance identifier.
+ *  Contains valid Rx adapter instance ID when return value is 0
+ *
+ * @return
+ *   -  0: Success
+ *   - <0: Error code on failure
+ */
+typedef int (*eventdev_eth_rx_adapter_instance_get_t)
+	(uint16_t eth_dev_id, uint16_t rx_queue_id, uint8_t *rxa_inst_id);
+
 typedef uint32_t rte_event_pmd_selftest_seqn_t;
 extern int rte_event_pmd_selftest_seqn_dynfield_offset;
 
@@ -797,6 +910,7 @@ rte_event_pmd_selftest_seqn(struct rte_mbuf *mbuf)
 }
 
 struct rte_cryptodev;
+struct rte_event_crypto_adapter_queue_conf;
 
 /**
  * This API may change without prior notice
@@ -851,11 +965,11 @@ typedef int (*eventdev_crypto_adapter_caps_get_t)
  *   - <0: Error code returned by the driver function.
  *
  */
-typedef int (*eventdev_crypto_adapter_queue_pair_add_t)
-			(const struct rte_eventdev *dev,
-			 const struct rte_cryptodev *cdev,
-			 int32_t queue_pair_id,
-			 const struct rte_event *event);
+typedef int (*eventdev_crypto_adapter_queue_pair_add_t)(
+		const struct rte_eventdev *dev,
+		const struct rte_cryptodev *cdev,
+		int32_t queue_pair_id,
+		const struct rte_event_crypto_adapter_queue_conf *queue_conf);
 
 
 /**
@@ -963,6 +1077,27 @@ typedef int (*eventdev_crypto_adapter_stats_get)
 typedef int (*eventdev_crypto_adapter_stats_reset)
 			(const struct rte_eventdev *dev,
 			 const struct rte_cryptodev *cdev);
+
+struct rte_event_crypto_adapter_vector_limits;
+/**
+ * Get event vector limits for a given event, crypto device pair.
+ *
+ * @param dev
+ *   Event device pointer
+ *
+ * @param cdev
+ *   Crypto device pointer
+ *
+ * @param[out] limits
+ *   Pointer to the limits structure to be filled.
+ *
+ * @return
+ *   - 0: Success.
+ *   - <0: Error code returned by the driver function.
+ */
+typedef int (*eventdev_crypto_adapter_vector_limits_get_t)(
+	const struct rte_eventdev *dev, const struct rte_cryptodev *cdev,
+	struct rte_event_crypto_adapter_vector_limits *limits);
 
 /**
  * Retrieve the event device's eth Tx adapter capabilities.
@@ -1144,6 +1279,66 @@ typedef int (*eventdev_eth_tx_adapter_stats_get_t)(
 typedef int (*eventdev_eth_tx_adapter_stats_reset_t)(uint8_t id,
 					const struct rte_eventdev *dev);
 
+/**
+ * Get TX adapter instance ID for Tx queue
+ *
+ * @param eth_dev_id
+ *  Port identifier of Ethernet device
+ *
+ * @param tx_queue_id
+ *  Ethernet device Tx queue index
+ *
+ * @param[out] txa_inst_id
+ *  Pointer to Tx adapter instance identifier
+ *  Contains valid Tx adapter instance ID when return value is 0
+ *
+ * @return
+ *  -  0: Success
+ *  - <0: Error code on failure
+ */
+typedef int (*eventdev_eth_tx_adapter_instance_get_t)
+	(uint16_t eth_dev_id, uint16_t tx_queue_id, uint8_t *txa_inst_id);
+
+/**
+ * Start a Tx queue that is assigned to Tx adapter instance
+ *
+ * @param id
+ *  Adapter identifier
+ *
+ * @param eth_dev_id
+ *  Port identifier of Ethernet device
+ *
+ * @param tx_queue_id
+ *  Ethernet device Tx queue index
+ *
+ * @return
+ *  -  0: Success
+ *  - <0: Error code on failure
+ */
+typedef int (*eventdev_eth_tx_adapter_queue_start)
+	(uint8_t id, uint16_t eth_dev_id, uint16_t tx_queue_id);
+
+/**
+ * Stop a Tx queue that is assigned to Tx adapter instance
+ *
+ * @param id
+ *  Adapter identifier
+ *
+ * @param eth_dev_id
+ *  Port identifier of Ethernet device
+ *
+ * @param tx_queue_id
+ *  Ethernet device Tx queue index
+ *
+ * @return
+ *  -  0: Success
+ *  - <0: Error code on failure
+ */
+typedef int (*eventdev_eth_tx_adapter_queue_stop)
+	(uint8_t id, uint16_t eth_dev_id, uint16_t tx_queue_id);
+
+#define eventdev_stop_flush_t rte_eventdev_stop_flush_t
+
 /** Event device operations function pointer table */
 struct eventdev_ops {
 	eventdev_info_get_t dev_infos_get;	/**< Get device info. */
@@ -1158,6 +1353,8 @@ struct eventdev_ops {
 	/**< Set up an event queue. */
 	eventdev_queue_release_t queue_release;
 	/**< Release an event queue. */
+	eventdev_queue_attr_set_t queue_attr_set;
+	/**< Set an event queue attribute. */
 
 	eventdev_port_default_conf_get_t port_def_conf;
 	/**< Get default port configuration. */
@@ -1165,6 +1362,8 @@ struct eventdev_ops {
 	/**< Set up an event port. */
 	eventdev_port_release_t port_release;
 	/**< Release an event port. */
+	eventdev_port_quiesce_t port_quiesce;
+	/**< Quiesce an event port. */
 
 	eventdev_port_link_t port_link;
 	/**< Link event queues to an event port. */
@@ -1205,6 +1404,8 @@ struct eventdev_ops {
 	eventdev_eth_rx_adapter_vector_limits_get_t
 		eth_rx_adapter_vector_limits_get;
 	/**< Get event vector limits for the Rx adapter */
+	eventdev_eth_rx_adapter_instance_get_t eth_rx_adapter_instance_get;
+	/**< Get Rx adapter instance ID for Rx queue */
 
 	eventdev_timer_adapter_caps_get_t timer_adapter_caps_get;
 	/**< Get timer adapter capabilities */
@@ -1223,6 +1424,14 @@ struct eventdev_ops {
 	/**< Get crypto stats */
 	eventdev_crypto_adapter_stats_reset crypto_adapter_stats_reset;
 	/**< Reset crypto stats */
+	eventdev_crypto_adapter_vector_limits_get_t
+		crypto_adapter_vector_limits_get;
+	/**< Get event vector limits for the crypto adapter */
+
+	eventdev_eth_rx_adapter_q_stats_get eth_rx_adapter_queue_stats_get;
+	/**< Get ethernet Rx queue stats */
+	eventdev_eth_rx_adapter_q_stats_reset eth_rx_adapter_queue_stats_reset;
+	/**< Reset ethernet Rx queue stats */
 
 	eventdev_eth_tx_adapter_caps_get_t eth_tx_adapter_caps_get;
 	/**< Get ethernet Tx adapter capabilities */
@@ -1243,6 +1452,12 @@ struct eventdev_ops {
 	/**< Get eth Tx adapter statistics */
 	eventdev_eth_tx_adapter_stats_reset_t eth_tx_adapter_stats_reset;
 	/**< Reset eth Tx adapter statistics */
+	eventdev_eth_tx_adapter_instance_get_t eth_tx_adapter_instance_get;
+	/**< Get Tx adapter instance ID for Tx queue */
+	eventdev_eth_tx_adapter_queue_start eth_tx_adapter_queue_start;
+	/**< Start Tx queue assigned to Tx adapter instance */
+	eventdev_eth_tx_adapter_queue_stop eth_tx_adapter_queue_stop;
+	/**< Stop Tx queue assigned to Tx adapter instance */
 
 	eventdev_selftest dev_selftest;
 	/**< Start eventdev Selftest */

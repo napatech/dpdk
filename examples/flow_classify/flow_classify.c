@@ -430,7 +430,7 @@ parse_ipv4_5tuple_rule(char *str, struct rte_eth_ntuple_filter *ntuple_filter)
 			&ntuple_filter->dst_ip,
 			&ntuple_filter->dst_ip_mask);
 	if (ret != 0) {
-		flow_classify_log("failed to read source address/mask: %s\n",
+		flow_classify_log("failed to read destination address/mask: %s\n",
 			in[CB_FLD_DST_ADDR]);
 		return ret;
 	}
@@ -818,6 +818,8 @@ main(int argc, char *argv[])
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
 	socket_id = rte_eth_dev_socket_id(0);
+	if (socket_id == SOCKET_ID_ANY)
+		socket_id = rte_lcore_to_socket_id(rte_get_next_lcore(-1, 0, 0));
 
 	/* Memory allocation. 8< */
 	size = RTE_CACHE_LINE_ROUNDUP(sizeof(struct flow_classifier_acl));

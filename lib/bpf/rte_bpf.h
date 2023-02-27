@@ -16,6 +16,7 @@
  * (https://www.kernel.org/doc/Documentation/networking/filter.txt).
  */
 
+#include <rte_compat.h>
 #include <rte_common.h>
 #include <rte_mbuf.h>
 #include <bpf_def.h>
@@ -212,8 +213,6 @@ __rte_experimental
 void
 rte_bpf_dump(FILE *f, const struct ebpf_insn *buf, uint32_t len);
 
-#ifdef RTE_PORT_PCAP
-
 struct bpf_program;
 
 /**
@@ -221,8 +220,6 @@ struct bpf_program;
  *
  * @param prog
  *  Classic BPF program from pcap_compile().
- * @param prm
- *  Result Extended BPF program.
  * @return
  *   Pointer to BPF program (allocated with *rte_malloc*)
  *   that is used in future BPF operations,
@@ -230,12 +227,11 @@ struct bpf_program;
  *   Possible rte_errno errors include:
  *   - EINVAL - invalid parameter passed to function
  *   - ENOMEM - can't reserve enough memory
+ *   - ENOTSUP - operation not supported
  */
 __rte_experimental
 struct rte_bpf_prm *
 rte_bpf_convert(const struct bpf_program *prog);
-
-#endif
 
 #ifdef __cplusplus
 }

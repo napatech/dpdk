@@ -14,6 +14,16 @@
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+int
+test_mp_secondary(void)
+{
+	printf("mp_secondary not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+#else
+
 #include <sys/wait.h>
 #include <libgen.h>
 #include <dirent.h>
@@ -28,7 +38,6 @@
 #include <rte_lcore.h>
 #include <rte_errno.h>
 #include <rte_branch_prediction.h>
-#include <rte_atomic.h>
 #include <rte_ring.h>
 #include <rte_debug.h>
 #include <rte_log.h>
@@ -211,5 +220,7 @@ test_mp_secondary(void)
 
 	return run_object_creation_tests();
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */
 
 REGISTER_TEST_COMMAND(multiprocess_autotest, test_mp_secondary);

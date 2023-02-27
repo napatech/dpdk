@@ -29,14 +29,12 @@
 extern "C" {
 #endif
 
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <inttypes.h>
-#include <errno.h>
+#include <rte_compat.h>
 #include <rte_common.h>
-#include <rte_memory.h>
-#include <rte_lcore.h>
 #include <rte_debug.h>
 #include <rte_atomic.h>
 #include <rte_ring.h>
@@ -362,7 +360,7 @@ rte_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int thread_id)
 
 	/* The reader can go offline only after the load of the
 	 * data structure is completed. i.e. any load of the
-	 * data strcture can not move after this store.
+	 * data structure can not move after this store.
 	 */
 
 	__atomic_store_n(&v->qsbr_cnt[thread_id].cnt,

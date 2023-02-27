@@ -2,6 +2,7 @@
  * Copyright(c) 2016 IGEL Co., Ltd.
  * Copyright(c) 2016-2018 Intel Corporation
  */
+#include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -12,7 +13,8 @@
 #include <ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
-#include <rte_bus_vdev.h>
+#include <rte_net.h>
+#include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_vhost.h>
 #include <rte_spinlock.h>
@@ -31,9 +33,10 @@ enum {VIRTIO_RXQ, VIRTIO_TXQ, VIRTIO_QNUM};
 #define ETH_VHOST_CLIENT_ARG		"client"
 #define ETH_VHOST_IOMMU_SUPPORT		"iommu-support"
 #define ETH_VHOST_POSTCOPY_SUPPORT	"postcopy-support"
-#define ETH_VHOST_VIRTIO_NET_F_HOST_TSO "tso"
-#define ETH_VHOST_LINEAR_BUF  "linear-buffer"
-#define ETH_VHOST_EXT_BUF  "ext-buffer"
+#define ETH_VHOST_VIRTIO_NET_F_HOST_TSO	"tso"
+#define ETH_VHOST_LINEAR_BUF		"linear-buffer"
+#define ETH_VHOST_EXT_BUF		"ext-buffer"
+#define ETH_VHOST_LEGACY_OL_FLAGS	"legacy-ol-flags"
 #define VHOST_MAX_PKT_BURST 32
 
 static const char *valid_arguments[] = {
@@ -45,6 +48,7 @@ static const char *valid_arguments[] = {
 	ETH_VHOST_VIRTIO_NET_F_HOST_TSO,
 	ETH_VHOST_LINEAR_BUF,
 	ETH_VHOST_EXT_BUF,
+	ETH_VHOST_LEGACY_OL_FLAGS,
 	NULL
 };
 
@@ -59,33 +63,10 @@ static struct rte_ether_addr base_eth_addr = {
 	}
 };
 
-enum vhost_xstats_pkts {
-	VHOST_UNDERSIZE_PKT = 0,
-	VHOST_64_PKT,
-	VHOST_65_TO_127_PKT,
-	VHOST_128_TO_255_PKT,
-	VHOST_256_TO_511_PKT,
-	VHOST_512_TO_1023_PKT,
-	VHOST_1024_TO_1522_PKT,
-	VHOST_1523_TO_MAX_PKT,
-	VHOST_BROADCAST_PKT,
-	VHOST_MULTICAST_PKT,
-	VHOST_UNICAST_PKT,
-	VHOST_PKT,
-	VHOST_BYTE,
-	VHOST_MISSED_PKT,
-	VHOST_ERRORS_PKT,
-	VHOST_ERRORS_FRAGMENTED,
-	VHOST_ERRORS_JABBER,
-	VHOST_UNKNOWN_PROTOCOL,
-	VHOST_XSTATS_MAX,
-};
-
 struct vhost_stats {
 	uint64_t pkts;
 	uint64_t bytes;
 	uint64_t missed_pkts;
-	uint64_t xstats[VHOST_XSTATS_MAX];
 };
 
 struct vhost_queue {
@@ -106,10 +87,13 @@ struct pmd_internal {
 	char *iface_name;
 	uint64_t flags;
 	uint64_t disable_flags;
+	uint64_t features;
 	uint16_t max_queues;
 	int vid;
 	rte_atomic32_t started;
-	uint8_t vlan_strip;
+	bool vlan_strip;
+	bool rx_sw_csum;
+	bool tx_sw_csum;
 };
 
 struct internal_list {
@@ -140,138 +124,92 @@ struct rte_vhost_vring_state {
 
 static struct rte_vhost_vring_state *vring_states[RTE_MAX_ETHPORTS];
 
-#define VHOST_XSTATS_NAME_SIZE 64
-
-struct vhost_xstats_name_off {
-	char name[VHOST_XSTATS_NAME_SIZE];
-	uint64_t offset;
-};
-
-/* [rx]_is prepended to the name string here */
-static const struct vhost_xstats_name_off vhost_rxport_stat_strings[] = {
-	{"good_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_PKT])},
-	{"total_bytes",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_BYTE])},
-	{"missed_pkts",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_MISSED_PKT])},
-	{"broadcast_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_BROADCAST_PKT])},
-	{"multicast_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_MULTICAST_PKT])},
-	{"unicast_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_UNICAST_PKT])},
-	 {"undersize_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_UNDERSIZE_PKT])},
-	{"size_64_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_64_PKT])},
-	{"size_65_to_127_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_65_TO_127_PKT])},
-	{"size_128_to_255_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_128_TO_255_PKT])},
-	{"size_256_to_511_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_256_TO_511_PKT])},
-	{"size_512_to_1023_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_512_TO_1023_PKT])},
-	{"size_1024_to_1522_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_1024_TO_1522_PKT])},
-	{"size_1523_to_max_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_1523_TO_MAX_PKT])},
-	{"errors_with_bad_CRC",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_ERRORS_PKT])},
-	{"fragmented_errors",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_ERRORS_FRAGMENTED])},
-	{"jabber_errors",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_ERRORS_JABBER])},
-	{"unknown_protos_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_UNKNOWN_PROTOCOL])},
-};
-
-/* [tx]_ is prepended to the name string here */
-static const struct vhost_xstats_name_off vhost_txport_stat_strings[] = {
-	{"good_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_PKT])},
-	{"total_bytes",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_BYTE])},
-	{"missed_pkts",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_MISSED_PKT])},
-	{"broadcast_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_BROADCAST_PKT])},
-	{"multicast_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_MULTICAST_PKT])},
-	{"unicast_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_UNICAST_PKT])},
-	{"undersize_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_UNDERSIZE_PKT])},
-	{"size_64_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_64_PKT])},
-	{"size_65_to_127_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_65_TO_127_PKT])},
-	{"size_128_to_255_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_128_TO_255_PKT])},
-	{"size_256_to_511_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_256_TO_511_PKT])},
-	{"size_512_to_1023_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_512_TO_1023_PKT])},
-	{"size_1024_to_1522_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_1024_TO_1522_PKT])},
-	{"size_1523_to_max_packets",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_1523_TO_MAX_PKT])},
-	{"errors_with_bad_CRC",
-	 offsetof(struct vhost_queue, stats.xstats[VHOST_ERRORS_PKT])},
-};
-
-#define VHOST_NB_XSTATS_RXPORT (sizeof(vhost_rxport_stat_strings) / \
-				sizeof(vhost_rxport_stat_strings[0]))
-
-#define VHOST_NB_XSTATS_TXPORT (sizeof(vhost_txport_stat_strings) / \
-				sizeof(vhost_txport_stat_strings[0]))
-
 static int
 vhost_dev_xstats_reset(struct rte_eth_dev *dev)
 {
-	struct vhost_queue *vq = NULL;
-	unsigned int i = 0;
+	struct vhost_queue *vq;
+	int ret, i;
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		vq = dev->data->rx_queues[i];
-		if (!vq)
-			continue;
-		memset(&vq->stats, 0, sizeof(vq->stats));
+		ret = rte_vhost_vring_stats_reset(vq->vid, vq->virtqueue_id);
+		if (ret < 0)
+			return ret;
 	}
+
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		vq = dev->data->tx_queues[i];
-		if (!vq)
-			continue;
-		memset(&vq->stats, 0, sizeof(vq->stats));
+		ret = rte_vhost_vring_stats_reset(vq->vid, vq->virtqueue_id);
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
 }
 
 static int
-vhost_dev_xstats_get_names(struct rte_eth_dev *dev __rte_unused,
+vhost_dev_xstats_get_names(struct rte_eth_dev *dev,
 			   struct rte_eth_xstat_name *xstats_names,
-			   unsigned int limit __rte_unused)
+			   unsigned int limit)
 {
-	unsigned int t = 0;
-	int count = 0;
-	int nstats = VHOST_NB_XSTATS_RXPORT + VHOST_NB_XSTATS_TXPORT;
+	struct rte_vhost_stat_name *name;
+	struct vhost_queue *vq;
+	int ret, i, count = 0, nstats = 0;
 
-	if (!xstats_names)
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		vq = dev->data->rx_queues[i];
+		ret = rte_vhost_vring_stats_get_names(vq->vid, vq->virtqueue_id, NULL, 0);
+		if (ret < 0)
+			return ret;
+
+		nstats += ret;
+	}
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		vq = dev->data->tx_queues[i];
+		ret = rte_vhost_vring_stats_get_names(vq->vid, vq->virtqueue_id, NULL, 0);
+		if (ret < 0)
+			return ret;
+
+		nstats += ret;
+	}
+
+	if (!xstats_names || limit < (unsigned int)nstats)
 		return nstats;
-	for (t = 0; t < VHOST_NB_XSTATS_RXPORT; t++) {
-		snprintf(xstats_names[count].name,
-			 sizeof(xstats_names[count].name),
-			 "rx_%s", vhost_rxport_stat_strings[t].name);
-		count++;
+
+	name = calloc(nstats, sizeof(*name));
+	if (!name)
+		return -1;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		vq = dev->data->rx_queues[i];
+		ret = rte_vhost_vring_stats_get_names(vq->vid, vq->virtqueue_id,
+				name + count, nstats - count);
+		if (ret < 0) {
+			free(name);
+			return ret;
+		}
+
+		count += ret;
 	}
-	for (t = 0; t < VHOST_NB_XSTATS_TXPORT; t++) {
-		snprintf(xstats_names[count].name,
-			 sizeof(xstats_names[count].name),
-			 "tx_%s", vhost_txport_stat_strings[t].name);
-		count++;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		vq = dev->data->tx_queues[i];
+		ret = rte_vhost_vring_stats_get_names(vq->vid, vq->virtqueue_id,
+				name + count, nstats - count);
+		if (ret < 0) {
+			free(name);
+			return ret;
+		}
+
+		count += ret;
 	}
+
+	for (i = 0; i < count; i++)
+		strncpy(xstats_names[i].name, name[i].name, RTE_ETH_XSTATS_NAME_SIZE);
+
+	free(name);
+
 	return count;
 }
 
@@ -279,86 +217,183 @@ static int
 vhost_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 		     unsigned int n)
 {
-	unsigned int i;
-	unsigned int t;
-	unsigned int count = 0;
-	struct vhost_queue *vq = NULL;
-	unsigned int nxstats = VHOST_NB_XSTATS_RXPORT + VHOST_NB_XSTATS_TXPORT;
+	struct rte_vhost_stat *stats;
+	struct vhost_queue *vq;
+	int ret, i, count = 0, nstats = 0;
 
-	if (n < nxstats)
-		return nxstats;
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		vq = dev->data->rx_queues[i];
+		ret = rte_vhost_vring_stats_get(vq->vid, vq->virtqueue_id, NULL, 0);
+		if (ret < 0)
+			return ret;
 
-	for (t = 0; t < VHOST_NB_XSTATS_RXPORT; t++) {
-		xstats[count].value = 0;
-		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			vq = dev->data->rx_queues[i];
-			if (!vq)
-				continue;
-			xstats[count].value +=
-				*(uint64_t *)(((char *)vq)
-				+ vhost_rxport_stat_strings[t].offset);
-		}
-		xstats[count].id = count;
-		count++;
+		nstats += ret;
 	}
-	for (t = 0; t < VHOST_NB_XSTATS_TXPORT; t++) {
-		xstats[count].value = 0;
-		for (i = 0; i < dev->data->nb_tx_queues; i++) {
-			vq = dev->data->tx_queues[i];
-			if (!vq)
-				continue;
-			xstats[count].value +=
-				*(uint64_t *)(((char *)vq)
-				+ vhost_txport_stat_strings[t].offset);
-		}
-		xstats[count].id = count;
-		count++;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		vq = dev->data->tx_queues[i];
+		ret = rte_vhost_vring_stats_get(vq->vid, vq->virtqueue_id, NULL, 0);
+		if (ret < 0)
+			return ret;
+
+		nstats += ret;
 	}
-	return count;
+
+	if (!xstats || n < (unsigned int)nstats)
+		return nstats;
+
+	stats = calloc(nstats, sizeof(*stats));
+	if (!stats)
+		return -1;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		vq = dev->data->rx_queues[i];
+		ret = rte_vhost_vring_stats_get(vq->vid, vq->virtqueue_id,
+				stats + count, nstats - count);
+		if (ret < 0) {
+			free(stats);
+			return ret;
+		}
+
+		count += ret;
+	}
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		vq = dev->data->tx_queues[i];
+		ret = rte_vhost_vring_stats_get(vq->vid, vq->virtqueue_id,
+				stats + count, nstats - count);
+		if (ret < 0) {
+			free(stats);
+			return ret;
+		}
+
+		count += ret;
+	}
+
+	for (i = 0; i < count; i++) {
+		xstats[i].id = stats[i].id;
+		xstats[i].value = stats[i].value;
+	}
+
+	free(stats);
+
+	return nstats;
 }
 
-static inline void
-vhost_count_xcast_packets(struct vhost_queue *vq,
-				struct rte_mbuf *mbuf)
+static void
+vhost_dev_csum_configure(struct rte_eth_dev *eth_dev)
 {
-	struct rte_ether_addr *ea = NULL;
-	struct vhost_stats *pstats = &vq->stats;
+	struct pmd_internal *internal = eth_dev->data->dev_private;
+	const struct rte_eth_rxmode *rxmode = &eth_dev->data->dev_conf.rxmode;
+	const struct rte_eth_txmode *txmode = &eth_dev->data->dev_conf.txmode;
 
-	ea = rte_pktmbuf_mtod(mbuf, struct rte_ether_addr *);
-	if (rte_is_multicast_ether_addr(ea)) {
-		if (rte_is_broadcast_ether_addr(ea))
-			pstats->xstats[VHOST_BROADCAST_PKT]++;
-		else
-			pstats->xstats[VHOST_MULTICAST_PKT]++;
-	} else {
-		pstats->xstats[VHOST_UNICAST_PKT]++;
+	internal->rx_sw_csum = false;
+	internal->tx_sw_csum = false;
+
+	/* SW checksum is not compatible with legacy mode */
+	if (!(internal->flags & RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS))
+		return;
+
+	if (internal->features & (1ULL << VIRTIO_NET_F_CSUM)) {
+		if (!(rxmode->offloads &
+				(RTE_ETH_RX_OFFLOAD_UDP_CKSUM | RTE_ETH_RX_OFFLOAD_TCP_CKSUM))) {
+			VHOST_LOG(NOTICE, "Rx csum will be done in SW, may impact performance.");
+			internal->rx_sw_csum = true;
+		}
+	}
+
+	if (!(internal->features & (1ULL << VIRTIO_NET_F_GUEST_CSUM))) {
+		if (txmode->offloads &
+				(RTE_ETH_TX_OFFLOAD_UDP_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_CKSUM)) {
+			VHOST_LOG(NOTICE, "Tx csum will be done in SW, may impact performance.");
+			internal->tx_sw_csum = true;
+		}
 	}
 }
 
-static __rte_always_inline void
-vhost_update_single_packet_xstats(struct vhost_queue *vq, struct rte_mbuf *buf)
+static void
+vhost_dev_tx_sw_csum(struct rte_mbuf *mbuf)
 {
-	uint32_t pkt_len = 0;
-	uint64_t index;
-	struct vhost_stats *pstats = &vq->stats;
+	uint32_t hdr_len;
+	uint16_t csum = 0, csum_offset;
 
-	pstats->xstats[VHOST_PKT]++;
-	pkt_len = buf->pkt_len;
-	if (pkt_len == 64) {
-		pstats->xstats[VHOST_64_PKT]++;
-	} else if (pkt_len > 64 && pkt_len < 1024) {
-		index = (sizeof(pkt_len) * 8)
-			- __builtin_clz(pkt_len) - 5;
-		pstats->xstats[index]++;
-	} else {
-		if (pkt_len < 64)
-			pstats->xstats[VHOST_UNDERSIZE_PKT]++;
-		else if (pkt_len <= 1522)
-			pstats->xstats[VHOST_1024_TO_1522_PKT]++;
-		else if (pkt_len > 1522)
-			pstats->xstats[VHOST_1523_TO_MAX_PKT]++;
+	switch (mbuf->ol_flags & RTE_MBUF_F_TX_L4_MASK) {
+	case RTE_MBUF_F_TX_L4_NO_CKSUM:
+		return;
+	case RTE_MBUF_F_TX_TCP_CKSUM:
+		csum_offset = offsetof(struct rte_tcp_hdr, cksum);
+		break;
+	case RTE_MBUF_F_TX_UDP_CKSUM:
+		csum_offset = offsetof(struct rte_udp_hdr, dgram_cksum);
+		break;
+	default:
+		/* Unsupported packet type. */
+		return;
 	}
-	vhost_count_xcast_packets(vq, buf);
+
+	hdr_len = mbuf->l2_len + mbuf->l3_len;
+	csum_offset += hdr_len;
+
+	/* Prepare the pseudo-header checksum */
+	if (rte_net_intel_cksum_prepare(mbuf) < 0)
+		return;
+
+	if (rte_raw_cksum_mbuf(mbuf, hdr_len, rte_pktmbuf_pkt_len(mbuf) - hdr_len, &csum) < 0)
+		return;
+
+	csum = ~csum;
+	/* See RFC768 */
+	if (unlikely((mbuf->packet_type & RTE_PTYPE_L4_UDP) && csum == 0))
+		csum = 0xffff;
+
+	if (rte_pktmbuf_data_len(mbuf) >= csum_offset + 1)
+		*rte_pktmbuf_mtod_offset(mbuf, uint16_t *, csum_offset) = csum;
+
+	mbuf->ol_flags &= ~RTE_MBUF_F_TX_L4_MASK;
+	mbuf->ol_flags |= RTE_MBUF_F_TX_L4_NO_CKSUM;
+}
+
+static void
+vhost_dev_rx_sw_csum(struct rte_mbuf *mbuf)
+{
+	struct rte_net_hdr_lens hdr_lens;
+	uint32_t ptype, hdr_len;
+	uint16_t csum = 0, csum_offset;
+
+	/* Return early if the L4 checksum was not offloaded */
+	if ((mbuf->ol_flags & RTE_MBUF_F_RX_L4_CKSUM_MASK) != RTE_MBUF_F_RX_L4_CKSUM_NONE)
+		return;
+
+	ptype = rte_net_get_ptype(mbuf, &hdr_lens, RTE_PTYPE_ALL_MASK);
+
+	hdr_len = hdr_lens.l2_len + hdr_lens.l3_len;
+
+	switch (ptype & RTE_PTYPE_L4_MASK) {
+	case RTE_PTYPE_L4_TCP:
+		csum_offset = offsetof(struct rte_tcp_hdr, cksum) + hdr_len;
+		break;
+	case RTE_PTYPE_L4_UDP:
+		csum_offset = offsetof(struct rte_udp_hdr, dgram_cksum) + hdr_len;
+		break;
+	default:
+		/* Unsupported packet type */
+		return;
+	}
+
+	/* The pseudo-header checksum is already performed, as per Virtio spec */
+	if (rte_raw_cksum_mbuf(mbuf, hdr_len, rte_pktmbuf_pkt_len(mbuf) - hdr_len, &csum) < 0)
+		return;
+
+	csum = ~csum;
+	/* See RFC768 */
+	if (unlikely((ptype & RTE_PTYPE_L4_UDP) && csum == 0))
+		csum = 0xffff;
+
+	if (rte_pktmbuf_data_len(mbuf) >= csum_offset + 1)
+		*rte_pktmbuf_mtod_offset(mbuf, uint16_t *, csum_offset) = csum;
+
+	mbuf->ol_flags &= ~RTE_MBUF_F_RX_L4_CKSUM_MASK;
+	mbuf->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
 }
 
 static uint16_t
@@ -401,10 +436,10 @@ eth_vhost_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 		if (r->internal->vlan_strip)
 			rte_vlan_strip(bufs[i]);
 
-		r->stats.bytes += bufs[i]->pkt_len;
-		r->stats.xstats[VHOST_BYTE] += bufs[i]->pkt_len;
+		if (r->internal->rx_sw_csum)
+			vhost_dev_rx_sw_csum(bufs[i]);
 
-		vhost_update_single_packet_xstats(r, bufs[i]);
+		r->stats.bytes += bufs[i]->pkt_len;
 	}
 
 out:
@@ -442,6 +477,10 @@ eth_vhost_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 			}
 		}
 
+		if (r->internal->tx_sw_csum)
+			vhost_dev_tx_sw_csum(m);
+
+
 		bufs[nb_send] = m;
 		++nb_send;
 	}
@@ -461,27 +500,14 @@ eth_vhost_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 			break;
 	}
 
-	for (i = 0; likely(i < nb_tx); i++) {
+	for (i = 0; likely(i < nb_tx); i++)
 		nb_bytes += bufs[i]->pkt_len;
-		vhost_update_single_packet_xstats(r, bufs[i]);
-	}
 
 	nb_missed = nb_bufs - nb_tx;
 
 	r->stats.pkts += nb_tx;
 	r->stats.bytes += nb_bytes;
 	r->stats.missed_pkts += nb_missed;
-
-	r->stats.xstats[VHOST_BYTE] += nb_bytes;
-	r->stats.xstats[VHOST_MISSED_PKT] += nb_missed;
-	r->stats.xstats[VHOST_UNICAST_PKT] += nb_missed;
-
-	/* According to RFC2863, ifHCOutUcastPkts, ifHCOutMulticastPkts and
-	 * ifHCOutBroadcastPkts counters are increased when packets are not
-	 * transmitted successfully.
-	 */
-	for (i = nb_tx; i < nb_bufs; i++)
-		vhost_count_xcast_packets(r, bufs[i]);
 
 	for (i = 0; likely(i < nb_tx); i++)
 		rte_pktmbuf_free(bufs[i]);
@@ -716,10 +742,11 @@ eth_vhost_install_intr(struct rte_eth_dev *dev)
 }
 
 static void
-update_queuing_status(struct rte_eth_dev *dev)
+update_queuing_status(struct rte_eth_dev *dev, bool wait_queuing)
 {
 	struct pmd_internal *internal = dev->data->dev_private;
 	struct vhost_queue *vq;
+	struct rte_vhost_vring_state *state;
 	unsigned int i;
 	int allow_queuing = 1;
 
@@ -730,13 +757,18 @@ update_queuing_status(struct rte_eth_dev *dev)
 	    rte_atomic32_read(&internal->dev_attached) == 0)
 		allow_queuing = 0;
 
+	state = vring_states[dev->data->port_id];
+
 	/* Wait until rx/tx_pkt_burst stops accessing vhost device */
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		vq = dev->data->rx_queues[i];
 		if (vq == NULL)
 			continue;
-		rte_atomic32_set(&vq->allow_queuing, allow_queuing);
-		while (rte_atomic32_read(&vq->while_queuing))
+		if (allow_queuing && state->cur[vq->virtqueue_id])
+			rte_atomic32_set(&vq->allow_queuing, 1);
+		else
+			rte_atomic32_set(&vq->allow_queuing, 0);
+		while (wait_queuing && rte_atomic32_read(&vq->while_queuing))
 			rte_pause();
 	}
 
@@ -744,8 +776,11 @@ update_queuing_status(struct rte_eth_dev *dev)
 		vq = dev->data->tx_queues[i];
 		if (vq == NULL)
 			continue;
-		rte_atomic32_set(&vq->allow_queuing, allow_queuing);
-		while (rte_atomic32_read(&vq->while_queuing))
+		if (allow_queuing && state->cur[vq->virtqueue_id])
+			rte_atomic32_set(&vq->allow_queuing, 1);
+		else
+			rte_atomic32_set(&vq->allow_queuing, 0);
+		while (wait_queuing && rte_atomic32_read(&vq->while_queuing))
 			rte_pause();
 	}
 }
@@ -804,6 +839,11 @@ new_device(int vid)
 		eth_dev->data->numa_node = newnode;
 #endif
 
+	if (rte_vhost_get_negotiated_features(vid, &internal->features)) {
+		VHOST_LOG(ERR, "Failed to get device features\n");
+		return -1;
+	}
+
 	internal->vid = vid;
 	if (rte_atomic32_read(&internal->started) == 1) {
 		queue_setup(eth_dev, internal);
@@ -826,8 +866,10 @@ new_device(int vid)
 
 	eth_dev->data->dev_link.link_status = RTE_ETH_LINK_UP;
 
+	vhost_dev_csum_configure(eth_dev);
+
 	rte_atomic32_set(&internal->dev_attached, 1);
-	update_queuing_status(eth_dev);
+	update_queuing_status(eth_dev, false);
 
 	VHOST_LOG(INFO, "Vhost device %d created\n", vid);
 
@@ -857,7 +899,7 @@ destroy_device(int vid)
 	internal = eth_dev->data->dev_private;
 
 	rte_atomic32_set(&internal->dev_attached, 0);
-	update_queuing_status(eth_dev);
+	update_queuing_status(eth_dev, true);
 
 	eth_dev->data->dev_link.link_status = RTE_ETH_LINK_DOWN;
 
@@ -967,6 +1009,8 @@ vring_state_changed(int vid, uint16_t vring, int enable)
 	state->max_vring = RTE_MAX(vring, state->max_vring);
 	rte_spinlock_unlock(&state->lock);
 
+	update_queuing_status(eth_dev, false);
+
 	VHOST_LOG(INFO, "vring%u is %s\n",
 			vring, enable ? "enabled" : "disabled");
 
@@ -975,7 +1019,7 @@ vring_state_changed(int vid, uint16_t vring, int enable)
 	return 0;
 }
 
-static struct vhost_device_ops vhost_ops = {
+static struct rte_vhost_device_ops vhost_ops = {
 	.new_device          = new_device,
 	.destroy_device      = destroy_device,
 	.vring_state_changed = vring_state_changed,
@@ -1130,6 +1174,8 @@ eth_dev_configure(struct rte_eth_dev *dev)
 
 	internal->vlan_strip = !!(rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP);
 
+	vhost_dev_csum_configure(dev);
+
 	return 0;
 }
 
@@ -1152,7 +1198,7 @@ eth_dev_start(struct rte_eth_dev *eth_dev)
 	}
 
 	rte_atomic32_set(&internal->started, 1);
-	update_queuing_status(eth_dev);
+	update_queuing_status(eth_dev, false);
 
 	return 0;
 }
@@ -1164,7 +1210,7 @@ eth_dev_stop(struct rte_eth_dev *dev)
 
 	dev->data->dev_started = 0;
 	rte_atomic32_set(&internal->started, 0);
-	update_queuing_status(dev);
+	update_queuing_status(dev, true);
 
 	return 0;
 }
@@ -1279,7 +1325,16 @@ eth_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->tx_offload_capa = RTE_ETH_TX_OFFLOAD_MULTI_SEGS |
 				RTE_ETH_TX_OFFLOAD_VLAN_INSERT;
+	if (internal->flags & RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS) {
+		dev_info->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+			RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
+	}
+
 	dev_info->rx_offload_capa = RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
+	if (internal->flags & RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS) {
+		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
+			RTE_ETH_RX_OFFLOAD_TCP_CKSUM;
+	}
 
 	return 0;
 }
@@ -1390,6 +1445,45 @@ eth_rx_queue_count(void *rx_queue)
 	return rte_vhost_rx_queue_count(vq->vid, vq->virtqueue_id);
 }
 
+#define CLB_VAL_IDX 0
+#define CLB_MSK_IDX 1
+#define CLB_MATCH_IDX 2
+static int
+vhost_monitor_callback(const uint64_t value,
+		const uint64_t opaque[RTE_POWER_MONITOR_OPAQUE_SZ])
+{
+	const uint64_t m = opaque[CLB_MSK_IDX];
+	const uint64_t v = opaque[CLB_VAL_IDX];
+	const uint64_t c = opaque[CLB_MATCH_IDX];
+
+	if (c)
+		return (value & m) == v ? -1 : 0;
+	else
+		return (value & m) == v ? 0 : -1;
+}
+
+static int
+vhost_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
+{
+	struct vhost_queue *vq = rx_queue;
+	struct rte_vhost_power_monitor_cond vhost_pmc;
+	int ret;
+	if (vq == NULL)
+		return -EINVAL;
+	ret = rte_vhost_get_monitor_addr(vq->vid, vq->virtqueue_id,
+			&vhost_pmc);
+	if (ret < 0)
+		return -EINVAL;
+	pmc->addr = vhost_pmc.addr;
+	pmc->opaque[CLB_VAL_IDX] = vhost_pmc.val;
+	pmc->opaque[CLB_MSK_IDX] = vhost_pmc.mask;
+	pmc->opaque[CLB_MATCH_IDX] = vhost_pmc.match;
+	pmc->size = vhost_pmc.size;
+	pmc->fn = vhost_monitor_callback;
+
+	return 0;
+}
+
 static const struct eth_dev_ops ops = {
 	.dev_start = eth_dev_start,
 	.dev_stop = eth_dev_stop,
@@ -1409,6 +1503,7 @@ static const struct eth_dev_ops ops = {
 	.xstats_get_names = vhost_dev_xstats_get_names,
 	.rx_queue_intr_enable = eth_rxq_intr_enable,
 	.rx_queue_intr_disable = eth_rxq_intr_disable,
+	.get_monitor_addr = vhost_get_monitor_addr,
 };
 
 static int
@@ -1515,7 +1610,7 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 	int ret = 0;
 	char *iface_name;
 	uint16_t queues;
-	uint64_t flags = 0;
+	uint64_t flags = RTE_VHOST_USER_NET_STATS_ENABLE;
 	uint64_t disable_flags = 0;
 	int client_mode = 0;
 	int iommu_support = 0;
@@ -1523,6 +1618,7 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 	int tso = 0;
 	int linear_buf = 0;
 	int ext_buf = 0;
+	int legacy_ol_flags = 0;
 	struct rte_eth_dev *eth_dev;
 	const char *name = rte_vdev_device_name(dev);
 
@@ -1603,11 +1699,11 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 				&open_int, &tso);
 		if (ret < 0)
 			goto out_free;
+	}
 
-		if (tso == 0) {
-			disable_flags |= (1ULL << VIRTIO_NET_F_HOST_TSO4);
-			disable_flags |= (1ULL << VIRTIO_NET_F_HOST_TSO6);
-		}
+	if (tso == 0) {
+		disable_flags |= (1ULL << VIRTIO_NET_F_HOST_TSO4);
+		disable_flags |= (1ULL << VIRTIO_NET_F_HOST_TSO6);
 	}
 
 	if (rte_kvargs_count(kvlist, ETH_VHOST_LINEAR_BUF) == 1) {
@@ -1631,6 +1727,17 @@ rte_pmd_vhost_probe(struct rte_vdev_device *dev)
 		if (ext_buf == 1)
 			flags |= RTE_VHOST_USER_EXTBUF_SUPPORT;
 	}
+
+	if (rte_kvargs_count(kvlist, ETH_VHOST_LEGACY_OL_FLAGS) == 1) {
+		ret = rte_kvargs_process(kvlist,
+				ETH_VHOST_LEGACY_OL_FLAGS,
+				&open_int, &legacy_ol_flags);
+		if (ret < 0)
+			goto out_free;
+	}
+
+	if (legacy_ol_flags == 0)
+		flags |= RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS;
 
 	if (dev->device.numa_node == SOCKET_ID_ANY)
 		dev->device.numa_node = rte_socket_id();

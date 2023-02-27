@@ -3,6 +3,7 @@
  */
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -14,7 +15,7 @@
 #include <rte_malloc.h>
 #include <rte_kvargs.h>
 #include <ethdev_vdev.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_alarm.h>
 #include <rte_cycles.h>
 
@@ -666,6 +667,7 @@ virtio_user_pmd_probe(struct rte_vdev_device *vdev)
 	/* previously called by pci probing for physical dev */
 	if (eth_virtio_dev_init(eth_dev) < 0) {
 		PMD_INIT_LOG(ERR, "eth_virtio_dev_init fails");
+		virtio_user_dev_uninit(dev);
 		virtio_user_eth_dev_free(eth_dev);
 		goto end;
 	}
@@ -688,14 +690,10 @@ virtio_user_pmd_probe(struct rte_vdev_device *vdev)
 	ret = 0;
 
 end:
-	if (kvlist)
-		rte_kvargs_free(kvlist);
-	if (path)
-		free(path);
-	if (mac_addr)
-		free(mac_addr);
-	if (ifname)
-		free(ifname);
+	rte_kvargs_free(kvlist);
+	free(path);
+	free(mac_addr);
+	free(ifname);
 	return ret;
 }
 

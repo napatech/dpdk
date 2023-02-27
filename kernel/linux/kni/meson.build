@@ -5,7 +5,7 @@
 # Ref: https://jira.devtools.intel.com/browse/DPDK-29263
 kmod_cflags = ''
 file_path = kernel_source_dir + '/include/linux/netdevice.h'
-run_cmd = run_command('grep', 'ndo_tx_timeout', file_path)
+run_cmd = run_command('grep', 'ndo_tx_timeout', file_path, check: false)
 
 if run_cmd.stdout().contains('txqueue') == true
    kmod_cflags = '-DHAVE_ARG_TX_QUEUE'
@@ -29,10 +29,10 @@ custom_target('rte_kni',
             'M=' + meson.current_build_dir(),
             'src=' + meson.current_source_dir(),
             ' '.join(['MODULE_CFLAGS=', kmod_cflags,'-include '])
-            + meson.source_root() + '/config/rte_config.h' +
-            ' -I' + meson.source_root() + '/lib/eal/include' +
-            ' -I' + meson.source_root() + '/lib/kni' +
-            ' -I' + meson.build_root() +
+            + dpdk_source_root + '/config/rte_config.h' +
+            ' -I' + dpdk_source_root + '/lib/eal/include' +
+            ' -I' + dpdk_source_root + '/lib/kni' +
+            ' -I' + dpdk_build_root +
             ' -I' + meson.current_source_dir(),
             'modules'] + cross_args,
         depends: kni_mkfile,

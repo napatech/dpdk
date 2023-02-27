@@ -1,5 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 OR Linux-OpenIB OR BSD-3-Clause */
-/* Copyright (c) 2017-2020 Pensando Systems, Inc.  All rights reserved. */
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2017-2022 Advanced Micro Devices, Inc.
+ */
 
 #ifndef _IONIC_IF_H_
 #define _IONIC_IF_H_
@@ -400,8 +401,8 @@ union ionic_lif_config {
  *     @version:            Ethernet identify structure version
  *     @max_ucast_filters:  Number of perfect unicast addresses supported
  *     @max_mcast_filters:  Number of perfect multicast addresses supported
- *     @min_frame_size:     Minimum size of frames to be sent
- *     @max_frame_size:     Maximum size of frames to be sent
+ *     @min_mtu:            Minimum MTU of frames to be sent
+ *     @max_mtu:            Maximum MTU of frames to be sent
  *     @config:             LIF config struct with features, mtu, mac, q counts
  *
  * @rdma:                RDMA identify structure
@@ -433,8 +434,8 @@ union ionic_lif_identity {
 			__le32 max_ucast_filters;
 			__le32 max_mcast_filters;
 			__le16 rss_ind_tbl_sz;
-			__le32 min_frame_size;
-			__le32 max_frame_size;
+			__le32 min_mtu;
+			__le32 max_mtu;
 			u8 rsvd2[106];
 			union ionic_lif_config config;
 		} __rte_packed eth;
@@ -684,7 +685,7 @@ enum ionic_txq_desc_opcode {
  *                   IONIC_TXQ_DESC_OPCODE_CSUM_HW:
  *                      Offload 16-bit checksum computation to hardware.
  *                      If @csum_l3 is set then the packet's L3 checksum is
- *                      updated. Similarly, if @csum_l4 is set the the L4
+ *                      updated. Similarly, if @csum_l4 is set the L4
  *                      checksum is updated. If @encap is set then encap header
  *                      checksums are also updated.
  *
@@ -2068,7 +2069,7 @@ typedef struct ionic_admin_comp ionic_fw_download_comp;
  * enum ionic_fw_control_oper - FW control operations
  * @IONIC_FW_RESET:     Reset firmware
  * @IONIC_FW_INSTALL:   Install firmware
- * @IONIC_FW_ACTIVATE:  Acticate firmware
+ * @IONIC_FW_ACTIVATE:  Activate firmware
  */
 enum ionic_fw_control_oper {
 	IONIC_FW_RESET		= 0,
@@ -2091,7 +2092,7 @@ struct ionic_fw_control_cmd {
 };
 
 /**
- * struct ionic_fw_control_comp - Firmware control copletion
+ * struct ionic_fw_control_comp - Firmware control completion
  * @status:     Status of the command (enum ionic_status_code)
  * @comp_index: Index in the descriptor ring for which this is the completion
  * @slot:       Slot where the firmware was installed
@@ -2878,7 +2879,7 @@ struct ionic_doorbell {
  *                    and @identity->intr_coal_div to convert from
  *                    usecs to device units:
  *
- *                      coal_init = coal_usecs * coal_mutl / coal_div
+ *                      coal_init = coal_usecs * coal_mult / coal_div
  *
  *                    When an interrupt is sent the interrupt
  *                    coalescing timer current value

@@ -8,7 +8,6 @@
  */
 
 #include <stdio.h>
-#include <stdarg.h>
 #include <string.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -17,19 +16,11 @@
 
 #include <rte_common.h>
 #include <rte_log.h>
-#include <rte_memory.h>
 #include <rte_memzone.h>
 #include <rte_malloc.h>
-#include <rte_launch.h>
-#include <rte_eal.h>
 #include <rte_eal_memconfig.h>
-#include <rte_atomic.h>
-#include <rte_per_lcore.h>
-#include <rte_lcore.h>
-#include <rte_branch_prediction.h>
 #include <rte_errno.h>
 #include <rte_string_fns.h>
-#include <rte_spinlock.h>
 #include <rte_tailq.h>
 
 #include "rte_ring.h"
@@ -75,7 +66,7 @@ rte_ring_get_memsize_elem(unsigned int esize, unsigned int count)
 		return -EINVAL;
 	}
 
-	sz = sizeof(struct rte_ring) + count * esize;
+	sz = sizeof(struct rte_ring) + (ssize_t)count * esize;
 	sz = RTE_ALIGN(sz, RTE_CACHE_LINE_SIZE);
 	return sz;
 }
@@ -267,7 +258,7 @@ rte_ring_create_elem(const char *name, unsigned int esize, unsigned int count,
 
 	ring_size = rte_ring_get_memsize_elem(esize, count);
 	if (ring_size < 0) {
-		rte_errno = ring_size;
+		rte_errno = -ring_size;
 		return NULL;
 	}
 

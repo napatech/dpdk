@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2021 NVIDIA Corporation & Affiliates
 
-if not is_linux
+if not (is_linux or is_windows)
     build = false
-    reason = 'only supported on Linux'
+    reason = 'only supported on Linux and Windows'
     subdir_done()
 endif
 
-fmt_name = 'mlx5_crypto'
 deps += ['common_mlx5', 'eal', 'cryptodev']
+if not dpdk_conf.has('RTE_COMMON_MLX5')
+    # avoid referencing undefined variables from common/mlx5
+    subdir_done()
+endif
+
 sources = files(
         'mlx5_crypto.c',
         'mlx5_crypto_dek.c',

@@ -5,6 +5,10 @@
 #ifndef _RTE_TRACE_POINT_REGISTER_H_
 #define _RTE_TRACE_POINT_REGISTER_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifdef _RTE_TRACE_POINT_H_
 #error for registration, include this file first before <rte_trace_point.h>
 #endif
@@ -16,9 +20,10 @@ RTE_DECLARE_PER_LCORE(volatile int, trace_point_sz);
 
 #define RTE_TRACE_POINT_REGISTER(trace, name) \
 rte_trace_point_t __attribute__((section("__rte_trace_point"))) __##trace; \
+static const char __##trace##_name[] = RTE_STR(name); \
 RTE_INIT(trace##_init) \
 { \
-	__rte_trace_point_register(&__##trace, RTE_STR(name), \
+	__rte_trace_point_register(&__##trace, __##trace##_name, \
 		(void (*)(void)) trace); \
 }
 
@@ -41,5 +46,9 @@ do { \
 	__rte_trace_point_emit_field(__RTE_TRACE_EMIT_STRING_LEN_MAX, \
 		RTE_STR(in)"[32]", "string_bounded_t"); \
 } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _RTE_TRACE_POINT_REGISTER_H_ */

@@ -13,6 +13,7 @@
 #include "rte_version.h"
 #include "rte_ethdev.h"
 
+#include "bnxt.h"
 #include "ulp_template_db_enum.h"
 #include "ulp_tun.h"
 #include "bnxt_tf_common.h"
@@ -33,12 +34,15 @@
 #define BNXT_ULP_APP_DEV_UNSUPPORTED	0x4
 #define BNXT_ULP_HIGH_AVAIL_ENABLED	0x8
 #define BNXT_ULP_APP_UNICAST_ONLY	0x10
+#define BNXT_ULP_APP_SOCKET_DIRECT	0x20
+
 #define ULP_VF_REP_IS_ENABLED(flag)	((flag) & BNXT_ULP_VF_REP_ENABLED)
 #define ULP_SHARED_SESSION_IS_ENABLED(flag) ((flag) &\
 					     BNXT_ULP_SHARED_SESSION_ENABLED)
 #define ULP_APP_DEV_UNSUPPORTED_ENABLED(flag)	((flag) &\
 						 BNXT_ULP_APP_DEV_UNSUPPORTED)
 #define ULP_HIGH_AVAIL_IS_ENABLED(flag)	((flag) & BNXT_ULP_HIGH_AVAIL_ENABLED)
+#define ULP_SOCKET_DIRECT_IS_ENABLED(flag) ((flag) & BNXT_ULP_APP_SOCKET_DIRECT)
 
 enum bnxt_ulp_flow_mem_type {
 	BNXT_ULP_FLOW_MEM_TYPE_INT = 0,
@@ -88,7 +92,6 @@ struct bnxt_ulp_data {
 #define	BNXT_ULP_TUN_ENTRY_INVALID	-1
 #define	BNXT_ULP_MAX_TUN_CACHE_ENTRIES	16
 	struct bnxt_tun_cache_entry	tun_tbl[BNXT_ULP_MAX_TUN_CACHE_ENTRIES];
-	bool				accum_stats;
 	uint8_t				app_id;
 	uint8_t				num_shared_clients;
 	struct bnxt_flow_app_tun_ent	app_tun[BNXT_ULP_MAX_TUN_CACHE_ENTRIES];
@@ -258,7 +261,7 @@ bnxt_ulp_cntxt_ptr2_ulp_flags_get(struct bnxt_ulp_context *ulp_ctx,
 				  uint32_t *flags);
 
 int32_t
-bnxt_ulp_get_df_rule_info(uint8_t port_id, struct bnxt_ulp_context *ulp_ctx,
+bnxt_ulp_get_df_rule_info(uint16_t port_id, struct bnxt_ulp_context *ulp_ctx,
 			  struct bnxt_ulp_df_rule_info *info);
 
 struct bnxt_ulp_vfr_rule_info*
@@ -287,7 +290,7 @@ struct bnxt_ulp_app_capabilities_info *
 bnxt_ulp_app_cap_list_get(uint32_t *num_entries);
 
 int32_t
-bnxt_ulp_cntxt_app_caps_init(struct bnxt_ulp_context *ulp_ctx,
+bnxt_ulp_cntxt_app_caps_init(struct bnxt *bp,
 			     uint8_t app_id, uint32_t dev_id);
 
 struct bnxt_ulp_resource_resv_info *
@@ -304,7 +307,7 @@ bool
 bnxt_ulp_cntxt_ha_enabled(struct bnxt_ulp_context *ulp_ctx);
 
 struct bnxt_ulp_context *
-bnxt_ulp_cntxt_entry_acquire(void);
+bnxt_ulp_cntxt_entry_acquire(void *arg);
 
 void
 bnxt_ulp_cntxt_entry_release(void);

@@ -23,6 +23,23 @@
 uint32_t active_queues[RTE_SCHED_QUEUES_PER_PIPE];
 uint32_t n_active_queues;
 
+struct rte_sched_cman_params cman_params;
+
+int parse_u64(const char *entry, uint64_t *val)
+{
+	char *endptr;
+	if (!entry || !val)
+		return -EINVAL;
+
+	errno = 0;
+
+	*val = strtoull(entry, &endptr, 0);
+	if (errno == EINVAL || errno == ERANGE || *endptr != '\0')
+		return -EINVAL;
+
+	return 0;
+}
+
 int
 cfg_load_port(struct rte_cfgfile *cfg, struct rte_sched_port_params *port_params)
 {
@@ -45,7 +62,7 @@ cfg_load_port(struct rte_cfgfile *cfg, struct rte_sched_port_params *port_params
 int
 cfg_load_pipe(struct rte_cfgfile *cfg, struct rte_sched_pipe_params *pipe_params)
 {
-	int i, j;
+	int i, j, ret = 0;
 	char *next;
 	const char *entry;
 	int profiles;
@@ -61,68 +78,84 @@ cfg_load_pipe(struct rte_cfgfile *cfg, struct rte_sched_pipe_params *pipe_params
 		snprintf(pipe_name, sizeof(pipe_name), "pipe profile %d", j);
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tb rate");
-		if (entry)
-			pipe_params[j].tb_rate = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tb_rate);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tb size");
-		if (entry)
-			pipe_params[j].tb_size = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tb_size);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc period");
-		if (entry)
-			pipe_params[j].tc_period = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_period);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 0 rate");
-		if (entry)
-			pipe_params[j].tc_rate[0] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[0]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 1 rate");
-		if (entry)
-			pipe_params[j].tc_rate[1] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[1]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 2 rate");
-		if (entry)
-			pipe_params[j].tc_rate[2] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[2]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 3 rate");
-		if (entry)
-			pipe_params[j].tc_rate[3] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[3]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 4 rate");
-		if (entry)
-			pipe_params[j].tc_rate[4] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[4]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 5 rate");
-		if (entry)
-			pipe_params[j].tc_rate[5] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[5]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 6 rate");
-		if (entry)
-			pipe_params[j].tc_rate[6] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[6]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 7 rate");
-		if (entry)
-			pipe_params[j].tc_rate[7] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[7]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 8 rate");
-		if (entry)
-			pipe_params[j].tc_rate[8] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[8]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 9 rate");
-		if (entry)
-			pipe_params[j].tc_rate[9] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[9]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 10 rate");
-		if (entry)
-			pipe_params[j].tc_rate[10] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[10]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 11 rate");
-		if (entry)
-			pipe_params[j].tc_rate[11] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[11]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 12 rate");
-		if (entry)
-			pipe_params[j].tc_rate[12] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &pipe_params[j].tc_rate[12]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, pipe_name, "tc 12 oversubscription weight");
 		if (entry)
@@ -146,7 +179,7 @@ int
 cfg_load_subport_profile(struct rte_cfgfile *cfg,
 	struct rte_sched_subport_profile_params *subport_profile)
 {
-	int i;
+	int i, ret = 0;
 	const char *entry;
 	int profiles;
 
@@ -155,75 +188,91 @@ cfg_load_subport_profile(struct rte_cfgfile *cfg,
 
 	profiles = rte_cfgfile_num_sections(cfg, "subport profile",
 					   sizeof("subport profile") - 1);
-	subport_params[0].n_pipe_profiles = profiles;
+	port_params.n_subport_profiles = profiles;
 
 	for (i = 0; i < profiles; i++) {
 		char sec_name[32];
 		snprintf(sec_name, sizeof(sec_name), "subport profile %d", i);
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tb rate");
-		if (entry)
-			subport_profile[i].tb_rate = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tb_rate);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tb size");
-		if (entry)
-			subport_profile[i].tb_size = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tb_size);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc period");
-		if (entry)
-			subport_profile[i].tc_period = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_period);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 0 rate");
-		if (entry)
-			subport_profile[i].tc_rate[0] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[0]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 1 rate");
-		if (entry)
-			subport_profile[i].tc_rate[1] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[1]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 2 rate");
-		if (entry)
-			subport_profile[i].tc_rate[2] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[2]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 3 rate");
-		if (entry)
-			subport_profile[i].tc_rate[3] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[3]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 4 rate");
-		if (entry)
-			subport_profile[i].tc_rate[4] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[4]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 5 rate");
-		if (entry)
-			subport_profile[i].tc_rate[5] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[5]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 6 rate");
-		if (entry)
-			subport_profile[i].tc_rate[6] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[6]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 7 rate");
-		if (entry)
-			subport_profile[i].tc_rate[7] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[7]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 8 rate");
-		if (entry)
-			subport_profile[i].tc_rate[8] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[8]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 9 rate");
-		if (entry)
-			subport_profile[i].tc_rate[9] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[9]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 10 rate");
-		if (entry)
-			subport_profile[i].tc_rate[10] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[10]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 11 rate");
-		if (entry)
-			subport_profile[i].tc_rate[11] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[11]);
+		if (ret)
+			return ret;
 
 		entry = rte_cfgfile_get_entry(cfg, sec_name, "tc 12 rate");
-		if (entry)
-			subport_profile[i].tc_rate[12] = (uint64_t)atoi(entry);
+		ret = parse_u64(entry, &subport_profile[i].tc_rate[12]);
+		if (ret)
+			return ret;
 	}
 
 	return 0;
@@ -232,6 +281,7 @@ cfg_load_subport_profile(struct rte_cfgfile *cfg,
 int
 cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subport_params)
 {
+	bool cman_enabled = false;
 	const char *entry;
 	int i, j, k;
 
@@ -242,25 +292,21 @@ cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subpo
 	memset(active_queues, 0, sizeof(active_queues));
 	n_active_queues = 0;
 
-#ifdef RTE_SCHED_RED
-	char sec_name[CFG_NAME_LEN];
-	struct rte_red_params red_params[RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE][RTE_COLORS];
-
-	snprintf(sec_name, sizeof(sec_name), "red");
-
-	if (rte_cfgfile_has_section(cfg, sec_name)) {
+	if (rte_cfgfile_has_section(cfg, "red")) {
+		cman_params.cman_mode = RTE_SCHED_CMAN_RED;
+		cman_enabled = true;
 
 		for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++) {
 			char str[32];
 
-			/* Parse WRED min thresholds */
-			snprintf(str, sizeof(str), "tc %d wred min", i);
-			entry = rte_cfgfile_get_entry(cfg, sec_name, str);
+			/* Parse RED min thresholds */
+			snprintf(str, sizeof(str), "tc %d red min", i);
+			entry = rte_cfgfile_get_entry(cfg, "red", str);
 			if (entry) {
 				char *next;
 				/* for each packet colour (green, yellow, red) */
 				for (j = 0; j < RTE_COLORS; j++) {
-					red_params[i][j].min_th
+					cman_params.red_params[i][j].min_th
 						= (uint16_t)strtol(entry, &next, 10);
 					if (next == NULL)
 						break;
@@ -268,14 +314,14 @@ cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subpo
 				}
 			}
 
-			/* Parse WRED max thresholds */
-			snprintf(str, sizeof(str), "tc %d wred max", i);
+			/* Parse RED max thresholds */
+			snprintf(str, sizeof(str), "tc %d red max", i);
 			entry = rte_cfgfile_get_entry(cfg, "red", str);
 			if (entry) {
 				char *next;
 				/* for each packet colour (green, yellow, red) */
 				for (j = 0; j < RTE_COLORS; j++) {
-					red_params[i][j].max_th
+					cman_params.red_params[i][j].max_th
 						= (uint16_t)strtol(entry, &next, 10);
 					if (next == NULL)
 						break;
@@ -283,14 +329,14 @@ cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subpo
 				}
 			}
 
-			/* Parse WRED inverse mark probabilities */
-			snprintf(str, sizeof(str), "tc %d wred inv prob", i);
+			/* Parse RED inverse mark probabilities */
+			snprintf(str, sizeof(str), "tc %d red inv prob", i);
 			entry = rte_cfgfile_get_entry(cfg, "red", str);
 			if (entry) {
 				char *next;
 				/* for each packet colour (green, yellow, red) */
 				for (j = 0; j < RTE_COLORS; j++) {
-					red_params[i][j].maxp_inv
+					cman_params.red_params[i][j].maxp_inv
 						= (uint8_t)strtol(entry, &next, 10);
 
 					if (next == NULL)
@@ -299,14 +345,14 @@ cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subpo
 				}
 			}
 
-			/* Parse WRED EWMA filter weights */
-			snprintf(str, sizeof(str), "tc %d wred weight", i);
+			/* Parse RED EWMA filter weights */
+			snprintf(str, sizeof(str), "tc %d red weight", i);
 			entry = rte_cfgfile_get_entry(cfg, "red", str);
 			if (entry) {
 				char *next;
 				/* for each packet colour (green, yellow, red) */
 				for (j = 0; j < RTE_COLORS; j++) {
-					red_params[i][j].wq_log2
+					cman_params.red_params[i][j].wq_log2
 						= (uint8_t)strtol(entry, &next, 10);
 					if (next == NULL)
 						break;
@@ -315,7 +361,44 @@ cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subpo
 			}
 		}
 	}
-#endif /* RTE_SCHED_RED */
+
+	if (rte_cfgfile_has_section(cfg, "pie")) {
+		cman_params.cman_mode = RTE_SCHED_CMAN_PIE;
+		cman_enabled = true;
+
+		for (i = 0; i < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; i++) {
+			char str[32];
+
+			/* Parse Queue Delay Ref value */
+			snprintf(str, sizeof(str), "tc %d qdelay ref", i);
+			entry = rte_cfgfile_get_entry(cfg, "pie", str);
+			if (entry)
+				cman_params.pie_params[i].qdelay_ref =
+					(uint16_t) atoi(entry);
+
+			/* Parse Max Burst value */
+			snprintf(str, sizeof(str), "tc %d max burst", i);
+			entry = rte_cfgfile_get_entry(cfg, "pie", str);
+			if (entry)
+				cman_params.pie_params[i].max_burst =
+					(uint16_t) atoi(entry);
+
+			/* Parse Update Interval Value */
+			snprintf(str, sizeof(str), "tc %d update interval", i);
+			entry = rte_cfgfile_get_entry(cfg, "pie", str);
+			if (entry)
+				cman_params.pie_params[i].dp_update_interval =
+					(uint16_t) atoi(entry);
+
+			/* Parse Tailq Threshold Value */
+			snprintf(str, sizeof(str), "tc %d tailq th", i);
+			entry = rte_cfgfile_get_entry(cfg, "pie", str);
+			if (entry)
+				cman_params.pie_params[i].tailq_th =
+					(uint16_t) atoi(entry);
+
+		}
+	}
 
 	for (i = 0; i < MAX_SCHED_SUBPORTS; i++) {
 		char sec_name[CFG_NAME_LEN];
@@ -393,20 +476,8 @@ cfg_load_subport(struct rte_cfgfile *cfg, struct rte_sched_subport_params *subpo
 					}
 				}
 			}
-#ifdef RTE_SCHED_RED
-			for (j = 0; j < RTE_SCHED_TRAFFIC_CLASSES_PER_PIPE; j++) {
-				for (k = 0; k < RTE_COLORS; k++) {
-					subport_params[i].red_params[j][k].min_th =
-						red_params[j][k].min_th;
-					subport_params[i].red_params[j][k].max_th =
-						red_params[j][k].max_th;
-					subport_params[i].red_params[j][k].maxp_inv =
-						red_params[j][k].maxp_inv;
-					subport_params[i].red_params[j][k].wq_log2 =
-						red_params[j][k].wq_log2;
-				}
-			}
-#endif
+			if (cman_enabled)
+				subport_params[i].cman_params = &cman_params;
 		}
 	}
 

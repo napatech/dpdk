@@ -9,7 +9,7 @@
 #include <rte_kvargs.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 
 #include <fcntl.h>
 #include <linux/ethtool.h>
@@ -490,11 +490,6 @@ mrvl_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
-	if (dev->data->dev_conf.rxmode.split_hdr_size) {
-		MRVL_LOG(INFO, "Split headers not supported");
-		return -EINVAL;
-	}
-
 	if (dev->data->dev_conf.rxmode.mtu > priv->max_mtu) {
 		MRVL_LOG(ERR, "MTU %u is larger than max_mtu %u\n",
 			 dev->data->dev_conf.rxmode.mtu,
@@ -579,7 +574,7 @@ mrvl_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	if (mru - RTE_ETHER_CRC_LEN + MRVL_PKT_OFFS > mbuf_data_size) {
 		mru = mbuf_data_size + RTE_ETHER_CRC_LEN - MRVL_PKT_OFFS;
 		mtu = MRVL_PP2_MRU_TO_MTU(mru);
-		MRVL_LOG(WARNING, "MTU too big, max MTU possible limitted "
+		MRVL_LOG(WARNING, "MTU too big, max MTU possible limited "
 			"by current mbuf size: %u. Set MTU to %u, MRU to %u",
 			mbuf_data_size, mtu, mru);
 	}
@@ -1626,13 +1621,14 @@ mrvl_xstats_get(struct rte_eth_dev *dev,
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
 	struct pp2_ppio_statistics ppio_stats;
-	unsigned int i;
+	unsigned int i, count;
 
-	if (!stats)
-		return 0;
+	count = RTE_DIM(mrvl_xstats_tbl);
+	if (n < count)
+		return count;
 
 	pp2_ppio_get_statistics(priv->ppio, &ppio_stats, 0);
-	for (i = 0; i < n && i < RTE_DIM(mrvl_xstats_tbl); i++) {
+	for (i = 0; i < count; i++) {
 		uint64_t val;
 
 		if (mrvl_xstats_tbl[i].size == sizeof(uint32_t))
@@ -1648,7 +1644,7 @@ mrvl_xstats_get(struct rte_eth_dev *dev,
 		stats[i].value = val;
 	}
 
-	return n;
+	return count;
 }
 
 /**
@@ -1708,6 +1704,8 @@ mrvl_dev_infos_get(struct rte_eth_dev *dev,
 		   struct rte_eth_dev_info *info)
 {
 	struct mrvl_priv *priv = dev->data->dev_private;
+
+	info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	info->speed_capa = RTE_ETH_LINK_SPEED_10M |
 			   RTE_ETH_LINK_SPEED_100M |

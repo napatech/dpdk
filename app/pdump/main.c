@@ -502,14 +502,12 @@ cleanup_rings(void)
 	for (i = 0; i < num_tuples; i++) {
 		pt = &pdump_t[i];
 
-		if (pt->device_id)
-			free(pt->device_id);
+		free(pt->device_id);
 
 		/* free the rings */
-		if (pt->rx_ring)
-			rte_ring_free(pt->rx_ring);
-		if (pt->tx_ring)
-			rte_ring_free(pt->tx_ring);
+		rte_ring_free(pt->rx_ring);
+		rte_ring_free(pt->tx_ring);
+		rte_mempool_free(pt->mp);
 	}
 }
 
@@ -903,11 +901,21 @@ dump_packets_core(void *arg)
 	return 0;
 }
 
+static unsigned int
+get_next_core(unsigned int lcore)
+{
+	lcore = rte_get_next_lcore(lcore, 1, 0);
+	if (lcore == RTE_MAX_LCORE)
+		rte_exit(EXIT_FAILURE,
+				"Max core limit %u reached for packet capture", lcore);
+	return lcore;
+}
+
 static inline void
 dump_packets(void)
 {
 	int i;
-	uint32_t lcore_id = 0;
+	unsigned int lcore_id = 0;
 
 	if (!multiple_core_capture) {
 		printf(" core (%u), capture for (%d) tuples\n",
@@ -933,12 +941,12 @@ dump_packets(void)
 		return;
 	}
 
-	lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
+	lcore_id = get_next_core(lcore_id);
 
 	for (i = 0; i < num_tuples; i++) {
 		rte_eal_remote_launch(dump_packets_core,
 				&pdump_t[i], lcore_id);
-		lcore_id = rte_get_next_lcore(lcore_id, 1, 0);
+		lcore_id = get_next_core(lcore_id);
 
 		if (rte_eal_wait_lcore(lcore_id) < 0)
 			rte_exit(EXIT_FAILURE, "failed to wait\n");

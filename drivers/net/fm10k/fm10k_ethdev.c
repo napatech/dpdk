@@ -7,7 +7,7 @@
 #include <rte_malloc.h>
 #include <rte_memzone.h>
 #include <rte_string_fns.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_spinlock.h>
 #include <rte_kvargs.h>
 #include <rte_vect.h>
@@ -255,7 +255,7 @@ rx_queue_clean(struct fm10k_rx_queue *q)
 	for (i = 0; i < q->nb_fake_desc; ++i)
 		q->hw_ring[q->nb_desc + i] = zero;
 
-	/* vPMD driver has a different way of releasing mbufs. */
+	/* vPMD has a different way of releasing mbufs. */
 	if (q->rx_using_sse) {
 		fm10k_rx_queue_release_mbufs_vec(q);
 		return;
@@ -290,7 +290,7 @@ rx_queue_free(struct fm10k_rx_queue *q)
 }
 
 /*
- * disable RX queue, wait unitl HW finished necessary flush operation
+ * disable RX queue, wait until HW finished necessary flush operation
  */
 static inline int
 rx_queue_disable(struct fm10k_hw *hw, uint16_t qnum)
@@ -379,7 +379,7 @@ tx_queue_free(struct fm10k_tx_queue *q)
 }
 
 /*
- * disable TX queue, wait unitl HW finished necessary flush operation
+ * disable TX queue, wait until HW finished necessary flush operation
  */
 static inline int
 tx_queue_disable(struct fm10k_hw *hw, uint16_t qnum)
@@ -453,7 +453,7 @@ fm10k_dev_configure(struct rte_eth_dev *dev)
 	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
 		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
-	/* multipe queue mode checking */
+	/* multiple queue mode checking */
 	ret  = fm10k_check_mq_mode(dev);
 	if (ret != 0) {
 		PMD_DRV_LOG(ERR, "fm10k_check_mq_mode fails with %d.",
@@ -759,7 +759,7 @@ fm10k_dev_rx_init(struct rte_eth_dev *dev)
 
 		/* It adds dual VLAN length for supporting dual VLAN */
 		if ((dev->data->mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN +
-				2 * FM10K_VLAN_TAG_SIZE) > buf_size ||
+				2 * RTE_VLAN_HLEN) > buf_size ||
 			rxq->offloads & RTE_ETH_RX_OFFLOAD_SCATTER) {
 			uint32_t reg;
 			dev->data->scattered_rx = 1;
@@ -1779,7 +1779,6 @@ static uint64_t fm10k_get_rx_port_offloads_capa(struct rte_eth_dev *dev)
 			   RTE_ETH_RX_OFFLOAD_IPV4_CKSUM  |
 			   RTE_ETH_RX_OFFLOAD_UDP_CKSUM   |
 			   RTE_ETH_RX_OFFLOAD_TCP_CKSUM   |
-			   RTE_ETH_RX_OFFLOAD_HEADER_SPLIT |
 			   RTE_ETH_RX_OFFLOAD_RSS_HASH);
 }
 
@@ -2553,7 +2552,7 @@ error:
  * @param handle
  *  Pointer to interrupt handle.
  * @param param
- *  The address of parameter (struct rte_eth_dev *) regsitered before.
+ *  The address of parameter (struct rte_eth_dev *) registered before.
  *
  * @return
  *  void
@@ -2676,7 +2675,7 @@ fm10k_dev_interrupt_handler_pf(void *param)
  * @param handle
  *  Pointer to interrupt handle.
  * @param param
- *  The address of parameter (struct rte_eth_dev *) regsitered before.
+ *  The address of parameter (struct rte_eth_dev *) registered before.
  *
  * @return
  *  void
@@ -3034,7 +3033,7 @@ fm10k_params_init(struct rte_eth_dev *dev)
 	struct fm10k_dev_info *info =
 		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 
-	/* Inialize bus info. Normally we would call fm10k_get_bus_info(), but
+	/* Initialize bus info. Normally we would call fm10k_get_bus_info(), but
 	 * there is no way to get link status without reading BAR4.  Until this
 	 * works, assume we have maximum bandwidth.
 	 * @todo - fix bus info

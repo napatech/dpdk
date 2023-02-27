@@ -48,13 +48,37 @@ s32 ngbe_write_phy_reg_mvl(struct ngbe_hw *hw,
 	return 0;
 }
 
+s32 ngbe_check_phy_mode_mvl(struct ngbe_hw *hw)
+{
+	u8 value = 0;
+	u32 phy_mode = 0;
+
+	phy_mode = ngbe_flash_read_dword(hw, 0xFF010);
+	value = (u8)(phy_mode >> (hw->bus.lan_id * 8));
+
+	if (MVL_GEN_CTL_MODE(value) == MVL_GEN_CTL_MODE_COPPER) {
+		/* mode select to RGMII-to-copper */
+		hw->phy.type = ngbe_phy_mvl;
+		hw->phy.media_type = ngbe_media_type_copper;
+		hw->mac.link_type = ngbe_link_copper;
+	} else if (MVL_GEN_CTL_MODE(value) == MVL_GEN_CTL_MODE_FIBER) {
+		/* mode select to RGMII-to-sfi */
+		hw->phy.type = ngbe_phy_mvl_sfi;
+		hw->phy.media_type = ngbe_media_type_fiber;
+		hw->mac.link_type = ngbe_link_fiber;
+	} else {
+		DEBUGOUT("marvell 88E1512 mode %x is not supported.", value);
+		return NGBE_ERR_DEVICE_NOT_SUPPORTED;
+	}
+
+	return 0;
+}
+
 s32 ngbe_init_phy_mvl(struct ngbe_hw *hw)
 {
 	s32 ret_val = 0;
 	u16 value = 0;
 	int i;
-
-	DEBUGFUNC("ngbe_init_phy_mvl");
 
 	/* enable interrupts, only link status change and an done is allowed */
 	ngbe_write_phy_reg_mdi(hw, MVL_PAGE_SEL, 0, 2);
@@ -73,7 +97,7 @@ s32 ngbe_init_phy_mvl(struct ngbe_hw *hw)
 	}
 
 	if (i == 15) {
-		DEBUGOUT("phy reset exceeds maximum waiting period.\n");
+		DEBUGOUT("phy reset exceeds maximum waiting period.");
 		return NGBE_ERR_TIMEOUT;
 	}
 
@@ -98,16 +122,7 @@ s32 ngbe_init_phy_mvl(struct ngbe_hw *hw)
 	value = MVL_INTR_EN_ANC | MVL_INTR_EN_LSC;
 	hw->phy.write_reg(hw, MVL_INTR_EN, 0, value);
 
-	/* LED control */
-	ngbe_write_phy_reg_mdi(hw, MVL_PAGE_SEL, 0, 3);
-	ngbe_read_phy_reg_mdi(hw, MVL_LEDFCR, 0, &value);
-	value &= ~(MVL_LEDFCR_CTL0 | MVL_LEDFCR_CTL1);
-	value |= MVL_LEDFCR_CTL0_CONF | MVL_LEDFCR_CTL1_CONF;
-	ngbe_write_phy_reg_mdi(hw, MVL_LEDFCR, 0, value);
-	ngbe_read_phy_reg_mdi(hw, MVL_LEDPCR, 0, &value);
-	value &= ~(MVL_LEDPCR_CTL0 | MVL_LEDPCR_CTL1);
-	value |= MVL_LEDPCR_CTL0_CONF | MVL_LEDPCR_CTL1_CONF;
-	ngbe_write_phy_reg_mdi(hw, MVL_LEDPCR, 0, value);
+	hw->phy.set_phy_power(hw, false);
 
 	return ret_val;
 }
@@ -119,12 +134,47 @@ s32 ngbe_setup_phy_link_mvl(struct ngbe_hw *hw, u32 speed,
 	u16 value_r9 = 0;
 	u16 value;
 
-	DEBUGFUNC("ngbe_setup_phy_link_mvl");
 	UNREFERENCED_PARAMETER(autoneg_wait_to_complete);
+
+	if (hw->led_conf == 0xFFFF) {
+		/* LED control */
+		ngbe_write_phy_reg_mdi(hw, MVL_PAGE_SEL, 0, 3);
+		ngbe_read_phy_reg_mdi(hw, MVL_LEDFCR, 0, &value);
+		value &= ~(MVL_LEDFCR_CTL0 | MVL_LEDFCR_CTL1);
+		value |= MVL_LEDFCR_CTL0_CONF | MVL_LEDFCR_CTL1_CONF;
+		ngbe_write_phy_reg_mdi(hw, MVL_LEDFCR, 0, value);
+		ngbe_read_phy_reg_mdi(hw, MVL_LEDPCR, 0, &value);
+		value &= ~(MVL_LEDPCR_CTL0 | MVL_LEDPCR_CTL1);
+		value |= MVL_LEDPCR_CTL0_CONF | MVL_LEDPCR_CTL1_CONF;
+		ngbe_write_phy_reg_mdi(hw, MVL_LEDPCR, 0, value);
+	}
 
 	hw->phy.autoneg_advertised = 0;
 
 	if (hw->phy.type == ngbe_phy_mvl) {
+		if (!hw->mac.autoneg) {
+			switch (speed) {
+			case NGBE_LINK_SPEED_1GB_FULL:
+				value = MVL_CTRL_SPEED_SELECT1;
+				break;
+			case NGBE_LINK_SPEED_100M_FULL:
+				value = MVL_CTRL_SPEED_SELECT0;
+				break;
+			case NGBE_LINK_SPEED_10M_FULL:
+				value = 0;
+				break;
+			default:
+				value = MVL_CTRL_SPEED_SELECT0 |
+					MVL_CTRL_SPEED_SELECT1;
+				DEBUGOUT("unknown speed = 0x%x.", speed);
+				break;
+			}
+			/* duplex full */
+			value |= MVL_CTRL_DUPLEX | MVL_CTRL_RESET;
+			ngbe_write_phy_reg_mdi(hw, MVL_CTRL, 0, value);
+
+			goto skip_an;
+		}
 		if (speed & NGBE_LINK_SPEED_1GB_FULL) {
 			value_r9 |= MVL_PHY_1000BASET_FULL;
 			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
@@ -153,17 +203,30 @@ s32 ngbe_setup_phy_link_mvl(struct ngbe_hw *hw, u32 speed,
 			   MVL_PHY_1000BASET_HALF);
 		value_r9 |= value;
 		hw->phy.write_reg(hw, MVL_PHY_1000BASET, 0, value_r9);
+
+		value = MVL_CTRL_RESTART_AN | MVL_CTRL_ANE |
+			MVL_CTRL_RESET | MVL_CTRL_DUPLEX;
+		ngbe_write_phy_reg_mdi(hw, MVL_CTRL, 0, value);
 	} else {
-		hw->phy.autoneg_advertised = 1;
+		hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
 
 		hw->phy.read_reg(hw, MVL_ANA, 0, &value);
 		value &= ~(MVL_PHY_1000BASEX_HALF | MVL_PHY_1000BASEX_FULL);
 		value |= MVL_PHY_1000BASEX_FULL;
 		hw->phy.write_reg(hw, MVL_ANA, 0, value);
+
+		if (hw->mac.autoneg)
+			value = MVL_CTRL_RESTART_AN | MVL_CTRL_ANE |
+				MVL_CTRL_RESET | MVL_CTRL_DUPLEX |
+				MVL_CTRL_SPEED_SELECT1;
+		else
+			value = MVL_CTRL_RESET | MVL_CTRL_DUPLEX |
+				MVL_CTRL_SPEED_SELECT1;
+		ngbe_write_phy_reg_mdi(hw, MVL_CTRL, 0, value);
 	}
 
-	value = MVL_CTRL_RESTART_AN | MVL_CTRL_ANE;
-	ngbe_write_phy_reg_mdi(hw, MVL_CTRL, 0, value);
+skip_an:
+	hw->phy.set_phy_power(hw, true);
 
 	hw->phy.read_reg(hw, MVL_INTR, 0, &value);
 
@@ -175,8 +238,6 @@ s32 ngbe_reset_phy_mvl(struct ngbe_hw *hw)
 	u32 i;
 	u16 ctrl = 0;
 	s32 status = 0;
-
-	DEBUGFUNC("ngbe_reset_phy_mvl");
 
 	if (hw->phy.type != ngbe_phy_mvl && hw->phy.type != ngbe_phy_mvl_sfi)
 		return NGBE_ERR_PHY_TYPE;
@@ -202,9 +263,64 @@ s32 ngbe_reset_phy_mvl(struct ngbe_hw *hw)
 	}
 
 	if (i == MVL_PHY_RST_WAIT_PERIOD) {
-		DEBUGOUT("PHY reset polling failed to complete.\n");
+		DEBUGOUT("PHY reset polling failed to complete.");
 		return NGBE_ERR_RESET_FAILED;
 	}
+
+	return status;
+}
+
+s32 ngbe_get_phy_advertised_pause_mvl(struct ngbe_hw *hw, u8 *pause_bit)
+{
+	u16 value;
+	s32 status = 0;
+
+	if (hw->phy.type == ngbe_phy_mvl) {
+		status = hw->phy.read_reg(hw, MVL_ANA, 0, &value);
+		value &= MVL_CANA_ASM_PAUSE | MVL_CANA_PAUSE;
+		*pause_bit = (u8)(value >> 10);
+	} else {
+		status = hw->phy.read_reg(hw, MVL_ANA, 0, &value);
+		value &= MVL_FANA_PAUSE_MASK;
+		*pause_bit = (u8)(value >> 7);
+	}
+
+	return status;
+}
+
+s32 ngbe_get_phy_lp_advertised_pause_mvl(struct ngbe_hw *hw, u8 *pause_bit)
+{
+	u16 value;
+	s32 status = 0;
+
+	if (hw->phy.type == ngbe_phy_mvl) {
+		status = hw->phy.read_reg(hw, MVL_LPAR, 0, &value);
+		value &= MVL_CLPAR_ASM_PAUSE | MVL_CLPAR_PAUSE;
+		*pause_bit = (u8)(value >> 10);
+	} else {
+		status = hw->phy.read_reg(hw, MVL_LPAR, 0, &value);
+		value &= MVL_FLPAR_PAUSE_MASK;
+		*pause_bit = (u8)(value >> 7);
+	}
+
+	return status;
+}
+
+s32 ngbe_set_phy_pause_adv_mvl(struct ngbe_hw *hw, u16 pause_bit)
+{
+	u16 value;
+	s32 status = 0;
+
+	if (hw->phy.type == ngbe_phy_mvl) {
+		status = hw->phy.read_reg(hw, MVL_ANA, 0, &value);
+		value &= ~(MVL_CANA_ASM_PAUSE | MVL_CANA_PAUSE);
+	} else {
+		status = hw->phy.read_reg(hw, MVL_ANA, 0, &value);
+		value &= ~MVL_FANA_PAUSE_MASK;
+	}
+
+	value |= pause_bit;
+	status = hw->phy.write_reg(hw, MVL_ANA, 0, value);
 
 	return status;
 }
@@ -217,8 +333,6 @@ s32 ngbe_check_phy_link_mvl(struct ngbe_hw *hw,
 	u16 phy_speed = 0;
 	u16 phy_data = 0;
 	u16 insr = 0;
-
-	DEBUGFUNC("ngbe_check_phy_link_mvl");
 
 	/* Initialize speed and link to default case */
 	*link_up = false;
@@ -249,3 +363,16 @@ s32 ngbe_check_phy_link_mvl(struct ngbe_hw *hw,
 	return status;
 }
 
+s32 ngbe_set_phy_power_mvl(struct ngbe_hw *hw, bool on)
+{
+	u16 value = 0;
+
+	hw->phy.read_reg(hw, MVL_CTRL, 0, &value);
+	if (on)
+		value &= ~MVL_CTRL_PWDN;
+	else
+		value |= MVL_CTRL_PWDN;
+	hw->phy.write_reg(hw, MVL_CTRL, 0, value);
+
+	return 0;
+}

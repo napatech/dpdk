@@ -58,10 +58,10 @@ tf_tbl_bind(struct tf *tfp,
 	db_cfg.num_elements = parms->num_elements;
 	db_cfg.module = TF_MODULE_TYPE_TABLE;
 	db_cfg.num_elements = parms->num_elements;
-	db_cfg.cfg = parms->cfg;
 
 	for (d = 0; d < TF_DIR_MAX; d++) {
 		db_cfg.dir = d;
+		db_cfg.cfg = &parms->cfg[d ? TF_TBL_TYPE_MAX : 0];
 		db_cfg.alloc_cnt = parms->resources->tbl_cnt[d].cnt;
 		db_cfg.rm_db = (void *)&tbl_db->tbl_db[d];
 		if (tf_session_is_shared_session(tfs) &&
@@ -307,28 +307,28 @@ tf_tbl_set(struct tf *tfp,
 	}
 	tbl_db = (struct tbl_rm_db *)tbl_db_ptr;
 
-
-	/* Do not check meter drop counter because it is not allocated
-	 * resources
+	/* Verify that the entry has been previously allocated.
+	 * for meter drop counter, check the corresponding meter
+	 * entry
 	 */
-	if (parms->type != TF_TBL_TYPE_METER_DROP_CNT) {
-		/* Verify that the entry has been previously allocated */
-		aparms.rm_db = tbl_db->tbl_db[parms->dir];
+	aparms.rm_db = tbl_db->tbl_db[parms->dir];
+	if (parms->type != TF_TBL_TYPE_METER_DROP_CNT)
 		aparms.subtype = parms->type;
-		aparms.allocated = &allocated;
-		aparms.index = parms->idx;
-		rc = tf_rm_is_allocated(&aparms);
-		if (rc)
-			return rc;
+	else
+		aparms.subtype = TF_TBL_TYPE_METER_INST;
+	aparms.allocated = &allocated;
+	aparms.index = parms->idx;
+	rc = tf_rm_is_allocated(&aparms);
+	if (rc)
+		return rc;
 
-		if (allocated != TF_RM_ALLOCATED_ENTRY_IN_USE) {
-			TFP_DRV_LOG(ERR,
-			      "%s, Invalid or not allocated, type:%s, idx:%d\n",
-			      tf_dir_2_str(parms->dir),
-			      tf_tbl_type_2_str(parms->type),
-			      parms->idx);
-			return -EINVAL;
-		}
+	if (allocated != TF_RM_ALLOCATED_ENTRY_IN_USE) {
+		TFP_DRV_LOG(ERR,
+		      "%s, Invalid or not allocated, type:%s, idx:%d\n",
+		      tf_dir_2_str(parms->dir),
+		      tf_tbl_type_2_str(parms->type),
+		      parms->idx);
+		return -EINVAL;
 	}
 
 	/* Set the entry */
@@ -398,27 +398,28 @@ tf_tbl_get(struct tf *tfp,
 	}
 	tbl_db = (struct tbl_rm_db *)tbl_db_ptr;
 
-	/* Do not check meter drop counter because it is not allocated
-	 * resources.
+	/* Verify that the entry has been previously allocated.
+	 * for meter drop counter, check the corresponding meter
+	 * entry
 	 */
-	if (parms->type != TF_TBL_TYPE_METER_DROP_CNT) {
-		/* Verify that the entry has been previously allocated */
-		aparms.rm_db = tbl_db->tbl_db[parms->dir];
+	aparms.rm_db = tbl_db->tbl_db[parms->dir];
+	if (parms->type != TF_TBL_TYPE_METER_DROP_CNT)
 		aparms.subtype = parms->type;
-		aparms.index = parms->idx;
-		aparms.allocated = &allocated;
-		rc = tf_rm_is_allocated(&aparms);
-		if (rc)
-			return rc;
+	else
+		aparms.subtype = TF_TBL_TYPE_METER_INST;
+	aparms.index = parms->idx;
+	aparms.allocated = &allocated;
+	rc = tf_rm_is_allocated(&aparms);
+	if (rc)
+		return rc;
 
-		if (allocated != TF_RM_ALLOCATED_ENTRY_IN_USE) {
-			TFP_DRV_LOG(ERR,
-			   "%s, Invalid or not allocated index, type:%s, idx:%d\n",
-			   tf_dir_2_str(parms->dir),
-			   tf_tbl_type_2_str(parms->type),
-			   parms->idx);
-			return -EINVAL;
-		}
+	if (allocated != TF_RM_ALLOCATED_ENTRY_IN_USE) {
+		TFP_DRV_LOG(ERR,
+		   "%s, Invalid or not allocated index, type:%s, idx:%d\n",
+		   tf_dir_2_str(parms->dir),
+		   tf_tbl_type_2_str(parms->type),
+		   parms->idx);
+		return -EINVAL;
 	}
 
 	/* Set the entry */
@@ -441,7 +442,8 @@ tf_tbl_get(struct tf *tfp,
 				  hcapi_type,
 				  parms->data_sz_in_bytes,
 				  parms->data,
-				  parms->idx);
+				  parms->idx,
+				  false);
 	if (rc) {
 		TFP_DRV_LOG(ERR,
 			    "%s, Get failed, type:%s, rc:%s\n",
@@ -526,7 +528,8 @@ tf_tbl_bulk_get(struct tf *tfp,
 				       parms->starting_idx,
 				       parms->num_entries,
 				       parms->entry_sz_in_bytes,
-				       parms->physical_mem_addr);
+				       parms->physical_mem_addr,
+				       false);
 	if (rc) {
 		TFP_DRV_LOG(ERR,
 			    "%s, Bulk get failed, type:%s, rc:%s\n",

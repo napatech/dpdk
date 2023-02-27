@@ -3,9 +3,9 @@
 #
 
 if not is_linux or not dpdk_conf.get('RTE_ARCH_64')
-	build = false
-	reason = 'only supported on 64-bit Linux'
-	subdir_done()
+    build = false
+    reason = 'only supported on 64-bit Linux'
+    subdir_done()
 endif
 
 sources = files(
@@ -24,10 +24,12 @@ sources = files(
 
 deps += ['bus_pci', 'common_cnxk', 'security', 'eventdev']
 
-includes += include_directories('../../../lib/net')
+includes += include_directories('../../../lib/net', '../../event/cnxk')
 
 if get_option('buildtype').contains('debug')
-    cflags += [ '-DLA_IPSEC_DEBUG' ]
+    cflags += [ '-DLA_IPSEC_DEBUG','-DCNXK_CRYPTODEV_DEBUG' ]
 else
-    cflags += [ '-ULA_IPSEC_DEBUG' ]
+    cflags += [ '-ULA_IPSEC_DEBUG','-UCNXK_CRYPTODEV_DEBUG' ]
 endif
+
+pmd_supports_disable_iova_as_pa = true

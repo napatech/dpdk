@@ -2,28 +2,16 @@
  * Copyright(c) 2018 Intel Corporation
  */
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <stdint.h>
-#include <unistd.h>
-#include <inttypes.h>
 
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <sys/queue.h>
 
 #include <rte_common.h>
-#include <rte_byteorder.h>
 #include <rte_malloc.h>
 #include <rte_log.h>
-#include <rte_debug.h>
-#include <rte_cycles.h>
-#include <rte_eal.h>
-#include <rte_per_lcore.h>
-#include <rte_lcore.h>
 #include <rte_atomic.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
@@ -113,7 +101,7 @@ bpf_eth_cbi_unuse(struct bpf_eth_cbi *cbi)
 static void
 bpf_eth_cbi_wait(const struct bpf_eth_cbi *cbi)
 {
-	uint32_t nuse, puse;
+	uint32_t puse;
 
 	/* make sure all previous loads and stores are completed */
 	rte_smp_mb();
@@ -122,11 +110,8 @@ bpf_eth_cbi_wait(const struct bpf_eth_cbi *cbi)
 
 	/* in use, busy wait till current RX/TX iteration is finished */
 	if ((puse & BPF_ETH_CBI_INUSE) != 0) {
-		do {
-			rte_pause();
-			rte_compiler_barrier();
-			nuse = cbi->use;
-		} while (nuse == puse);
+		RTE_WAIT_UNTIL_MASKED((uint32_t *)(uintptr_t)&cbi->use,
+			UINT32_MAX, !=, puse, __ATOMIC_RELAXED);
 	}
 }
 
@@ -169,7 +154,7 @@ bpf_eth_cbh_add(struct bpf_eth_cbh *cbh, uint16_t port, uint16_t queue)
 }
 
 /*
- * BPF packet processing routinies.
+ * BPF packet processing routines.
  */
 
 static inline uint32_t

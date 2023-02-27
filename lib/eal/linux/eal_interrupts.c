@@ -7,13 +7,10 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/queue.h>
-#include <stdarg.h>
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <sys/epoll.h>
-#include <sys/signalfd.h>
 #include <sys/ioctl.h>
 #include <sys/eventfd.h>
 #include <assert.h>
@@ -21,9 +18,6 @@
 
 #include <rte_common.h>
 #include <rte_interrupts.h>
-#include <rte_memory.h>
-#include <rte_launch.h>
-#include <rte_eal.h>
 #include <rte_per_lcore.h>
 #include <rte_lcore.h>
 #include <rte_branch_prediction.h>
@@ -36,8 +30,6 @@
 #include <rte_eal_trace.h>
 
 #include "eal_private.h"
-#include "eal_vfio.h"
-#include "eal_thread.h"
 
 #define EAL_INTR_EPOLL_WAIT_FOREVER (-1)
 #define NB_OTHER_INTR               1
@@ -416,7 +408,7 @@ uio_intx_intr_disable(const struct rte_intr_handle *intr_handle)
 
 	/* use UIO config file descriptor for uio_pci_generic */
 	uio_cfg_fd = rte_intr_dev_fd_get(intr_handle);
-	if (pread(uio_cfg_fd, &command_high, 1, 5) != 1) {
+	if (uio_cfg_fd < 0 || pread(uio_cfg_fd, &command_high, 1, 5) != 1) {
 		RTE_LOG(ERR, EAL,
 			"Error reading interrupts status for fd %d\n",
 			uio_cfg_fd);
@@ -442,7 +434,7 @@ uio_intx_intr_enable(const struct rte_intr_handle *intr_handle)
 
 	/* use UIO config file descriptor for uio_pci_generic */
 	uio_cfg_fd = rte_intr_dev_fd_get(intr_handle);
-	if (pread(uio_cfg_fd, &command_high, 1, 5) != 1) {
+	if (uio_cfg_fd < 0 || pread(uio_cfg_fd, &command_high, 1, 5) != 1) {
 		RTE_LOG(ERR, EAL,
 			"Error reading interrupts status for fd %d\n",
 			uio_cfg_fd);
@@ -465,7 +457,8 @@ uio_intr_disable(const struct rte_intr_handle *intr_handle)
 {
 	const int value = 0;
 
-	if (write(rte_intr_fd_get(intr_handle), &value, sizeof(value)) < 0) {
+	if (rte_intr_fd_get(intr_handle) < 0 ||
+	    write(rte_intr_fd_get(intr_handle), &value, sizeof(value)) < 0) {
 		RTE_LOG(ERR, EAL, "Error disabling interrupts for fd %d (%s)\n",
 			rte_intr_fd_get(intr_handle), strerror(errno));
 		return -1;
@@ -478,7 +471,8 @@ uio_intr_enable(const struct rte_intr_handle *intr_handle)
 {
 	const int value = 1;
 
-	if (write(rte_intr_fd_get(intr_handle), &value, sizeof(value)) < 0) {
+	if (rte_intr_fd_get(intr_handle) < 0 ||
+	    write(rte_intr_fd_get(intr_handle), &value, sizeof(value)) < 0) {
 		RTE_LOG(ERR, EAL, "Error enabling interrupts for fd %d (%s)\n",
 			rte_intr_fd_get(intr_handle), strerror(errno));
 		return -1;
@@ -587,7 +581,7 @@ rte_intr_callback_unregister_pending(const struct rte_intr_handle *intr_handle,
 
 	rte_spinlock_lock(&intr_lock);
 
-	/* check if the insterrupt source for the fd is existent */
+	/* check if the interrupt source for the fd is existent */
 	TAILQ_FOREACH(src, &intr_sources, next) {
 		if (rte_intr_fd_get(src->intr_handle) == rte_intr_fd_get(intr_handle))
 			break;
@@ -637,7 +631,7 @@ rte_intr_callback_unregister(const struct rte_intr_handle *intr_handle,
 
 	rte_spinlock_lock(&intr_lock);
 
-	/* check if the insterrupt source for the fd is existent */
+	/* check if the interrupt source for the fd is existent */
 	TAILQ_FOREACH(src, &intr_sources, next)
 		if (rte_intr_fd_get(src->intr_handle) == rte_intr_fd_get(intr_handle))
 			break;
@@ -945,17 +939,14 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 			bytes_read = sizeof(buf.timerfd_num);
 			break;
 #ifdef VFIO_PRESENT
+#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
+		case RTE_INTR_HANDLE_VFIO_REQ:
+#endif
 		case RTE_INTR_HANDLE_VFIO_MSIX:
 		case RTE_INTR_HANDLE_VFIO_MSI:
 		case RTE_INTR_HANDLE_VFIO_LEGACY:
 			bytes_read = sizeof(buf.vfio_intr_count);
 			break;
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
-		case RTE_INTR_HANDLE_VFIO_REQ:
-			bytes_read = 0;
-			call = true;
-			break;
-#endif
 #endif
 		case RTE_INTR_HANDLE_VDEV:
 		case RTE_INTR_HANDLE_EXT:

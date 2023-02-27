@@ -2,13 +2,15 @@
  * Copyright 2017 NXP
  */
 
+#include <stdlib.h>
+
 #include <rte_common.h>
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <rte_memcpy.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_rawdev.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_test.h>
 
 /* Using relative path as skeleton_rawdev is not part of exported headers */
@@ -395,13 +397,11 @@ test_rawdev_enqdeq(void)
 	RTE_TEST_ASSERT_EQUAL((unsigned int)ret, count,
 			      "Unable to dequeue buffers");
 
-	if (deq_buffers)
-		free(deq_buffers);
+	free(deq_buffers);
 
 	return TEST_SUCCESS;
 cleanup:
-	if (buffers[0].buf_addr)
-		free(buffers[0].buf_addr);
+	free(buffers[0].buf_addr);
 
 	return TEST_FAILED;
 }

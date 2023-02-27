@@ -6,6 +6,7 @@
 #define RTE_PMD_MLX5_DEVX_CMDS_H_
 
 #include <rte_compat.h>
+#include <rte_bitops.h>
 
 #include "mlx5_glue.h"
 #include "mlx5_prm.h"
@@ -13,6 +14,16 @@
 /* This is limitation of libibverbs: in length variable type is u16. */
 #define MLX5_DEVX_MAX_KLM_ENTRIES ((UINT16_MAX - \
 		MLX5_ST_SZ_DW(create_mkey_in) * 4) / (MLX5_ST_SZ_DW(klm) * 4))
+
+struct mlx5_devx_counter_attr {
+	uint32_t pd_valid:1;
+	uint32_t pd:24;
+	uint32_t bulk_log_max_alloc:1;
+	union {
+		uint8_t flow_counter_bulk_log_size;
+		uint8_t bulk_n_128;
+	};
+};
 
 struct mlx5_devx_mkey_attr {
 	uint64_t addr;
@@ -73,6 +84,9 @@ struct mlx5_hca_vdpa_attr {
 	uint32_t log_doorbell_stride:5;
 	uint32_t log_doorbell_bar_size:5;
 	uint32_t queue_counters_valid:1;
+	uint32_t vnet_modify_ext:1;
+	uint32_t virtio_net_q_addr_modify:1;
+	uint32_t virtio_q_index_modify:1;
 	uint32_t max_num_virtio_queues;
 	struct {
 		uint32_t a;
@@ -86,6 +100,64 @@ struct mlx5_hca_flow_attr {
 	uint32_t tunnel_header_2_3;
 };
 
+/**
+ * Accumulate port PARSE_GRAPH_NODE capabilities from
+ * PARSE_GRAPH_NODE Capabilities and HCA Capabilities 2 tables
+ */
+__extension__
+struct mlx5_hca_flex_attr {
+	uint32_t node_in;
+	uint32_t node_out;
+	uint16_t header_length_mode;
+	uint16_t sample_offset_mode;
+	uint8_t  max_num_arc_in;
+	uint8_t  max_num_arc_out;
+	uint8_t  max_num_sample;
+	uint8_t  max_num_prog_sample:5;	/* From HCA CAP 2 */
+	uint8_t  sample_id_in_out:1;
+	uint16_t max_base_header_length;
+	uint8_t  max_sample_base_offset;
+	uint16_t max_next_header_offset;
+	uint8_t  header_length_mask_width;
+};
+
+/* ISO C restricts enumerator values to range of 'int' */
+__extension__
+enum {
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_HEAD          = RTE_BIT32(1),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_MAC           = RTE_BIT32(2),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_IP            = RTE_BIT32(3),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_GRE           = RTE_BIT32(4),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_UDP           = RTE_BIT32(5),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_MPLS          = RTE_BIT32(6),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_TCP           = RTE_BIT32(7),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_VXLAN_GRE     = RTE_BIT32(8),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_GENEVE        = RTE_BIT32(9),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_IPSEC_ESP     = RTE_BIT32(10),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_IPV4          = RTE_BIT32(11),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_IPV6          = RTE_BIT32(12),
+	PARSE_GRAPH_NODE_CAP_SUPPORTED_PROTOCOL_PROGRAMMABLE  = RTE_BIT32(31)
+};
+
+enum {
+	PARSE_GRAPH_NODE_CAP_LENGTH_MODE_FIXED          = RTE_BIT32(0),
+	PARSE_GRAPH_NODE_CAP_LENGTH_MODE_EXPLISIT_FIELD = RTE_BIT32(1),
+	PARSE_GRAPH_NODE_CAP_LENGTH_MODE_BITMASK_FIELD  = RTE_BIT32(2)
+};
+
+/*
+ * DWORD shift is the base for calculating header_length_field_mask
+ * value in the MLX5_GRAPH_NODE_LEN_FIELD mode.
+ */
+#define MLX5_PARSE_GRAPH_NODE_HDR_LEN_SHIFT_DWORD 0x02
+
+static inline uint32_t
+mlx5_hca_parse_graph_node_base_hdr_len_mask
+	(const struct mlx5_hca_flex_attr *attr)
+{
+	return (1 << attr->header_length_mask_width) - 1;
+}
+
 /* HCA supports this number of time periods for LRO. */
 #define MLX5_LRO_NUM_SUPP_PERIODS 4
 
@@ -93,6 +165,8 @@ struct mlx5_hca_flow_attr {
 struct mlx5_hca_attr {
 	uint32_t eswitch_manager:1;
 	uint32_t flow_counters_dump:1;
+	uint32_t mem_rq_rmp:1;
+	uint32_t log_max_rmp:5;
 	uint32_t log_max_rqt_size:5;
 	uint32_t parse_graph_flex_node:1;
 	uint8_t flow_counter_bulk_alloc_bitmap;
@@ -117,6 +191,7 @@ struct mlx5_hca_attr {
 	uint32_t swp_csum:1;
 	uint32_t swp_lso:1;
 	uint32_t lro_max_msg_sz_mode:2;
+	uint32_t rq_delay_drop:1;
 	uint32_t lro_timer_supported_periods[MLX5_LRO_NUM_SUPP_PERIODS];
 	uint16_t lro_min_mss_size;
 	uint32_t flex_parser_protocols;
@@ -126,6 +201,9 @@ struct mlx5_hca_attr {
 	uint32_t log_max_hairpin_queues:5;
 	uint32_t log_max_hairpin_wq_data_sz:5;
 	uint32_t log_max_hairpin_num_packets:5;
+	uint32_t hairpin_sq_wqe_bb_size:4;
+	uint32_t hairpin_sq_wq_in_host_mem:1;
+	uint32_t hairpin_data_buffer_locked:1;
 	uint32_t vhca_id:16;
 	uint32_t relaxed_ordering_write:1;
 	uint32_t relaxed_ordering_read:1;
@@ -139,11 +217,13 @@ struct mlx5_hca_attr {
 	uint32_t scatter_fcs_w_decap_disable:1;
 	uint32_t flow_hit_aso:1; /* General obj type FLOW_HIT_ASO supported. */
 	uint32_t roce:1;
+	uint32_t wait_on_time:1;
 	uint32_t rq_ts_format:2;
 	uint32_t sq_ts_format:2;
 	uint32_t steering_format_version:4;
 	uint32_t qp_ts_format:2;
-	uint32_t regex:1;
+	uint32_t regexp_params:1;
+	uint32_t regexp_version:3;
 	uint32_t reg_c_preserve:1;
 	uint32_t ct_offload:1; /* General obj type ASO CT offload supported. */
 	uint32_t crypto:1; /* Crypto engine is supported. */
@@ -164,6 +244,7 @@ struct mlx5_hca_attr {
 	struct mlx5_hca_qos_attr qos;
 	struct mlx5_hca_vdpa_attr vdpa;
 	struct mlx5_hca_flow_attr flow;
+	struct mlx5_hca_flex_attr flex;
 	int log_max_qp_sz;
 	int log_max_cq_sz;
 	int log_max_qp;
@@ -187,6 +268,26 @@ struct mlx5_hca_attr {
 	uint32_t log_max_mmo_decompress:5;
 	uint32_t umr_modify_entity_size_disabled:1;
 	uint32_t umr_indirect_mkey_disabled:1;
+	uint32_t log_min_stride_wqe_sz:5;
+	uint32_t esw_mgr_vport_id_valid:1; /* E-Switch Mgr vport ID is valid. */
+	uint32_t crypto_wrapped_import_method:1;
+	uint16_t esw_mgr_vport_id; /* E-Switch Mgr vport ID . */
+	uint16_t max_wqe_sz_sq;
+	uint32_t set_reg_c:8;
+	uint32_t nic_flow_table:1;
+	uint32_t modify_outer_ip_ecn:1;
+	union {
+		uint32_t max_flow_counter;
+		struct {
+			uint16_t max_flow_counter_15_0;
+			uint16_t max_flow_counter_31_16;
+		};
+	};
+	uint32_t flow_counter_bulk_log_max_alloc:5;
+	uint32_t flow_counter_bulk_log_granularity:5;
+	uint32_t alloc_flow_counter_pd:1;
+	uint32_t flow_counter_access_aso:1;
+	uint32_t flow_access_aso_opc_mod:8;
 };
 
 /* LAG Context. */
@@ -237,6 +338,7 @@ struct mlx5_devx_create_rq_attr {
 	uint32_t state:4;
 	uint32_t flush_in_error_en:1;
 	uint32_t hairpin:1;
+	uint32_t hairpin_data_buffer_type:3;
 	uint32_t ts_format:2;
 	uint32_t user_index:24;
 	uint32_t cqn:24;
@@ -257,6 +359,17 @@ struct mlx5_devx_modify_rq_attr {
 	uint32_t hairpin_peer_vhca:16;
 	uint64_t modify_bitmask;
 	uint32_t lwm:16; /* Contained WQ lwm. */
+};
+
+/* Create RMP attributes structure, used by create RMP operation. */
+struct mlx5_devx_create_rmp_attr {
+	uint32_t rsvd0:8;
+	uint32_t state:4;
+	uint32_t rsvd1:20;
+	uint32_t basic_cyclic_rcv_wqe:1;
+	uint32_t rsvd4:31;
+	uint32_t rsvd8[10];
+	struct mlx5_devx_wq_attr wq_attr;
 };
 
 struct mlx5_rx_hash_field_select {
@@ -322,6 +435,7 @@ struct mlx5_devx_create_sq_attr {
 	uint32_t non_wire:1;
 	uint32_t static_sq_wq:1;
 	uint32_t ts_format:2;
+	uint32_t hairpin_wq_buffer_type:3;
 	uint32_t user_index:24;
 	uint32_t cqn:24;
 	uint32_t packet_pacing_rate_limit_index:16;
@@ -384,7 +498,7 @@ struct mlx5_devx_virtq_attr {
 	uint32_t tis_id;
 	uint32_t counters_obj_id;
 	uint64_t dirty_bitmap_addr;
-	uint64_t type;
+	uint64_t mod_fields_bitmap;
 	uint64_t desc_addr;
 	uint64_t used_addr;
 	uint64_t available_addr;
@@ -394,6 +508,7 @@ struct mlx5_devx_virtq_attr {
 		uint64_t offset;
 	} umems[3];
 	uint8_t error_type;
+	uint8_t q_type;
 };
 
 
@@ -402,9 +517,9 @@ struct mlx5_devx_qp_attr {
 	uint32_t uar_index:24;
 	uint32_t cqn:24;
 	uint32_t log_page_size:5;
-	uint32_t rq_size:17; /* Must be power of 2. */
+	uint32_t num_of_receive_wqes:17; /* Must be power of 2. */
 	uint32_t log_rq_stride:3;
-	uint32_t sq_size:17; /* Must be power of 2. */
+	uint32_t num_of_send_wqbbs:17; /* Must be power of 2. */
 	uint32_t ts_format:2;
 	uint32_t dbr_umem_valid:1;
 	uint32_t dbr_umem_id;
@@ -506,6 +621,11 @@ struct mlx5_devx_crypto_login_attr {
 /* mlx5_devx_cmds.c */
 
 __rte_internal
+struct mlx5_devx_obj *
+mlx5_devx_cmd_flow_counter_alloc_general(void *ctx,
+				struct mlx5_devx_counter_attr *attr);
+
+__rte_internal
 struct mlx5_devx_obj *mlx5_devx_cmd_flow_counter_alloc(void *ctx,
 						       uint32_t bulk_sz);
 __rte_internal
@@ -535,6 +655,9 @@ struct mlx5_devx_obj *mlx5_devx_cmd_create_rq(void *ctx,
 __rte_internal
 int mlx5_devx_cmd_modify_rq(struct mlx5_devx_obj *rq,
 			    struct mlx5_devx_modify_rq_attr *rq_attr);
+__rte_internal
+struct mlx5_devx_obj *mlx5_devx_cmd_create_rmp(void *ctx,
+			struct mlx5_devx_create_rmp_attr *rq_attr, int socket);
 __rte_internal
 struct mlx5_devx_obj *mlx5_devx_cmd_create_tir(void *ctx,
 					   struct mlx5_devx_tir_attr *tir_attr);
@@ -586,8 +709,9 @@ int mlx5_devx_cmd_query_parse_samples(struct mlx5_devx_obj *flex_obj,
 				      uint32_t ids[], uint32_t num);
 
 __rte_internal
-struct mlx5_devx_obj *mlx5_devx_cmd_create_flex_parser(void *ctx,
-					struct mlx5_devx_graph_node_attr *data);
+struct mlx5_devx_obj *
+mlx5_devx_cmd_create_flex_parser(void *ctx,
+				 struct mlx5_devx_graph_node_attr *data);
 
 __rte_internal
 int mlx5_devx_cmd_register_read(void *ctx, uint16_t reg_id,

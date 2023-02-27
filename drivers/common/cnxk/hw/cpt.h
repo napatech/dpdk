@@ -64,8 +64,7 @@ union cpt_lf_ctx_flush {
 	struct {
 		uint64_t cptr : 46;
 		uint64_t inval : 1;
-		uint64_t res : 1;
-		uint64_t pf_func : 16;
+		uint64_t reserved_47_63 : 17;
 	} s;
 };
 
@@ -73,6 +72,7 @@ union cpt_lf_ctx_reload {
 	uint64_t u;
 	struct {
 		uint64_t cptr : 46;
+		uint64_t reserved_46_63 : 18;
 	} s;
 };
 
@@ -88,6 +88,17 @@ union cpt_lf_inprog {
 		uint64_t grb_cnt : 8;
 		uint64_t gwb_cnt : 8;
 		uint64_t reserved_48_63 : 16;
+	} s;
+};
+
+union cpt_lf_q_inst_ptr {
+	uint64_t u;
+	struct cpt_lf_q_inst_ptr_s {
+		uint64_t dq_ptr : 20;
+		uint64_t reserved_20_31 : 12;
+		uint64_t nq_ptr : 20;
+		uint64_t reserved_52_62 : 11;
+		uint64_t xq_xor : 1;
 	} s;
 };
 
@@ -146,6 +157,22 @@ union cpt_inst_w4 {
 	} s;
 };
 
+union cpt_inst_w5 {
+	uint64_t u64;
+	struct {
+		uint64_t dptr : 60;
+		uint64_t gather_sz : 4;
+	} s;
+};
+
+union cpt_inst_w6 {
+	uint64_t u64;
+	struct {
+		uint64_t rptr : 60;
+		uint64_t scatter_sz : 4;
+	} s;
+};
+
 union cpt_inst_w7 {
 	uint64_t u64;
 	struct {
@@ -189,9 +216,15 @@ struct cpt_inst_s {
 
 	union cpt_inst_w4 w4;
 
-	uint64_t dptr;
+	union {
+		union cpt_inst_w5 w5;
+		uint64_t dptr;
+	};
 
-	uint64_t rptr;
+	union {
+		union cpt_inst_w6 w6;
+		uint64_t rptr;
+	};
 
 	union cpt_inst_w7 w7;
 };
@@ -215,6 +248,8 @@ union cpt_res_s {
 
 		uint64_t reserved_64_127;
 	} cn9k;
+
+	uint64_t u64[2];
 };
 
 /* [CN10K, .) */
@@ -288,10 +323,11 @@ struct cpt_frag_info_s {
 	union {
 		uint64_t u64;
 		struct {
-			union cpt_frag_info f3;
-			union cpt_frag_info f2;
-			union cpt_frag_info f1;
+			/* CPT HW swaps each 8B word implicitly */
 			union cpt_frag_info f0;
+			union cpt_frag_info f1;
+			union cpt_frag_info f2;
+			union cpt_frag_info f3;
 		};
 	} w0;
 
@@ -299,12 +335,22 @@ struct cpt_frag_info_s {
 	union {
 		uint64_t u64;
 		struct {
-			uint16_t frag_size3;
-			uint16_t frag_size2;
-			uint16_t frag_size1;
+			/* CPT HW swaps each 8B word implicitly */
 			uint16_t frag_size0;
+			uint16_t frag_size1;
+			uint16_t frag_size2;
+			uint16_t frag_size3;
 		};
 	} w1;
+};
+
+union cpt_fc_write_s {
+	struct {
+		uint32_t qsize;
+		uint32_t reserved_32_63;
+		uint64_t reserved_64_127;
+	} s;
+	uint64_t u64[2];
 };
 
 #endif /* __CPT_HW_H__ */

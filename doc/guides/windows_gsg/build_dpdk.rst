@@ -64,7 +64,11 @@ A good option to choose is the MSI installer for both meson and ninja together::
 
 	http://mesonbuild.com/Getting-meson.html#installing-meson-and-ninja-with-the-msi-installer%22
 
-Recommended version is either Meson 0.57.0 (baseline) or the latest release.
+Recommended version is Meson 0.57.
+
+Versions starting from 0.58 are unusable with LLVM toolchain
+because of a `Meson issue <https://github.com/mesonbuild/meson/issues/8981>`_.
+
 
 Install the Backend
 -------------------
@@ -100,7 +104,7 @@ To compile the examples, the flag ``-Dexamples`` is required.
 .. code-block:: console
 
     cd C:\Users\me\dpdk
-    meson -Dexamples=helloworld build
+    meson setup -Dexamples=helloworld build
     ninja -C build
 
 Option 2. Cross-Compile with MinGW-w64
@@ -111,5 +115,5 @@ Depending on the distribution, paths in this file may need adjustments.
 
 .. code-block:: console
 
-    meson --cross-file config/x86/cross-mingw -Dexamples=helloworld build
+    meson setup --cross-file config/x86/cross-mingw -Dexamples=helloworld build
     ninja -C build

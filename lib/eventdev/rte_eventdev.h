@@ -210,11 +210,10 @@
 extern "C" {
 #endif
 
+#include <rte_compat.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_errno.h>
 #include <rte_mbuf_pool_ops.h>
-#include <rte_memory.h>
 #include <rte_mempool.h>
 
 #include "rte_eventdev_trace_fp.h"
@@ -224,10 +223,16 @@ struct rte_event;
 
 /* Event device capability bitmap flags */
 #define RTE_EVENT_DEV_CAP_QUEUE_QOS           (1ULL << 0)
-/**< Event scheduling prioritization is based on the priority associated with
- *  each event queue.
+/**< Event scheduling prioritization is based on the priority and weight
+ * associated with each event queue. Events from a queue with highest priority
+ * is scheduled first. If the queues are of same priority, weight of the queues
+ * are considered to select a queue in a weighted round robin fashion.
+ * Subsequent dequeue calls from an event port could see events from the same
+ * event queue, if the queue is configured with an affinity count. Affinity
+ * count is the number of subsequent dequeue calls, in which an event port
+ * should use the same event queue if the queue is non-empty
  *
- *  @see rte_event_queue_setup()
+ *  @see rte_event_queue_setup(), rte_event_queue_attr_set()
  */
 #define RTE_EVENT_DEV_CAP_EVENT_QOS           (1ULL << 1)
 /**< Event scheduling prioritization is based on the priority associated with
@@ -299,6 +304,23 @@ struct rte_event;
  * the content of this field is implementation dependent.
  */
 
+#define RTE_EVENT_DEV_CAP_MAINTENANCE_FREE (1ULL << 10)
+/**< Event device *does not* require calls to rte_event_maintain().
+ * An event device that does not set this flag requires calls to
+ * rte_event_maintain() during periods when neither
+ * rte_event_dequeue_burst() nor rte_event_enqueue_burst() are called
+ * on a port. This will allow the event device to perform internal
+ * processing, such as flushing buffered events, return credits to a
+ * global pool, or process signaling related to load balancing.
+ */
+
+#define RTE_EVENT_DEV_CAP_RUNTIME_QUEUE_ATTR (1ULL << 11)
+/**< Event device is capable of changing the queue attributes at runtime i.e
+ * after rte_event_queue_setup() or rte_event_start() call sequence. If this
+ * flag is not set, eventdev queue attributes can only be configured during
+ * rte_event_queue_setup().
+ */
+
 /* Event device priority levels */
 #define RTE_EVENT_DEV_PRIORITY_HIGHEST   0
 /**< Highest priority expressed across eventdev subsystem
@@ -314,6 +336,26 @@ struct rte_event;
 /**< Lowest priority expressed across eventdev subsystem
  * @see rte_event_queue_setup(), rte_event_enqueue_burst()
  * @see rte_event_port_link()
+ */
+
+/* Event queue scheduling weights */
+#define RTE_EVENT_QUEUE_WEIGHT_HIGHEST 255
+/**< Highest weight of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
+ */
+#define RTE_EVENT_QUEUE_WEIGHT_LOWEST 0
+/**< Lowest weight of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
+ */
+
+/* Event queue scheduling affinity */
+#define RTE_EVENT_QUEUE_AFFINITY_HIGHEST 255
+/**< Highest scheduling affinity of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
+ */
+#define RTE_EVENT_QUEUE_AFFINITY_LOWEST 0
+/**< Lowest scheduling affinity of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
  */
 
 /**
@@ -599,6 +641,22 @@ struct rte_event_queue_conf {
 	 * event device supported priority value.
 	 * Valid when the device has RTE_EVENT_DEV_CAP_QUEUE_QOS capability
 	 */
+	uint8_t weight;
+	/**< Weight of the event queue relative to other event queues.
+	 * The requested weight should be in the range of
+	 * [RTE_EVENT_DEV_WEIGHT_HIGHEST, RTE_EVENT_DEV_WEIGHT_LOWEST].
+	 * The implementation shall normalize the requested weight to event
+	 * device supported weight value.
+	 * Valid when the device has RTE_EVENT_DEV_CAP_QUEUE_QOS capability.
+	 */
+	uint8_t affinity;
+	/**< Affinity of the event queue relative to other event queues.
+	 * The requested affinity should be in the range of
+	 * [RTE_EVENT_DEV_AFFINITY_HIGHEST, RTE_EVENT_DEV_AFFINITY_LOWEST].
+	 * The implementation shall normalize the requested affinity to event
+	 * device supported affinity value.
+	 * Valid when the device has RTE_EVENT_DEV_CAP_QUEUE_QOS capability.
+	 */
 };
 
 /**
@@ -669,6 +727,14 @@ rte_event_queue_setup(uint8_t dev_id, uint8_t queue_id,
  * The schedule type of the queue.
  */
 #define RTE_EVENT_QUEUE_ATTR_SCHEDULE_TYPE 4
+/**
+ * The weight of the queue.
+ */
+#define RTE_EVENT_QUEUE_ATTR_WEIGHT 5
+/**
+ * Affinity of the queue.
+ */
+#define RTE_EVENT_QUEUE_ATTR_AFFINITY 6
 
 /**
  * Get an attribute from a queue.
@@ -693,6 +759,29 @@ rte_event_queue_setup(uint8_t dev_id, uint8_t queue_id,
 int
 rte_event_queue_attr_get(uint8_t dev_id, uint8_t queue_id, uint32_t attr_id,
 			uint32_t *attr_value);
+
+/**
+ * Set an event queue attribute.
+ *
+ * @param dev_id
+ *   Eventdev id
+ * @param queue_id
+ *   Eventdev queue id
+ * @param attr_id
+ *   The attribute ID to set
+ * @param attr_value
+ *   The attribute value to set
+ *
+ * @return
+ *   - 0: Successfully set attribute.
+ *   - -EINVAL: invalid device, queue or attr_id.
+ *   - -ENOTSUP: device does not support setting the event attribute.
+ *   - <0: failed to set event queue attribute
+ */
+__rte_experimental
+int
+rte_event_queue_attr_set(uint8_t dev_id, uint8_t queue_id, uint32_t attr_id,
+			 uint64_t attr_value);
 
 /* Event port specific APIs */
 
@@ -822,6 +911,42 @@ int
 rte_event_port_setup(uint8_t dev_id, uint8_t port_id,
 		     const struct rte_event_port_conf *port_conf);
 
+typedef void (*rte_eventdev_port_flush_t)(uint8_t dev_id,
+					  struct rte_event event, void *arg);
+/**< Callback function prototype that can be passed during
+ * rte_event_port_release(), invoked once per a released event.
+ */
+
+/**
+ * Quiesce any core specific resources consumed by the event port.
+ *
+ * Event ports are generally coupled with lcores, and a given Hardware
+ * implementation might require the PMD to store port specific data in the
+ * lcore.
+ * When the application decides to migrate the event port to another lcore
+ * or teardown the current lcore it may to call `rte_event_port_quiesce`
+ * to make sure that all the data associated with the event port are released
+ * from the lcore, this might also include any prefetched events.
+ * While releasing the event port from the lcore, this function calls the
+ * user-provided flush callback once per event.
+ *
+ * @note Invocation of this API does not affect the existing port configuration.
+ *
+ * @param dev_id
+ *   The identifier of the device.
+ * @param port_id
+ *   The index of the event port to setup. The value must be in the range
+ *   [0, nb_event_ports - 1] previously supplied to rte_event_dev_configure().
+ * @param release_cb
+ *   Callback function invoked once per flushed event.
+ * @param args
+ *   Argument supplied to callback.
+ */
+__rte_experimental
+void
+rte_event_port_quiesce(uint8_t dev_id, uint8_t port_id,
+		       rte_eventdev_port_flush_t release_cb, void *args);
+
 /**
  * The queue depth of the port on the enqueue side
  */
@@ -899,8 +1024,8 @@ rte_event_dev_start(uint8_t dev_id);
 void
 rte_event_dev_stop(uint8_t dev_id);
 
-typedef void (*eventdev_stop_flush_t)(uint8_t dev_id, struct rte_event event,
-		void *arg);
+typedef void (*rte_eventdev_stop_flush_t)(uint8_t dev_id,
+					  struct rte_event event, void *arg);
 /**< Callback function called during rte_event_dev_stop(), invoked once per
  * flushed event.
  */
@@ -929,9 +1054,8 @@ typedef void (*eventdev_stop_flush_t)(uint8_t dev_id, struct rte_event event,
  *
  * @see rte_event_dev_stop()
  */
-int
-rte_event_dev_stop_flush_callback_register(uint8_t dev_id,
-		eventdev_stop_flush_t callback, void *userdata);
+int rte_event_dev_stop_flush_callback_register(uint8_t dev_id,
+					       rte_eventdev_stop_flush_t callback, void *userdata);
 
 /**
  * Close an event device. The device cannot be restarted!
@@ -952,8 +1076,10 @@ rte_event_dev_close(uint8_t dev_id);
  */
 struct rte_event_vector {
 	uint16_t nb_elem;
-	/**< Number of elements in this event vector. */
-	uint16_t rsvd : 15;
+	/**< Number of elements valid in this event vector. */
+	uint16_t elem_offset : 12;
+	/**< Offset into the vector array where valid elements start from. */
+	uint16_t rsvd : 3;
 	/**< Reserved for future use */
 	uint16_t attr_valid : 1;
 	/**< Indicates that the below union attributes have valid information.
@@ -976,21 +1102,31 @@ struct rte_event_vector {
 	};
 	/**< Union to hold common attributes of the vector array. */
 	uint64_t impl_opaque;
+
+/* empty structures do not have zero size in C++ leading to compilation errors
+ * with clang about structure having different sizes in C and C++.
+ * Since these are all zero-sized arrays, we can omit the "union" wrapper for
+ * C++ builds, removing the warning.
+ */
+#ifndef __cplusplus
 	/**< Implementation specific opaque value.
 	 * An implementation may use this field to hold implementation specific
 	 * value to share between dequeue and enqueue operation.
 	 * The application should not modify this field.
 	 */
 	union {
+#endif
 		struct rte_mbuf *mbufs[0];
 		void *ptrs[0];
-		uint64_t *u64s[0];
+		uint64_t u64s[0];
+#ifndef __cplusplus
 	} __rte_aligned(16);
+#endif
 	/**< Start of the vector array union. Depending upon the event type the
 	 * vector array can be an array of mbufs or pointers or opaque u64
 	 * values.
 	 */
-};
+} __rte_aligned(16);
 
 /* Scheduler type definitions */
 #define RTE_SCHED_TYPE_ORDERED          0
@@ -1085,6 +1221,9 @@ struct rte_event_vector {
 #define RTE_EVENT_TYPE_ETH_RX_ADAPTER_VECTOR                                   \
 	(RTE_EVENT_TYPE_VECTOR | RTE_EVENT_TYPE_ETH_RX_ADAPTER)
 /**< The event vector generated from eth Rx adapter. */
+#define RTE_EVENT_TYPE_CRYPTODEV_VECTOR                                        \
+	(RTE_EVENT_TYPE_VECTOR | RTE_EVENT_TYPE_CRYPTODEV)
+/**< The event vector generated from cryptodev adapter. */
 
 #define RTE_EVENT_TYPE_MAX              0x10
 /**< Maximum number of event types */
@@ -1300,6 +1439,11 @@ rte_event_timer_adapter_caps_get(uint8_t dev_id, uint32_t *caps);
 #define RTE_EVENT_CRYPTO_ADAPTER_CAP_SESSION_PRIVATE_DATA   0x8
 /**< Flag indicates HW/SW supports a mechanism to store and retrieve
  * the private data information along with the crypto session.
+ */
+
+#define RTE_EVENT_CRYPTO_ADAPTER_CAP_EVENT_VECTOR   0x10
+/**< Flag indicates HW is capable of aggregating processed
+ * crypto operations into rte_event_vector.
  */
 
 /**
@@ -1641,7 +1785,7 @@ rte_event_dev_xstats_names_get(uint8_t dev_id,
 			       enum rte_event_dev_xstats_mode mode,
 			       uint8_t queue_port_id,
 			       struct rte_event_dev_xstats_name *xstats_names,
-			       unsigned int *ids,
+			       uint64_t *ids,
 			       unsigned int size);
 
 /**
@@ -1674,7 +1818,7 @@ int
 rte_event_dev_xstats_get(uint8_t dev_id,
 			 enum rte_event_dev_xstats_mode mode,
 			 uint8_t queue_port_id,
-			 const unsigned int ids[],
+			 const uint64_t ids[],
 			 uint64_t values[], unsigned int n);
 
 /**
@@ -1695,7 +1839,7 @@ rte_event_dev_xstats_get(uint8_t dev_id,
  */
 uint64_t
 rte_event_dev_xstats_by_name_get(uint8_t dev_id, const char *name,
-				 unsigned int *id);
+				 uint64_t *id);
 
 /**
  * Reset the values of the xstats of the selected component in the device.
@@ -1721,7 +1865,7 @@ int
 rte_event_dev_xstats_reset(uint8_t dev_id,
 			   enum rte_event_dev_xstats_mode mode,
 			   int16_t queue_port_id,
-			   const uint32_t ids[],
+			   const uint64_t ids[],
 			   uint32_t nb_ids);
 
 /**
@@ -1795,7 +1939,7 @@ __rte_event_enqueue_burst(uint8_t dev_id, uint8_t port_id,
 		return 0;
 	}
 #endif
-	rte_eventdev_trace_enq_burst(dev_id, port_id, ev, nb_events, fn);
+	rte_eventdev_trace_enq_burst(dev_id, port_id, ev, nb_events, (void *)fn);
 	/*
 	 * Allow zero cost non burst mode routine invocation if application
 	 * requests nb_events as const one
@@ -2061,6 +2205,76 @@ rte_event_dequeue_burst(uint8_t dev_id, uint8_t port_id, struct rte_event ev[],
 	else
 		return (fp_ops->dequeue_burst)(port, ev, nb_events,
 					       timeout_ticks);
+}
+
+#define RTE_EVENT_DEV_MAINT_OP_FLUSH          (1 << 0)
+/**< Force an immediately flush of any buffered events in the port,
+ * potentially at the cost of additional overhead.
+ *
+ * @see rte_event_maintain()
+ */
+
+/**
+ * Maintain an event device.
+ *
+ * This function is only relevant for event devices which do not have
+ * the @ref RTE_EVENT_DEV_CAP_MAINTENANCE_FREE flag set. Such devices
+ * require an application thread using a particular port to
+ * periodically call rte_event_maintain() on that port during periods
+ * which it is neither attempting to enqueue events to nor dequeue
+ * events from the port. rte_event_maintain() is a low-overhead
+ * function and should be called at a high rate (e.g., in the
+ * application's poll loop).
+ *
+ * No port may be left unmaintained.
+ *
+ * At the application thread's convenience, rte_event_maintain() may
+ * (but is not required to) be called even during periods when enqueue
+ * or dequeue functions are being called, at the cost of a slight
+ * increase in overhead.
+ *
+ * rte_event_maintain() may be called on event devices which have set
+ * @ref RTE_EVENT_DEV_CAP_MAINTENANCE_FREE, in which case it is a
+ * no-operation.
+ *
+ * @param dev_id
+ *   The identifier of the device.
+ * @param port_id
+ *   The identifier of the event port.
+ * @param op
+ *   0, or @ref RTE_EVENT_DEV_MAINT_OP_FLUSH.
+ * @return
+ *  - 0 on success.
+ *  - -EINVAL if *dev_id*,  *port_id*, or *op* is invalid.
+ *
+ * @see RTE_EVENT_DEV_CAP_MAINTENANCE_FREE
+ */
+__rte_experimental
+static inline int
+rte_event_maintain(uint8_t dev_id, uint8_t port_id, int op)
+{
+	const struct rte_event_fp_ops *fp_ops;
+	void *port;
+
+	fp_ops = &rte_event_fp_ops[dev_id];
+	port = fp_ops->data[port_id];
+#ifdef RTE_LIBRTE_EVENTDEV_DEBUG
+	if (dev_id >= RTE_EVENT_MAX_DEVS ||
+	    port_id >= RTE_EVENT_MAX_PORTS_PER_DEV)
+		return -EINVAL;
+
+	if (port == NULL)
+		return -EINVAL;
+
+	if (op & (~RTE_EVENT_DEV_MAINT_OP_FLUSH))
+		return -EINVAL;
+#endif
+	rte_eventdev_trace_maintain(dev_id, port_id, op);
+
+	if (fp_ops->maintain != NULL)
+		fp_ops->maintain(port, op);
+
+	return 0;
 }
 
 #ifdef __cplusplus

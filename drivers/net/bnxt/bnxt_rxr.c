@@ -49,7 +49,7 @@ static inline int bnxt_alloc_rx_data(struct bnxt_rx_queue *rxq,
 	rx_buf = &rxr->rx_buf_ring[prod];
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
-		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
+		__atomic_fetch_add(&rxq->rx_mbuf_alloc_fail, 1, __ATOMIC_RELAXED);
 		return -ENOMEM;
 	}
 
@@ -84,7 +84,7 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
-		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
+		__atomic_fetch_add(&rxq->rx_mbuf_alloc_fail, 1, __ATOMIC_RELAXED);
 		return -ENOMEM;
 	}
 
@@ -459,7 +459,7 @@ static inline struct rte_mbuf *bnxt_tpa_end(
 	struct rte_mbuf *new_data = __bnxt_alloc_rx_data(rxq->mb_pool);
 	RTE_ASSERT(new_data != NULL);
 	if (!new_data) {
-		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
+		__atomic_fetch_add(&rxq->rx_mbuf_alloc_fail, 1, __ATOMIC_RELAXED);
 		return NULL;
 	}
 	tpa_info->mbuf = new_data;
@@ -823,9 +823,9 @@ void bnxt_set_mark_in_mbuf(struct bnxt *bp,
 			   struct rte_mbuf *mbuf)
 {
 	uint32_t cfa_code = 0;
-	uint8_t meta_fmt = 0;
-	uint16_t flags2 = 0;
-	uint32_t meta =  0;
+
+	if (unlikely(bp->mark_table == NULL))
+		return;
 
 	cfa_code = rte_le_to_cpu_16(rxcmp1->cfa_code);
 	if (!cfa_code)
@@ -833,25 +833,6 @@ void bnxt_set_mark_in_mbuf(struct bnxt *bp,
 
 	if (cfa_code && !bp->mark_table[cfa_code].valid)
 		return;
-
-	flags2 = rte_le_to_cpu_16(rxcmp1->flags2);
-	meta = rte_le_to_cpu_32(rxcmp1->metadata);
-	if (meta) {
-		meta >>= BNXT_RX_META_CFA_CODE_SHIFT;
-
-		/* The flags field holds extra bits of info from [6:4]
-		 * which indicate if the flow is in TCAM or EM or EEM
-		 */
-		meta_fmt = (flags2 & BNXT_CFA_META_FMT_MASK) >>
-			   BNXT_CFA_META_FMT_SHFT;
-
-		/* meta_fmt == 4 => 'b100 => 'b10x => EM.
-		 * meta_fmt == 5 => 'b101 => 'b10x => EM + VLAN
-		 * meta_fmt == 6 => 'b110 => 'b11x => EEM
-		 * meta_fmt == 7 => 'b111 => 'b11x => EEM + VLAN.
-		 */
-		meta_fmt >>= BNXT_CFA_META_FMT_EM_EEM_SHFT;
-	}
 
 	mbuf->hash.fdir.hi = bp->mark_table[cfa_code].mark_id;
 	mbuf->ol_flags |= RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
@@ -1008,6 +989,7 @@ reuse_rx_mbuf:
 		goto rx;
 	}
 	rxr->rx_raw_prod = raw_prod;
+rx:
 	rxr->rx_next_cons = RING_IDX(rxr->rx_ring_struct, RING_NEXT(cons));
 
 	if (BNXT_TRUFLOW_EN(bp) && (BNXT_VF_IS_TRUSTED(bp) || BNXT_PF(bp)) &&
@@ -1026,7 +1008,6 @@ reuse_rx_mbuf:
 	 * All MBUFs are allocated with the same size under DPDK,
 	 * no optimization for rx_copy_thresh
 	 */
-rx:
 	*rx_pkt = mbuf;
 
 next_rx:
@@ -1115,7 +1096,6 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			break;
 	}
 
-	cpr->cp_raw_cons = raw_cons;
 	if (!nb_rx_pkts && !nb_rep_rx_pkts && !evt) {
 		/*
 		 * For PMD, there is no need to keep on pushing to REARM
@@ -1124,6 +1104,7 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		goto done;
 	}
 
+	cpr->cp_raw_cons = raw_cons;
 	/* Ring the completion queue doorbell. */
 	bnxt_db_cq(cpr);
 
@@ -1164,20 +1145,6 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 done:
 	return nb_rx_pkts;
-}
-
-/*
- * Dummy DPDK callback for RX.
- *
- * This function is used to temporarily replace the real callback during
- * unsafe control operations on the queue, or in case of error.
- */
-uint16_t
-bnxt_dummy_recv_pkts(void *rx_queue __rte_unused,
-		     struct rte_mbuf **rx_pkts __rte_unused,
-		     uint16_t nb_pkts __rte_unused)
-{
-	return 0;
 }
 
 void bnxt_free_rx_rings(struct bnxt *bp)
@@ -1354,9 +1321,9 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		if (unlikely(!rxr->rx_buf_ring[i])) {
 			if (bnxt_alloc_rx_data(rxq, rxr, raw_prod) != 0) {
 				PMD_DRV_LOG(WARNING,
-					    "init'ed rx ring %d with %d/%d mbufs only\n",
+					    "RxQ %d allocated %d of %d mbufs\n",
 					    rxq->queue_id, i, ring->ring_size);
-				break;
+				return -ENOMEM;
 			}
 		}
 		rxr->rx_raw_prod = raw_prod;
@@ -1368,6 +1335,9 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 	     i < ring->ring_size + BNXT_RX_EXTRA_MBUF_ENTRIES; i++) {
 		rxr->rx_buf_ring[i] = &rxq->fake_mbuf;
 	}
+
+	/* Explicitly reset this driver internal tracker on a ring init */
+	rxr->rx_next_cons = 0;
 
 	if (!bnxt_need_agg_ring(rxq->bp->eth_dev))
 		return 0;
@@ -1381,9 +1351,9 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 		if (unlikely(!rxr->ag_buf_ring[i])) {
 			if (bnxt_alloc_ag_data(rxq, rxr, raw_prod) != 0) {
 				PMD_DRV_LOG(WARNING,
-					    "init'ed AG ring %d with %d/%d mbufs only\n",
+					    "RxQ %d allocated %d of %d mbufs\n",
 					    rxq->queue_id, i, ring->ring_size);
-				break;
+				return -ENOMEM;
 			}
 		}
 		rxr->ag_raw_prod = raw_prod;
@@ -1399,16 +1369,14 @@ int bnxt_init_one_rx_ring(struct bnxt_rx_queue *rxq)
 				rxr->tpa_info[i].mbuf =
 					__bnxt_alloc_rx_data(rxq->mb_pool);
 				if (!rxr->tpa_info[i].mbuf) {
-					rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
+					__atomic_fetch_add(&rxq->rx_mbuf_alloc_fail, 1,
+							__ATOMIC_RELAXED);
 					return -ENOMEM;
 				}
 			}
 		}
 	}
 	PMD_DRV_LOG(DEBUG, "TPA alloc Done!\n");
-
-	/* Explicitly reset this driver internal tracker on a ring init */
-	rxr->rx_next_cons = 0;
 
 	return 0;
 }
@@ -1429,6 +1397,9 @@ int bnxt_flush_rx_cmp(struct bnxt_cp_ring_info *cpr)
 	do {
 		cons = RING_CMP(cpr->cp_ring_struct, raw_cons);
 		rxcmp = (struct rx_pkt_cmpl *)&cpr->cp_desc_ring[cons];
+
+		if (!bnxt_cpr_cmp_valid(rxcmp, raw_cons, ring_mask + 1))
+			break;
 
 		if (CMP_TYPE(rxcmp) == CMPL_BASE_TYPE_HWRM_DONE)
 			return 1;

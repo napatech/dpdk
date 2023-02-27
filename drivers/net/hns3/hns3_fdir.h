@@ -2,8 +2,10 @@
  * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
-#ifndef _HNS3_FDIR_H_
-#define _HNS3_FDIR_H_
+#ifndef HNS3_FDIR_H
+#define HNS3_FDIR_H
+
+#include <stdint.h>
 
 #include <rte_flow.h>
 
@@ -124,17 +126,10 @@ struct hns3_fd_ad_data {
 	uint16_t rule_id;
 };
 
-struct hns3_flow_counter {
-	LIST_ENTRY(hns3_flow_counter) next; /* Pointer to the next counter. */
-	uint32_t shared:1;   /* Share counter ID with other flow rules. */
-	uint32_t ref_cnt:31; /* Reference counter. */
-	uint16_t id;   /* Counter ID. */
-	uint64_t hits; /* Number of packets matched by the rule. */
-};
-
 #define HNS3_RULE_FLAG_FDID		0x1
 #define HNS3_RULE_FLAG_VF_ID		0x2
 #define HNS3_RULE_FLAG_COUNTER		0x4
+#define HNS3_RULE_FLAG_COUNTER_INDIR	0x8
 
 struct hns3_fdir_key_conf {
 	struct hns3_fd_rule_tuples spec;
@@ -149,7 +144,7 @@ struct hns3_fdir_rule {
 	uint32_t flags;
 	uint32_t fd_id; /* APP marked unique value for this rule. */
 	uint8_t action;
-	/* VF id, avaiblable when flags with HNS3_RULE_FLAG_VF_ID. */
+	/* VF id, available when flags with HNS3_RULE_FLAG_VF_ID. */
 	uint8_t vf_id;
 	/*
 	 * equal 0 when action is drop.
@@ -173,21 +168,7 @@ struct hns3_fdir_rule_ele {
 	struct hns3_fdir_rule fdir_conf;
 };
 
-/* rss filter list structure */
-struct hns3_rss_conf_ele {
-	TAILQ_ENTRY(hns3_rss_conf_ele) entries;
-	struct hns3_rss_conf filter_info;
-};
-
-/* hns3_flow memory list structure */
-struct hns3_flow_mem {
-	TAILQ_ENTRY(hns3_flow_mem) entries;
-	struct rte_flow *flow;
-};
-
 TAILQ_HEAD(hns3_fdir_rule_list, hns3_fdir_rule_ele);
-TAILQ_HEAD(hns3_rss_filter_list, hns3_rss_conf_ele);
-TAILQ_HEAD(hns3_flow_mem_list, hns3_flow_mem);
 
 /*
  *  A structure used to define fields of a FDIR related info.
@@ -199,12 +180,8 @@ struct hns3_fdir_info {
 	struct hns3_fd_cfg fd_cfg;
 };
 
-struct rte_flow {
-	enum rte_filter_type filter_type;
-	void *rule;
-	uint32_t counter_id;
-};
 struct hns3_adapter;
+struct hns3_hw;
 
 int hns3_init_fd_config(struct hns3_adapter *hns);
 int hns3_fdir_filter_init(struct hns3_adapter *hns);
@@ -212,9 +189,7 @@ void hns3_fdir_filter_uninit(struct hns3_adapter *hns);
 int hns3_fdir_filter_program(struct hns3_adapter *hns,
 			     struct hns3_fdir_rule *rule, bool del);
 int hns3_clear_all_fdir_filter(struct hns3_adapter *hns);
-int hns3_get_count(struct hns3_hw *hw, uint32_t id, uint64_t *value);
-void hns3_flow_init(struct rte_eth_dev *dev);
-void hns3_flow_uninit(struct rte_eth_dev *dev);
+int hns3_fd_get_count(struct hns3_hw *hw, uint32_t id, uint64_t *value);
 int hns3_restore_all_fdir_filter(struct hns3_adapter *hns);
 
-#endif /* _HNS3_FDIR_H_ */
+#endif /* HNS3_FDIR_H */

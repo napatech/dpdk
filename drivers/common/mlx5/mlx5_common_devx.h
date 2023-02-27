@@ -7,6 +7,8 @@
 
 #include "mlx5_devx_cmds.h"
 
+#include <rte_compat.h>
+
 /* The standard page size */
 #define MLX5_LOG_PAGE_SIZE 12
 
@@ -45,12 +47,25 @@ struct mlx5_devx_qp {
 	volatile uint32_t *db_rec; /* The QP doorbell record. */
 };
 
-/* DevX Receive Queue structure. */
-struct mlx5_devx_rq {
-	struct mlx5_devx_obj *rq; /* The RQ DevX object. */
+/* DevX Receive Queue resource structure. */
+struct mlx5_devx_wq_res {
 	void *umem_obj; /* The RQ umem object. */
 	volatile void *umem_buf;
 	volatile uint32_t *db_rec; /* The RQ doorbell record. */
+};
+
+/* DevX Receive Memory Pool structure. */
+struct mlx5_devx_rmp {
+	struct mlx5_devx_obj *rmp; /* The RMP DevX object. */
+	uint32_t ref_cnt; /* Reference count. */
+	struct mlx5_devx_wq_res wq;
+};
+
+/* DevX Receive Queue structure. */
+struct mlx5_devx_rq {
+	struct mlx5_devx_obj *rq; /* The RQ DevX object. */
+	struct mlx5_devx_rmp *rmp; /* Shared RQ RMP object. */
+	struct mlx5_devx_wq_res wq; /* WQ resource of standalone RQ. */
 };
 
 /* mlx5_common_devx.c */
@@ -76,7 +91,7 @@ void mlx5_devx_qp_destroy(struct mlx5_devx_qp *qp);
 
 __rte_internal
 int mlx5_devx_qp_create(void *ctx, struct mlx5_devx_qp *qp_obj,
-			uint16_t log_wqbb_n,
+			uint32_t queue_size,
 			struct mlx5_devx_qp_attr *attr, int socket);
 
 __rte_internal

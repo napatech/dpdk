@@ -10,7 +10,7 @@
 #include <rte_malloc.h>
 #include <rte_log.h>
 #include <rte_errno.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_pci.h>
 #include <rte_regexdev_driver.h>
 #include <rte_mbuf.h>
@@ -41,6 +41,39 @@
 /* In WQE set mode, the pi should be quarter of the MLX5_REGEX_MAX_WQE_INDEX. */
 #define MLX5_REGEX_UMR_QP_PI_IDX(pi, ops) \
 	(((pi) + (ops)) & (MLX5_REGEX_MAX_WQE_INDEX >> 2))
+#ifdef RTE_LIBRTE_MLX5_DEBUG
+#define MLX5_REGEX_DEBUG 0
+#endif
+#ifdef HAVE_MLX5_UMR_IMKEY
+static uint16_t max_nb_segs = MLX5_REGEX_MAX_KLM_NUM;
+#else
+static uint16_t max_nb_segs = 1;
+#endif
+
+uint16_t
+mlx5_regexdev_max_segs_get(void)
+{
+	return max_nb_segs;
+}
+
+#ifdef MLX5_REGEX_DEBUG
+static inline uint16_t
+validate_ops(struct rte_regex_ops **ops, uint16_t nb_ops)
+{
+	uint16_t nb_left = nb_ops;
+	struct rte_mbuf *mbuf;
+
+	while (nb_left--) {
+		mbuf = ops[nb_left]->mbuf;
+		if ((mbuf->pkt_len > MLX5_RXP_MAX_JOB_LENGTH) ||
+		    (mbuf->nb_segs > max_nb_segs)) {
+			DRV_LOG(ERR, "Failed to validate regex ops");
+			return 1;
+		}
+	}
+	return 0;
+}
+#endif
 
 static inline uint32_t
 qp_size_get(struct mlx5_regex_hw_qp *qp)
@@ -109,26 +142,6 @@ set_wqe_ctrl_seg(struct mlx5_wqe_ctrl_seg *seg, uint16_t pi, uint8_t opcode,
 	seg->imm = imm;
 }
 
-/**
- * Query LKey from a packet buffer for QP. If not found, add the mempool.
- *
- * @param priv
- *   Pointer to the priv object.
- * @param mr_ctrl
- *   Pointer to per-queue MR control structure.
- * @param mbuf
- *   Pointer to source mbuf, to search in.
- *
- * @return
- *   Searched LKey on success, UINT32_MAX on no match.
- */
-static inline uint32_t
-mlx5_regex_mb2mr(struct mlx5_regex_priv *priv, struct mlx5_mr_ctrl *mr_ctrl,
-		 struct rte_mbuf *mbuf)
-{
-	return mlx5_mr_mb2mr(priv->cdev, 0, mr_ctrl, mbuf);
-}
-
 static inline void
 __prep_one(struct mlx5_regex_priv *priv, struct mlx5_regex_hw_qp *qp_obj,
 	   struct rte_regex_ops *op, struct mlx5_regex_job *job,
@@ -145,8 +158,12 @@ __prep_one(struct mlx5_regex_priv *priv, struct mlx5_regex_hw_qp *qp_obj,
 				op->group_id2 : 0;
 	uint16_t group3 = op->req_flags & RTE_REGEX_OPS_REQ_GROUP_ID3_VALID_F ?
 				op->group_id3 : 0;
-	uint8_t control = op->req_flags &
-				RTE_REGEX_OPS_REQ_MATCH_HIGH_PRIORITY_F ? 1 : 0;
+	uint8_t control = 0x0;
+
+	if (op->req_flags & RTE_REGEX_OPS_REQ_MATCH_HIGH_PRIORITY_F)
+		control = 0x1;
+	else if (op->req_flags & RTE_REGEX_OPS_REQ_STOP_ON_MATCH_F)
+		control = 0x2;
 
 	/* For backward compatibility. */
 	if (!(op->req_flags & (RTE_REGEX_OPS_REQ_GROUP_ID0_VALID_F |
@@ -180,7 +197,7 @@ prep_one(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 	struct mlx5_klm klm;
 
 	klm.byte_count = rte_pktmbuf_data_len(op->mbuf);
-	klm.mkey = mlx5_regex_mb2mr(priv, &qp->mr_ctrl, op->mbuf);
+	klm.mkey = mlx5_mr_mb2mr(&qp->mr_ctrl, op->mbuf);
 	klm.address = rte_pktmbuf_mtod(op->mbuf, uintptr_t);
 	__prep_one(priv, qp_obj, op, job, qp_obj->pi, &klm);
 	qp_obj->db_pi = qp_obj->pi;
@@ -188,24 +205,20 @@ prep_one(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 }
 
 static inline void
-send_doorbell(struct mlx5_regex_priv *priv, struct mlx5_regex_hw_qp *qp_obj)
+send_doorbell(struct mlx5_regex_priv *priv, struct mlx5_regex_hw_qp *qp)
 {
-	struct mlx5dv_devx_uar *uar = priv->uar;
-	size_t wqe_offset = (qp_obj->db_pi & (qp_size_get(qp_obj) - 1)) *
-		(MLX5_SEND_WQE_BB << (priv->has_umr ? 2 : 0)) +
-		(priv->has_umr ? MLX5_REGEX_UMR_WQE_SIZE : 0);
-	uint8_t *wqe = (uint8_t *)(uintptr_t)qp_obj->qp_obj.wqes + wqe_offset;
+	size_t wqe_offset = (qp->db_pi & (qp_size_get(qp) - 1)) *
+			    (MLX5_SEND_WQE_BB << (priv->has_umr ? 2 : 0)) +
+			    (priv->has_umr ? MLX5_REGEX_UMR_WQE_SIZE : 0);
+	uint8_t *wqe = (uint8_t *)(uintptr_t)qp->qp_obj.wqes + wqe_offset;
+	uint32_t actual_pi = (priv->has_umr ? (qp->db_pi * 4 + 3) : qp->db_pi) &
+			     MLX5_REGEX_MAX_WQE_INDEX;
+
 	/* Or the fm_ce_se instead of set, avoid the fence be cleared. */
 	((struct mlx5_wqe_ctrl_seg *)wqe)->fm_ce_se |= MLX5_WQE_CTRL_CQ_UPDATE;
-	uint64_t *doorbell_addr =
-		(uint64_t *)((uint8_t *)uar->base_addr + 0x800);
-	rte_io_wmb();
-	qp_obj->qp_obj.db_rec[MLX5_SND_DBR] = rte_cpu_to_be_32((priv->has_umr ?
-					(qp_obj->db_pi * 4 + 3) : qp_obj->db_pi)
-					& MLX5_REGEX_MAX_WQE_INDEX);
-	rte_wmb();
-	*doorbell_addr = *(volatile uint64_t *)wqe;
-	rte_wmb();
+	mlx5_doorbell_ring(&priv->uar.bf_db, *(volatile uint64_t *)wqe,
+			   actual_pi, &qp->qp_obj.db_rec[MLX5_SND_DBR],
+			   !priv->uar.dbnc);
 }
 
 static inline int
@@ -349,9 +362,8 @@ prep_regex_umr_wqe_set(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 			while (mbuf) {
 				addr = rte_pktmbuf_mtod(mbuf, uintptr_t);
 				/* Build indirect mkey seg's KLM. */
-				mkey_klm->mkey = mlx5_regex_mb2mr(priv,
-								  &qp->mr_ctrl,
-								  mbuf);
+				mkey_klm->mkey = mlx5_mr_mb2mr(&qp->mr_ctrl,
+							       mbuf);
 				mkey_klm->address = rte_cpu_to_be_64(addr);
 				mkey_klm->byte_count = rte_cpu_to_be_32
 						(rte_pktmbuf_data_len(mbuf));
@@ -368,7 +380,7 @@ prep_regex_umr_wqe_set(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 			klm.byte_count = scatter_size;
 		} else {
 			/* The single mubf case. Build the KLM directly. */
-			klm.mkey = mlx5_regex_mb2mr(priv, &qp->mr_ctrl, mbuf);
+			klm.mkey = mlx5_mr_mb2mr(&qp->mr_ctrl, mbuf);
 			klm.address = rte_pktmbuf_mtod(mbuf, uintptr_t);
 			klm.byte_count = rte_pktmbuf_data_len(mbuf);
 		}
@@ -399,6 +411,11 @@ mlx5_regexdev_enqueue_gga(struct rte_regexdev *dev, uint16_t qp_id,
 	struct mlx5_regex_qp *queue = &priv->qps[qp_id];
 	struct mlx5_regex_hw_qp *qp_obj;
 	size_t hw_qpid, nb_left = nb_ops, nb_desc;
+
+#ifdef MLX5_REGEX_DEBUG
+	if (validate_ops(ops, nb_ops))
+		return 0;
+#endif
 
 	while ((hw_qpid = ffs(queue->free_qps))) {
 		hw_qpid--; /* ffs returns 1 for bit 0 */
@@ -433,6 +450,11 @@ mlx5_regexdev_enqueue(struct rte_regexdev *dev, uint16_t qp_id,
 	struct mlx5_regex_qp *queue = &priv->qps[qp_id];
 	struct mlx5_regex_hw_qp *qp_obj;
 	size_t hw_qpid, job_id, i = 0;
+
+#ifdef MLX5_REGEX_DEBUG
+	if (validate_ops(ops, nb_ops))
+		return 0;
+#endif
 
 	while ((hw_qpid = ffs(queue->free_qps))) {
 		hw_qpid--; /* ffs returns 1 for bit 0 */
@@ -559,7 +581,7 @@ mlx5_regexdev_dequeue(struct rte_regexdev *dev, uint16_t qp_id,
 		uint16_t wq_counter
 			= (rte_be_to_cpu_16(cqe->wqe_counter) + 1) &
 			  MLX5_REGEX_MAX_WQE_INDEX;
-		size_t hw_qpid = cqe->rsvd3[2];
+		size_t hw_qpid = cqe->user_index_bytes[2];
 		struct mlx5_regex_hw_qp *qp_obj = &queue->qps[hw_qpid];
 
 		/* UMR mode WQE counter move as WQE set(4 WQEBBS).*/
@@ -727,6 +749,7 @@ mlx5_regexdev_setup_fastpath(struct mlx5_regex_priv *priv, uint32_t qp_id)
 	err = setup_buffers(priv, qp);
 	if (err) {
 		rte_free(qp->jobs);
+		qp->jobs = NULL;
 		return err;
 	}
 
@@ -774,14 +797,14 @@ mlx5_regexdev_teardown_fastpath(struct mlx5_regex_priv *priv, uint32_t qp_id)
 	struct mlx5_regex_qp *qp = &priv->qps[qp_id];
 	uint32_t i;
 
-	if (qp) {
+	if (qp->jobs) {
 		for (i = 0; i < qp->nb_desc; i++) {
 			if (qp->jobs[i].imkey)
 				claim_zero(mlx5_devx_cmd_destroy
 							(qp->jobs[i].imkey));
 		}
 		free_buffers(qp);
-		if (qp->jobs)
-			rte_free(qp->jobs);
+		rte_free(qp->jobs);
+		qp->jobs = NULL;
 	}
 }

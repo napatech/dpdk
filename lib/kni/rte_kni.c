@@ -12,7 +12,6 @@
 #include <sys/ioctl.h>
 #include <linux/version.h>
 
-#include <rte_spinlock.h>
 #include <rte_string_fns.h>
 #include <rte_ethdev.h>
 #include <rte_malloc.h>
@@ -20,7 +19,6 @@
 #include <rte_kni.h>
 #include <rte_memzone.h>
 #include <rte_tailq.h>
-#include <rte_rwlock.h>
 #include <rte_eal_memconfig.h>
 #include <rte_kni_common.h>
 #include "rte_kni_fifo.h"
@@ -98,6 +96,8 @@ static volatile int kni_fd = -1;
 int
 rte_kni_init(unsigned int max_kni_ifaces __rte_unused)
 {
+	RTE_LOG(WARNING, KNI, "WARNING: KNI is deprecated and will be removed in DPDK 23.11\n");
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 	if (rte_eal_iova_mode() != RTE_IOVA_PA) {
 		RTE_LOG(ERR, KNI, "KNI requires IOVA as PA\n");
@@ -359,8 +359,7 @@ static void *
 va2pa(struct rte_mbuf *m)
 {
 	return (void *)((unsigned long)m -
-			((unsigned long)m->buf_addr -
-			 (unsigned long)m->buf_iova));
+			((unsigned long)m->buf_addr - (unsigned long)rte_mbuf_iova_get(m)));
 }
 
 static void *
@@ -514,6 +513,8 @@ kni_config_promiscusity(uint16_t port_id, uint8_t to_on)
 static int
 kni_config_allmulticast(uint16_t port_id, uint8_t to_on)
 {
+	int ret;
+
 	if (!rte_eth_dev_is_valid_port(port_id)) {
 		RTE_LOG(ERR, KNI, "Invalid port id %d\n", port_id);
 		return -EINVAL;
@@ -523,11 +524,16 @@ kni_config_allmulticast(uint16_t port_id, uint8_t to_on)
 		port_id, to_on);
 
 	if (to_on)
-		rte_eth_allmulticast_enable(port_id);
+		ret = rte_eth_allmulticast_enable(port_id);
 	else
-		rte_eth_allmulticast_disable(port_id);
+		ret = rte_eth_allmulticast_disable(port_id);
+	if (ret != 0)
+		RTE_LOG(ERR, KNI,
+			"Failed to %s allmulticast mode for port %u: %s\n",
+			to_on ? "enable" : "disable", port_id,
+			rte_strerror(-ret));
 
-	return 0;
+	return ret;
 }
 
 int

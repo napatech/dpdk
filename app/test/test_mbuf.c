@@ -2,6 +2,8 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
+#include "test.h"
+
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -21,7 +23,6 @@
 #include <rte_eal.h>
 #include <rte_per_lcore.h>
 #include <rte_lcore.h>
-#include <rte_atomic.h>
 #include <rte_branch_prediction.h>
 #include <rte_ring.h>
 #include <rte_mempool.h>
@@ -33,8 +34,6 @@
 #include <rte_ip.h>
 #include <rte_tcp.h>
 #include <rte_mbuf_dyn.h>
-
-#include "test.h"
 
 #define MEMPOOL_CACHE_SIZE      32
 #define MBUF_DATA_SIZE          2048
@@ -305,8 +304,7 @@ test_one_pktmbuf(struct rte_mempool *pktmbuf_pool)
 	return 0;
 
 fail:
-	if (m)
-		rte_pktmbuf_free(m);
+	rte_pktmbuf_free(m);
 	return -1;
 }
 
@@ -417,12 +415,9 @@ testclone_testupdate_testdetach(struct rte_mempool *pktmbuf_pool,
 	return 0;
 
 fail:
-	if (m)
-		rte_pktmbuf_free(m);
-	if (clone)
-		rte_pktmbuf_free(clone);
-	if (clone2)
-		rte_pktmbuf_free(clone2);
+	rte_pktmbuf_free(m);
+	rte_pktmbuf_free(clone);
+	rte_pktmbuf_free(clone2);
 	return -1;
 }
 
@@ -573,12 +568,9 @@ test_pktmbuf_copy(struct rte_mempool *pktmbuf_pool,
 	return 0;
 
 fail:
-	if (m)
-		rte_pktmbuf_free(m);
-	if (copy)
-		rte_pktmbuf_free(copy);
-	if (copy2)
-		rte_pktmbuf_free(copy2);
+	rte_pktmbuf_free(m);
+	rte_pktmbuf_free(copy);
+	rte_pktmbuf_free(copy2);
 	return -1;
 }
 
@@ -680,12 +672,9 @@ test_attach_from_different_pool(struct rte_mempool *pktmbuf_pool,
 	return 0;
 
 fail:
-	if (m)
-		rte_pktmbuf_free(m);
-	if (clone)
-		rte_pktmbuf_free(clone);
-	if (clone2)
-		rte_pktmbuf_free(clone2);
+	rte_pktmbuf_free(m);
+	rte_pktmbuf_free(clone);
+	rte_pktmbuf_free(clone2);
 	return -1;
 }
 
@@ -723,8 +712,7 @@ test_pktmbuf_pool(struct rte_mempool *pktmbuf_pool)
 	}
 	/* free them */
 	for (i=0; i<NB_MBUF; i++) {
-		if (m[i] != NULL)
-			rte_pktmbuf_free(m[i]);
+		rte_pktmbuf_free(m[i]);
 	}
 
 	return ret;
@@ -925,8 +913,7 @@ test_pktmbuf_pool_ptr(struct rte_mempool *pktmbuf_pool)
 
 	/* free them */
 	for (i=0; i<NB_MBUF; i++) {
-		if (m[i] != NULL)
-			rte_pktmbuf_free(m[i]);
+		rte_pktmbuf_free(m[i]);
 	}
 
 	for (i=0; i<NB_MBUF; i++)
@@ -948,8 +935,7 @@ test_pktmbuf_pool_ptr(struct rte_mempool *pktmbuf_pool)
 
 	/* free them */
 	for (i=0; i<NB_MBUF; i++) {
-		if (m[i] != NULL)
-			rte_pktmbuf_free(m[i]);
+		rte_pktmbuf_free(m[i]);
 	}
 
 	return ret;
@@ -1148,7 +1134,7 @@ test_refcnt_mbuf(void)
 
 	rte_eal_mp_wait_lcore();
 
-	/* check that we porcessed all references */
+	/* check that we processed all references */
 	tref = 0;
 	main_lcore = rte_get_main_lcore();
 
@@ -1172,6 +1158,15 @@ err:
 	return 0;
 #endif
 }
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+static int
+test_failing_mbuf_sanity_check(struct rte_mempool *pktmbuf_pool)
+{
+	RTE_SET_USED(pktmbuf_pool);
+	return TEST_SKIPPED;
+}
+#else
 
 #include <unistd.h>
 #include <sys/resource.h>
@@ -1237,11 +1232,13 @@ test_failing_mbuf_sanity_check(struct rte_mempool *pktmbuf_pool)
 		return -1;
 	}
 
-	badbuf = *buf;
-	badbuf.buf_iova = 0;
-	if (verify_mbuf_check_panics(&badbuf)) {
-		printf("Error with bad-physaddr mbuf test\n");
-		return -1;
+	if (RTE_IOVA_AS_PA) {
+		badbuf = *buf;
+		rte_mbuf_iova_set(&badbuf, 0);
+		if (verify_mbuf_check_panics(&badbuf)) {
+			printf("Error with bad-physaddr mbuf test\n");
+			return -1;
+		}
 	}
 
 	badbuf = *buf;
@@ -1267,6 +1264,8 @@ test_failing_mbuf_sanity_check(struct rte_mempool *pktmbuf_pool)
 
 	return 0;
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */
 
 static int
 test_mbuf_linearize(struct rte_mempool *pktmbuf_pool, int pkt_len,
@@ -1356,8 +1355,7 @@ test_mbuf_linearize(struct rte_mempool *pktmbuf_pool, int pkt_len,
 	return 0;
 
 fail:
-	if (mbuf)
-		rte_pktmbuf_free(mbuf);
+	rte_pktmbuf_free(mbuf);
 	return -1;
 }
 
@@ -2032,8 +2030,6 @@ test_pktmbuf_read_from_offset(struct rte_mempool *pktmbuf_pool)
 			NULL);
 	if (data_copy == NULL)
 		GOTO_FAIL("%s: Error in reading packet data!\n", __func__);
-	if (strlen(data_copy) != MBUF_TEST_DATA_LEN2 - 5)
-		GOTO_FAIL("%s: Incorrect data length!\n", __func__);
 	for (off = 0; off < MBUF_TEST_DATA_LEN2 - 5; off++) {
 		if (data_copy[off] != (char)0xcc)
 			GOTO_FAIL("Data corrupted at offset %u", off);
@@ -2055,8 +2051,6 @@ test_pktmbuf_read_from_offset(struct rte_mempool *pktmbuf_pool)
 	data_copy = rte_pktmbuf_read(m, hdr_len, 0, NULL);
 	if (data_copy == NULL)
 		GOTO_FAIL("%s: Error in reading packet data!\n", __func__);
-	if (strlen(data_copy) != MBUF_TEST_DATA_LEN2)
-		GOTO_FAIL("%s: Corrupted data content!\n", __func__);
 	for (off = 0; off < MBUF_TEST_DATA_LEN2; off++) {
 		if (data_copy[off] != (char)0xcc)
 			GOTO_FAIL("Data corrupted at offset %u", off);
@@ -2307,16 +2301,16 @@ fail:
 
 /* Define a free call back function to be used for external buffer */
 static void
-ext_buf_free_callback_fn(void *addr __rte_unused, void *opaque)
+ext_buf_free_callback_fn(void *addr, void *opaque)
 {
-	void *ext_buf_addr = opaque;
+	bool *freed = opaque;
 
-	if (ext_buf_addr == NULL) {
+	if (addr == NULL) {
 		printf("External buffer address is invalid\n");
 		return;
 	}
-	rte_free(ext_buf_addr);
-	ext_buf_addr = NULL;
+	rte_free(addr);
+	*freed = true;
 	printf("External buffer freed via callback\n");
 }
 
@@ -2340,6 +2334,7 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 	void *ext_buf_addr = NULL;
 	uint16_t buf_len = EXT_BUF_TEST_DATA_LEN +
 				sizeof(struct rte_mbuf_ext_shared_info);
+	bool freed = false;
 
 	/* alloc a mbuf */
 	m = rte_pktmbuf_alloc(pktmbuf_pool);
@@ -2355,7 +2350,7 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 		GOTO_FAIL("%s: External buffer allocation failed\n", __func__);
 
 	ret_shinfo = rte_pktmbuf_ext_shinfo_init_helper(ext_buf_addr, &buf_len,
-		ext_buf_free_callback_fn, ext_buf_addr);
+		ext_buf_free_callback_fn, &freed);
 	if (ret_shinfo == NULL)
 		GOTO_FAIL("%s: Shared info initialization failed!\n", __func__);
 
@@ -2388,26 +2383,35 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 2)
 		GOTO_FAIL("%s: Invalid ext_buf ref_cnt\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	/* test to manually update ext_buf_ref_cnt from 2 to 3*/
 	rte_mbuf_ext_refcnt_update(ret_shinfo, 1);
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 3)
 		GOTO_FAIL("%s: Update ext_buf ref_cnt failed\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	/* reset the ext_refcnt before freeing the external buffer */
 	rte_mbuf_ext_refcnt_set(ret_shinfo, 2);
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 2)
 		GOTO_FAIL("%s: set ext_buf ref_cnt failed\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	/* detach the external buffer from mbufs */
 	rte_pktmbuf_detach_extbuf(m);
 	/* check if ref cnt is decremented */
 	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 1)
 		GOTO_FAIL("%s: Invalid ext_buf ref_cnt\n", __func__);
+	if (freed)
+		GOTO_FAIL("%s: extbuf should not be freed\n", __func__);
 
 	rte_pktmbuf_detach_extbuf(clone);
-	if (rte_mbuf_ext_refcnt_read(ret_shinfo) != 0)
-		GOTO_FAIL("%s: Invalid ext_buf ref_cnt\n", __func__);
+	if (!freed)
+		GOTO_FAIL("%s: extbuf should be freed\n", __func__);
+	freed = false;
 
 	rte_pktmbuf_free(m);
 	m = NULL;
@@ -2675,7 +2679,7 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 
 	flag3 = rte_mbuf_dynflag_register_bitnum(&dynflag3,
 						rte_bsf64(RTE_MBUF_F_LAST_FREE));
-	if (flag3 != rte_bsf64(RTE_MBUF_F_LAST_FREE))
+	if ((uint32_t)flag3 != rte_bsf64(RTE_MBUF_F_LAST_FREE))
 		GOTO_FAIL("failed to register dynamic flag 3, flag3=%d: %s",
 			flag3, strerror(errno));
 
@@ -2763,8 +2767,7 @@ test_nb_segs_and_next_reset(void)
 	return 0;
 
 fail:
-	if (pool != NULL)
-		rte_mempool_free(pool);
+	rte_mempool_free(pool);
 	return -1;
 }
 

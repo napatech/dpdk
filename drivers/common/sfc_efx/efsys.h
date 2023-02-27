@@ -12,6 +12,7 @@
 
 #include <stdbool.h>
 
+#include <rte_compat.h>
 #include <rte_spinlock.h>
 #include <rte_byteorder.h>
 #include <rte_debug.h>
@@ -125,7 +126,7 @@ prefetch_read_once(const volatile void *addr)
 /* Enable Riverhead support */
 #define EFSYS_OPT_RIVERHEAD 1
 
-#ifdef RTE_LIBRTE_SFC_EFX_DEBUG
+#ifdef RTE_DEBUG_COMMON_SFC_EFX
 #define EFSYS_OPT_CHECK_REG 1
 #else
 #define EFSYS_OPT_CHECK_REG 0
@@ -187,7 +188,7 @@ prefetch_read_once(const volatile void *addr)
 
 #define EFSYS_OPT_MAE 1
 
-#define EFSYS_OPT_VIRTIO 0
+#define EFSYS_OPT_VIRTIO 1
 
 /* ID */
 
@@ -609,14 +610,14 @@ typedef struct efsys_bar_s {
 /* DMA SYNC */
 
 /*
- * DPDK does not provide any DMA syncing API, and no PMD drivers
+ * DPDK does not provide any DMA syncing API, and no PMDs
  * have any traces of explicit DMA syncing.
  * DMA mapping is assumed to be coherent.
  */
 
 #define EFSYS_DMA_SYNC_FOR_KERNEL(_esmp, _offset, _size)	((void)0)
 
-/* Just avoid store and compiler (impliciltly) reordering */
+/* Just avoid store and compiler (implicitly) reordering */
 #define EFSYS_DMA_SYNC_FOR_DEVICE(_esmp, _offset, _size)	rte_wmb()
 
 /* TIMESTAMP */
@@ -742,7 +743,7 @@ typedef uint64_t	efsys_stat_t;
 /* RTE_VERIFY from DPDK treats expressions with % operator incorrectly,
  * so we re-implement it here
  */
-#ifdef RTE_LIBRTE_SFC_EFX_DEBUG
+#ifdef RTE_DEBUG_COMMON_SFC_EFX
 #define EFSYS_ASSERT(_exp)						\
 	do {								\
 		if (unlikely(!(_exp)))					\

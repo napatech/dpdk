@@ -13,7 +13,7 @@
 #include <rte_log.h>
 #include <rte_pci.h>
 #include <rte_mbuf.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_memzone.h>
 #include <rte_memcpy.h>
 #include <rte_rawdev.h>
@@ -1398,6 +1398,10 @@ ntb_init_hw(struct rte_rawdev *dev, struct rte_pci_device *pci_dev)
 
 	/* Init doorbell. */
 	hw->db_valid_mask = RTE_LEN2MASK(hw->db_cnt, uint64_t);
+	/* Clear all valid doorbell bits before registering intr handler */
+	if (hw->ntb_ops->db_clear == NULL)
+		return -ENOTSUP;
+	(*hw->ntb_ops->db_clear)(dev, hw->db_valid_mask);
 
 	intr_handle = pci_dev->intr_handle;
 	/* Register callback func to eal lib */

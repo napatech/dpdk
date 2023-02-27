@@ -14,7 +14,6 @@
 #define CRC32_VEC_LEN2     348
 #define CRC16_VEC_LEN1     12
 #define CRC16_VEC_LEN2     2
-#define LINE_LEN           75
 
 /* CRC test vector */
 static const uint8_t crc_vec[CRC_VEC_LEN] = {
@@ -80,6 +79,8 @@ test_crc_calc(void)
 
 	/* 32-bit ethernet CRC: Test 2 */
 	test_data = rte_zmalloc(NULL, CRC32_VEC_LEN1, 0);
+	if (test_data == NULL)
+		return -7;
 
 	for (i = 0; i < CRC32_VEC_LEN1; i += 12)
 		rte_memcpy(&test_data[i], crc32_vec1, 12);

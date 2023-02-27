@@ -5,6 +5,8 @@
 #ifndef MLX5_MALLOC_H_
 #define MLX5_MALLOC_H_
 
+#include <rte_compat.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -19,7 +21,7 @@ extern "C" {
 
 enum mlx5_mem_flags {
 	MLX5_MEM_ANY = 0,
-	/* Memory will be allocated dpends on sys_mem_en. */
+	/* Memory will be allocated depends on sys_mem_en. */
 	MLX5_MEM_SYS = 1 << 0,
 	/* Memory should be allocated from system. */
 	MLX5_MEM_RTE = 1 << 1,

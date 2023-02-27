@@ -17,9 +17,9 @@
 #include <rte_lcore.h>
 #include <rte_per_lcore.h>
 #include <rte_random.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_test.h>
-#include <rte_fslmc.h>
+#include <bus_fslmc_driver.h>
 
 #include "dpaa2_eventdev.h"
 #include "dpaa2_eventdev_logs.h"
@@ -118,7 +118,7 @@ _eventdev_setup(int mode)
 	struct rte_event_dev_info info;
 	const char *pool_name = "evdev_dpaa2_test_pool";
 
-	/* Create and destrory pool for each test case to make it standalone */
+	/* Create and destroy pool for each test case to make it standalone */
 	eventdev_test_mempool = rte_pktmbuf_pool_create(pool_name,
 					MAX_EVENTS,
 					0 /*MBUF_CACHE_SIZE*/,

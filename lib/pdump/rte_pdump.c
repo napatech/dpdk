@@ -2,7 +2,8 @@
  * Copyright(c) 2016-2018 Intel Corporation
  */
 
-#include <rte_memcpy.h>
+#include <stdlib.h>
+
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
 #include <rte_lcore.h>
@@ -74,6 +75,7 @@ static const char MZ_RTE_PDUMP_STATS[] = "rte_pdump_stats";
 static struct {
 	struct rte_pdump_stats rx[RTE_MAX_ETHPORTS][RTE_MAX_QUEUES_PER_PORT];
 	struct rte_pdump_stats tx[RTE_MAX_ETHPORTS][RTE_MAX_QUEUES_PER_PORT];
+	const struct rte_memzone *mz;
 } *pdump_stats;
 
 /* Create a clone of mbuf to be placed into ring. */
@@ -429,6 +431,7 @@ rte_pdump_init(void)
 		return -1;
 	}
 	pdump_stats = mz->addr;
+	pdump_stats->mz = mz;
 
 	ret = rte_mp_action_register(PDUMP_MP, pdump_server);
 	if (ret && rte_errno != ENOTSUP)
@@ -440,6 +443,11 @@ int
 rte_pdump_uninit(void)
 {
 	rte_mp_action_unregister(PDUMP_MP);
+
+	if (pdump_stats != NULL) {
+		rte_memzone_free(pdump_stats->mz);
+		pdump_stats = NULL;
+	}
 
 	return 0;
 }
@@ -528,6 +536,12 @@ pdump_prepare_client_request(const char *device, uint16_t queue,
 	struct timespec ts = {.tv_sec = 5, .tv_nsec = 0};
 	struct pdump_request *req = (struct pdump_request *)mp_req.param;
 	struct pdump_response *resp;
+
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		PDUMP_LOG(ERR,
+			  "pdump enable/disable not allowed in primary process\n");
+		return -EINVAL;
+	}
 
 	memset(req, 0, sizeof(*req));
 
@@ -630,6 +644,9 @@ pdump_enable_by_deviceid(const char *device_id, uint16_t queue,
 	ret = pdump_validate_flags(flags);
 	if (ret < 0)
 		return ret;
+
+	if (snaplen == 0)
+		snaplen = UINT32_MAX;
 
 	return pdump_prepare_client_request(device_id, queue, flags, snaplen,
 					    ENABLE, ring, mp, prm);

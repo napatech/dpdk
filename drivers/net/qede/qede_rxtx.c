@@ -38,48 +38,40 @@ static inline int qede_alloc_rx_buffer(struct qede_rx_queue *rxq)
 
 static inline int qede_alloc_rx_bulk_mbufs(struct qede_rx_queue *rxq, int count)
 {
+	void *obj_p[QEDE_MAX_BULK_ALLOC_COUNT] __rte_cache_aligned;
 	struct rte_mbuf *mbuf = NULL;
 	struct eth_rx_bd *rx_bd;
 	dma_addr_t mapping;
 	int i, ret = 0;
 	uint16_t idx;
-	uint16_t mask = NUM_RX_BDS(rxq);
-
-	if (count > QEDE_MAX_BULK_ALLOC_COUNT)
-		count = QEDE_MAX_BULK_ALLOC_COUNT;
 
 	idx = rxq->sw_rx_prod & NUM_RX_BDS(rxq);
 
-	if (count > mask - idx + 1)
-		count = mask - idx + 1;
-
-	ret = rte_mempool_get_bulk(rxq->mb_pool, (void **)&rxq->sw_rx_ring[idx],
-				   count);
-
+	ret = rte_mempool_get_bulk(rxq->mb_pool, obj_p, count);
 	if (unlikely(ret)) {
 		PMD_RX_LOG(ERR, rxq,
 			   "Failed to allocate %d rx buffers "
 			    "sw_rx_prod %u sw_rx_cons %u mp entries %u free %u",
-			    count,
-			    rxq->sw_rx_prod & NUM_RX_BDS(rxq),
-			    rxq->sw_rx_cons & NUM_RX_BDS(rxq),
+			    count, idx, rxq->sw_rx_cons & NUM_RX_BDS(rxq),
 			    rte_mempool_avail_count(rxq->mb_pool),
 			    rte_mempool_in_use_count(rxq->mb_pool));
 		return -ENOMEM;
 	}
 
 	for (i = 0; i < count; i++) {
-		rte_prefetch0(rxq->sw_rx_ring[(idx + 1) & NUM_RX_BDS(rxq)]);
-		mbuf = rxq->sw_rx_ring[idx & NUM_RX_BDS(rxq)];
+		mbuf = obj_p[i];
+		if (likely(i < count - 1))
+			rte_prefetch0(obj_p[i + 1]);
 
+		idx = rxq->sw_rx_prod & NUM_RX_BDS(rxq);
+		rxq->sw_rx_ring[idx] = mbuf;
 		mapping = rte_mbuf_data_iova_default(mbuf);
 		rx_bd = (struct eth_rx_bd *)
 			ecore_chain_produce(&rxq->rx_bd_ring);
 		rx_bd->addr.hi = rte_cpu_to_le_32(U64_HI(mapping));
 		rx_bd->addr.lo = rte_cpu_to_le_32(U64_LO(mapping));
-		idx++;
+		rxq->sw_rx_prod++;
 	}
-	rxq->sw_rx_prod = idx;
 
 	return 0;
 }
@@ -90,7 +82,7 @@ static inline int qede_alloc_rx_bulk_mbufs(struct qede_rx_queue *rxq, int count)
  *    (MTU + Maximum L2 Header Size + 2) / ETH_RX_MAX_BUFF_PER_PKT
  * 3) In regular mode - minimum rx_buf_size should be
  *    (MTU + Maximum L2 Header Size + 2)
- *    In above cases +2 corrosponds to 2 bytes padding in front of L2
+ *    In above cases +2 corresponds to 2 bytes padding in front of L2
  *    header.
  * 4) rx_buf_size should be cacheline-size aligned. So considering
  *    criteria 1, we need to adjust the size to floor instead of ceil,
@@ -106,7 +98,7 @@ qede_calc_rx_buf_size(struct rte_eth_dev *dev, uint16_t mbufsz,
 
 	if (dev->data->scattered_rx) {
 		/* per HW limitation, only ETH_RX_MAX_BUFF_PER_PKT number of
-		 * bufferes can be used for single packet. So need to make sure
+		 * buffers can be used for single packet. So need to make sure
 		 * mbuf size is sufficient enough for this.
 		 */
 		if ((mbufsz * ETH_RX_MAX_BUFF_PER_PKT) <
@@ -243,11 +235,11 @@ qede_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qid,
 		dev->data->rx_queues[qid] = NULL;
 	}
 
-	max_rx_pktlen = dev->data->mtu + RTE_ETHER_HDR_LEN;
+	max_rx_pktlen = dev->data->mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN;
 
 	/* Fix up RX buffer size */
 	bufsz = (uint16_t)rte_pktmbuf_data_room_size(mp) - RTE_PKTMBUF_HEADROOM;
-	/* cache align the mbuf size to simplfy rx_buf_size calculation */
+	/* cache align the mbuf size to simplify rx_buf_size calculation */
 	bufsz = QEDE_FLOOR_TO_CACHE_LINE_SIZE(bufsz);
 	if ((rxmode->offloads & RTE_ETH_RX_OFFLOAD_SCATTER)	||
 	    (max_rx_pktlen + QEDE_ETH_OVERHEAD) > bufsz) {
@@ -706,12 +698,10 @@ void qede_dealloc_fp_resc(struct rte_eth_dev *eth_dev)
 		}
 	}
 
-	if (qdev->fp_array)
-		rte_free(qdev->fp_array);
+	rte_free(qdev->fp_array);
 	qdev->fp_array = NULL;
 
-	if (qdev->fp_array_cmt)
-		rte_free(qdev->fp_array_cmt);
+	rte_free(qdev->fp_array_cmt);
 	qdev->fp_array_cmt = NULL;
 }
 
@@ -887,66 +877,53 @@ qede_tx_queue_start(struct rte_eth_dev *eth_dev, uint16_t tx_queue_id)
 }
 
 static inline void
+qede_free_tx_pkt(struct qede_tx_queue *txq)
+{
+	struct rte_mbuf *mbuf;
+	uint16_t nb_segs;
+	uint16_t idx;
+
+	idx = TX_CONS(txq);
+	mbuf = txq->sw_tx_ring[idx];
+	if (mbuf) {
+		nb_segs = mbuf->nb_segs;
+		PMD_TX_LOG(DEBUG, txq, "nb_segs to free %u\n", nb_segs);
+		while (nb_segs) {
+			/* It's like consuming rxbuf in recv() */
+			ecore_chain_consume(&txq->tx_pbl);
+			txq->nb_tx_avail++;
+			nb_segs--;
+		}
+		rte_pktmbuf_free(mbuf);
+		txq->sw_tx_ring[idx] = NULL;
+		txq->sw_tx_cons++;
+		PMD_TX_LOG(DEBUG, txq, "Freed tx packet\n");
+	} else {
+		ecore_chain_consume(&txq->tx_pbl);
+		txq->nb_tx_avail++;
+	}
+}
+
+static inline void
 qede_process_tx_compl(__rte_unused struct ecore_dev *edev,
 		      struct qede_tx_queue *txq)
 {
 	uint16_t hw_bd_cons;
-	uint16_t sw_tx_cons;
-	uint16_t remaining;
-	uint16_t mask;
-	struct rte_mbuf *mbuf;
-	uint16_t nb_segs;
-	uint16_t idx;
-	uint16_t first_idx;
-
-	rte_compiler_barrier();
-	rte_prefetch0(txq->hw_cons_ptr);
-	sw_tx_cons = ecore_chain_get_cons_idx(&txq->tx_pbl);
-	hw_bd_cons = rte_le_to_cpu_16(*txq->hw_cons_ptr);
 #ifdef RTE_LIBRTE_QEDE_DEBUG_TX
+	uint16_t sw_tx_cons;
+#endif
+
+	hw_bd_cons = rte_le_to_cpu_16(*txq->hw_cons_ptr);
+	/* read barrier prevents speculative execution on stale data */
+	rte_rmb();
+
+#ifdef RTE_LIBRTE_QEDE_DEBUG_TX
+	sw_tx_cons = ecore_chain_get_cons_idx(&txq->tx_pbl);
 	PMD_TX_LOG(DEBUG, txq, "Tx Completions = %u\n",
 		   abs(hw_bd_cons - sw_tx_cons));
 #endif
-
-	mask = NUM_TX_BDS(txq);
-	idx = txq->sw_tx_cons & mask;
-
-	remaining = hw_bd_cons - sw_tx_cons;
-	txq->nb_tx_avail += remaining;
-	first_idx = idx;
-
-	while (remaining) {
-		mbuf = txq->sw_tx_ring[idx];
-		RTE_ASSERT(mbuf);
-		nb_segs = mbuf->nb_segs;
-		remaining -= nb_segs;
-
-		/* Prefetch the next mbuf. Note that at least the last 4 mbufs
-		 * that are prefetched will not be used in the current call.
-		 */
-		rte_mbuf_prefetch_part1(txq->sw_tx_ring[(idx + 4) & mask]);
-		rte_mbuf_prefetch_part2(txq->sw_tx_ring[(idx + 4) & mask]);
-
-		PMD_TX_LOG(DEBUG, txq, "nb_segs to free %u\n", nb_segs);
-
-		while (nb_segs) {
-			ecore_chain_consume(&txq->tx_pbl);
-			nb_segs--;
-		}
-
-		idx = (idx + 1) & mask;
-		PMD_TX_LOG(DEBUG, txq, "Freed tx packet\n");
-	}
-	txq->sw_tx_cons = idx;
-
-	if (first_idx > idx) {
-		rte_pktmbuf_free_bulk(&txq->sw_tx_ring[first_idx],
-							  mask - first_idx + 1);
-		rte_pktmbuf_free_bulk(&txq->sw_tx_ring[0], idx);
-	} else {
-		rte_pktmbuf_free_bulk(&txq->sw_tx_ring[first_idx],
-							  idx - first_idx);
-	}
+	while (hw_bd_cons !=  ecore_chain_get_cons_idx(&txq->tx_pbl))
+		qede_free_tx_pkt(txq);
 }
 
 static int qede_drain_txq(struct qede_dev *qdev,
@@ -1559,25 +1536,26 @@ qede_recv_pkts_regular(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	uint8_t bitfield_val;
 #endif
 	uint8_t offset, flags, bd_num;
-
+	uint16_t count = 0;
 
 	/* Allocate buffers that we used in previous loop */
 	if (rxq->rx_alloc_count) {
-		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq,
-			     rxq->rx_alloc_count))) {
+		count = rxq->rx_alloc_count > QEDE_MAX_BULK_ALLOC_COUNT ?
+			QEDE_MAX_BULK_ALLOC_COUNT : rxq->rx_alloc_count;
+
+		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq, count))) {
 			struct rte_eth_dev *dev;
 
 			PMD_RX_LOG(ERR, rxq,
-				   "New buffer allocation failed,"
-				   "dropping incoming packetn");
+				   "New buffers allocation failed,"
+				   "dropping incoming packets\n");
 			dev = &rte_eth_devices[rxq->port_id];
-			dev->data->rx_mbuf_alloc_failed +=
-							rxq->rx_alloc_count;
-			rxq->rx_alloc_errors += rxq->rx_alloc_count;
+			dev->data->rx_mbuf_alloc_failed += count;
+			rxq->rx_alloc_errors += count;
 			return 0;
 		}
 		qede_update_rx_prod(qdev, rxq);
-		rxq->rx_alloc_count = 0;
+		rxq->rx_alloc_count -= count;
 	}
 
 	hw_comp_cons = rte_le_to_cpu_16(*rxq->hw_cons_ptr);
@@ -1745,8 +1723,8 @@ next_cqe:
 		}
 	}
 
-	/* Request number of bufferes to be allocated in next loop */
-	rxq->rx_alloc_count = rx_alloc_count;
+	/* Request number of buffers to be allocated in next loop */
+	rxq->rx_alloc_count += rx_alloc_count;
 
 	rxq->rcv_pkts += rx_pkt;
 	rxq->rx_segs += rx_pkt;
@@ -1786,25 +1764,26 @@ qede_recv_pkts(void *p_rxq, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	struct qede_agg_info *tpa_info = NULL;
 	uint32_t rss_hash;
 	int rx_alloc_count = 0;
-
+	uint16_t count = 0;
 
 	/* Allocate buffers that we used in previous loop */
 	if (rxq->rx_alloc_count) {
-		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq,
-			     rxq->rx_alloc_count))) {
+		count = rxq->rx_alloc_count > QEDE_MAX_BULK_ALLOC_COUNT ?
+			QEDE_MAX_BULK_ALLOC_COUNT : rxq->rx_alloc_count;
+
+		if (unlikely(qede_alloc_rx_bulk_mbufs(rxq, count))) {
 			struct rte_eth_dev *dev;
 
 			PMD_RX_LOG(ERR, rxq,
-				   "New buffer allocation failed,"
-				   "dropping incoming packetn");
+				   "New buffers allocation failed,"
+				   "dropping incoming packets\n");
 			dev = &rte_eth_devices[rxq->port_id];
-			dev->data->rx_mbuf_alloc_failed +=
-							rxq->rx_alloc_count;
-			rxq->rx_alloc_errors += rxq->rx_alloc_count;
+			dev->data->rx_mbuf_alloc_failed += count;
+			rxq->rx_alloc_errors += count;
 			return 0;
 		}
 		qede_update_rx_prod(qdev, rxq);
-		rxq->rx_alloc_count = 0;
+		rxq->rx_alloc_count -= count;
 	}
 
 	hw_comp_cons = rte_le_to_cpu_16(*rxq->hw_cons_ptr);
@@ -2042,8 +2021,8 @@ next_cqe:
 		}
 	}
 
-	/* Request number of bufferes to be allocated in next loop */
-	rxq->rx_alloc_count = rx_alloc_count;
+	/* Request number of buffers to be allocated in next loop */
+	rxq->rx_alloc_count += rx_alloc_count;
 
 	rxq->rcv_pkts += rx_pkt;
 
@@ -2506,7 +2485,7 @@ qede_xmit_pkts(void *p_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 				/* Inner L2 header size in two byte words */
 				inner_l2_hdr_size = (mbuf->l2_len -
 						MPLSINUDP_HDR_SIZE) / 2;
-				/* Inner L4 header offset from the beggining
+				/* Inner L4 header offset from the beginning
 				 * of inner packet in two byte words
 				 */
 				inner_l4_hdr_offset = (mbuf->l2_len -
@@ -2733,15 +2712,6 @@ qede_xmit_pkts_cmt(void *p_fp_cmt, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 	return eng0_pkts + eng1_pkts;
 }
-
-uint16_t
-qede_rxtx_pkts_dummy(__rte_unused void *p_rxq,
-		     __rte_unused struct rte_mbuf **pkts,
-		     __rte_unused uint16_t nb_pkts)
-{
-	return 0;
-}
-
 
 /* this function does a fake walk through over completion queue
  * to calculate number of BDs used by HW.

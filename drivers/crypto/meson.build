@@ -1,9 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
-if is_windows
-    subdir_done()
-endif
 
 drivers = [
         'armv8',
@@ -19,9 +16,9 @@ drivers = [
         'nitrox',
         'null',
         'octeontx',
-        'octeontx2',
         'openssl',
         'scheduler',
+        'uadk',
         'virtio',
 ]
 

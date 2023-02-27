@@ -302,11 +302,13 @@
 #define TXGBE_TEREDOPORT                0x01441C
 #define TXGBE_LEDCTL                    0x014424
 #define   TXGBE_LEDCTL_SEL_MASK         MS(0, 0xFFFF)
-#define   TXGBE_LEDCTL_SEL(s)           MS((s), 0x1)
-#define   TXGBE_LEDCTL_ORD_MASK          MS(16, 0xFFFF)
-#define   TXGBE_LEDCTL_ORD(s)            MS(((s)+16), 0x1)
-	/* s=UP(0),10G(1),1G(2),100M(3),BSY(4) */
-#define   TXGBE_LEDCTL_ACTIVE      (TXGBE_LEDCTL_SEL(4) | TXGBE_LEDCTL_ORD(4))
+#define   TXGBE_LEDCTL_ORD_MASK         MS(16, 0xFFFF)
+#define   TXGBE_LEDCTL_ORD_SHIFT        16
+#define   TXGBE_LEDCTL_UP		MS(0, 0x1)
+#define   TXGBE_LEDCTL_10G		MS(1, 0x1)
+#define   TXGBE_LEDCTL_1G		MS(2, 0x1)
+#define   TXGBE_LEDCTL_100M		MS(3, 0x1)
+#define   TXGBE_LEDCTL_ACTIVE		MS(4, 0x1)
 #define TXGBE_TAGTPID(i)                (0x014430 + (i) * 4) /* 0-3 */
 #define   TXGBE_TAGTPID_LSB_MASK        MS(0, 0xFFFF)
 #define   TXGBE_TAGTPID_LSB(v)          LS(v, 0, 0xFFFF)
@@ -1072,30 +1074,30 @@ enum txgbe_5tuple_protocol {
 #define TXGBE_MACRXERRCRCH           0x01192C
 #define TXGBE_MACRXERRLENL           0x011978
 #define TXGBE_MACRXERRLENH           0x01197C
-#define TXGBE_MACRX1TO64L            0x001940
-#define TXGBE_MACRX1TO64H            0x001944
-#define TXGBE_MACRX65TO127L          0x001948
-#define TXGBE_MACRX65TO127H          0x00194C
-#define TXGBE_MACRX128TO255L         0x001950
-#define TXGBE_MACRX128TO255H         0x001954
-#define TXGBE_MACRX256TO511L         0x001958
-#define TXGBE_MACRX256TO511H         0x00195C
-#define TXGBE_MACRX512TO1023L        0x001960
-#define TXGBE_MACRX512TO1023H        0x001964
-#define TXGBE_MACRX1024TOMAXL        0x001968
-#define TXGBE_MACRX1024TOMAXH        0x00196C
-#define TXGBE_MACTX1TO64L            0x001834
-#define TXGBE_MACTX1TO64H            0x001838
-#define TXGBE_MACTX65TO127L          0x00183C
-#define TXGBE_MACTX65TO127H          0x001840
-#define TXGBE_MACTX128TO255L         0x001844
-#define TXGBE_MACTX128TO255H         0x001848
-#define TXGBE_MACTX256TO511L         0x00184C
-#define TXGBE_MACTX256TO511H         0x001850
-#define TXGBE_MACTX512TO1023L        0x001854
-#define TXGBE_MACTX512TO1023H        0x001858
-#define TXGBE_MACTX1024TOMAXL        0x00185C
-#define TXGBE_MACTX1024TOMAXH        0x001860
+#define TXGBE_MACRX1TO64L            0x011940
+#define TXGBE_MACRX1TO64H            0x011944
+#define TXGBE_MACRX65TO127L          0x011948
+#define TXGBE_MACRX65TO127H          0x01194C
+#define TXGBE_MACRX128TO255L         0x011950
+#define TXGBE_MACRX128TO255H         0x011954
+#define TXGBE_MACRX256TO511L         0x011958
+#define TXGBE_MACRX256TO511H         0x01195C
+#define TXGBE_MACRX512TO1023L        0x011960
+#define TXGBE_MACRX512TO1023H        0x011964
+#define TXGBE_MACRX1024TOMAXL        0x011968
+#define TXGBE_MACRX1024TOMAXH        0x01196C
+#define TXGBE_MACTX1TO64L            0x011834
+#define TXGBE_MACTX1TO64H            0x011838
+#define TXGBE_MACTX65TO127L          0x01183C
+#define TXGBE_MACTX65TO127H          0x011840
+#define TXGBE_MACTX128TO255L         0x011844
+#define TXGBE_MACTX128TO255H         0x011848
+#define TXGBE_MACTX256TO511L         0x01184C
+#define TXGBE_MACTX256TO511H         0x011850
+#define TXGBE_MACTX512TO1023L        0x011854
+#define TXGBE_MACTX512TO1023H        0x011858
+#define TXGBE_MACTX1024TOMAXL        0x01185C
+#define TXGBE_MACTX1024TOMAXH        0x011860
 
 #define TXGBE_MACRXUNDERSIZE         0x011938
 #define TXGBE_MACRXOVERSIZE          0x01193C
@@ -1862,8 +1864,13 @@ po32m(struct txgbe_hw *hw, u32 reg, u32 mask, u32 expect, u32 *actual,
 	}
 
 	do {
-		all |= rd32(hw, reg);
-		value |= mask & all;
+		if (expect != 0) {
+			all |= rd32(hw, reg);
+			value |= mask & all;
+		} else {
+			all = rd32(hw, reg);
+			value = mask & all;
+		}
 		if (value == expect)
 			break;
 
@@ -1896,7 +1903,7 @@ po32m(struct txgbe_hw *hw, u32 reg, u32 mask, u32 expect, u32 *actual,
 
 #define wr32w(hw, reg, val, mask, slice) do { \
 	wr32((hw), reg, val); \
-	po32m((hw), reg, mask, mask, NULL, 5, slice); \
+	po32m((hw), reg, mask, 0, NULL, 5, slice); \
 } while (0)
 
 #define TXGBE_XPCS_IDAADDR    0x13000

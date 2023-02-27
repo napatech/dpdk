@@ -8,7 +8,7 @@
 #include <rte_malloc.h>
 #include <ethdev_driver.h>
 #include <rte_tcp.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
 
 #include "rte_eth_bond.h"
@@ -151,8 +151,8 @@ int
 rte_eth_bond_create(const char *name, uint8_t mode, uint8_t socket_id)
 {
 	struct bond_dev_private *internals;
+	struct rte_eth_dev *bond_dev;
 	char devargs[52];
-	uint16_t port_id;
 	int ret;
 
 	if (name == NULL) {
@@ -169,8 +169,8 @@ rte_eth_bond_create(const char *name, uint8_t mode, uint8_t socket_id)
 	if (ret)
 		return ret;
 
-	ret = rte_eth_dev_get_port_by_name(name, &port_id);
-	RTE_ASSERT(!ret);
+	bond_dev = rte_eth_dev_get_by_name(name);
+	RTE_ASSERT(bond_dev);
 
 	/*
 	 * To make bond_ethdev_configure() happy we need to free the
@@ -178,11 +178,11 @@ rte_eth_bond_create(const char *name, uint8_t mode, uint8_t socket_id)
 	 *
 	 * Also see comment in bond_ethdev_configure().
 	 */
-	internals = rte_eth_devices[port_id].data->dev_private;
+	internals = bond_dev->data->dev_private;
 	rte_kvargs_free(internals->kvlist);
 	internals->kvlist = NULL;
 
-	return port_id;
+	return bond_dev->data->port_id;
 }
 
 int
@@ -375,7 +375,7 @@ eth_bond_slave_inherit_dev_info_rx_next(struct bond_dev_private *internals,
 	 * value. Thus, the new internal value of default Rx queue offloads
 	 * has to be masked by rx_queue_offload_capa to make sure that only
 	 * commonly supported offloads are preserved from both the previous
-	 * value and the value being inhereted from the new slave device.
+	 * value and the value being inherited from the new slave device.
 	 */
 	rxconf_i->offloads = (rxconf_i->offloads | rxconf->offloads) &
 			     internals->rx_queue_offload_capa;
@@ -413,7 +413,7 @@ eth_bond_slave_inherit_dev_info_tx_next(struct bond_dev_private *internals,
 	 * value. Thus, the new internal value of default Tx queue offloads
 	 * has to be masked by tx_queue_offload_capa to make sure that only
 	 * commonly supported offloads are preserved from both the previous
-	 * value and the value being inhereted from the new slave device.
+	 * value and the value being inherited from the new slave device.
 	 */
 	txconf_i->offloads = (txconf_i->offloads | txconf->offloads) &
 			     internals->tx_queue_offload_capa;
@@ -513,6 +513,8 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 		internals->primary_port = slave_port_id;
 		internals->current_primary_port = slave_port_id;
 
+		internals->speed_capa = dev_info.speed_capa;
+
 		/* Inherit queues settings from first slave */
 		internals->nb_rx_queues = slave_eth_dev->data->nb_rx_queues;
 		internals->nb_tx_queues = slave_eth_dev->data->nb_tx_queues;
@@ -527,6 +529,7 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 	} else {
 		int ret;
 
+		internals->speed_capa &= dev_info.speed_capa;
 		eth_bond_slave_inherit_dev_info_rx_next(internals, &dev_info);
 		eth_bond_slave_inherit_dev_info_tx_next(internals, &dev_info);
 
@@ -540,6 +543,11 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 		if (ret != 0)
 			return ret;
 	}
+
+	/* Bond mode Broadcast & 8023AD don't support MBUF_FAST_FREE offload. */
+	if (internals->mode == BONDING_MODE_8023AD ||
+	    internals->mode == BONDING_MODE_BROADCAST)
+		internals->tx_offload_capa &= ~RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
 	bonded_eth_dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf &=
 			internals->flow_type_rss_offloads;
@@ -563,6 +571,12 @@ __eth_bond_slave_add_lock_free(uint16_t bonded_port_id, uint16_t slave_port_id)
 		if (slave_configure(bonded_eth_dev, slave_eth_dev) != 0) {
 			internals->slave_count--;
 			RTE_BOND_LOG(ERR, "rte_bond_slaves_configure: port=%d",
+					slave_port_id);
+			return -1;
+		}
+		if (slave_start(bonded_eth_dev, slave_eth_dev) != 0) {
+			internals->slave_count--;
+			RTE_BOND_LOG(ERR, "rte_bond_slaves_start: port=%d",
 					slave_port_id);
 			return -1;
 		}
@@ -668,7 +682,7 @@ __eth_bond_slave_remove_lock_free(uint16_t bonded_port_id,
 		}
 
 	if (slave_idx < 0) {
-		RTE_BOND_LOG(ERR, "Couldn't find slave in port list, slave count %d",
+		RTE_BOND_LOG(ERR, "Couldn't find slave in port list, slave count %u",
 				internals->slave_count);
 		return -1;
 	}

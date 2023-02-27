@@ -8,8 +8,8 @@ sources += files(
         'mlx5_common_os.c',
 )
 
-res_lib = run_command(python3, '-c', 'import os; print(os.environ["DEVX_LIB_PATH"])')
-res_inc = run_command(python3, '-c', 'import os; print(os.environ["DEVX_INC_PATH"])')
+res_lib = run_command(python3, '-c', 'import os; print(os.environ["DEVX_LIB_PATH"])', check: false)
+res_inc = run_command(python3, '-c', 'import os; print(os.environ["DEVX_INC_PATH"])', check: false)
 
 if (res_lib.returncode() != 0 or res_inc.returncode() != 0)
     build = false
@@ -39,7 +39,3 @@ if get_option('buildtype').contains('debug')
 else
     cflags += [ '-UPEDANTIC' ]
 endif
-
-# Generate an empty mlx5_autoconf.h file for compatibility with Linux
-config = configuration_data()
-configure_file(output : 'mlx5_autoconf.h', configuration : config)

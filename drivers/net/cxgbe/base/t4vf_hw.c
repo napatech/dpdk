@@ -83,7 +83,7 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 
 	u32 mbox_ctl = T4VF_CIM_BASE_ADDR + A_CIM_VF_EXT_MAILBOX_CTRL;
 	__be64 cmd_rpl[MBOX_LEN / 8];
-	struct mbox_entry entry;
+	struct mbox_entry *entry;
 	unsigned int delay_idx;
 	u32 v, mbox_data;
 	const __be64 *p;
@@ -106,13 +106,17 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 			size > NUM_CIM_VF_MAILBOX_DATA_INSTANCES * 4)
 		return -EINVAL;
 
+	entry = t4_os_alloc(sizeof(*entry));
+	if (entry == NULL)
+		return -ENOMEM;
+
 	/*
 	 * Queue ourselves onto the mailbox access list.  When our entry is at
 	 * the front of the list, we have rights to access the mailbox.  So we
 	 * wait [for a while] till we're at the front [or bail out with an
 	 * EBUSY] ...
 	 */
-	t4_os_atomic_add_tail(&entry, &adapter->mbox_list, &adapter->mbox_lock);
+	t4_os_atomic_add_tail(entry, &adapter->mbox_list, &adapter->mbox_lock);
 
 	delay_idx = 0;
 	ms = delay[0];
@@ -125,17 +129,17 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 		 * contend on access to the mailbox ...
 		 */
 		if (i > (2 * FW_CMD_MAX_TIMEOUT)) {
-			t4_os_atomic_list_del(&entry, &adapter->mbox_list,
+			t4_os_atomic_list_del(entry, &adapter->mbox_list,
 					      &adapter->mbox_lock);
 			ret = -EBUSY;
-			return ret;
+			goto out_free;
 		}
 
 		/*
 		 * If we're at the head, break out and start the mailbox
 		 * protocol.
 		 */
-		if (t4_os_list_first_entry(&adapter->mbox_list) == &entry)
+		if (t4_os_list_first_entry(&adapter->mbox_list) == entry)
 			break;
 
 		/*
@@ -160,10 +164,10 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 		v = G_MBOWNER(t4_read_reg(adapter, mbox_ctl));
 
 	if (v != X_MBOWNER_PL) {
-		t4_os_atomic_list_del(&entry, &adapter->mbox_list,
+		t4_os_atomic_list_del(entry, &adapter->mbox_list,
 				      &adapter->mbox_lock);
 		ret = (v == X_MBOWNER_FW) ? -EBUSY : -ETIMEDOUT;
-		return ret;
+		goto out_free;
 	}
 
 	/*
@@ -224,7 +228,7 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 			get_mbox_rpl(adapter, cmd_rpl, size / 8, mbox_data);
 			t4_write_reg(adapter, mbox_ctl,
 				     V_MBOWNER(X_MBOWNER_NONE));
-			t4_os_atomic_list_del(&entry, &adapter->mbox_list,
+			t4_os_atomic_list_del(entry, &adapter->mbox_list,
 					      &adapter->mbox_lock);
 
 			/* return value in high-order host-endian word */
@@ -236,7 +240,8 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 					 & F_FW_CMD_REQUEST) == 0);
 				memcpy(rpl, cmd_rpl, size);
 			}
-			return -((int)G_FW_CMD_RETVAL(v));
+			ret = -((int)G_FW_CMD_RETVAL(v));
+			goto out_free;
 		}
 	}
 
@@ -246,8 +251,11 @@ int t4vf_wr_mbox_core(struct adapter *adapter,
 	dev_err(adapter, "command %#x timed out\n",
 		*(const u8 *)cmd);
 	dev_err(adapter, "    Control = %#x\n", t4_read_reg(adapter, mbox_ctl));
-	t4_os_atomic_list_del(&entry, &adapter->mbox_list, &adapter->mbox_lock);
+	t4_os_atomic_list_del(entry, &adapter->mbox_list, &adapter->mbox_lock);
 	ret = -ETIMEDOUT;
+
+out_free:
+	t4_os_free(entry);
 	return ret;
 }
 
@@ -458,46 +466,6 @@ int t4vf_set_params(struct adapter *adapter, unsigned int nparams,
 		p->val = cpu_to_be32(*vals++);
 	}
 	return t4vf_wr_mbox(adapter, &cmd, sizeof(cmd), NULL);
-}
-
-/**
- * t4vf_fl_pkt_align - return the fl packet alignment
- * @adapter: the adapter
- *
- * T4 has a single field to specify the packing and padding boundary.
- * T5 onwards has separate fields for this and hence the alignment for
- * next packet offset is maximum of these two.
- */
-int t4vf_fl_pkt_align(struct adapter *adapter, u32 sge_control,
-		      u32 sge_control2)
-{
-	unsigned int ingpadboundary, ingpackboundary, fl_align, ingpad_shift;
-
-	/* T4 uses a single control field to specify both the PCIe Padding and
-	 * Packing Boundary.  T5 introduced the ability to specify these
-	 * separately.  The actual Ingress Packet Data alignment boundary
-	 * within Packed Buffer Mode is the maximum of these two
-	 * specifications.
-	 */
-	if (CHELSIO_CHIP_VERSION(adapter->params.chip) <= CHELSIO_T5)
-		ingpad_shift = X_INGPADBOUNDARY_SHIFT;
-	else
-		ingpad_shift = X_T6_INGPADBOUNDARY_SHIFT;
-
-	ingpadboundary = 1 << (G_INGPADBOUNDARY(sge_control) + ingpad_shift);
-
-	fl_align = ingpadboundary;
-	if (!is_t4(adapter->params.chip)) {
-		ingpackboundary = G_INGPACKBOUNDARY(sge_control2);
-		if (ingpackboundary == X_INGPACKBOUNDARY_16B)
-			ingpackboundary = 16;
-		else
-			ingpackboundary = 1 << (ingpackboundary +
-					X_INGPACKBOUNDARY_SHIFT);
-
-		fl_align = max(ingpadboundary, ingpackboundary);
-	}
-	return fl_align;
 }
 
 unsigned int t4vf_get_pf_from_vf(struct adapter *adapter)

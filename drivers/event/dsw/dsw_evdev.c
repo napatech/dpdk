@@ -441,6 +441,7 @@ dsw_probe(struct rte_vdev_device *vdev)
 	dev->enqueue_forward_burst = dsw_event_enqueue_forward_burst;
 	dev->dequeue = dsw_event_dequeue;
 	dev->dequeue_burst = dsw_event_dequeue_burst;
+	dev->maintain = dsw_event_maintain;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;

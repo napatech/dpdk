@@ -1,4 +1,4 @@
-DPDK_22 {
+DPDK_23 {
 	global:
 
 	rte_ip_frag_free_death_row;
@@ -16,5 +16,6 @@ DPDK_22 {
 EXPERIMENTAL {
 	global:
 
-	rte_frag_table_del_expired_entries;
+	rte_ip_frag_table_del_expired_entries;
+	rte_ipv4_fragment_copy_nonseg_packet;
 };

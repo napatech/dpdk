@@ -4,9 +4,10 @@
 
 #include <rte_malloc.h>
 #include <rte_mempool.h>
+#include <rte_eal_paging.h>
 #include <rte_errno.h>
 #include <rte_log.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_memory.h>
 
 #include <mlx5_glue.h>
@@ -19,21 +20,21 @@
 
 #define MLX5_CRYPTO_DRIVER_NAME crypto_mlx5
 #define MLX5_CRYPTO_LOG_NAME pmd.crypto.mlx5
-#define MLX5_CRYPTO_MAX_QPS 1024
+#define MLX5_CRYPTO_MAX_QPS 128
 #define MLX5_CRYPTO_MAX_SEGS 56
 
-#define MLX5_CRYPTO_FEATURE_FLAGS \
+#define MLX5_CRYPTO_FEATURE_FLAGS(wrapped_mode) \
 	(RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO | RTE_CRYPTODEV_FF_HW_ACCELERATED | \
 	 RTE_CRYPTODEV_FF_IN_PLACE_SGL | RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT | \
 	 RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT | \
 	 RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT | \
 	 RTE_CRYPTODEV_FF_OOP_LB_IN_LB_OUT | \
-	 RTE_CRYPTODEV_FF_CIPHER_WRAPPED_KEY | \
+	 (wrapped_mode ? RTE_CRYPTODEV_FF_CIPHER_WRAPPED_KEY : 0) | \
 	 RTE_CRYPTODEV_FF_CIPHER_MULTIPLE_DATA_UNITS)
 
 TAILQ_HEAD(mlx5_crypto_privs, mlx5_crypto_priv) mlx5_crypto_priv_list =
 				TAILQ_HEAD_INITIALIZER(mlx5_crypto_priv_list);
-static pthread_mutex_t priv_list_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t priv_list_lock;
 
 int mlx5_crypto_logtype;
 
@@ -59,7 +60,8 @@ const struct rte_cryptodev_capabilities mlx5_crypto_caps[] = {
 				},
 				.dataunit_set =
 				RTE_CRYPTO_CIPHER_DATA_UNIT_LEN_512_BYTES |
-				RTE_CRYPTO_CIPHER_DATA_UNIT_LEN_4096_BYTES,
+				RTE_CRYPTO_CIPHER_DATA_UNIT_LEN_4096_BYTES |
+				RTE_CRYPTO_CIPHER_DATA_UNIT_LEN_1_MEGABYTES,
 			}, }
 		}, }
 	},
@@ -93,10 +95,13 @@ static void
 mlx5_crypto_dev_infos_get(struct rte_cryptodev *dev,
 			  struct rte_cryptodev_info *dev_info)
 {
+	struct mlx5_crypto_priv *priv = dev->data->dev_private;
+
 	RTE_SET_USED(dev);
 	if (dev_info != NULL) {
 		dev_info->driver_id = mlx5_crypto_driver_id;
-		dev_info->feature_flags = MLX5_CRYPTO_FEATURE_FLAGS;
+		dev_info->feature_flags =
+			MLX5_CRYPTO_FEATURE_FLAGS(priv->is_wrapped_mode);
 		dev_info->capabilities = mlx5_crypto_caps;
 		dev_info->max_nb_queue_pairs = MLX5_CRYPTO_MAX_QPS;
 		dev_info->min_mbuf_headroom_req = 0;
@@ -166,14 +171,13 @@ mlx5_crypto_sym_session_get_size(struct rte_cryptodev *dev __rte_unused)
 static int
 mlx5_crypto_sym_session_configure(struct rte_cryptodev *dev,
 				  struct rte_crypto_sym_xform *xform,
-				  struct rte_cryptodev_sym_session *session,
-				  struct rte_mempool *mp)
+				  struct rte_cryptodev_sym_session *session)
 {
 	struct mlx5_crypto_priv *priv = dev->data->dev_private;
-	struct mlx5_crypto_session *sess_private_data;
+	struct mlx5_crypto_session *sess_private_data =
+		CRYPTODEV_GET_SYM_SESS_PRIV(session);
 	struct rte_crypto_cipher_xform *cipher;
 	uint8_t encryption_order;
-	int ret;
 
 	if (unlikely(xform->next != NULL)) {
 		DRV_LOG(ERR, "Xform next is not supported.");
@@ -184,17 +188,9 @@ mlx5_crypto_sym_session_configure(struct rte_cryptodev *dev,
 		DRV_LOG(ERR, "Only AES-XTS algorithm is supported.");
 		return -ENOTSUP;
 	}
-	ret = rte_mempool_get(mp, (void *)&sess_private_data);
-	if (ret != 0) {
-		DRV_LOG(ERR,
-			"Failed to get session %p private data from mempool.",
-			sess_private_data);
-		return -ENOMEM;
-	}
 	cipher = &xform->cipher;
 	sess_private_data->dek = mlx5_crypto_dek_prepare(priv, cipher);
 	if (sess_private_data->dek == NULL) {
-		rte_mempool_put(mp, sess_private_data);
 		DRV_LOG(ERR, "Failed to prepare dek.");
 		return -ENOMEM;
 	}
@@ -221,6 +217,11 @@ mlx5_crypto_sym_session_configure(struct rte_cryptodev *dev,
 					     ((uint32_t)MLX5_BLOCK_SIZE_4096B <<
 					     MLX5_BLOCK_SIZE_OFFSET);
 		break;
+	case 1048576:
+		sess_private_data->bsp_res = rte_cpu_to_be_32
+					     ((uint32_t)MLX5_BLOCK_SIZE_1MB <<
+					     MLX5_BLOCK_SIZE_OFFSET);
+		break;
 	default:
 		DRV_LOG(ERR, "Cipher data unit length is not supported.");
 		return -ENOTSUP;
@@ -229,8 +230,6 @@ mlx5_crypto_sym_session_configure(struct rte_cryptodev *dev,
 	sess_private_data->dek_id =
 			rte_cpu_to_be_32(sess_private_data->dek->obj->id &
 					 0xffffff);
-	set_sym_session_private_data(session, dev->driver_id,
-				     sess_private_data);
 	DRV_LOG(DEBUG, "Session %p was configured.", sess_private_data);
 	return 0;
 }
@@ -240,16 +239,13 @@ mlx5_crypto_sym_session_clear(struct rte_cryptodev *dev,
 			      struct rte_cryptodev_sym_session *sess)
 {
 	struct mlx5_crypto_priv *priv = dev->data->dev_private;
-	struct mlx5_crypto_session *spriv = get_sym_session_private_data(sess,
-								dev->driver_id);
+	struct mlx5_crypto_session *spriv = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 
 	if (unlikely(spriv == NULL)) {
 		DRV_LOG(ERR, "Failed to get session %p private data.", spriv);
 		return;
 	}
 	mlx5_crypto_dek_destroy(priv, spriv->dek);
-	set_sym_session_private_data(sess, dev->driver_id, NULL);
-	rte_mempool_put(rte_mempool_from_obj(spriv), spriv);
 	DRV_LOG(DEBUG, "Session %p was cleared.", spriv);
 }
 
@@ -305,9 +301,9 @@ mlx5_crypto_get_block_size(struct rte_crypto_op *op)
 }
 
 static __rte_always_inline uint32_t
-mlx5_crypto_klm_set(struct mlx5_crypto_priv *priv, struct mlx5_crypto_qp *qp,
-		      struct rte_mbuf *mbuf, struct mlx5_wqe_dseg *klm,
-		      uint32_t offset, uint32_t *remain)
+mlx5_crypto_klm_set(struct mlx5_crypto_qp *qp, struct rte_mbuf *mbuf,
+		    struct mlx5_wqe_dseg *klm, uint32_t offset,
+		    uint32_t *remain)
 {
 	uint32_t data_len = (rte_pktmbuf_data_len(mbuf) - offset);
 	uintptr_t addr = rte_pktmbuf_mtod_offset(mbuf, uintptr_t, offset);
@@ -317,22 +313,21 @@ mlx5_crypto_klm_set(struct mlx5_crypto_priv *priv, struct mlx5_crypto_qp *qp,
 	*remain -= data_len;
 	klm->bcount = rte_cpu_to_be_32(data_len);
 	klm->pbuf = rte_cpu_to_be_64(addr);
-	klm->lkey = mlx5_mr_mb2mr(priv->cdev, 0, &qp->mr_ctrl, mbuf);
+	klm->lkey = mlx5_mr_mb2mr(&qp->mr_ctrl, mbuf);
 	return klm->lkey;
 
 }
 
 static __rte_always_inline uint32_t
-mlx5_crypto_klms_set(struct mlx5_crypto_priv *priv, struct mlx5_crypto_qp *qp,
-		     struct rte_crypto_op *op, struct rte_mbuf *mbuf,
-		     struct mlx5_wqe_dseg *klm)
+mlx5_crypto_klms_set(struct mlx5_crypto_qp *qp, struct rte_crypto_op *op,
+		     struct rte_mbuf *mbuf, struct mlx5_wqe_dseg *klm)
 {
 	uint32_t remain_len = op->sym->cipher.data.length;
 	uint32_t nb_segs = mbuf->nb_segs;
 	uint32_t klm_n = 1u;
 
 	/* First mbuf needs to take the cipher offset. */
-	if (unlikely(mlx5_crypto_klm_set(priv, qp, mbuf, klm,
+	if (unlikely(mlx5_crypto_klm_set(qp, mbuf, klm,
 		     op->sym->cipher.data.offset, &remain_len) == UINT32_MAX)) {
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		return 0;
@@ -344,7 +339,7 @@ mlx5_crypto_klms_set(struct mlx5_crypto_priv *priv, struct mlx5_crypto_qp *qp,
 			op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
 			return 0;
 		}
-		if (unlikely(mlx5_crypto_klm_set(priv, qp, mbuf, ++klm, 0,
+		if (unlikely(mlx5_crypto_klm_set(qp, mbuf, ++klm, 0,
 						 &remain_len) == UINT32_MAX)) {
 			op->status = RTE_CRYPTO_OP_STATUS_ERROR;
 			return 0;
@@ -360,8 +355,7 @@ mlx5_crypto_wqe_set(struct mlx5_crypto_priv *priv,
 			 struct rte_crypto_op *op,
 			 struct mlx5_umr_wqe *umr)
 {
-	struct mlx5_crypto_session *sess = get_sym_session_private_data
-				(op->sym->session, mlx5_crypto_driver_id);
+	struct mlx5_crypto_session *sess = CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
 	struct mlx5_wqe_cseg *cseg = &umr->ctr;
 	struct mlx5_wqe_mkey_cseg *mkc = &umr->mkc;
 	struct mlx5_wqe_dseg *klms = &umr->kseg[0];
@@ -370,7 +364,7 @@ mlx5_crypto_wqe_set(struct mlx5_crypto_priv *priv,
 	uint32_t ds;
 	bool ipl = op->sym->m_dst == NULL || op->sym->m_dst == op->sym->m_src;
 	/* Set UMR WQE. */
-	uint32_t klm_n = mlx5_crypto_klms_set(priv, qp, op,
+	uint32_t klm_n = mlx5_crypto_klms_set(qp, op,
 				   ipl ? op->sym->m_src : op->sym->m_dst, klms);
 
 	if (unlikely(klm_n == 0))
@@ -396,8 +390,7 @@ mlx5_crypto_wqe_set(struct mlx5_crypto_priv *priv,
 	cseg = RTE_PTR_ADD(cseg, priv->umr_wqe_size);
 	klms = RTE_PTR_ADD(cseg, sizeof(struct mlx5_rdma_write_wqe));
 	if (!ipl) {
-		klm_n = mlx5_crypto_klms_set(priv, qp, op, op->sym->m_src,
-					     klms);
+		klm_n = mlx5_crypto_klms_set(qp, op, op->sym->m_src, klms);
 		if (unlikely(klm_n == 0))
 			return 0;
 	} else {
@@ -420,20 +413,6 @@ mlx5_crypto_wqe_set(struct mlx5_crypto_priv *priv,
 	}
 	qp->wqe = (uint8_t *)cseg;
 	return 1;
-}
-
-static __rte_always_inline void
-mlx5_crypto_uar_write(uint64_t val, struct mlx5_crypto_priv *priv)
-{
-#ifdef RTE_ARCH_64
-	*priv->uar_addr = val;
-#else /* !RTE_ARCH_64 */
-	rte_spinlock_lock(&priv->uar32_sl);
-	*(volatile uint32_t *)priv->uar_addr = val;
-	rte_io_wmb();
-	*((volatile uint32_t *)priv->uar_addr + 1) = val >> 32;
-	rte_spinlock_unlock(&priv->uar32_sl);
-#endif
 }
 
 static uint16_t
@@ -471,11 +450,9 @@ mlx5_crypto_enqueue_burst(void *queue_pair, struct rte_crypto_op **ops,
 		qp->pi++;
 	} while (--remain);
 	qp->stats.enqueued_count += nb_ops;
-	rte_io_wmb();
-	qp->qp_obj.db_rec[MLX5_SND_DBR] = rte_cpu_to_be_32(qp->db_pi);
-	rte_wmb();
-	mlx5_crypto_uar_write(*(volatile uint64_t *)qp->wqe, qp->priv);
-	rte_wmb();
+	mlx5_doorbell_ring(&priv->uar.bf_db, *(volatile uint64_t *)qp->wqe,
+			   qp->db_pi, &qp->qp_obj.db_rec[MLX5_SND_DBR],
+			   !priv->uar.dbnc);
 	return nb_ops;
 }
 
@@ -556,7 +533,7 @@ mlx5_crypto_qp_init(struct mlx5_crypto_priv *priv, struct mlx5_crypto_qp *qp)
 		ucseg->if_cf_toe_cq_res = RTE_BE32(1u << MLX5_UMRC_IF_OFFSET);
 		ucseg->mkey_mask = RTE_BE64(1u << 0); /* Mkey length bit. */
 		ucseg->ko_to_bs = rte_cpu_to_be_32
-			((RTE_ALIGN(priv->max_segs_num, 4u) <<
+			((MLX5_CRYPTO_KLM_SEGS_NUM(priv->umr_wqe_size) <<
 			 MLX5_UMRC_KO_OFFSET) | (4 << MLX5_UMRC_TO_BS_OFFSET));
 		bsf->keytag = priv->keytag;
 		/* Init RDMA WRITE WQE. */
@@ -580,7 +557,7 @@ mlx5_crypto_indirect_mkeys_prepare(struct mlx5_crypto_priv *priv,
 		.umr_en = 1,
 		.crypto_en = 1,
 		.set_remote_rw = 1,
-		.klm_num = RTE_ALIGN(priv->max_segs_num, 4),
+		.klm_num = MLX5_CRYPTO_KLM_SEGS_NUM(priv->umr_wqe_size),
 	};
 
 	for (umr = (struct mlx5_umr_wqe *)qp->qp_obj.umem_buf, i = 0;
@@ -608,8 +585,9 @@ mlx5_crypto_queue_pair_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	uint16_t log_nb_desc = rte_log2_u32(qp_conf->nb_descriptors);
 	uint32_t ret;
 	uint32_t alloc_size = sizeof(*qp);
+	uint32_t log_wqbb_n;
 	struct mlx5_devx_cq_attr cq_attr = {
-		.uar_page_id = mlx5_os_get_devx_uar_page_id(priv->uar),
+		.uar_page_id = mlx5_os_get_devx_uar_page_id(priv->uar.obj),
 	};
 
 	if (dev->data->queue_pairs[qp_id] != NULL)
@@ -630,15 +608,18 @@ mlx5_crypto_queue_pair_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 		DRV_LOG(ERR, "Failed to create CQ.");
 		goto error;
 	}
+	log_wqbb_n = rte_log2_u32(RTE_BIT32(log_nb_desc) *
+				(priv->wqe_set_size / MLX5_SEND_WQE_BB));
 	attr.pd = priv->cdev->pdn;
-	attr.uar_index = mlx5_os_get_devx_uar_page_id(priv->uar);
+	attr.uar_index = mlx5_os_get_devx_uar_page_id(priv->uar.obj);
 	attr.cqn = qp->cq_obj.cq->id;
-	attr.rq_size = 0;
-	attr.sq_size = RTE_BIT32(log_nb_desc);
+	attr.num_of_receive_wqes = 0;
+	attr.num_of_send_wqbbs = RTE_BIT32(log_wqbb_n);
 	attr.ts_format =
 		mlx5_ts_format_conv(priv->cdev->config.hca_attr.qp_ts_format);
-	ret = mlx5_devx_qp_create(priv->cdev->ctx, &qp->qp_obj, log_nb_desc,
-				  &attr, socket_id);
+	ret = mlx5_devx_qp_create(priv->cdev->ctx, &qp->qp_obj,
+					attr.num_of_send_wqbbs * MLX5_WQE_SIZE,
+					&attr, socket_id);
 	if (ret) {
 		DRV_LOG(ERR, "Failed to create QP.");
 		goto error;
@@ -719,30 +700,6 @@ static struct rte_cryptodev_ops mlx5_crypto_ops = {
 	.sym_configure_raw_dp_ctx	= NULL,
 };
 
-static void
-mlx5_crypto_uar_release(struct mlx5_crypto_priv *priv)
-{
-	if (priv->uar != NULL) {
-		mlx5_glue->devx_free_uar(priv->uar);
-		priv->uar = NULL;
-	}
-}
-
-static int
-mlx5_crypto_uar_prepare(struct mlx5_crypto_priv *priv)
-{
-	priv->uar = mlx5_devx_alloc_uar(priv->cdev->ctx, -1);
-	if (priv->uar)
-		priv->uar_addr = mlx5_os_get_devx_uar_reg_addr(priv->uar);
-	if (priv->uar == NULL || priv->uar_addr == NULL) {
-		rte_errno = errno;
-		DRV_LOG(ERR, "Failed to allocate UAR.");
-		return -1;
-	}
-	return 0;
-}
-
-
 static int
 mlx5_crypto_args_check_handler(const char *key, const char *val, void *opaque)
 {
@@ -753,8 +710,6 @@ mlx5_crypto_args_check_handler(const char *key, const char *val, void *opaque)
 	int ret;
 	int i;
 
-	if (strcmp(key, "class") == 0)
-		return 0;
 	if (strcmp(key, "wcs_file") == 0) {
 		file = fopen(val, "rb");
 		if (file == NULL) {
@@ -782,10 +737,8 @@ mlx5_crypto_args_check_handler(const char *key, const char *val, void *opaque)
 		return -errno;
 	}
 	if (strcmp(key, "max_segs_num") == 0) {
-		if (!tmp || tmp > MLX5_CRYPTO_MAX_SEGS) {
-			DRV_LOG(WARNING, "Invalid max_segs_num: %d, should"
-				" be less than %d.",
-				(uint32_t)tmp, MLX5_CRYPTO_MAX_SEGS);
+		if (!tmp) {
+			DRV_LOG(ERR, "max_segs_num must be greater than 0.");
 			rte_errno = EINVAL;
 			return -rte_errno;
 		}
@@ -796,56 +749,131 @@ mlx5_crypto_args_check_handler(const char *key, const char *val, void *opaque)
 		attr->credential_pointer = (uint32_t)tmp;
 	} else if (strcmp(key, "keytag") == 0) {
 		devarg_prms->keytag = tmp;
-	} else {
-		DRV_LOG(WARNING, "Invalid key %s.", key);
 	}
 	return 0;
 }
 
 static int
-mlx5_crypto_parse_devargs(struct rte_devargs *devargs,
-			  struct mlx5_crypto_devarg_params *devarg_prms)
+mlx5_crypto_parse_devargs(struct mlx5_kvargs_ctrl *mkvlist,
+			  struct mlx5_crypto_devarg_params *devarg_prms,
+			  bool wrapped_mode)
 {
 	struct mlx5_devx_crypto_login_attr *attr = &devarg_prms->login_attr;
-	struct rte_kvargs *kvlist;
+	const char **params = (const char *[]){
+		"credential_id",
+		"import_kek_id",
+		"keytag",
+		"max_segs_num",
+		"wcs_file",
+		NULL,
+	};
 
 	/* Default values. */
 	attr->credential_pointer = 0;
 	attr->session_import_kek_ptr = 0;
 	devarg_prms->keytag = 0;
 	devarg_prms->max_segs_num = 8;
-	if (devargs == NULL) {
+	if (mkvlist == NULL) {
+		if (!wrapped_mode)
+			return 0;
 		DRV_LOG(ERR,
-	"No login devargs in order to enable crypto operations in the device.");
+			"No login devargs in order to enable crypto operations in the device.");
 		rte_errno = EINVAL;
 		return -1;
 	}
-	kvlist = rte_kvargs_parse(devargs->args, NULL);
-	if (kvlist == NULL) {
-		DRV_LOG(ERR, "Failed to parse devargs.");
-		rte_errno = EINVAL;
-		return -1;
-	}
-	if (rte_kvargs_process(kvlist, NULL, mlx5_crypto_args_check_handler,
-			   devarg_prms) != 0) {
+	if (mlx5_kvargs_process(mkvlist, params, mlx5_crypto_args_check_handler,
+				devarg_prms) != 0) {
 		DRV_LOG(ERR, "Devargs handler function Failed.");
-		rte_kvargs_free(kvlist);
 		rte_errno = EINVAL;
 		return -1;
 	}
-	rte_kvargs_free(kvlist);
-	if (devarg_prms->login_devarg == false) {
+	if (devarg_prms->login_devarg == false && wrapped_mode) {
 		DRV_LOG(ERR,
-	"No login credential devarg in order to enable crypto operations "
-	"in the device.");
+			"No login credential devarg in order to enable crypto operations in the device while in wrapped import method.");
 		rte_errno = EINVAL;
 		return -1;
 	}
 	return 0;
 }
 
+/*
+ * Calculate UMR WQE size and RDMA Write WQE size with the
+ * following limitations:
+ *	- Each WQE size is multiple of 64.
+ *	- The summarize of both UMR WQE and RDMA_W WQE is a power of 2.
+ *	- The number of entries in the UMR WQE's KLM list is multiple of 4.
+ */
+static void
+mlx5_crypto_get_wqe_sizes(uint32_t segs_num, uint32_t *umr_size,
+			uint32_t *rdmaw_size)
+{
+	uint32_t diff, wqe_set_size;
+
+	*umr_size = MLX5_CRYPTO_UMR_WQE_STATIC_SIZE +
+			RTE_ALIGN(segs_num, 4) *
+			sizeof(struct mlx5_wqe_dseg);
+	/* Make sure UMR WQE size is multiple of WQBB. */
+	*umr_size = RTE_ALIGN(*umr_size, MLX5_SEND_WQE_BB);
+	*rdmaw_size = sizeof(struct mlx5_rdma_write_wqe) +
+			sizeof(struct mlx5_wqe_dseg) *
+			(segs_num <= 2 ? 2 : 2 +
+			RTE_ALIGN(segs_num - 2, 4));
+	/* Make sure RDMA_WRITE WQE size is multiple of WQBB. */
+	*rdmaw_size = RTE_ALIGN(*rdmaw_size, MLX5_SEND_WQE_BB);
+	wqe_set_size = *rdmaw_size + *umr_size;
+	diff = rte_align32pow2(wqe_set_size) - wqe_set_size;
+	/* Make sure wqe_set size is power of 2. */
+	if (diff)
+		*umr_size += diff;
+}
+
+static uint8_t
+mlx5_crypto_max_segs_num(uint16_t max_wqe_size)
+{
+	int klms_sizes = max_wqe_size - MLX5_CRYPTO_UMR_WQE_STATIC_SIZE;
+	uint32_t max_segs_cap = RTE_ALIGN_FLOOR(klms_sizes, MLX5_SEND_WQE_BB) /
+			sizeof(struct mlx5_wqe_dseg);
+
+	MLX5_ASSERT(klms_sizes >= MLX5_SEND_WQE_BB);
+	while (max_segs_cap) {
+		uint32_t umr_wqe_size, rdmw_wqe_size;
+
+		mlx5_crypto_get_wqe_sizes(max_segs_cap, &umr_wqe_size,
+						&rdmw_wqe_size);
+		if (umr_wqe_size <= max_wqe_size &&
+				rdmw_wqe_size <= max_wqe_size)
+			break;
+		max_segs_cap -= 4;
+	}
+	return max_segs_cap;
+}
+
 static int
-mlx5_crypto_dev_probe(struct mlx5_common_device *cdev)
+mlx5_crypto_configure_wqe_size(struct mlx5_crypto_priv *priv,
+				uint16_t max_wqe_size, uint32_t max_segs_num)
+{
+	uint32_t rdmw_wqe_size, umr_wqe_size;
+
+	mlx5_crypto_get_wqe_sizes(max_segs_num, &umr_wqe_size,
+					&rdmw_wqe_size);
+	priv->wqe_set_size = rdmw_wqe_size + umr_wqe_size;
+	if (umr_wqe_size > max_wqe_size ||
+				rdmw_wqe_size > max_wqe_size) {
+		DRV_LOG(ERR, "Invalid max_segs_num: %u. should be %u or lower.",
+			max_segs_num,
+			mlx5_crypto_max_segs_num(max_wqe_size));
+		rte_errno = EINVAL;
+		return -EINVAL;
+	}
+	priv->umr_wqe_size = (uint16_t)umr_wqe_size;
+	priv->umr_wqe_stride = priv->umr_wqe_size / MLX5_SEND_WQE_BB;
+	priv->max_rdmar_ds = rdmw_wqe_size / sizeof(struct mlx5_wqe_dseg);
+	return 0;
+}
+
+static int
+mlx5_crypto_dev_probe(struct mlx5_common_device *cdev,
+		      struct mlx5_kvargs_ctrl *mkvlist)
 {
 	struct rte_cryptodev *crypto_dev;
 	struct mlx5_devx_obj *login;
@@ -859,8 +887,8 @@ mlx5_crypto_dev_probe(struct mlx5_common_device *cdev)
 				RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS,
 	};
 	const char *ibdev_name = mlx5_os_get_ctx_device_name(cdev->ctx);
-	uint16_t rdmw_wqe_size;
 	int ret;
+	bool wrapped_mode;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		DRV_LOG(ERR, "Non-primary process type is not supported.");
@@ -873,15 +901,10 @@ mlx5_crypto_dev_probe(struct mlx5_common_device *cdev)
 		rte_errno = ENOTSUP;
 		return -ENOTSUP;
 	}
-	ret = mlx5_crypto_parse_devargs(cdev->dev->devargs, &devarg_prms);
+	wrapped_mode = !!cdev->config.hca_attr.crypto_wrapped_import_method;
+	ret = mlx5_crypto_parse_devargs(mkvlist, &devarg_prms, wrapped_mode);
 	if (ret) {
 		DRV_LOG(ERR, "Failed to parse devargs.");
-		return -rte_errno;
-	}
-	login = mlx5_devx_cmd_create_crypto_login_obj(cdev->ctx,
-						      &devarg_prms.login_attr);
-	if (login == NULL) {
-		DRV_LOG(ERR, "Failed to configure login.");
 		return -rte_errno;
 	}
 	crypto_dev = rte_cryptodev_pmd_create(ibdev_name, cdev->dev,
@@ -895,29 +918,40 @@ mlx5_crypto_dev_probe(struct mlx5_common_device *cdev)
 	crypto_dev->dev_ops = &mlx5_crypto_ops;
 	crypto_dev->dequeue_burst = mlx5_crypto_dequeue_burst;
 	crypto_dev->enqueue_burst = mlx5_crypto_enqueue_burst;
-	crypto_dev->feature_flags = MLX5_CRYPTO_FEATURE_FLAGS;
+	crypto_dev->feature_flags = MLX5_CRYPTO_FEATURE_FLAGS(wrapped_mode);
 	crypto_dev->driver_id = mlx5_crypto_driver_id;
 	priv = crypto_dev->data->dev_private;
 	priv->cdev = cdev;
-	priv->login_obj = login;
 	priv->crypto_dev = crypto_dev;
-	if (mlx5_crypto_uar_prepare(priv) != 0) {
+	priv->is_wrapped_mode = wrapped_mode;
+	if (mlx5_devx_uar_prepare(cdev, &priv->uar) != 0) {
+		rte_cryptodev_pmd_destroy(priv->crypto_dev);
+		return -1;
+	}
+	if (wrapped_mode) {
+		login = mlx5_devx_cmd_create_crypto_login_obj(cdev->ctx,
+						      &devarg_prms.login_attr);
+		if (login == NULL) {
+			DRV_LOG(ERR, "Failed to configure login.");
+			mlx5_devx_uar_release(&priv->uar);
+			rte_cryptodev_pmd_destroy(priv->crypto_dev);
+			return -rte_errno;
+		}
+		priv->login_obj = login;
+	}
+	ret = mlx5_crypto_configure_wqe_size(priv,
+		cdev->config.hca_attr.max_wqe_sz_sq, devarg_prms.max_segs_num);
+	if (ret) {
+		claim_zero(mlx5_devx_cmd_destroy(priv->login_obj));
+		mlx5_devx_uar_release(&priv->uar);
 		rte_cryptodev_pmd_destroy(priv->crypto_dev);
 		return -1;
 	}
 	priv->keytag = rte_cpu_to_be_64(devarg_prms.keytag);
-	priv->max_segs_num = devarg_prms.max_segs_num;
-	priv->umr_wqe_size = sizeof(struct mlx5_wqe_umr_bsf_seg) +
-			     sizeof(struct mlx5_umr_wqe) +
-			     RTE_ALIGN(priv->max_segs_num, 4) *
-			     sizeof(struct mlx5_wqe_dseg);
-	rdmw_wqe_size = sizeof(struct mlx5_rdma_write_wqe) +
-			      sizeof(struct mlx5_wqe_dseg) *
-			      (priv->max_segs_num <= 2 ? 2 : 2 +
-			       RTE_ALIGN(priv->max_segs_num - 2, 4));
-	priv->wqe_set_size = priv->umr_wqe_size + rdmw_wqe_size;
-	priv->umr_wqe_stride = priv->umr_wqe_size / MLX5_SEND_WQE_BB;
-	priv->max_rdmar_ds = rdmw_wqe_size / sizeof(struct mlx5_wqe_dseg);
+	DRV_LOG(INFO, "Max number of segments: %u.",
+		(unsigned int)RTE_MIN(
+			MLX5_CRYPTO_KLM_SEGS_NUM(priv->umr_wqe_size),
+			(uint16_t)(priv->max_rdmar_ds - 2)));
 	pthread_mutex_lock(&priv_list_lock);
 	TAILQ_INSERT_TAIL(&mlx5_crypto_priv_list, priv, next);
 	pthread_mutex_unlock(&priv_list_lock);
@@ -940,9 +974,9 @@ mlx5_crypto_dev_remove(struct mlx5_common_device *cdev)
 		TAILQ_REMOVE(&mlx5_crypto_priv_list, priv, next);
 	pthread_mutex_unlock(&priv_list_lock);
 	if (priv) {
-		mlx5_crypto_uar_release(priv);
-		rte_cryptodev_pmd_destroy(priv->crypto_dev);
 		claim_zero(mlx5_devx_cmd_destroy(priv->login_obj));
+		mlx5_devx_uar_release(&priv->uar);
+		rte_cryptodev_pmd_destroy(priv->crypto_dev);
 	}
 	return 0;
 }
@@ -951,6 +985,14 @@ static const struct rte_pci_id mlx5_crypto_pci_id_map[] = {
 		{
 			RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 					PCI_DEVICE_ID_MELLANOX_CONNECTX6)
+		},
+		{
+			RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+					PCI_DEVICE_ID_MELLANOX_CONNECTX6DX)
+		},
+		{
+			RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+					PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF)
 		},
 		{
 			.vendor_id = 0
@@ -967,6 +1009,7 @@ static struct mlx5_class_driver mlx5_crypto_driver = {
 
 RTE_INIT(rte_mlx5_crypto_init)
 {
+	pthread_mutex_init(&priv_list_lock, NULL);
 	mlx5_common_init();
 	if (mlx5_glue != NULL)
 		mlx5_class_driver_register(&mlx5_crypto_driver);

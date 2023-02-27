@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 
 #include <rte_debug.h>
+#include <rte_bus.h>
 #include <rte_eal.h>
 #include <eal_memcfg.h>
 #include <rte_errno.h>
@@ -262,6 +263,7 @@ rte_eal_cleanup(void)
 
 	eal_intr_thread_cancel();
 	eal_mem_virt2iova_cleanup();
+	eal_bus_cleanup();
 	/* after this point, any DPDK pointers will become dangling */
 	rte_eal_memory_detach();
 	eal_cleanup_config(internal_conf);
@@ -279,6 +281,7 @@ rte_eal_init(int argc, char **argv)
 	bool has_phys_addr;
 	enum rte_iova_mode iova_mode;
 	int ret;
+	char cpuset[RTE_CPU_AFFINITY_STR_LEN];
 
 	eal_log_init(NULL, 0);
 
@@ -401,8 +404,19 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	if (pthread_setaffinity_np(pthread_self(), sizeof(rte_cpuset_t),
+			&lcore_config[config->main_lcore].cpuset) != 0) {
+		rte_eal_init_alert("Cannot set affinity");
+		rte_errno = EINVAL;
+		return -1;
+	}
 	__rte_thread_init(config->main_lcore,
 		&lcore_config[config->main_lcore].cpuset);
+
+	ret = eal_thread_dump_current_affinity(cpuset, sizeof(cpuset));
+	RTE_LOG(DEBUG, EAL, "Main lcore %u is ready (tid=%zx;cpuset=[%s%s])\n",
+		config->main_lcore, (uintptr_t)pthread_self(), cpuset,
+		ret == 0 ? "" : "...");
 
 	RTE_LCORE_FOREACH_WORKER(i) {
 
@@ -420,8 +434,12 @@ rte_eal_init(int argc, char **argv)
 		lcore_config[i].state = WAIT;
 
 		/* create a thread for each lcore */
-		if (eal_thread_create(&lcore_config[i].thread_id) != 0)
+		if (eal_thread_create(&lcore_config[i].thread_id, i) != 0)
 			rte_panic("Cannot create thread\n");
+		ret = pthread_setaffinity_np(lcore_config[i].thread_id,
+			sizeof(rte_cpuset_t), &lcore_config[i].cpuset);
+		if (ret != 0)
+			RTE_LOG(DEBUG, EAL, "Cannot set affinity\n");
 	}
 
 	/* Initialize services so drivers can register services during probe. */
@@ -481,6 +499,7 @@ rte_vfio_container_dma_map(__rte_unused int container_fd,
 			__rte_unused uint64_t iova,
 			__rte_unused uint64_t len)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 
@@ -490,6 +509,7 @@ rte_vfio_container_dma_unmap(__rte_unused int container_fd,
 			__rte_unused uint64_t iova,
 			__rte_unused uint64_t len)
 {
+	rte_errno = ENOTSUP;
 	return -1;
 }
 

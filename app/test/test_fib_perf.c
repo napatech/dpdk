@@ -12,10 +12,21 @@
 #include <rte_random.h>
 #include <rte_branch_prediction.h>
 #include <rte_ip.h>
-#include <rte_fib.h>
 
 #include "test.h"
 #include "test_xmmt_ops.h"
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+static int
+test_fib_perf(void)
+{
+	printf("fib_perf not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+#else
+
+#include <rte_fib.h>
 
 #define TEST_FIB_ASSERT(cond) do {				\
 	if (!(cond)) {						\
@@ -323,6 +334,7 @@ test_fib_perf(void)
 	struct rte_fib_conf config;
 
 	config.max_routes = 2000000;
+	config.rib_ext_sz = 0;
 	config.type = RTE_FIB_DIR24_8;
 	config.default_nh = 0;
 	config.dir24_8.nh_sz = RTE_FIB_DIR24_8_4B;
@@ -345,7 +357,7 @@ test_fib_perf(void)
 	fib = rte_fib_create(__func__, SOCKET_ID_ANY, &config);
 	TEST_FIB_ASSERT(fib != NULL);
 
-	/* Measue add. */
+	/* Measure add. */
 	begin = rte_rdtsc();
 
 	for (i = 0; i < NUM_ROUTE_ENTRIES; i++) {
@@ -407,5 +419,7 @@ test_fib_perf(void)
 
 	return 0;
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */
 
 REGISTER_TEST_COMMAND(fib_perf_autotest, test_fib_perf);

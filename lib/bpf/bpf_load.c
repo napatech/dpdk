@@ -2,20 +2,12 @@
  * Copyright(c) 2018 Intel Corporation
  */
 
-#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
 #include <stdint.h>
-#include <unistd.h>
-#include <inttypes.h>
 
-#include <rte_common.h>
 #include <rte_log.h>
-#include <rte_debug.h>
-#include <rte_memory.h>
-#include <rte_eal.h>
-#include <rte_byteorder.h>
 #include <rte_errno.h>
 
 #include "bpf_impl.h"
@@ -42,7 +34,8 @@ bpf_load(const struct rte_bpf_prm *prm)
 
 	memcpy(&bpf->prm, prm, sizeof(bpf->prm));
 
-	memcpy(buf + bsz, prm->xsym, xsz);
+	if (xsz > 0)
+		memcpy(buf + bsz, prm->xsym, xsz);
 	memcpy(buf + bsz + xsz, prm->ins, insz);
 
 	bpf->prm.xsym = (void *)(buf + bsz);
@@ -130,21 +123,3 @@ rte_bpf_load(const struct rte_bpf_prm *prm)
 
 	return bpf;
 }
-
-#ifndef RTE_LIBRTE_BPF_ELF
-struct rte_bpf *
-rte_bpf_elf_load(const struct rte_bpf_prm *prm, const char *fname,
-	const char *sname)
-{
-	if (prm == NULL || fname == NULL || sname == NULL) {
-		rte_errno = EINVAL;
-		return NULL;
-	}
-
-	RTE_BPF_LOG(ERR, "%s() is not supported with current config\n"
-		"rebuild with libelf installed\n",
-		__func__);
-	rte_errno = ENOTSUP;
-	return NULL;
-}
-#endif

@@ -20,7 +20,7 @@
 #include <rte_time.h>
 #include <rte_hash.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_tm_driver.h>
 
 /* need update link, bit flag */
@@ -43,7 +43,6 @@
 #define IXGBE_NB_STAT_MAPPING_REGS  32
 #define IXGBE_EXTENDED_VLAN	  (uint32_t)(1 << 26) /* EXTENDED VLAN ENABLE */
 #define IXGBE_VFTA_SIZE 128
-#define IXGBE_VLAN_TAG_SIZE 4
 #define IXGBE_HKEY_MAX_INDEX 10
 #define IXGBE_MAX_RX_QUEUE_NUM	128
 #define IXGBE_MAX_INTR_QUEUE_NUM	15
@@ -69,7 +68,7 @@
 #define IXGBE_LPBK_NONE   0x0 /* Default value. Loopback is disabled. */
 #define IXGBE_LPBK_TX_RX  0x1 /* Tx->Rx loopback operation is enabled. */
 /* X540-X550 specific loopback operations */
-#define IXGBE_MII_AUTONEG_ENABLE        0x1000 /* Auto-negociation enable (default = 1) */
+#define IXGBE_MII_AUTONEG_ENABLE        0x1000 /* Auto-negotiation enable (default = 1) */
 
 #define IXGBE_MAX_JUMBO_FRAME_SIZE      0x2600 /* Maximum Jumbo frame size. */
 
@@ -475,6 +474,7 @@ struct ixgbe_adapter {
 	struct ixgbe_hw_stats       stats;
 	struct ixgbe_macsec_stats   macsec_stats;
 	struct ixgbe_macsec_setting	macsec_setting;
+	struct rte_eth_fdir_conf    fdir_conf;
 	struct ixgbe_hw_fdir_info   fdir;
 	struct ixgbe_interrupt      intr;
 	struct ixgbe_stat_mapping_registers stat_mappings;
@@ -502,6 +502,9 @@ struct ixgbe_adapter {
 	/* For RSS reta table update */
 	uint8_t rss_reta_updated;
 
+	/* Used for limiting SDP3 TX_DISABLE checks */
+	uint8_t sdp3_no_tx_disable;
+
 	/* Used for VF link sync with PF's physical and logical (by checking
 	 * mailbox status) link status.
 	 */
@@ -519,6 +522,9 @@ struct ixgbe_vf_representor {
 
 int ixgbe_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params);
 int ixgbe_vf_representor_uninit(struct rte_eth_dev *ethdev);
+
+#define IXGBE_DEV_FDIR_CONF(dev) \
+	(&((struct ixgbe_adapter *)(dev)->data->dev_private)->fdir_conf)
 
 #define IXGBE_DEV_PRIVATE_TO_HW(adapter)\
 	(&((struct ixgbe_adapter *)adapter)->hw)
@@ -747,13 +753,13 @@ int ixgbe_enable_sec_tx_path_generic(struct ixgbe_hw *hw);
 
 int ixgbe_vt_check(struct ixgbe_hw *hw);
 int ixgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
-			    uint16_t tx_rate, uint64_t q_msk);
+			    uint32_t tx_rate, uint64_t q_msk);
 bool is_ixgbe_supported(struct rte_eth_dev *dev);
 int ixgbe_tm_ops_get(struct rte_eth_dev *dev, void *ops);
 void ixgbe_tm_conf_init(struct rte_eth_dev *dev);
 void ixgbe_tm_conf_uninit(struct rte_eth_dev *dev);
 int ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev, uint16_t queue_idx,
-			       uint16_t tx_rate);
+			       uint32_t tx_rate);
 int ixgbe_rss_conf_init(struct ixgbe_rte_flow_rss_conf *out,
 			const struct rte_flow_action_rss *in);
 int ixgbe_action_rss_same(const struct rte_flow_action_rss *comp,

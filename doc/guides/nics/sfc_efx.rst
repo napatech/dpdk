@@ -194,13 +194,9 @@ Supported pattern items (***transfer*** rules):
 
 - PORT_REPRESENTOR (cannot repeat; conflicts with other traffic source items)
 
+- REPRESENTED_PORT (cannot repeat; conflicts with other traffic source items)
+
 - PORT_ID (cannot repeat; conflicts with other traffic source items)
-
-- PHY_PORT (cannot repeat; conflicts with other traffic source items)
-
-- PF (cannot repeat; conflicts with other traffic source items)
-
-- VF (cannot repeat; conflicts with other traffic source items)
 
 - ETH
 
@@ -232,6 +228,14 @@ Supported actions (***transfer*** rules):
 
 - OF_VLAN_SET_PCP
 
+- SET_MAC_DST
+
+- SET_MAC_SRC
+
+- OF_DEC_NW_TTL
+
+- DEC_TTL
+
 - VXLAN_DECAP
 
 - VXLAN_ENCAP
@@ -240,11 +244,13 @@ Supported actions (***transfer*** rules):
 
 - MARK
 
-- PHY_PORT
-
 - PF
 
 - VF
+
+- PORT_REPRESENTOR
+
+- REPRESENTED_PORT
 
 - PORT_ID
 

@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 
@@ -21,11 +22,6 @@ struct flex_item *flex_items[RTE_MAX_ETHPORTS][FLEX_MAX_PARSERS_NUM];
 struct flex_pattern flex_patterns[FLEX_MAX_PATTERNS_NUM];
 
 #ifdef RTE_HAS_JANSSON
-static __rte_always_inline bool
-match_strkey(const char *key, const char *pattern)
-{
-	return strncmp(key, pattern, strlen(key)) == 0;
-}
 
 static struct flex_item *
 flex_parser_fetch(uint16_t port_id, uint16_t flex_id)
@@ -41,30 +37,10 @@ flex_parser_fetch(uint16_t port_id, uint16_t flex_id)
 	return flex_items[port_id][flex_id];
 }
 
-void
-flex_item_destroy(portid_t port_id, uint16_t flex_id)
+static __rte_always_inline bool
+match_strkey(const char *key, const char *pattern)
 {
-	int ret;
-	struct rte_flow_error error;
-	struct flex_item *fp = flex_parser_fetch(port_id, flex_id);
-	if (fp == FLEX_PARSER_ERR) {
-		printf("Bad parameters: port_id=%u flex_id=%u\n",
-		       port_id, flex_id);
-		return;
-	}
-	if (!fp)
-		return;
-	ret = rte_flow_flex_item_release(port_id, fp->flex_handle, &error);
-	if (!ret) {
-		free(fp);
-		flex_items[port_id][flex_id] = NULL;
-		printf("port-%u: released flex item #%u\n",
-		       port_id, flex_id);
-
-	} else {
-		printf("port-%u: cannot release flex item #%u: %s\n",
-		       port_id, flex_id, error.message);
-	}
+	return strncmp(key, pattern, strlen(key)) == 0;
 }
 
 static int
@@ -159,7 +135,8 @@ flex_link_item_parse(const char *src, struct rte_flow_item *item)
 	struct rte_flow_item *pattern;
 	struct rte_flow_action *actions;
 
-	sprintf(flow_rule, "flow create 0 pattern %s / end", src);
+	sprintf(flow_rule,
+		"flow create 0 pattern %s / end actions drop / end", src);
 	src = flow_rule;
 	ret = flow_parse(src, (void *)data, sizeof(data),
 			 &attr, &pattern, &actions);
@@ -390,8 +367,33 @@ flex_item_create(portid_t port_id, uint16_t flex_id, const char *filename)
 		       flow_error.message ? flow_error.message : "");
 	}
 out:
-	if (fp)
+	free(fp);
+}
+
+void
+flex_item_destroy(portid_t port_id, uint16_t flex_id)
+{
+	int ret;
+	struct rte_flow_error error;
+	struct flex_item *fp = flex_parser_fetch(port_id, flex_id);
+	if (fp == FLEX_PARSER_ERR) {
+		printf("Bad parameters: port_id=%u flex_id=%u\n",
+		       port_id, flex_id);
+		return;
+	}
+	if (!fp)
+		return;
+	ret = rte_flow_flex_item_release(port_id, fp->flex_handle, &error);
+	if (!ret) {
 		free(fp);
+		flex_items[port_id][flex_id] = NULL;
+		printf("port-%u: released flex item #%u\n",
+		       port_id, flex_id);
+
+	} else {
+		printf("port-%u: cannot release flex item #%u: %s\n",
+		       port_id, flex_id, error.message);
+	}
 }
 
 #else /* RTE_HAS_JANSSON */
@@ -399,14 +401,15 @@ void flex_item_create(__rte_unused portid_t port_id,
 		      __rte_unused uint16_t flex_id,
 		      __rte_unused const char *filename)
 {
-	printf("no JSON library\n");
+	printf("cannot create flex item - no JSON library configured\n");
 }
 
-void flex_item_destroy(__rte_unused portid_t port_id,
-		       __rte_unused uint16_t flex_id)
+void
+flex_item_destroy(__rte_unused portid_t port_id, __rte_unused uint16_t flex_id)
 {
-	printf("no JSON library\n");
+
 }
+
 #endif /* RTE_HAS_JANSSON */
 
 void
@@ -415,8 +418,10 @@ port_flex_item_flush(portid_t port_id)
 	uint16_t i;
 
 	for (i = 0; i < FLEX_MAX_PARSERS_NUM; i++) {
-		flex_item_destroy(port_id, i);
-		flex_items[port_id][i] = NULL;
+		if (flex_items[port_id][i] != NULL) {
+			flex_item_destroy(port_id, i);
+			flex_items[port_id][i] = NULL;
+		}
 	}
 }
 

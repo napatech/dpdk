@@ -6,17 +6,11 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/queue.h>
 
 #include <rte_memory.h>
 #include <rte_eal.h>
-#include <rte_launch.h>
-#include <rte_per_lcore.h>
-#include <rte_lcore.h>
-#include <rte_debug.h>
 #include <rte_common.h>
-#include <rte_spinlock.h>
 
 #include "eal_private.h"
 #include "eal_internal_cfg.h"
@@ -129,7 +123,7 @@ malloc_elem_find_max_iova_contig(struct malloc_elem *elem, size_t align)
 void
 malloc_elem_init(struct malloc_elem *elem, struct malloc_heap *heap,
 		struct rte_memseg_list *msl, size_t size,
-		struct malloc_elem *orig_elem, size_t orig_size)
+		struct malloc_elem *orig_elem, size_t orig_size, bool dirty)
 {
 	elem->heap = heap;
 	elem->msl = msl;
@@ -137,6 +131,7 @@ malloc_elem_init(struct malloc_elem *elem, struct malloc_heap *heap,
 	elem->next = NULL;
 	memset(&elem->free_list, 0, sizeof(elem->free_list));
 	elem->state = ELEM_FREE;
+	elem->dirty = dirty;
 	elem->size = size;
 	elem->pad = 0;
 	elem->orig_elem = orig_elem;
@@ -300,7 +295,7 @@ split_elem(struct malloc_elem *elem, struct malloc_elem *split_pt)
 	const size_t new_elem_size = elem->size - old_elem_size;
 
 	malloc_elem_init(split_pt, elem->heap, elem->msl, new_elem_size,
-			 elem->orig_elem, elem->orig_size);
+			elem->orig_elem, elem->orig_size, elem->dirty);
 	split_pt->prev = elem;
 	split_pt->next = next_elem;
 	if (next_elem)
@@ -446,6 +441,8 @@ malloc_elem_alloc(struct malloc_elem *elem, size_t size, unsigned align,
 		struct malloc_elem *new_free_elem =
 				RTE_PTR_ADD(new_elem, size + MALLOC_ELEM_OVERHEAD);
 
+		asan_clear_split_alloczone(new_free_elem);
+
 		split_elem(elem, new_free_elem);
 		malloc_elem_free_list_insert(new_free_elem);
 
@@ -457,6 +454,8 @@ malloc_elem_alloc(struct malloc_elem *elem, size_t size, unsigned align,
 		/* don't split it, pad the element instead */
 		elem->state = ELEM_BUSY;
 		elem->pad = old_elem_size;
+
+		asan_clear_alloczone(elem);
 
 		/* put a dummy header in padding, to point to real element header */
 		if (elem->pad > 0) { /* pad will be at least 64-bytes, as everything
@@ -470,12 +469,18 @@ malloc_elem_alloc(struct malloc_elem *elem, size_t size, unsigned align,
 		return new_elem;
 	}
 
+	asan_clear_split_alloczone(new_elem);
+
 	/* we are going to split the element in two. The original element
 	 * remains free, and the new element is the one allocated.
 	 * Re-insert original element, in case its new size makes it
 	 * belong on a different list.
 	 */
+
 	split_elem(elem, new_elem);
+
+	asan_clear_alloczone(new_elem);
+
 	new_elem->state = ELEM_BUSY;
 	malloc_elem_free_list_insert(elem);
 
@@ -496,6 +501,7 @@ join_elem(struct malloc_elem *elem1, struct malloc_elem *elem2)
 	else
 		elem1->heap->last = elem1;
 	elem1->next = next;
+	elem1->dirty |= elem2->dirty;
 	if (elem1->pad) {
 		struct malloc_elem *inner = RTE_PTR_ADD(elem1, elem1->pad);
 		inner->size = elem1->size - elem1->pad;
@@ -569,6 +575,14 @@ malloc_elem_free(struct malloc_elem *elem)
 	ptr = RTE_PTR_ADD(elem, MALLOC_ELEM_HEADER_LEN);
 	data_len = elem->size - MALLOC_ELEM_OVERHEAD;
 
+	/*
+	 * Consider the element clean for the purposes of joining.
+	 * If both neighbors are clean or non-existent,
+	 * the joint element will be clean,
+	 * which means the memory should be cleared.
+	 * There is no need to clear the memory if the joint element is dirty.
+	 */
+	elem->dirty = false;
 	elem = malloc_elem_join_adjacent_free(elem);
 
 	malloc_elem_free_list_insert(elem);
@@ -578,8 +592,14 @@ malloc_elem_free(struct malloc_elem *elem)
 	/* decrease heap's count of allocated elements */
 	elem->heap->alloc_count--;
 
-	/* poison memory */
+#ifndef RTE_MALLOC_DEBUG
+	/* Normally clear the memory when needed. */
+	if (!elem->dirty)
+		memset(ptr, 0, data_len);
+#else
+	/* Always poison the memory in debug mode. */
 	memset(ptr, MALLOC_POISON, data_len);
+#endif
 
 	return elem;
 }
@@ -601,6 +621,8 @@ malloc_elem_hide_region(struct malloc_elem *elem, void *start, size_t len)
 	if (next && next_elem_is_adjacent(elem)) {
 		len_after = RTE_PTR_DIFF(next, hide_end);
 		if (len_after >= MALLOC_ELEM_OVERHEAD + MIN_DATA_SIZE) {
+			asan_clear_split_alloczone(hide_end);
+
 			/* split after */
 			split_elem(elem, hide_end);
 
@@ -615,6 +637,8 @@ malloc_elem_hide_region(struct malloc_elem *elem, void *start, size_t len)
 	if (prev && prev_elem_is_adjacent(elem)) {
 		len_before = RTE_PTR_DIFF(hide_start, elem);
 		if (len_before >= MALLOC_ELEM_OVERHEAD + MIN_DATA_SIZE) {
+			asan_clear_split_alloczone(hide_start);
+
 			/* split before */
 			split_elem(elem, hide_start);
 
@@ -627,6 +651,8 @@ malloc_elem_hide_region(struct malloc_elem *elem, void *start, size_t len)
 			return;
 		}
 	}
+
+	asan_clear_alloczone(elem);
 
 	remove_elem(elem);
 }
@@ -641,8 +667,10 @@ malloc_elem_resize(struct malloc_elem *elem, size_t size)
 	const size_t new_size = size + elem->pad + MALLOC_ELEM_OVERHEAD;
 
 	/* if we request a smaller size, then always return ok */
-	if (elem->size >= new_size)
+	if (elem->size >= new_size) {
+		asan_clear_alloczone(elem);
 		return 0;
+	}
 
 	/* check if there is a next element, it's free and adjacent */
 	if (!elem->next || elem->next->state != ELEM_FREE ||
@@ -661,9 +689,15 @@ malloc_elem_resize(struct malloc_elem *elem, size_t size)
 		/* now we have a big block together. Lets cut it down a bit, by splitting */
 		struct malloc_elem *split_pt = RTE_PTR_ADD(elem, new_size);
 		split_pt = RTE_PTR_ALIGN_CEIL(split_pt, RTE_CACHE_LINE_SIZE);
+
+		asan_clear_split_alloczone(split_pt);
+
 		split_elem(elem, split_pt);
 		malloc_elem_free_list_insert(split_pt);
 	}
+
+	asan_clear_alloczone(elem);
+
 	return 0;
 }
 

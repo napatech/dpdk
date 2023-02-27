@@ -2,101 +2,7 @@
  * Copyright(C) 2021 Marvell.
  */
 
-#include "cnxk_cryptodev_ops.h"
 #include "cnxk_eventdev.h"
-
-static int
-crypto_adapter_qp_setup(const struct rte_cryptodev *cdev,
-			struct cnxk_cpt_qp *qp)
-{
-	char name[RTE_MEMPOOL_NAMESIZE];
-	uint32_t cache_size, nb_req;
-	unsigned int req_size;
-
-	snprintf(name, RTE_MEMPOOL_NAMESIZE, "cnxk_ca_req_%u:%u",
-		 cdev->data->dev_id, qp->lf.lf_id);
-	req_size = sizeof(struct cpt_inflight_req);
-	cache_size = RTE_MIN(RTE_MEMPOOL_CACHE_MAX_SIZE, qp->lf.nb_desc / 1.5);
-	nb_req = RTE_MAX(qp->lf.nb_desc, cache_size * rte_lcore_count());
-	qp->ca.req_mp = rte_mempool_create(name, nb_req, req_size, cache_size,
-					   0, NULL, NULL, NULL, NULL,
-					   rte_socket_id(), 0);
-	if (qp->ca.req_mp == NULL)
-		return -ENOMEM;
-
-	qp->ca.enabled = true;
-
-	return 0;
-}
-
-int
-cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
-			   const struct rte_cryptodev *cdev,
-			   int32_t queue_pair_id)
-{
-	struct cnxk_sso_evdev *sso_evdev = cnxk_sso_pmd_priv(event_dev);
-	uint32_t adptr_xae_cnt = 0;
-	struct cnxk_cpt_qp *qp;
-	int ret;
-
-	if (queue_pair_id == -1) {
-		uint16_t qp_id;
-
-		for (qp_id = 0; qp_id < cdev->data->nb_queue_pairs; qp_id++) {
-			qp = cdev->data->queue_pairs[qp_id];
-			ret = crypto_adapter_qp_setup(cdev, qp);
-			if (ret) {
-				cnxk_crypto_adapter_qp_del(cdev, -1);
-				return ret;
-			}
-			adptr_xae_cnt += qp->ca.req_mp->size;
-		}
-	} else {
-		qp = cdev->data->queue_pairs[queue_pair_id];
-		ret = crypto_adapter_qp_setup(cdev, qp);
-		if (ret)
-			return ret;
-		adptr_xae_cnt = qp->ca.req_mp->size;
-	}
-
-	/* Update crypto adapter XAE count */
-	sso_evdev->adptr_xae_cnt += adptr_xae_cnt;
-	cnxk_sso_xae_reconfigure((struct rte_eventdev *)(uintptr_t)event_dev);
-
-	return 0;
-}
-
-static int
-crypto_adapter_qp_free(struct cnxk_cpt_qp *qp)
-{
-	rte_mempool_free(qp->ca.req_mp);
-	qp->ca.enabled = false;
-
-	return 0;
-}
-
-int
-cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev,
-			   int32_t queue_pair_id)
-{
-	struct cnxk_cpt_qp *qp;
-
-	if (queue_pair_id == -1) {
-		uint16_t qp_id;
-
-		for (qp_id = 0; qp_id < cdev->data->nb_queue_pairs; qp_id++) {
-			qp = cdev->data->queue_pairs[qp_id];
-			if (qp->ca.enabled)
-				crypto_adapter_qp_free(qp);
-		}
-	} else {
-		qp = cdev->data->queue_pairs[queue_pair_id];
-		if (qp->ca.enabled)
-			crypto_adapter_qp_free(qp);
-	}
-
-	return 0;
-}
 
 void
 cnxk_sso_info_get(struct cnxk_sso_evdev *dev,
@@ -119,107 +25,36 @@ cnxk_sso_info_get(struct cnxk_sso_evdev *dev,
 				  RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK |
 				  RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
 				  RTE_EVENT_DEV_CAP_NONSEQ_MODE |
-				  RTE_EVENT_DEV_CAP_CARRY_FLOW_ID;
+				  RTE_EVENT_DEV_CAP_CARRY_FLOW_ID |
+				  RTE_EVENT_DEV_CAP_MAINTENANCE_FREE |
+				  RTE_EVENT_DEV_CAP_RUNTIME_QUEUE_ATTR;
 }
 
 int
 cnxk_sso_xaq_allocate(struct cnxk_sso_evdev *dev)
 {
-	char pool_name[RTE_MEMZONE_NAMESIZE];
-	uint32_t xaq_cnt, npa_aura_id;
-	const struct rte_memzone *mz;
-	struct npa_aura_s *aura;
-	static int reconfig_cnt;
+	uint32_t xae_cnt;
 	int rc;
 
-	if (dev->xaq_pool) {
-		rc = roc_sso_hwgrp_release_xaq(&dev->sso, dev->nb_event_queues);
-		if (rc < 0) {
-			plt_err("Failed to release XAQ %d", rc);
-			return rc;
-		}
-		rte_mempool_free(dev->xaq_pool);
-		dev->xaq_pool = NULL;
-	}
-
-	/*
-	 * Allocate memory for Add work backpressure.
-	 */
-	mz = rte_memzone_lookup(CNXK_SSO_FC_NAME);
-	if (mz == NULL)
-		mz = rte_memzone_reserve_aligned(CNXK_SSO_FC_NAME,
-						 sizeof(struct npa_aura_s) +
-							 RTE_CACHE_LINE_SIZE,
-						 0, 0, RTE_CACHE_LINE_SIZE);
-	if (mz == NULL) {
-		plt_err("Failed to allocate mem for fcmem");
-		return -ENOMEM;
-	}
-
-	dev->fc_iova = mz->iova;
-	dev->fc_mem = mz->addr;
-
-	aura = (struct npa_aura_s *)((uintptr_t)dev->fc_mem +
-				     RTE_CACHE_LINE_SIZE);
-	memset(aura, 0, sizeof(struct npa_aura_s));
-
-	aura->fc_ena = 1;
-	aura->fc_addr = dev->fc_iova;
-	aura->fc_hyst_bits = 0; /* Store count on all updates */
-
-	/* Taken from HRM 14.3.3(4) */
-	xaq_cnt = dev->nb_event_queues * CNXK_SSO_XAQ_CACHE_CNT;
+	xae_cnt = dev->sso.iue;
 	if (dev->xae_cnt)
-		xaq_cnt += dev->xae_cnt / dev->sso.xae_waes;
-	else if (dev->adptr_xae_cnt)
-		xaq_cnt += (dev->adptr_xae_cnt / dev->sso.xae_waes) +
-			   (CNXK_SSO_XAQ_SLACK * dev->nb_event_queues);
-	else
-		xaq_cnt += (dev->sso.iue / dev->sso.xae_waes) +
-			   (CNXK_SSO_XAQ_SLACK * dev->nb_event_queues);
+		xae_cnt += dev->xae_cnt;
+	if (dev->adptr_xae_cnt)
+		xae_cnt += (dev->adptr_xae_cnt);
 
-	plt_sso_dbg("Configuring %d xaq buffers", xaq_cnt);
-	/* Setup XAQ based on number of nb queues. */
-	snprintf(pool_name, 30, "cnxk_xaq_buf_pool_%d", reconfig_cnt);
-	dev->xaq_pool = (void *)rte_mempool_create_empty(
-		pool_name, xaq_cnt, dev->sso.xaq_buf_size, 0, 0,
-		rte_socket_id(), 0);
-
-	if (dev->xaq_pool == NULL) {
-		plt_err("Unable to create empty mempool.");
-		rte_memzone_free(mz);
-		return -ENOMEM;
-	}
-
-	rc = rte_mempool_set_ops_byname(dev->xaq_pool,
-					rte_mbuf_platform_mempool_ops(), aura);
-	if (rc != 0) {
-		plt_err("Unable to set xaqpool ops.");
-		goto alloc_fail;
-	}
-
-	rc = rte_mempool_populate_default(dev->xaq_pool);
+	plt_sso_dbg("Configuring %d xae buffers", xae_cnt);
+	rc = roc_sso_hwgrp_init_xaq_aura(&dev->sso, xae_cnt);
 	if (rc < 0) {
-		plt_err("Unable to set populate xaqpool.");
-		goto alloc_fail;
+		plt_err("Failed to configure XAQ aura");
+		return rc;
 	}
-	reconfig_cnt++;
-	/* When SW does addwork (enqueue) check if there is space in XAQ by
-	 * comparing fc_addr above against the xaq_lmt calculated below.
-	 * There should be a minimum headroom (CNXK_SSO_XAQ_SLACK / 2) for SSO
-	 * to request XAQ to cache them even before enqueue is called.
-	 */
-	dev->xaq_lmt =
-		xaq_cnt - (CNXK_SSO_XAQ_SLACK / 2 * dev->nb_event_queues);
-	dev->nb_xaq_cfg = xaq_cnt;
+	dev->xaq_lmt = dev->sso.xaq.xaq_lmt;
+	dev->fc_iova = (uint64_t)dev->sso.xaq.fc;
 
-	npa_aura_id = roc_npa_aura_handle_to_aura(dev->xaq_pool->pool_id);
-	return roc_sso_hwgrp_alloc_xaq(&dev->sso, npa_aura_id,
-				       dev->nb_event_queues);
-alloc_fail:
-	rte_mempool_free(dev->xaq_pool);
-	rte_memzone_free(mz);
-	return rc;
+	return roc_sso_hwgrp_alloc_xaq(
+		&dev->sso,
+		roc_npa_aura_handle_to_aura(dev->sso.xaq.aura_handle),
+		dev->nb_event_queues);
 }
 
 int
@@ -231,14 +66,6 @@ cnxk_sso_xae_reconfigure(struct rte_eventdev *event_dev)
 	if (event_dev->data->dev_started)
 		event_dev->dev_ops->dev_stop(event_dev);
 
-	rc = roc_sso_hwgrp_release_xaq(&dev->sso, dev->nb_event_queues);
-	if (rc < 0) {
-		plt_err("Failed to release XAQ %d", rc);
-		return rc;
-	}
-
-	rte_mempool_free(dev->xaq_pool);
-	dev->xaq_pool = NULL;
 	rc = cnxk_sso_xaq_allocate(dev);
 	if (rc < 0) {
 		plt_err("Failed to alloc XAQ %d", rc);
@@ -320,7 +147,6 @@ cnxk_sso_dev_validate(const struct rte_eventdev *event_dev)
 	struct rte_event_dev_config *conf = &event_dev->data->dev_conf;
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
 	uint32_t deq_tmo_ns;
-	int rc;
 
 	deq_tmo_ns = conf->dequeue_timeout_ns;
 
@@ -354,15 +180,8 @@ cnxk_sso_dev_validate(const struct rte_eventdev *event_dev)
 		return -EINVAL;
 	}
 
-	if (dev->xaq_pool) {
-		rc = roc_sso_hwgrp_release_xaq(&dev->sso, dev->nb_event_queues);
-		if (rc < 0) {
-			plt_err("Failed to release XAQ %d", rc);
-			return rc;
-		}
-		rte_mempool_free(dev->xaq_pool);
-		dev->xaq_pool = NULL;
-	}
+	roc_sso_rsrc_fini(&dev->sso);
+	roc_sso_hwgrp_free_xaq_aura(&dev->sso, dev->sso.nb_hwgrp);
 
 	dev->nb_event_queues = conf->nb_event_queues;
 	dev->nb_event_ports = conf->nb_event_ports;
@@ -381,6 +200,8 @@ cnxk_sso_queue_def_conf(struct rte_eventdev *event_dev, uint8_t queue_id,
 	queue_conf->nb_atomic_order_sequences = (1ULL << 20);
 	queue_conf->event_queue_cfg = RTE_EVENT_QUEUE_CFG_ALL_TYPES;
 	queue_conf->priority = RTE_EVENT_DEV_PRIORITY_NORMAL;
+	queue_conf->weight = RTE_EVENT_QUEUE_WEIGHT_LOWEST;
+	queue_conf->affinity = RTE_EVENT_QUEUE_AFFINITY_HIGHEST;
 }
 
 int
@@ -388,11 +209,21 @@ cnxk_sso_queue_setup(struct rte_eventdev *event_dev, uint8_t queue_id,
 		     const struct rte_event_queue_conf *queue_conf)
 {
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+	uint8_t priority, weight, affinity;
 
-	plt_sso_dbg("Queue=%d prio=%d", queue_id, queue_conf->priority);
-	/* Normalize <0-255> to <0-7> */
-	return roc_sso_hwgrp_set_priority(&dev->sso, queue_id, 0xFF, 0xFF,
-					  queue_conf->priority / 32);
+	priority = CNXK_QOS_NORMALIZE(queue_conf->priority, 0,
+				      RTE_EVENT_DEV_PRIORITY_LOWEST,
+				      CNXK_SSO_PRIORITY_CNT);
+	weight = CNXK_QOS_NORMALIZE(queue_conf->weight, CNXK_SSO_WEIGHT_MIN,
+				    RTE_EVENT_QUEUE_WEIGHT_HIGHEST, CNXK_SSO_WEIGHT_CNT);
+	affinity = CNXK_QOS_NORMALIZE(queue_conf->affinity, 0, RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
+				      CNXK_SSO_AFFINITY_CNT);
+
+	plt_sso_dbg("Queue=%u prio=%u weight=%u affinity=%u", queue_id,
+		    priority, weight, affinity);
+
+	return roc_sso_hwgrp_set_priority(&dev->sso, queue_id, weight, affinity,
+					  priority);
 }
 
 void
@@ -400,6 +231,50 @@ cnxk_sso_queue_release(struct rte_eventdev *event_dev, uint8_t queue_id)
 {
 	RTE_SET_USED(event_dev);
 	RTE_SET_USED(queue_id);
+}
+
+int
+cnxk_sso_queue_attribute_set(struct rte_eventdev *event_dev, uint8_t queue_id,
+			     uint32_t attr_id, uint64_t attr_value)
+{
+	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+	uint8_t priority, weight, affinity;
+	struct rte_event_queue_conf *conf;
+
+	conf = &event_dev->data->queues_cfg[queue_id];
+
+	switch (attr_id) {
+	case RTE_EVENT_QUEUE_ATTR_PRIORITY:
+		conf->priority = attr_value;
+		break;
+	case RTE_EVENT_QUEUE_ATTR_WEIGHT:
+		conf->weight = attr_value;
+		break;
+	case RTE_EVENT_QUEUE_ATTR_AFFINITY:
+		conf->affinity = attr_value;
+		break;
+	case RTE_EVENT_QUEUE_ATTR_NB_ATOMIC_FLOWS:
+	case RTE_EVENT_QUEUE_ATTR_NB_ATOMIC_ORDER_SEQUENCES:
+	case RTE_EVENT_QUEUE_ATTR_EVENT_QUEUE_CFG:
+	case RTE_EVENT_QUEUE_ATTR_SCHEDULE_TYPE:
+		/* FALLTHROUGH */
+		plt_sso_dbg("Unsupported attribute id %u", attr_id);
+		return -ENOTSUP;
+	default:
+		plt_err("Invalid attribute id %u", attr_id);
+		return -EINVAL;
+	}
+
+	priority = CNXK_QOS_NORMALIZE(conf->priority, 0,
+				      RTE_EVENT_DEV_PRIORITY_LOWEST,
+				      CNXK_SSO_PRIORITY_CNT);
+	weight = CNXK_QOS_NORMALIZE(conf->weight, CNXK_SSO_WEIGHT_MIN,
+				    RTE_EVENT_QUEUE_WEIGHT_HIGHEST, CNXK_SSO_WEIGHT_CNT);
+	affinity = CNXK_QOS_NORMALIZE(conf->affinity, 0, RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
+				      CNXK_SSO_AFFINITY_CNT);
+
+	return roc_sso_hwgrp_set_priority(&dev->sso, queue_id, weight, affinity,
+					  priority);
 }
 
 void
@@ -419,8 +294,7 @@ cnxk_sso_port_setup(struct rte_eventdev *event_dev, uint8_t port_id,
 		    cnxk_sso_hws_setup_t hws_setup_fn)
 {
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
-	uintptr_t grps_base[CNXK_SSO_MAX_HWGRP] = {0};
-	uint16_t q;
+	uintptr_t grp_base = 0;
 
 	plt_sso_dbg("Port=%d", port_id);
 	if (event_dev->data->ports[port_id] == NULL) {
@@ -428,15 +302,13 @@ cnxk_sso_port_setup(struct rte_eventdev *event_dev, uint8_t port_id,
 		return -EINVAL;
 	}
 
-	for (q = 0; q < dev->nb_event_queues; q++) {
-		grps_base[q] = roc_sso_hwgrp_base_get(&dev->sso, q);
-		if (grps_base[q] == 0) {
-			plt_err("Failed to get grp[%d] base addr", q);
-			return -EINVAL;
-		}
+	grp_base = roc_sso_hwgrp_base_get(&dev->sso, 0);
+	if (grp_base == 0) {
+		plt_err("Failed to get grp base addr");
+		return -EINVAL;
 	}
 
-	hws_setup_fn(dev, event_dev->data->ports[port_id], grps_base);
+	hws_setup_fn(dev, event_dev->data->ports[port_id], grp_base);
 	plt_sso_dbg("Port=%d ws=%p", port_id, event_dev->data->ports[port_id]);
 	rte_mb();
 
@@ -476,9 +348,10 @@ static void
 cnxk_sso_cleanup(struct rte_eventdev *event_dev, cnxk_sso_hws_reset_t reset_fn,
 		 cnxk_sso_hws_flush_t flush_fn, uint8_t enable)
 {
+	uint8_t pend_list[RTE_EVENT_MAX_QUEUES_PER_DEV], pend_cnt, new_pcnt;
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
 	uintptr_t hwgrp_base;
-	uint16_t i;
+	uint8_t queue_id, i;
 	void *ws;
 
 	for (i = 0; i < dev->nb_event_ports; i++) {
@@ -487,14 +360,30 @@ cnxk_sso_cleanup(struct rte_eventdev *event_dev, cnxk_sso_hws_reset_t reset_fn,
 	}
 
 	rte_mb();
+
+	/* Consume all the events through HWS0 */
 	ws = event_dev->data->ports[0];
 
-	for (i = 0; i < dev->nb_event_queues; i++) {
-		/* Consume all the events through HWS0 */
-		hwgrp_base = roc_sso_hwgrp_base_get(&dev->sso, i);
-		flush_fn(ws, i, hwgrp_base, cnxk_handle_event, event_dev);
-		/* Enable/Disable SSO GGRP */
-		plt_write64(enable, hwgrp_base + SSO_LF_GGRP_QCTL);
+	/* Starting list of queues to flush */
+	pend_cnt = dev->nb_event_queues;
+	for (i = 0; i < dev->nb_event_queues; i++)
+		pend_list[i] = i;
+
+	while (pend_cnt) {
+		new_pcnt = 0;
+		for (i = 0; i < pend_cnt; i++) {
+			queue_id = pend_list[i];
+			hwgrp_base =
+				roc_sso_hwgrp_base_get(&dev->sso, queue_id);
+			if (flush_fn(ws, queue_id, hwgrp_base,
+				     cnxk_handle_event, event_dev)) {
+				pend_list[new_pcnt++] = queue_id;
+				continue;
+			}
+			/* Enable/Disable SSO GGRP */
+			plt_write64(enable, hwgrp_base + SSO_LF_GGRP_QCTL);
+		}
+		pend_cnt = new_pcnt;
 	}
 }
 
@@ -508,13 +397,11 @@ cnxk_sso_start(struct rte_eventdev *event_dev, cnxk_sso_hws_reset_t reset_fn,
 
 	plt_sso_dbg();
 	for (i = 0; i < dev->qos_queue_cnt; i++) {
-		qos->hwgrp = dev->qos_parse_data[i].queue;
-		qos->iaq_prcnt = dev->qos_parse_data[i].iaq_prcnt;
-		qos->taq_prcnt = dev->qos_parse_data[i].taq_prcnt;
-		qos->xaq_prcnt = dev->qos_parse_data[i].xaq_prcnt;
+		qos[i].hwgrp = dev->qos_parse_data[i].queue;
+		qos[i].iaq_prcnt = dev->qos_parse_data[i].iaq_prcnt;
+		qos[i].taq_prcnt = dev->qos_parse_data[i].taq_prcnt;
 	}
-	rc = roc_sso_hwgrp_qos_config(&dev->sso, qos, dev->qos_queue_cnt,
-				      dev->xae_cnt);
+	rc = roc_sso_hwgrp_qos_config(&dev->sso, qos, dev->qos_queue_cnt);
 	if (rc < 0) {
 		plt_sso_dbg("failed to configure HWGRP QoS rc = %d", rc);
 		return -EINVAL;
@@ -556,12 +443,8 @@ cnxk_sso_close(struct rte_eventdev *event_dev, cnxk_sso_unlink_t unlink_fn)
 	}
 
 	roc_sso_rsrc_fini(&dev->sso);
-	rte_mempool_free(dev->xaq_pool);
-	rte_memzone_free(rte_memzone_lookup(CNXK_SSO_FC_NAME));
 
 	dev->fc_iova = 0;
-	dev->fc_mem = NULL;
-	dev->xaq_pool = NULL;
 	dev->configured = false;
 	dev->is_timeout_deq = 0;
 	dev->nb_event_ports = 0;
@@ -577,7 +460,7 @@ static void
 parse_queue_param(char *value, void *opaque)
 {
 	struct cnxk_sso_qos queue_qos = {0};
-	uint8_t *val = (uint8_t *)&queue_qos;
+	uint16_t *val = (uint16_t *)&queue_qos;
 	struct cnxk_sso_evdev *dev = opaque;
 	char *tok = strtok(value, "-");
 	struct cnxk_sso_qos *old_ptr;
@@ -592,7 +475,7 @@ parse_queue_param(char *value, void *opaque)
 	}
 
 	if (val != (&queue_qos.iaq_prcnt + 1)) {
-		plt_err("Invalid QoS parameter expected [Qx-XAQ-TAQ-IAQ]");
+		plt_err("Invalid QoS parameter expected [Qx-TAQ-IAQ]");
 		return;
 	}
 
@@ -640,9 +523,8 @@ parse_sso_kvargs_dict(const char *key, const char *value, void *opaque)
 {
 	RTE_SET_USED(key);
 
-	/* Dict format [Qx-XAQ-TAQ-IAQ][Qz-XAQ-TAQ-IAQ] use '-' cause ','
-	 * isn't allowed. Everything is expressed in percentages, 0 represents
-	 * default.
+	/* Dict format [Qx-TAQ-IAQ][Qz-TAQ-IAQ] use '-' cause ',' isn't allowed.
+	 * Everything is expressed in percentages, 0 represents default.
 	 */
 	parse_qos_list(value, opaque);
 
@@ -705,7 +587,7 @@ cnxk_sso_init(struct rte_eventdev *event_dev)
 	}
 
 	dev->is_timeout_deq = 0;
-	dev->min_dequeue_timeout_ns = USEC2NSEC(1);
+	dev->min_dequeue_timeout_ns = 0;
 	dev->max_dequeue_timeout_ns = USEC2NSEC(0x3FF);
 	dev->max_num_events = -1;
 	dev->nb_event_queues = 0;

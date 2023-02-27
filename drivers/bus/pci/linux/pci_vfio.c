@@ -18,7 +18,7 @@
 #include <rte_malloc.h>
 #include <rte_vfio.h>
 #include <rte_eal.h>
-#include <rte_bus.h>
+#include <bus_driver.h>
 #include <rte_spinlock.h>
 #include <rte_tailq.h>
 
@@ -49,6 +49,9 @@ pci_vfio_read_config(const struct rte_intr_handle *intr_handle,
 {
 	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
 
+	if (vfio_dev_fd < 0)
+		return -1;
+
 	return pread64(vfio_dev_fd, buf, len,
 	       VFIO_GET_REGION_ADDR(VFIO_PCI_CONFIG_REGION_INDEX) + offs);
 }
@@ -58,6 +61,9 @@ pci_vfio_write_config(const struct rte_intr_handle *intr_handle,
 		    const void *buf, size_t len, off_t offs)
 {
 	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
+
+	if (vfio_dev_fd < 0)
+		return -1;
 
 	return pwrite64(vfio_dev_fd, buf, len,
 	       VFIO_GET_REGION_ADDR(VFIO_PCI_CONFIG_REGION_INDEX) + offs);
@@ -266,12 +272,6 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
 			return -1;
 		}
 
-		/* Reallocate the efds and elist fields of intr_handle based
-		 * on PCI device MSIX size.
-		 */
-		if (rte_intr_event_list_update(dev->intr_handle, irq.count))
-			return -1;
-
 		/* if this vector cannot be used with eventfd, fail if we explicitly
 		 * specified interrupt type, otherwise continue */
 		if ((irq.flags & VFIO_IRQ_INFO_EVENTFD) == 0) {
@@ -282,6 +282,14 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
 			} else
 				continue;
 		}
+
+		/* Reallocate the efds and elist fields of intr_handle based
+		 * on PCI device MSIX size.
+		 */
+		if (i == VFIO_PCI_MSIX_IRQ_INDEX &&
+				(uint32_t)rte_intr_nb_intr_get(dev->intr_handle) < irq.count &&
+				rte_intr_event_list_update(dev->intr_handle, irq.count))
+			return -1;
 
 		/* set up an eventfd for interrupts */
 		fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
@@ -807,7 +815,7 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 			continue;
 		}
 
-		/* skip non-mmapable BARs */
+		/* skip non-mmappable BARs */
 		if ((reg->flags & VFIO_REGION_INFO_FLAG_MMAP) == 0) {
 			free(reg);
 			continue;
@@ -1010,6 +1018,9 @@ pci_vfio_unmap_resource_primary(struct rte_pci_device *dev)
 	}
 
 #endif
+	if (rte_intr_fd_get(dev->intr_handle) < 0)
+		return -1;
+
 	if (close(rte_intr_fd_get(dev->intr_handle)) < 0) {
 		RTE_LOG(INFO, EAL, "Error when closing eventfd file descriptor for %s\n",
 			pci_addr);
@@ -1017,6 +1028,9 @@ pci_vfio_unmap_resource_primary(struct rte_pci_device *dev)
 	}
 
 	vfio_dev_fd = rte_intr_dev_fd_get(dev->intr_handle);
+	if (vfio_dev_fd < 0)
+		return -1;
+
 	if (pci_vfio_set_bus_master(vfio_dev_fd, false)) {
 		RTE_LOG(ERR, EAL, "%s cannot unset bus mastering for PCI device!\n",
 				pci_addr);
@@ -1060,6 +1074,9 @@ pci_vfio_unmap_resource_secondary(struct rte_pci_device *dev)
 			loc->domain, loc->bus, loc->devid, loc->function);
 
 	vfio_dev_fd = rte_intr_dev_fd_get(dev->intr_handle);
+	if (vfio_dev_fd < 0)
+		return -1;
+
 	ret = rte_vfio_release_device(rte_pci_get_sysfs_path(), pci_addr,
 				      vfio_dev_fd);
 	if (ret < 0) {
@@ -1112,6 +1129,9 @@ pci_vfio_ioport_read(struct rte_pci_ioport *p,
 	const struct rte_intr_handle *intr_handle = p->dev->intr_handle;
 	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
 
+	if (vfio_dev_fd < 0)
+		return;
+
 	if (pread64(vfio_dev_fd, data,
 		    len, p->base + offset) <= 0)
 		RTE_LOG(ERR, EAL,
@@ -1125,6 +1145,9 @@ pci_vfio_ioport_write(struct rte_pci_ioport *p,
 {
 	const struct rte_intr_handle *intr_handle = p->dev->intr_handle;
 	int vfio_dev_fd = rte_intr_dev_fd_get(intr_handle);
+
+	if (vfio_dev_fd < 0)
+		return;
 
 	if (pwrite64(vfio_dev_fd, data,
 		     len, p->base + offset) <= 0)

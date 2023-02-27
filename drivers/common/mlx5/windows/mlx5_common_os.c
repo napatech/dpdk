@@ -7,7 +7,7 @@
 #include <stdio.h>
 
 #include <rte_mempool.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_malloc.h>
 #include <rte_errno.h>
 
@@ -26,20 +26,45 @@ mlx5_glue_constructor(void)
 }
 
 /**
+ * Validate user arguments for remote PD and CTX.
+ *
+ * @param config
+ *   Pointer to device configuration structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_os_remote_pd_and_ctx_validate(struct mlx5_common_dev_config *config)
+{
+	int device_fd = config->device_fd;
+	int pd_handle = config->pd_handle;
+
+	if (pd_handle != MLX5_ARG_UNSET || device_fd != MLX5_ARG_UNSET) {
+		DRV_LOG(ERR, "Remote PD and CTX is not supported on Windows.");
+		rte_errno = ENOTSUP;
+		return -rte_errno;
+	}
+	return 0;
+}
+
+/**
  * Release PD. Releases a given mlx5_pd object
  *
- * @param[in] pd
- *   Pointer to mlx5_pd.
+ * @param[in] cdev
+ *   Pointer to the mlx5 device.
  *
  * @return
  *   Zero if pd is released successfully, negative number otherwise.
  */
 int
-mlx5_os_dealloc_pd(void *pd)
+mlx5_os_pd_release(struct mlx5_common_device *cdev)
 {
+	struct mlx5_pd *pd = cdev->pd;
+
 	if (!pd)
 		return -EINVAL;
-	mlx5_devx_cmd_destroy(((struct mlx5_pd *)pd)->obj);
+	mlx5_devx_cmd_destroy(pd->obj);
 	mlx5_free(pd);
 	return 0;
 }
@@ -47,14 +72,14 @@ mlx5_os_dealloc_pd(void *pd)
 /**
  * Allocate Protection Domain object and extract its pdn using DV API.
  *
- * @param[out] dev
+ * @param[out] cdev
  *   Pointer to the mlx5 device.
  *
  * @return
  *   0 on success, a negative value otherwise.
  */
 int
-mlx5_os_pd_create(struct mlx5_common_device *cdev)
+mlx5_os_pd_prepare(struct mlx5_common_device *cdev)
 {
 	struct mlx5_pd *pd;
 
@@ -202,7 +227,7 @@ mlx5_os_open_device(struct mlx5_common_device *cdev, uint32_t classes)
 	struct mlx5_context *mlx5_ctx = NULL;
 	int n;
 
-	if (classes != MLX5_CLASS_ETH) {
+	if (classes != MLX5_CLASS_ETH && classes != MLX5_CLASS_CRYPTO) {
 		DRV_LOG(ERR,
 			"The chosen classes are not supported on Windows.");
 		rte_errno = ENOTSUP;
@@ -302,7 +327,7 @@ mlx5_os_umem_dereg(void *pumem)
 }
 
 /**
- * Register mr. Given protection doamin pointer, pointer to addr and length
+ * Register mr. Given protection domain pointer, pointer to addr and length
  * register the memory region.
  *
  * @param[in] pd
@@ -310,7 +335,7 @@ mlx5_os_umem_dereg(void *pumem)
  * @param[in] addr
  *   Pointer to memory start address (type devx_device_ctx).
  * @param[in] length
- *   Lengtoh of the memory to register.
+ *   Length of the memory to register.
  * @param[out] pmd_mr
  *   pmd_mr struct set with lkey, address, length, pointer to mr object, mkey
  *
@@ -368,9 +393,11 @@ mlx5_os_reg_mr(void *pd,
 static void
 mlx5_os_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
 {
-	if (pmd_mr && pmd_mr->mkey)
-		claim_zero(mlx5_glue->devx_obj_destroy(pmd_mr->mkey->obj));
-	if (pmd_mr && pmd_mr->obj)
+	if (!pmd_mr)
+		return;
+	if (pmd_mr->mkey)
+		claim_zero(mlx5_devx_cmd_destroy(pmd_mr->mkey));
+	if (pmd_mr->obj)
 		claim_zero(mlx5_os_umem_dereg(pmd_mr->obj));
 	memset(pmd_mr, 0, sizeof(*pmd_mr));
 }
@@ -389,4 +416,43 @@ mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb, mlx5_dereg_mr_t *dereg_mr_cb)
 {
 	*reg_mr_cb = mlx5_os_reg_mr;
 	*dereg_mr_cb = mlx5_os_dereg_mr;
+}
+
+/*
+ * In Windows, no need to wrap the MR, no known issue for it in kernel.
+ * Use the regular function to create direct MR.
+ */
+int
+mlx5_os_wrapped_mkey_create(void *ctx, void *pd, uint32_t pdn, void *addr,
+			    size_t length, struct mlx5_pmd_wrapped_mr *wpmd_mr)
+{
+	struct mlx5_pmd_mr pmd_mr = {0};
+	int ret = mlx5_os_reg_mr(pd, addr, length, &pmd_mr);
+
+	(void)pdn;
+	(void)ctx;
+	if (ret != 0)
+		return -1;
+	wpmd_mr->addr = addr;
+	wpmd_mr->len = length;
+	wpmd_mr->obj = pmd_mr.obj;
+	wpmd_mr->imkey = pmd_mr.mkey;
+	wpmd_mr->lkey = pmd_mr.mkey->id;
+	return 0;
+}
+
+void
+mlx5_os_wrapped_mkey_destroy(struct mlx5_pmd_wrapped_mr *wpmd_mr)
+{
+	struct mlx5_pmd_mr pmd_mr;
+
+	if (!wpmd_mr)
+		return;
+	pmd_mr.addr = wpmd_mr->addr;
+	pmd_mr.len = wpmd_mr->len;
+	pmd_mr.obj = wpmd_mr->obj;
+	pmd_mr.mkey = wpmd_mr->imkey;
+	pmd_mr.lkey = wpmd_mr->lkey;
+	mlx5_os_dereg_mr(&pmd_mr);
+	memset(wpmd_mr, 0, sizeof(*wpmd_mr));
 }

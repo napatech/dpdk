@@ -2,8 +2,12 @@
  * Copyright(c) 2018-2021 HiSilicon Limited.
  */
 
-#ifndef _HNS3_MBX_H_
-#define _HNS3_MBX_H_
+#ifndef HNS3_MBX_H
+#define HNS3_MBX_H
+
+#include <stdint.h>
+
+#include <rte_spinlock.h>
 
 enum HNS3_MBX_OPCODE {
 	HNS3_MBX_RESET = 0x01,          /* (VF -> PF) assert reset */
@@ -22,7 +26,7 @@ enum HNS3_MBX_OPCODE {
 	HNS3_MBX_GET_RETA,              /* (VF -> PF) get RETA */
 	HNS3_MBX_GET_RSS_KEY,           /* (VF -> PF) get RSS key */
 	HNS3_MBX_GET_MAC_ADDR,          /* (VF -> PF) get MAC addr */
-	HNS3_MBX_PF_VF_RESP,            /* (PF -> VF) generate respone to VF */
+	HNS3_MBX_PF_VF_RESP,            /* (PF -> VF) generate response to VF */
 	HNS3_MBX_GET_BDNUM,             /* (VF -> PF) get BD num */
 	HNS3_MBX_GET_BUFSIZE,           /* (VF -> PF) get buffer size */
 	HNS3_MBX_GET_STREAMID,          /* (VF -> PF) get stream id */
@@ -168,4 +172,4 @@ void hns3_dev_handle_mbx_msg(struct hns3_hw *hw);
 int hns3_send_mbx_msg(struct hns3_hw *hw, uint16_t code, uint16_t subcode,
 		      const uint8_t *msg_data, uint8_t msg_len, bool need_resp,
 		      uint8_t *resp_data, uint16_t resp_len);
-#endif /* _HNS3_MBX_H_ */
+#endif /* HNS3_MBX_H */

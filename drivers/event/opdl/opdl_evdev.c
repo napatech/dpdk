@@ -3,9 +3,10 @@
  */
 
 #include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_lcore.h>
 #include <rte_memzone.h>
 #include <rte_kvargs.h>
@@ -375,7 +376,8 @@ opdl_info_get(struct rte_eventdev *dev, struct rte_event_dev_info *info)
 		.max_event_port_enqueue_depth = MAX_OPDL_CONS_Q_DEPTH,
 		.max_num_events = OPDL_INFLIGHT_EVENTS_TOTAL,
 		.event_dev_cap = RTE_EVENT_DEV_CAP_BURST_MODE |
-				 RTE_EVENT_DEV_CAP_CARRY_FLOW_ID,
+				 RTE_EVENT_DEV_CAP_CARRY_FLOW_ID |
+				 RTE_EVENT_DEV_CAP_MAINTENANCE_FREE,
 	};
 
 	*info = evdev_opdl_info;
@@ -702,7 +704,7 @@ opdl_probe(struct rte_vdev_device *vdev)
 	}
 
 	PMD_DRV_LOG(INFO, "DEV_ID:[%02d] : "
-		      "Success - creating eventdev device %s, numa_node:[%d], do_valdation:[%s]"
+		      "Success - creating eventdev device %s, numa_node:[%d], do_validation:[%s]"
 			  " , self_test:[%s]\n",
 		      dev->data->dev_id,
 		      name,

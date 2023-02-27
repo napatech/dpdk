@@ -487,6 +487,7 @@ txgbevf_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->max_hash_mac_addrs = TXGBE_VMDQ_NUM_UC_MAC;
 	dev_info->max_vfs = pci_dev->max_vfs;
 	dev_info->max_vmdq_pools = RTE_ETH_64_POOLS;
+	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 	dev_info->rx_queue_offload_capa = txgbe_get_rx_queue_offloads(dev);
 	dev_info->rx_offload_capa = (txgbe_get_rx_port_offloads(dev) |
 				     dev_info->rx_queue_offload_capa);
@@ -519,6 +520,8 @@ txgbevf_dev_info_get(struct rte_eth_dev *dev,
 
 	dev_info->rx_desc_lim = rx_desc_lim;
 	dev_info->tx_desc_lim = tx_desc_lim;
+
+	dev_info->err_handle_mode = RTE_ETH_ERROR_HANDLE_MODE_PASSIVE;
 
 	return 0;
 }
@@ -960,7 +963,7 @@ txgbevf_set_ivar_map(struct txgbe_hw *hw, int8_t direction,
 		wr32(hw, TXGBE_VFIVARMISC, tmp);
 	} else {
 		/* rx or tx cause */
-		/* Workround for ICR lost */
+		/* Workaround for ICR lost */
 		idx = ((16 * (queue & 1)) + (8 * direction));
 		tmp = rd32(hw, TXGBE_VFIVAR(queue >> 1));
 		tmp &= ~(0xFF << idx);
@@ -996,7 +999,7 @@ txgbevf_configure_msix(struct rte_eth_dev *dev)
 	/* Configure all RX queues of VF */
 	for (q_idx = 0; q_idx < dev->data->nb_rx_queues; q_idx++) {
 		/* Force all queue use vector 0,
-		 * as TXGBE_VF_MAXMSIVECOTR = 1
+		 * as TXGBE_VF_MAXMSIVECTOR = 1
 		 */
 		txgbevf_set_ivar_map(hw, 0, q_idx, vector_idx);
 		rte_intr_vec_list_index_set(intr_handle, q_idx,
@@ -1110,7 +1113,7 @@ txgbevf_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	 * scattered packets when this feature has not been enabled before.
 	 */
 	if (dev_data->dev_started && !dev_data->scattered_rx &&
-	    (max_frame + 2 * TXGBE_VLAN_TAG_SIZE >
+	    (max_frame + 2 * RTE_VLAN_HLEN >
 	     dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)) {
 		PMD_INIT_LOG(ERR, "Stop port first.");
 		return -EINVAL;
@@ -1287,8 +1290,11 @@ txgbevf_dev_interrupt_get_status(struct rte_eth_dev *dev)
 
 	/* only one misc vector supported - mailbox */
 	eicr &= TXGBE_VFICR_MASK;
-	/* Workround for ICR lost */
+	/* Workaround for ICR lost */
 	intr->flags |= TXGBE_FLAG_MAILBOX;
+
+	/* To avoid compiler warnings set eicr to used. */
+	RTE_SET_USED(eicr);
 
 	return 0;
 }

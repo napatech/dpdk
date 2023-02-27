@@ -12,7 +12,11 @@ objs = [base_objs]
 
 sources = files(
         'ngbe_ethdev.c',
+        'ngbe_ptypes.c',
+        'ngbe_pf.c',
         'ngbe_rxtx.c',
 )
+
+deps += ['hash']
 
 includes += include_directories('base')

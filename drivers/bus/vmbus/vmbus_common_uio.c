@@ -13,7 +13,6 @@
 #include <rte_tailq.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
-#include <rte_bus.h>
 #include <rte_bus_vmbus.h>
 
 #include "private.h"
@@ -258,7 +257,9 @@ vmbus_uio_unmap_resource(struct rte_vmbus_device *dev)
 	rte_free(uio_res);
 
 	/* close fd if in primary process */
-	close(rte_intr_fd_get(dev->intr_handle));
+	if (rte_intr_fd_get(dev->intr_handle) >= 0)
+		close(rte_intr_fd_get(dev->intr_handle));
+
 	if (rte_intr_dev_fd_get(dev->intr_handle) >= 0) {
 		close(rte_intr_dev_fd_get(dev->intr_handle));
 		rte_intr_dev_fd_set(dev->intr_handle, -1);

@@ -2,6 +2,8 @@
  * Copyright(c) 2010-2016 Intel Corporation
  */
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+
 #include <string.h>
 #include <rte_byteorder.h>
 #include <rte_table_lpm_ipv6.h>
@@ -51,7 +53,7 @@ struct rte_bucket_4_8 {
 	uint64_t next_valid;
 	uint64_t key[4];
 	/* Cache line 1 */
-	uint8_t data[0];
+	uint8_t data[];
 };
 
 #if RTE_TABLE_HASH_LRU_STRATEGY == 3
@@ -290,10 +292,10 @@ test_table_lpm(void)
 	struct rte_mbuf *mbufs[RTE_PORT_IN_BURST_SIZE_MAX];
 	void *table;
 	char *entries[RTE_PORT_IN_BURST_SIZE_MAX];
-	char entry;
+	uint64_t entry;
 	void *entry_ptr;
 	int key_found;
-	uint32_t entry_size = 1;
+	uint32_t entry_size = sizeof(entry);
 
 	/* Initialize params and create tables */
 	struct rte_table_lpm_params lpm_params = {
@@ -355,7 +357,7 @@ test_table_lpm(void)
 	struct rte_table_lpm_key lpm_key;
 	lpm_key.ip = 0xadadadad;
 
-	table = rte_table_lpm_ops.f_create(&lpm_params, 0, 1);
+	table = rte_table_lpm_ops.f_create(&lpm_params, 0, entry_size);
 	if (table == NULL)
 		return -9;
 
@@ -456,10 +458,10 @@ test_table_lpm_ipv6(void)
 	struct rte_mbuf *mbufs[RTE_PORT_IN_BURST_SIZE_MAX];
 	void *table;
 	char *entries[RTE_PORT_IN_BURST_SIZE_MAX];
-	char entry;
+	uint64_t entry;
 	void *entry_ptr;
 	int key_found;
-	uint32_t entry_size = 1;
+	uint32_t entry_size = sizeof(entry);
 
 	/* Initialize params and create tables */
 	struct rte_table_lpm_ipv6_params lpm_params = {
@@ -1052,3 +1054,5 @@ test_table_hash_cuckoo(void)
 
 	return 0;
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */

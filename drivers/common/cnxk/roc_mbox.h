@@ -28,7 +28,7 @@ struct mbox_msghdr {
 #define MBOX_RSP_SIG (0xbeef)
 	/* Signature, for validating corrupted msgs */
 	uint16_t __io sig;
-#define MBOX_VERSION (0x000a)
+#define MBOX_VERSION (0x000b)
 	/* Version of msg's structure for this ID */
 	uint16_t __io ver;
 	/* Offset of next msg within mailbox region */
@@ -95,6 +95,8 @@ struct mbox_msghdr {
 	  msg_rsp)                                                             \
 	M(CGX_STATS_RST, 0x21A, cgx_stats_rst, msg_req, msg_rsp)               \
 	M(RPM_STATS, 0x21C, rpm_stats, msg_req, rpm_stats_rsp)                 \
+	M(CGX_PRIO_FLOW_CTRL_CFG, 0x21F, cgx_prio_flow_ctrl_cfg, cgx_pfc_cfg,  \
+	  cgx_pfc_rsp)                                                         \
 	/* NPA mbox IDs (range 0x400 - 0x5FF) */                               \
 	M(NPA_LF_ALLOC, 0x400, npa_lf_alloc, npa_lf_alloc_req,                 \
 	  npa_lf_alloc_rsp)                                                    \
@@ -114,7 +116,7 @@ struct mbox_msghdr {
 	  msg_rsp)                                                             \
 	M(SSO_GRP_GET_PRIORITY, 0x606, sso_grp_get_priority, sso_info_req,     \
 	  sso_grp_priority)                                                    \
-	M(SSO_WS_CACHE_INV, 0x607, sso_ws_cache_inv, msg_req, msg_rsp)         \
+	M(SSO_WS_CACHE_INV, 0x607, sso_ws_cache_inv, ssow_lf_inv_req, msg_rsp) \
 	M(SSO_GRP_QOS_CONFIG, 0x608, sso_grp_qos_config, sso_grp_qos_cfg,      \
 	  msg_rsp)                                                             \
 	M(SSO_GRP_GET_STATS, 0x609, sso_grp_get_stats, sso_info_req,           \
@@ -123,6 +125,9 @@ struct mbox_msghdr {
 	  sso_hws_stats)                                                       \
 	M(SSO_HW_RELEASE_XAQ, 0x611, sso_hw_release_xaq_aura,                  \
 	  sso_hw_xaq_release, msg_rsp)                                         \
+	M(SSO_CONFIG_LSW, 0x612, ssow_config_lsw, ssow_config_lsw, msg_rsp)    \
+	M(SSO_HWS_CHNG_MSHIP, 0x613, ssow_chng_mship, ssow_chng_mship,         \
+	  msg_rsp)                                                             \
 	/* TIM mbox IDs (range 0x800 - 0x9FF) */                               \
 	M(TIM_LF_ALLOC, 0x800, tim_lf_alloc, tim_lf_alloc_req,                 \
 	  tim_lf_alloc_rsp)                                                    \
@@ -131,6 +136,8 @@ struct mbox_msghdr {
 	M(TIM_ENABLE_RING, 0x803, tim_enable_ring, tim_ring_req,               \
 	  tim_enable_rsp)                                                      \
 	M(TIM_DISABLE_RING, 0x804, tim_disable_ring, tim_ring_req, msg_rsp)    \
+	M(TIM_GET_MIN_INTVL, 0x805, tim_get_min_intvl, tim_intvl_req,          \
+	  tim_intvl_rsp)                                                       \
 	/* CPT mbox IDs (range 0xA00 - 0xBFF) */                               \
 	M(CPT_LF_ALLOC, 0xA00, cpt_lf_alloc, cpt_lf_alloc_req_msg, msg_rsp)    \
 	M(CPT_LF_FREE, 0xA01, cpt_lf_free, msg_req, msg_rsp)                   \
@@ -143,11 +150,23 @@ struct mbox_msghdr {
 	M(CPT_STATS, 0xA05, cpt_sts_get, cpt_sts_req, cpt_sts_rsp)             \
 	M(CPT_RXC_TIME_CFG, 0xA06, cpt_rxc_time_cfg, cpt_rxc_time_cfg_req,     \
 	  msg_rsp)                                                             \
+	M(CPT_CTX_CACHE_SYNC, 0xA07, cpt_ctx_cache_sync, msg_req, msg_rsp)     \
+	M(CPT_LF_RESET, 0xA08, cpt_lf_reset, cpt_lf_rst_req, msg_rsp)          \
 	M(CPT_RX_INLINE_LF_CFG, 0xBFE, cpt_rx_inline_lf_cfg,                   \
 	  cpt_rx_inline_lf_cfg_msg, msg_rsp)                                   \
 	M(CPT_GET_CAPS, 0xBFD, cpt_caps_get, msg_req, cpt_caps_rsp_msg)        \
 	M(CPT_GET_ENG_GRP, 0xBFF, cpt_eng_grp_get, cpt_eng_grp_req,            \
 	  cpt_eng_grp_rsp)                                                     \
+	/* REE mbox IDs (range 0xE00 - 0xFFF) */                               \
+	M(REE_CONFIG_LF, 0xE01, ree_config_lf, ree_lf_req_msg, msg_rsp)        \
+	M(REE_RD_WR_REGISTER, 0xE02, ree_rd_wr_register, ree_rd_wr_reg_msg,    \
+	  ree_rd_wr_reg_msg)                                                   \
+	M(REE_RULE_DB_PROG, 0xE03, ree_rule_db_prog, ree_rule_db_prog_req_msg, \
+	  msg_rsp)                                                             \
+	M(REE_RULE_DB_LEN_GET, 0xE04, ree_rule_db_len_get, ree_req_msg,        \
+	  ree_rule_db_len_rsp_msg)                                             \
+	M(REE_RULE_DB_GET, 0xE05, ree_rule_db_get, ree_rule_db_get_req_msg,    \
+	  ree_rule_db_get_rsp_msg)                                             \
 	/* SDP mbox IDs (range 0x1000 - 0x11FF) */                             \
 	M(SET_SDP_CHAN_INFO, 0x1000, set_sdp_chan_info, sdp_chan_info_msg,     \
 	  msg_rsp)                                                             \
@@ -238,7 +257,18 @@ struct mbox_msghdr {
 	M(NIX_BANDPROF_ALLOC, 0x801d, nix_bandprof_alloc,                      \
 	  nix_bandprof_alloc_req, nix_bandprof_alloc_rsp)                      \
 	M(NIX_BANDPROF_FREE, 0x801e, nix_bandprof_free, nix_bandprof_free_req, \
-	  msg_rsp)
+	  msg_rsp)                                                             \
+	M(NIX_BANDPROF_GET_HWINFO, 0x801f, nix_bandprof_get_hwinfo, msg_req,   \
+	  nix_bandprof_get_hwinfo_rsp)                                         \
+	M(NIX_CPT_BP_ENABLE, 0x8020, nix_cpt_bp_enable, nix_bp_cfg_req,        \
+	  nix_bp_cfg_rsp)                                                      \
+	M(NIX_CPT_BP_DISABLE, 0x8021, nix_cpt_bp_disable, nix_bp_cfg_req,      \
+	  msg_rsp)                                                             \
+	M(NIX_RX_SW_SYNC, 0x8022, nix_rx_sw_sync, msg_req, msg_rsp)            \
+	M(NIX_READ_INLINE_IPSEC_CFG, 0x8023, nix_read_inline_ipsec_cfg,        \
+	  msg_req, nix_inline_ipsec_cfg)				       \
+	M(NIX_LF_INLINE_RQ_CFG, 0x8024, nix_lf_inline_rq_cfg,                  \
+	  nix_rq_cpt_field_mask_cfg_req, msg_rsp)
 
 /* Messages initiated by AF (range 0xC00 - 0xDFF) */
 #define MBOX_UP_CGX_MESSAGES                                                   \
@@ -283,6 +313,7 @@ struct ready_msg_rsp {
 };
 
 enum npc_pkind_type {
+	NPC_RX_CUSTOM_PRE_L2_PKIND = 55ULL,
 	NPC_RX_VLAN_EXDSA_PKIND = 56ULL,
 	NPC_RX_CHLEN24B_PKIND,
 	NPC_RX_CPT_HDR_PKIND,
@@ -303,12 +334,22 @@ struct npc_set_pkind {
 #define ROC_PRIV_FLAGS_LEN_90B	  BIT_ULL(3)
 #define ROC_PRIV_FLAGS_EXDSA	  BIT_ULL(4)
 #define ROC_PRIV_FLAGS_VLAN_EXDSA BIT_ULL(5)
+#define ROC_PRIV_FLAGS_PRE_L2	  BIT_ULL(6)
 #define ROC_PRIV_FLAGS_CUSTOM	  BIT_ULL(63)
 	uint64_t __io mode;
 #define PKIND_TX BIT_ULL(0)
 #define PKIND_RX BIT_ULL(1)
 	uint8_t __io dir;
 	uint8_t __io pkind; /* valid only in case custom flag */
+	uint8_t __io var_len_off;
+	/* Offset of custom header length field.
+	 * Valid only for pkind NPC_RX_CUSTOM_PRE_L2_PKIND
+	 */
+	uint8_t __io var_len_off_mask; /* Mask for length with in offset */
+	uint8_t __io shift_dir;
+	/* Shift direction to get length of the
+	 * header at var_len_off
+	 */
 };
 
 /* Structure for requesting resource provisioning.
@@ -521,6 +562,19 @@ struct cgx_pause_frm_cfg {
 	uint8_t __io tx_pause;
 };
 
+struct cgx_pfc_cfg {
+	struct mbox_msghdr hdr;
+	uint8_t __io rx_pause;
+	uint8_t __io tx_pause;
+	uint16_t __io pfc_en; /*  bitmap indicating enabled traffic classes */
+};
+
+struct cgx_pfc_rsp {
+	struct mbox_msghdr hdr;
+	uint8_t __io rx_pause;
+	uint8_t __io tx_pause;
+};
+
 struct sfp_eeprom_s {
 #define SFP_EEPROM_SIZE 256
 	uint16_t __io sff_id;
@@ -728,7 +782,7 @@ struct nix_lf_alloc_req {
 	uint64_t __io way_mask;
 #define NIX_LF_RSS_TAG_LSB_AS_ADDER BIT_ULL(0)
 #define NIX_LF_LBK_BLK_SEL	    BIT_ULL(1)
-	uint64_t flags;
+	uint64_t __io flags;
 };
 
 struct nix_lf_alloc_rsp {
@@ -749,7 +803,7 @@ struct nix_lf_alloc_rsp {
 	uint8_t __io cgx_links;	      /* No. of CGX links present in HW */
 	uint8_t __io lbk_links;	      /* No. of LBK links present in HW */
 	uint8_t __io sdp_links;	      /* No. of SDP links present in HW */
-	uint8_t tx_link;	      /* Transmit channel link number */
+	uint8_t __io tx_link;	      /* Transmit channel link number */
 };
 
 struct nix_lf_free_req {
@@ -1037,6 +1091,25 @@ struct nix_mark_format_cfg_rsp {
 	uint8_t __io mark_format_idx;
 };
 
+struct nix_rq_cpt_field_mask_cfg_req {
+	struct mbox_msghdr hdr;
+#define RQ_CTX_MASK_MAX 6
+	union {
+		uint64_t __io rq_ctx_word_set[RQ_CTX_MASK_MAX];
+		struct nix_cn10k_rq_ctx_s rq_set;
+	};
+	union {
+		uint64_t __io rq_ctx_word_mask[RQ_CTX_MASK_MAX];
+		struct nix_cn10k_rq_ctx_s rq_mask;
+	};
+	struct nix_lf_rx_ipec_cfg1_req {
+		uint32_t __io spb_cpt_aura;
+		uint8_t __io rq_mask_enable;
+		uint8_t __io spb_cpt_sizem1;
+		uint8_t __io spb_cpt_enable;
+	} ipsec_cfg1;
+};
+
 struct nix_lso_format_cfg {
 	struct mbox_msghdr hdr;
 	uint64_t __io field_mask;
@@ -1060,6 +1133,7 @@ struct nix_rx_cfg {
 	struct mbox_msghdr hdr;
 #define NIX_RX_OL3_VERIFY BIT(0)
 #define NIX_RX_OL4_VERIFY BIT(1)
+#define NIX_RX_DROP_RE	  BIT(2)
 	uint8_t __io len_verify; /* Outer L3/L4 len check */
 #define NIX_RX_CSUM_OL4_VERIFY BIT(0)
 	uint8_t __io csum_verify; /* Outer L4 checksum verification */
@@ -1091,10 +1165,12 @@ struct nix_bp_cfg_req {
 	/* bpid_per_chan = 1 assigns separate bp id for each channel */
 };
 
-/* PF can be mapped to either CGX or LBK interface,
- * so maximum 64 channels are possible.
+/* PF can be mapped to either CGX or LBK or SDP interface,
+ * so maximum 256 channels are possible.
  */
-#define NIX_MAX_CHAN 64
+#define NIX_MAX_CHAN	 256
+#define NIX_CGX_MAX_CHAN 16
+#define NIX_LBK_MAX_CHAN 1
 struct nix_bp_cfg_rsp {
 	struct mbox_msghdr hdr;
 	/* Channel and bpid mapping */
@@ -1109,7 +1185,9 @@ struct nix_inline_ipsec_cfg {
 	uint32_t __io cpt_credit;
 	struct {
 		uint8_t __io egrp;
-		uint8_t __io opcode;
+		uint16_t __io opcode;
+		uint16_t __io param1;
+		uint16_t __io param2;
 	} gen_cfg;
 	struct {
 		uint16_t __io cpt_pf_func;
@@ -1138,7 +1216,13 @@ struct nix_inline_ipsec_lf_cfg {
 struct nix_hw_info {
 	struct mbox_msghdr hdr;
 	uint16_t __io vwqe_delay;
-	uint16_t __io rsvd[15];
+	uint16_t __io max_mtu;
+	uint16_t __io min_mtu;
+	uint32_t __io rpm_dwrr_mtu;
+	uint32_t __io sdp_dwrr_mtu;
+	uint32_t __io lbk_dwrr_mtu;
+	uint32_t __io rsvd32[1];
+	uint64_t __io rsvd[15]; /* Add reserved fields for future expansion */
 };
 
 struct nix_bandprof_alloc_req {
@@ -1160,6 +1244,12 @@ struct nix_bandprof_free_req {
 	uint8_t __io free_all;
 	uint16_t __io prof_count[NIX_RX_BAND_PROF_LAYER_MAX];
 	uint16_t __io prof_idx[NIX_RX_BAND_PROF_LAYER_MAX][BANDPROF_PER_PFFUNC];
+};
+
+struct nix_bandprof_get_hwinfo_rsp {
+	struct mbox_msghdr hdr;
+	uint16_t __io prof_count[NIX_RX_BAND_PROF_LAYER_MAX];
+	uint32_t __io policer_timeunit;
 };
 
 /* SSO mailbox error codes
@@ -1214,6 +1304,33 @@ struct ssow_lf_free_req {
 	uint16_t __io hws;
 };
 
+#define SSOW_INVAL_SELECTIVE_VER 0x1000
+struct ssow_lf_inv_req {
+	struct mbox_msghdr hdr;
+	uint16_t __io nb_hws;		      /* Number of HWS to invalidate*/
+	uint16_t __io hws[MAX_RVU_BLKLF_CNT]; /* Array of HWS */
+};
+
+struct ssow_config_lsw {
+	struct mbox_msghdr hdr;
+#define SSOW_LSW_DIS	 0
+#define SSOW_LSW_GW_WAIT 1
+#define SSOW_LSW_GW_IMM	 2
+	uint8_t __io lsw_mode;
+#define SSOW_WQE_REL_LSW_WAIT 0
+#define SSOW_WQE_REL_IMM      1
+	uint8_t __io wqe_release;
+};
+
+struct ssow_chng_mship {
+	struct mbox_msghdr hdr;
+	uint8_t __io set;	 /* Membership set to modify. */
+	uint8_t __io enable;	 /* Enable/Disable the hwgrps. */
+	uint8_t __io hws;	 /* HWS to modify. */
+	uint16_t __io nb_hwgrps; /* Number of hwgrps in the array */
+	uint16_t __io hwgrps[MAX_RVU_BLKLF_CNT]; /* Array of hwgrps. */
+};
+
 struct sso_hw_setconfig {
 	struct mbox_msghdr hdr;
 	uint32_t __io npa_aura_id;
@@ -1245,7 +1362,7 @@ struct sso_grp_priority {
 struct sso_grp_qos_cfg {
 	struct mbox_msghdr hdr;
 	uint16_t __io grp;
-	uint32_t __io xaq_limit;
+	uint32_t __io rsvd;
 	uint16_t __io taq_thr;
 	uint16_t __io iaq_thr;
 };
@@ -1368,11 +1485,11 @@ struct cpt_sts_rsp {
 struct cpt_rxc_time_cfg_req {
 	struct mbox_msghdr hdr;
 	int blkaddr;
-	uint32_t step;
-	uint16_t zombie_thres;
-	uint16_t zombie_limit;
-	uint16_t active_thres;
-	uint16_t active_limit;
+	uint32_t __io step;
+	uint16_t __io zombie_thres;
+	uint16_t __io zombie_limit;
+	uint16_t __io active_thres;
+	uint16_t __io active_limit;
 };
 
 struct cpt_rx_inline_lf_cfg_msg {
@@ -1380,7 +1497,9 @@ struct cpt_rx_inline_lf_cfg_msg {
 	uint16_t __io sso_pf_func;
 	uint16_t __io param1;
 	uint16_t __io param2;
-	uint16_t __io reserved;
+	uint16_t __io opcode;
+	uint32_t __io credit;
+	uint32_t __io reserved;
 };
 
 enum cpt_eng_type {
@@ -1404,7 +1523,10 @@ union cpt_eng_caps {
 		uint64_t __io kasumi : 1;
 		uint64_t __io des : 1;
 		uint64_t __io crc : 1;
-		uint64_t __io reserved_14_63 : 50;
+		uint64_t __io mmul : 1;
+		uint64_t __io reserved_15_33 : 19;
+		uint64_t __io pdcp_chain : 1;
+		uint64_t __io reserved_35_63 : 29;
 	};
 };
 
@@ -1424,6 +1546,101 @@ struct cpt_eng_grp_rsp {
 	struct mbox_msghdr hdr;
 	uint8_t __io eng_type;
 	uint8_t __io eng_grp_num;
+};
+
+struct cpt_lf_rst_req {
+	struct mbox_msghdr hdr;
+	uint32_t __io slot;
+};
+
+/* REE mailbox error codes
+ * Range 1001 - 1100.
+ */
+enum ree_af_status {
+	REE_AF_ERR_RULE_UNKNOWN_VALUE = -1001,
+	REE_AF_ERR_LF_NO_MORE_RESOURCES = -1002,
+	REE_AF_ERR_LF_INVALID = -1003,
+	REE_AF_ERR_ACCESS_DENIED = -1004,
+	REE_AF_ERR_RULE_DB_PARTIAL = -1005,
+	REE_AF_ERR_RULE_DB_EQ_BAD_VALUE = -1006,
+	REE_AF_ERR_RULE_DB_BLOCK_ALLOC_FAILED = -1007,
+	REE_AF_ERR_BLOCK_NOT_IMPLEMENTED = -1008,
+	REE_AF_ERR_RULE_DB_INC_OFFSET_TOO_BIG = -1009,
+	REE_AF_ERR_RULE_DB_OFFSET_TOO_BIG = -1010,
+	REE_AF_ERR_Q_IS_GRACEFUL_DIS = -1011,
+	REE_AF_ERR_Q_NOT_GRACEFUL_DIS = -1012,
+	REE_AF_ERR_RULE_DB_ALLOC_FAILED = -1013,
+	REE_AF_ERR_RULE_DB_TOO_BIG = -1014,
+	REE_AF_ERR_RULE_DB_GEQ_BAD_VALUE = -1015,
+	REE_AF_ERR_RULE_DB_LEQ_BAD_VALUE = -1016,
+	REE_AF_ERR_RULE_DB_WRONG_LENGTH = -1017,
+	REE_AF_ERR_RULE_DB_WRONG_OFFSET = -1018,
+	REE_AF_ERR_RULE_DB_BLOCK_TOO_BIG = -1019,
+	REE_AF_ERR_RULE_DB_SHOULD_FILL_REQUEST = -1020,
+	REE_AF_ERR_RULE_DBI_ALLOC_FAILED = -1021,
+	REE_AF_ERR_LF_WRONG_PRIORITY = -1022,
+	REE_AF_ERR_LF_SIZE_TOO_BIG = -1023,
+};
+
+/* REE mbox message formats */
+
+struct ree_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __io blkaddr;
+};
+
+struct ree_lf_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __io blkaddr;
+	uint32_t __io size;
+	uint8_t __io lf;
+	uint8_t __io pri;
+};
+
+struct ree_rule_db_prog_req_msg {
+	struct mbox_msghdr hdr;
+#define REE_RULE_DB_REQ_BLOCK_SIZE ((64ULL * 1024ULL) >> 1)
+	uint8_t __io rule_db[REE_RULE_DB_REQ_BLOCK_SIZE];
+	uint32_t __io blkaddr;	     /* REE0 or REE1 */
+	uint32_t __io total_len;     /* total len of rule db */
+	uint32_t __io offset;	     /* offset of current rule db block */
+	uint16_t __io len;	     /* length of rule db block */
+	uint8_t __io is_last;	     /* is this the last block */
+	uint8_t __io is_incremental; /* is incremental flow */
+	uint8_t __io is_dbi;	     /* is rule db incremental */
+};
+
+struct ree_rule_db_get_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __io blkaddr;
+	uint32_t __io offset; /* retrieve db from this offset */
+	uint8_t __io is_dbi;  /* is request for rule db incremental */
+};
+
+struct ree_rd_wr_reg_msg {
+	struct mbox_msghdr hdr;
+	uint64_t __io reg_offset;
+	uint64_t __io *ret_val;
+	uint64_t __io val;
+	uint32_t __io blkaddr;
+	uint8_t __io is_write;
+};
+
+struct ree_rule_db_len_rsp_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __io blkaddr;
+	uint32_t __io len;
+	uint32_t __io inc_len;
+};
+
+struct ree_rule_db_get_rsp_msg {
+	struct mbox_msghdr hdr;
+#define REE_RULE_DB_RSP_BLOCK_SIZE (15ULL * 1024ULL)
+	uint8_t __io rule_db[REE_RULE_DB_RSP_BLOCK_SIZE];
+	uint32_t __io total_len; /* total len of rule db */
+	uint32_t __io offset;	 /* offset of current rule db block */
+	uint16_t __io len;	 /* length of rule db block */
+	uint8_t __io is_last;	 /* is this the last block */
 };
 
 /* NPC mbox message structs */
@@ -1788,6 +2005,9 @@ struct tim_config_req {
 	uint32_t __io chunksize;
 	uint32_t __io interval;
 	uint8_t __io gpioedge;
+	uint8_t __io rsvd[7];
+	uint64_t __io intervalns;
+	uint64_t __io clockfreq;
 };
 
 struct tim_lf_alloc_rsp {
@@ -1799,6 +2019,18 @@ struct tim_enable_rsp {
 	struct mbox_msghdr hdr;
 	uint64_t __io timestarted;
 	uint32_t __io currentbucket;
+};
+
+struct tim_intvl_req {
+	struct mbox_msghdr hdr;
+	uint8_t __io clocksource;
+	uint64_t __io clockfreq;
+};
+
+struct tim_intvl_rsp {
+	struct mbox_msghdr hdr;
+	uint64_t __io intvl_cyc;
+	uint64_t __io intvl_ns;
 };
 
 struct sdp_node_info {

@@ -9,6 +9,7 @@
 #include <sched.h>
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include <signal.h>
@@ -753,7 +754,7 @@ new_connection(int vid)
 	return 0;
 }
 
-struct vhost_device_ops vhost_blk_device_ops = {
+struct rte_vhost_device_ops vhost_blk_device_ops = {
 	.new_device =  new_device,
 	.destroy_device = destroy_device,
 	.new_connection = new_connection,
@@ -849,8 +850,7 @@ static void
 vhost_blk_ctrlr_destroy(struct vhost_blk_ctrlr *ctrlr)
 {
 	if (ctrlr->bdev != NULL) {
-		if (ctrlr->bdev->data != NULL)
-			rte_free(ctrlr->bdev->data);
+		rte_free(ctrlr->bdev->data);
 
 		rte_free(ctrlr->bdev);
 	}

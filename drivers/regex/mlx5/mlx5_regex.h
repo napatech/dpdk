@@ -46,16 +46,6 @@ struct mlx5_regex_qp {
 	struct mlx5_mr_ctrl mr_ctrl;
 };
 
-struct mlx5_regex_db {
-	void *ptr; /* Pointer to the db memory. */
-	uint32_t len; /* The memory len. */
-	bool active; /* Active flag. */
-	uint8_t db_assigned_to_eng_num;
-	/**< To which engine the db is connected. */
-	struct mlx5_regex_umem umem;
-	/**< The umem struct. */
-};
-
 struct mlx5_regex_priv {
 	TAILQ_ENTRY(mlx5_regex_priv) next;
 	struct mlx5_common_device *cdev; /* Backend mlx5 device. */
@@ -64,10 +54,8 @@ struct mlx5_regex_priv {
 	struct mlx5_regex_qp *qps; /* Pointer to the qp array. */
 	uint16_t nb_max_matches; /* Max number of matches. */
 	enum mlx5_rxp_program_mode prog_mode;
-	struct mlx5_regex_db db[MLX5_RXP_MAX_ENGINES +
-				MLX5_RXP_EM_COUNT];
 	uint32_t nb_engines; /* Number of RegEx engines. */
-	struct mlx5dv_devx_uar *uar; /* UAR object. */
+	struct mlx5_uar uar; /* UAR object. */
 	uint8_t is_bf2; /* The device is BF2 device. */
 	uint8_t has_umr; /* The device supports UMR. */
 	uint32_t mmo_regex_qp_cap:1;
@@ -86,20 +74,19 @@ int mlx5_regex_configure(struct rte_regexdev *dev,
 			 const struct rte_regexdev_config *cfg);
 int mlx5_regex_rules_db_import(struct rte_regexdev *dev,
 			       const char *rule_db, uint32_t rule_db_len);
+int mlx5_regex_check_rof_version(uint32_t combined_rof_version);
+int mlx5_regex_parse_rules_db(struct mlx5_regex_priv *priv,
+			       const char **rule_db, uint32_t *rule_db_len);
+int mlx5_regex_get_rxp_vers(uint32_t regexp_version, uint32_t *target_rxp_vers);
 
 /* mlx5_regex_devx.c */
-int mlx5_devx_regex_register_write(struct ibv_context *ctx, int engine_id,
-				   uint32_t addr, uint32_t data);
-int mlx5_devx_regex_register_read(struct ibv_context *ctx, int engine_id,
-				  uint32_t addr, uint32_t *data);
-int mlx5_devx_regex_database_stop(void *ctx, uint8_t engine);
-int mlx5_devx_regex_database_resume(void *ctx, uint8_t engine);
-int mlx5_devx_regex_database_program(void *ctx, uint8_t engine,
-				     uint32_t umem_id, uint64_t umem_offset);
+int mlx5_devx_regex_rules_program(void *ctx, uint8_t engine, uint32_t rof_mkey,
+				uint32_t rof_size, uint64_t db_mkey_offset);
 
 /* mlx5_regex_control.c */
 int mlx5_regex_qp_setup(struct rte_regexdev *dev, uint16_t qp_ind,
 			const struct rte_regexdev_qp_conf *cfg);
+void mlx5_regex_clean_ctrl(struct rte_regexdev *dev);
 
 /* mlx5_regex_fastpath.c */
 int mlx5_regexdev_setup_fastpath(struct mlx5_regex_priv *priv, uint32_t qp_id);
@@ -111,4 +98,6 @@ uint16_t mlx5_regexdev_dequeue(struct rte_regexdev *dev, uint16_t qp_id,
 		       struct rte_regex_ops **ops, uint16_t nb_ops);
 uint16_t mlx5_regexdev_enqueue_gga(struct rte_regexdev *dev, uint16_t qp_id,
 		       struct rte_regex_ops **ops, uint16_t nb_ops);
+uint16_t mlx5_regexdev_max_segs_get(void);
+
 #endif /* MLX5_REGEX_H */

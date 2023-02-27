@@ -2,17 +2,41 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
+#include "test.h"
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
 #include <inttypes.h>
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+static int
+test_red(void)
+{
+	printf("red not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+static int
+test_red_perf(void)
+{
+	printf("red_perf not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+static int
+test_red_all(void)
+{
+	printf("red_all not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+#else
+
 #include <sys/time.h>
 #include <time.h>
 #include <math.h>
-
-#include "test.h"
 
 #include <rte_red.h>
 
@@ -1049,7 +1073,7 @@ static struct test_queue ft6_tqueue = {
 static struct test_config func_test6_config = {
 	.ifname = "functional test 6 interface",
 	.msg = "functional test 6 : use several queues (each with its own run-time data),\n"
-	"		    use several RED configurations (such that each configuration is sharte_red by multiple queues),\n"
+	"		    use several RED configurations (such that each configuration is shared by multiple queues),\n"
 	"		    increase average queue size to target level,\n"
 	"		    dequeue all packets until queue is empty,\n"
 	"		    confirm that average queue size is computed correctly while queue is empty\n"
@@ -1566,10 +1590,10 @@ static void ovfl_check_avg(uint32_t avg)
 }
 
 static struct test_config ovfl_test1_config = {
-	.ifname = "queue avergage overflow test interface",
+	.ifname = "queue average overflow test interface",
 	.msg = "overflow test 1 : use one RED configuration,\n"
 	"		  increase average queue size to target level,\n"
-	"		  check maximum number of bits requirte_red to represent avg_s\n\n",
+	"		  check maximum number of bits required to represent avg_s\n\n",
 	.htxt = "avg queue size  "
 	"wq_log2  "
 	"fraction bits  "
@@ -1757,12 +1781,12 @@ test_invalid_parameters(void)
 		printf("%i: rte_red_config_init should have failed!\n", __LINE__);
 		return -1;
 	}
-	/* min_treshold == max_treshold */
+	/* min_threshold == max_threshold */
 	if (rte_red_config_init(&config, 0, 1, 1, 0) == 0) {
 		printf("%i: rte_red_config_init should have failed!\n", __LINE__);
 		return -1;
 	}
-	/* min_treshold > max_treshold */
+	/* min_threshold > max_threshold */
 	if (rte_red_config_init(&config, 0, 2, 1, 0) == 0) {
 		printf("%i: rte_red_config_init should have failed!\n", __LINE__);
 		return -1;
@@ -1850,6 +1874,8 @@ test_red_all(void)
 	show_stats(num_tests, num_pass);
 	return tell_the_result(num_tests, num_pass);
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */
 
 REGISTER_TEST_COMMAND(red_autotest, test_red);
 REGISTER_TEST_COMMAND(red_perf, test_red_perf);

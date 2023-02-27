@@ -5,6 +5,7 @@
 /*
  * Security Associations
  */
+#include <stdlib.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
@@ -17,6 +18,7 @@
 #include <rte_byteorder.h>
 #include <rte_errno.h>
 #include <rte_ip.h>
+#include <rte_udp.h>
 #include <rte_random.h>
 #include <rte_ethdev.h>
 #include <rte_malloc.h>
@@ -45,6 +47,7 @@ struct supported_cipher_algo {
 struct supported_auth_algo {
 	const char *keyword;
 	enum rte_crypto_auth_algorithm algo;
+	uint16_t iv_len;
 	uint16_t digest_len;
 	uint16_t key_len;
 	uint8_t key_not_req;
@@ -98,11 +101,32 @@ const struct supported_cipher_algo cipher_algos[] = {
 		.key_len = 20
 	},
 	{
+		.keyword = "aes-192-ctr",
+		.algo = RTE_CRYPTO_CIPHER_AES_CTR,
+		.iv_len = 16,
+		.block_size = 16,
+		.key_len = 28
+	},
+	{
+		.keyword = "aes-256-ctr",
+		.algo = RTE_CRYPTO_CIPHER_AES_CTR,
+		.iv_len = 16,
+		.block_size = 16,
+		.key_len = 36
+	},
+	{
 		.keyword = "3des-cbc",
 		.algo = RTE_CRYPTO_CIPHER_3DES_CBC,
 		.iv_len = 8,
 		.block_size = 8,
 		.key_len = 24
+	},
+	{
+		.keyword = "des-cbc",
+		.algo = RTE_CRYPTO_CIPHER_DES_CBC,
+		.iv_len = 8,
+		.block_size = 8,
+		.key_len = 8
 	}
 };
 
@@ -125,6 +149,31 @@ const struct supported_auth_algo auth_algos[] = {
 		.algo = RTE_CRYPTO_AUTH_SHA256_HMAC,
 		.digest_len = 16,
 		.key_len = 32
+	},
+	{
+		.keyword = "sha384-hmac",
+		.algo = RTE_CRYPTO_AUTH_SHA384_HMAC,
+		.digest_len = 24,
+		.key_len = 48
+	},
+	{
+		.keyword = "sha512-hmac",
+		.algo = RTE_CRYPTO_AUTH_SHA512_HMAC,
+		.digest_len = 32,
+		.key_len = 64
+	},
+	{
+		.keyword = "aes-gmac",
+		.algo = RTE_CRYPTO_AUTH_AES_GMAC,
+		.iv_len = 8,
+		.digest_len = 16,
+		.key_len = 20
+	},
+	{
+		.keyword = "aes-xcbc-mac-96",
+		.algo = RTE_CRYPTO_AUTH_AES_XCBC_MAC,
+		.digest_len = 12,
+		.key_len = 16
 	}
 };
 
@@ -152,6 +201,42 @@ const struct supported_aead_algo aead_algos[] = {
 		.algo = RTE_CRYPTO_AEAD_AES_GCM,
 		.iv_len = 8,
 		.block_size = 4,
+		.key_len = 36,
+		.digest_len = 16,
+		.aad_len = 8,
+	},
+	{
+		.keyword = "aes-128-ccm",
+		.algo = RTE_CRYPTO_AEAD_AES_CCM,
+		.iv_len = 8,
+		.block_size = 4,
+		.key_len = 20,
+		.digest_len = 16,
+		.aad_len = 8,
+	},
+	{
+		.keyword = "aes-192-ccm",
+		.algo = RTE_CRYPTO_AEAD_AES_CCM,
+		.iv_len = 8,
+		.block_size = 4,
+		.key_len = 28,
+		.digest_len = 16,
+		.aad_len = 8,
+	},
+	{
+		.keyword = "aes-256-ccm",
+		.algo = RTE_CRYPTO_AEAD_AES_CCM,
+		.iv_len = 8,
+		.block_size = 4,
+		.key_len = 36,
+		.digest_len = 16,
+		.aad_len = 8,
+	},
+	{
+		.keyword = "chacha20-poly1305",
+		.algo = RTE_CRYPTO_AEAD_CHACHA20_POLY1305,
+		.iv_len = 12,
+		.block_size = 64,
 		.key_len = 36,
 		.digest_len = 16,
 		.aad_len = 8,
@@ -322,6 +407,7 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 		return;
 	if (atoi(tokens[1]) == INVALID_SPI)
 		return;
+	rule->flags = 0;
 	rule->spi = atoi(tokens[1]);
 	rule->portid = UINT16_MAX;
 	ips = ipsec_get_primary_session(rule);
@@ -338,14 +424,14 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 
 			if (strcmp(tokens[ti], "ipv4-tunnel") == 0) {
 				sa_cnt->nb_v4++;
-				rule->flags = IP4_TUNNEL;
+				rule->flags |= IP4_TUNNEL;
 			} else if (strcmp(tokens[ti], "ipv6-tunnel") == 0) {
 				sa_cnt->nb_v6++;
-				rule->flags = IP6_TUNNEL;
+				rule->flags |= IP6_TUNNEL;
 			} else if (strcmp(tokens[ti], "transport") == 0) {
 				sa_cnt->nb_v4++;
 				sa_cnt->nb_v6++;
-				rule->flags = TRANSPORT;
+				rule->flags |= TRANSPORT;
 			} else {
 				APP_CHECK(0, status, "unrecognized "
 					"input \"%s\"", tokens[ti]);
@@ -353,6 +439,11 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			}
 
 			mode_p = 1;
+			continue;
+		}
+
+		if (strcmp(tokens[ti], "telemetry") == 0) {
+			rule->flags |= SA_TELEMETRY_ENABLE;
 			continue;
 		}
 
@@ -476,6 +567,14 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 				"unrecognized input \"%s\"", tokens[ti]);
 			if (status->status < 0)
 				return;
+
+			if (algo->algo == RTE_CRYPTO_AUTH_AES_GMAC) {
+				key_len -= 4;
+				rule->auth_key_len = key_len;
+				rule->iv_len = algo->iv_len;
+				memcpy(&rule->salt,
+					&rule->auth_key[key_len], 4);
+			}
 
 			auth_algo_p = 1;
 			continue;
@@ -677,6 +776,31 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			continue;
 		}
 
+		if (strcmp(tokens[ti], "mss") == 0) {
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+			rule->mss = atoi(tokens[ti]);
+			if (status->status < 0)
+				return;
+			continue;
+		}
+
+		if (strcmp(tokens[ti], "reassembly_en") == 0) {
+			rule->flags |= SA_REASSEMBLY_ENABLE;
+			continue;
+		}
+
+		if (strcmp(tokens[ti], "esn") == 0) {
+			INCREMENT_TOKEN_INDEX(ti, n_tokens, status);
+			if (status->status < 0)
+				return;
+			rule->esn = atoll(tokens[ti]);
+			if (status->status < 0)
+				return;
+			continue;
+		}
+
 		if (strcmp(tokens[ti], "fallback") == 0) {
 			struct rte_ipsec_session *fb;
 
@@ -771,6 +895,11 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 				app_sa_prm.udp_encap = 1;
 				udp_encap_p = 1;
 				break;
+			case RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO:
+				rule->udp_encap = 1;
+				rule->udp.sport = 0;
+				rule->udp.dport = 4500;
+				break;
 			default:
 				APP_CHECK(0, status,
 					"UDP encapsulation not supported for "
@@ -781,7 +910,7 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			continue;
 		}
 
-		/* unrecognizeable input */
+		/* unrecognizable input */
 		APP_CHECK(0, status, "unrecognized input \"%s\"",
 			tokens[ti]);
 		return;
@@ -819,6 +948,15 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO)) {
 		ips->type = RTE_SECURITY_ACTION_TYPE_NONE;
 	}
+
+	if (ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO)
+		wrkr_flags |= INL_CR_F;
+	else if (ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
+		wrkr_flags |= INL_PR_F;
+	else if (ips->type == RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL)
+		wrkr_flags |= LA_PR_F;
+	else
+		wrkr_flags |= LA_ANY_F;
 
 	nb_crypto_sessions++;
 	*ri = *ri + 1;
@@ -858,6 +996,8 @@ print_one_sa_rule(const struct ipsec_sa *sa, int inbound)
 	}
 
 	printf("mode:");
+	if (sa->udp_encap)
+		printf("UDP encapsulated ");
 
 	switch (WITHOUT_TRANSPORT_VERSION(sa->flags)) {
 	case IP4_TUNNEL:
@@ -970,7 +1110,7 @@ sa_create(const char *name, int32_t socket_id, uint32_t nb_sa)
 }
 
 static int
-check_eth_dev_caps(uint16_t portid, uint32_t inbound)
+check_eth_dev_caps(uint16_t portid, uint32_t inbound, uint32_t tso)
 {
 	struct rte_eth_dev_info dev_info;
 	int retval;
@@ -999,6 +1139,12 @@ check_eth_dev_caps(uint16_t portid, uint32_t inbound)
 				"hardware TX IPSec offload is not supported\n");
 			return -EINVAL;
 		}
+		if (tso && (dev_info.tx_offload_capa &
+				RTE_ETH_TX_OFFLOAD_TCP_TSO) == 0) {
+			RTE_LOG(WARNING, PORT,
+				"hardware TCP TSO offload is not supported\n");
+			return -EINVAL;
+		}
 	}
 	return 0;
 }
@@ -1021,7 +1167,7 @@ get_spi_proto(uint32_t spi, enum rte_security_ipsec_sa_direction dir,
 	if (rc4 >= 0) {
 		if (rc6 >= 0) {
 			RTE_LOG(ERR, IPSEC,
-				"%s: SPI %u used simultaeously by "
+				"%s: SPI %u used simultaneously by "
 				"IPv4(%d) and IPv6 (%d) SP rules\n",
 				__func__, spi, rc4, rc6);
 			return -EINVAL;
@@ -1094,7 +1240,9 @@ sa_add_address_inline_crypto(struct ipsec_sa *sa)
 static int
 sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		uint32_t nb_entries, uint32_t inbound,
-		struct socket_ctx *skt_ctx)
+		struct socket_ctx *skt_ctx,
+		struct ipsec_ctx *ips_ctx[],
+		const struct eventmode_conf *em_conf)
 {
 	struct ipsec_sa *sa;
 	uint32_t i, idx;
@@ -1127,7 +1275,7 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 
 		if (ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL ||
 			ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO) {
-			if (check_eth_dev_caps(sa->portid, inbound))
+			if (check_eth_dev_caps(sa->portid, inbound, sa->mss))
 				return -EINVAL;
 		}
 
@@ -1147,8 +1295,15 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 			break;
 		}
 
-		if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM) {
-			iv_length = 12;
+
+		if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM ||
+			sa->aead_algo == RTE_CRYPTO_AEAD_AES_CCM ||
+			sa->aead_algo == RTE_CRYPTO_AEAD_CHACHA20_POLY1305) {
+
+			if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_CCM)
+				iv_length = 11;
+			else
+				iv_length = 12;
 
 			sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
 			sa_ctx->xf[idx].a.aead.algo = sa->aead_algo;
@@ -1170,12 +1325,11 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		} else {
 			switch (sa->cipher_algo) {
 			case RTE_CRYPTO_CIPHER_NULL:
+			case RTE_CRYPTO_CIPHER_DES_CBC:
 			case RTE_CRYPTO_CIPHER_3DES_CBC:
 			case RTE_CRYPTO_CIPHER_AES_CBC:
-				iv_length = sa->iv_len;
-				break;
 			case RTE_CRYPTO_CIPHER_AES_CTR:
-				iv_length = 16;
+				iv_length = sa->iv_len;
 				break;
 			default:
 				RTE_LOG(ERR, IPSEC_ESP,
@@ -1183,6 +1337,10 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 						sa->cipher_algo);
 				return -EINVAL;
 			}
+
+			/* AES_GMAC uses salt like AEAD algorithms */
+			if (sa->auth_algo == RTE_CRYPTO_AUTH_AES_GMAC)
+				iv_length = 12;
 
 			if (inbound) {
 				sa_ctx->xf[idx].b.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
@@ -1205,6 +1363,9 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 					sa->digest_len;
 				sa_ctx->xf[idx].a.auth.op =
 					RTE_CRYPTO_AUTH_OP_VERIFY;
+				sa_ctx->xf[idx].a.auth.iv.offset = IV_OFFSET;
+				sa_ctx->xf[idx].a.auth.iv.length = iv_length;
+
 			} else { /* outbound */
 				sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_CIPHER;
 				sa_ctx->xf[idx].a.cipher.algo = sa->cipher_algo;
@@ -1226,11 +1387,21 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 					sa->digest_len;
 				sa_ctx->xf[idx].b.auth.op =
 					RTE_CRYPTO_AUTH_OP_GENERATE;
+				sa_ctx->xf[idx].b.auth.iv.offset = IV_OFFSET;
+				sa_ctx->xf[idx].b.auth.iv.length = iv_length;
+
 			}
 
-			sa_ctx->xf[idx].a.next = &sa_ctx->xf[idx].b;
-			sa_ctx->xf[idx].b.next = NULL;
-			sa->xforms = &sa_ctx->xf[idx].a;
+			if (sa->auth_algo == RTE_CRYPTO_AUTH_AES_GMAC) {
+				sa->xforms = inbound ?
+					&sa_ctx->xf[idx].a : &sa_ctx->xf[idx].b;
+				sa->xforms->next = NULL;
+
+			} else {
+				sa_ctx->xf[idx].a.next = &sa_ctx->xf[idx].b;
+				sa_ctx->xf[idx].b.next = NULL;
+				sa->xforms = &sa_ctx->xf[idx].a;
+			}
 		}
 
 		if (ips->type ==
@@ -1241,6 +1412,14 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 			if (rc != 0) {
 				RTE_LOG(ERR, IPSEC_ESP,
 					"create_inline_session() failed\n");
+				return -EINVAL;
+			}
+		} else {
+			rc = create_lookaside_session(ips_ctx, skt_ctx,
+						      em_conf, sa, ips);
+			if (rc != 0) {
+				RTE_LOG(ERR, IPSEC_ESP,
+					"create_lookaside_session() failed\n");
 				return -EINVAL;
 			}
 		}
@@ -1259,16 +1438,20 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 
 static inline int
 sa_out_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
-		uint32_t nb_entries, struct socket_ctx *skt_ctx)
+		uint32_t nb_entries, struct socket_ctx *skt_ctx,
+		struct ipsec_ctx *ips_ctx[],
+		const struct eventmode_conf *em_conf)
 {
-	return sa_add_rules(sa_ctx, entries, nb_entries, 0, skt_ctx);
+	return sa_add_rules(sa_ctx, entries, nb_entries, 0, skt_ctx, ips_ctx, em_conf);
 }
 
 static inline int
 sa_in_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
-		uint32_t nb_entries, struct socket_ctx *skt_ctx)
+		uint32_t nb_entries, struct socket_ctx *skt_ctx,
+		struct ipsec_ctx *ips_ctx[],
+		const struct eventmode_conf *em_conf)
 {
-	return sa_add_rules(sa_ctx, entries, nb_entries, 1, skt_ctx);
+	return sa_add_rules(sa_ctx, entries, nb_entries, 1, skt_ctx, ips_ctx, em_conf);
 }
 
 /*
@@ -1311,8 +1494,16 @@ fill_ipsec_sa_prm(struct rte_ipsec_sa_prm *prm, const struct ipsec_sa *ss,
 	prm->ipsec_xform.mode = (IS_TRANSPORT(ss->flags)) ?
 		RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT :
 		RTE_SECURITY_IPSEC_SA_MODE_TUNNEL;
+	prm->ipsec_xform.options.udp_encap = ss->udp_encap;
+	prm->ipsec_xform.udp.dport = ss->udp.dport;
+	prm->ipsec_xform.udp.sport = ss->udp.sport;
 	prm->ipsec_xform.options.ecn = 1;
 	prm->ipsec_xform.options.copy_dscp = 1;
+
+	if (ss->esn > 0) {
+		prm->ipsec_xform.options.esn = 1;
+		prm->ipsec_xform.esn.value = ss->esn;
+	}
 
 	if (IS_IP4_TUNNEL(ss->flags)) {
 		prm->ipsec_xform.tunnel.type = RTE_SECURITY_IPSEC_TUNNEL_IPV4;
@@ -1341,14 +1532,9 @@ fill_ipsec_session(struct rte_ipsec_session *ss, struct rte_ipsec_sa *sa)
 
 	ss->sa = sa;
 
-	if (ss->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
-		ss->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL) {
-		if (ss->security.ses != NULL) {
-			rc = rte_ipsec_session_prepare(ss);
-			if (rc != 0)
-				memset(ss, 0, sizeof(*ss));
-		}
-	}
+	rc = rte_ipsec_session_prepare(ss);
+	if (rc != 0)
+		memset(ss, 0, sizeof(*ss));
 
 	return rc;
 }
@@ -1357,7 +1543,9 @@ fill_ipsec_session(struct rte_ipsec_session *ss, struct rte_ipsec_sa *sa)
  * Initialise related rte_ipsec_sa object.
  */
 static int
-ipsec_sa_init(struct ipsec_sa *lsa, struct rte_ipsec_sa *sa, uint32_t sa_size)
+ipsec_sa_init(struct ipsec_sa *lsa, struct rte_ipsec_sa *sa, uint32_t sa_size,
+		struct socket_ctx *skt_ctx, struct ipsec_ctx *ips_ctx[],
+		const struct eventmode_conf *em_conf)
 {
 	int rc;
 	struct rte_ipsec_sa_prm prm;
@@ -1366,13 +1554,13 @@ ipsec_sa_init(struct ipsec_sa *lsa, struct rte_ipsec_sa *sa, uint32_t sa_size)
 		.version_ihl = IPVERSION << 4 |
 			sizeof(v4) / RTE_IPV4_IHL_MULTIPLIER,
 		.time_to_live = IPDEFTTL,
-		.next_proto_id = IPPROTO_ESP,
+		.next_proto_id = lsa->udp_encap ? IPPROTO_UDP : IPPROTO_ESP,
 		.src_addr = lsa->src.ip.ip4,
 		.dst_addr = lsa->dst.ip.ip4,
 	};
 	struct rte_ipv6_hdr v6 = {
 		.vtc_flow = htonl(IP6_VERSION << 28),
-		.proto = IPPROTO_ESP,
+		.proto = lsa->udp_encap ? IPPROTO_UDP : IPPROTO_ESP,
 	};
 
 	if (IS_IP6_TUNNEL(lsa->flags)) {
@@ -1386,6 +1574,9 @@ ipsec_sa_init(struct ipsec_sa *lsa, struct rte_ipsec_sa *sa, uint32_t sa_size)
 	if (rc < 0)
 		return rc;
 
+	if (lsa->flags & SA_TELEMETRY_ENABLE)
+		rte_ipsec_telemetry_sa_add(sa);
+
 	/* init primary processing session */
 	ips = ipsec_get_primary_session(lsa);
 	rc = fill_ipsec_session(ips, sa);
@@ -1393,18 +1584,27 @@ ipsec_sa_init(struct ipsec_sa *lsa, struct rte_ipsec_sa *sa, uint32_t sa_size)
 		return rc;
 
 	/* init inline fallback processing session */
-	if (lsa->fallback_sessions == 1)
-		rc = fill_ipsec_session(ipsec_get_fallback_session(lsa), sa);
+	if (lsa->fallback_sessions == 1) {
+		struct rte_ipsec_session *ipfs = ipsec_get_fallback_session(lsa);
+		if (ipfs->security.ses == NULL) {
+			rc = create_lookaside_session(ips_ctx, skt_ctx, em_conf, lsa, ipfs);
+			if (rc != 0)
+				return rc;
+		}
+		rc = fill_ipsec_session(ipfs, sa);
+	}
 
 	return rc;
 }
 
 /*
- * Allocate space and init rte_ipsec_sa strcutures,
+ * Allocate space and init rte_ipsec_sa structures,
  * one per session.
  */
 static int
-ipsec_satbl_init(struct sa_ctx *ctx, uint32_t nb_ent, int32_t socket)
+ipsec_satbl_init(struct sa_ctx *ctx, uint32_t nb_ent, int32_t socket,
+		struct socket_ctx *skt_ctx, struct ipsec_ctx *ips_ctx[],
+		const struct eventmode_conf *em_conf)
 {
 	int32_t rc, sz;
 	uint32_t i, idx;
@@ -1442,7 +1642,7 @@ ipsec_satbl_init(struct sa_ctx *ctx, uint32_t nb_ent, int32_t socket)
 		sa = (struct rte_ipsec_sa *)((uintptr_t)ctx->satbl + sz * i);
 		lsa = ctx->sa + idx;
 
-		rc = ipsec_sa_init(lsa, sa, sz);
+		rc = ipsec_sa_init(lsa, sa, sz, skt_ctx, ips_ctx, em_conf);
 	}
 
 	return rc;
@@ -1484,10 +1684,14 @@ sa_spi_present(struct sa_ctx *sa_ctx, uint32_t spi, int inbound)
 }
 
 void
-sa_init(struct socket_ctx *ctx, int32_t socket_id)
+sa_init(struct socket_ctx *ctx, int32_t socket_id,
+	struct lcore_conf *lcore_conf,
+	const struct eventmode_conf *em_conf)
 {
 	int32_t rc;
 	const char *name;
+	uint32_t lcore_id;
+	struct ipsec_ctx *ipsec_ctx[RTE_MAX_LCORE];
 
 	if (ctx == NULL)
 		rte_exit(EXIT_FAILURE, "NULL context.\n");
@@ -1512,12 +1716,13 @@ sa_init(struct socket_ctx *ctx, int32_t socket_id)
 				&sa_in_cnt);
 		if (rc != 0)
 			rte_exit(EXIT_FAILURE, "failed to init SAD\n");
-
-		sa_in_add_rules(ctx->sa_in, sa_in, nb_sa_in, ctx);
+		RTE_LCORE_FOREACH(lcore_id)
+			ipsec_ctx[lcore_id] = &lcore_conf[lcore_id].inbound;
+		sa_in_add_rules(ctx->sa_in, sa_in, nb_sa_in, ctx, ipsec_ctx, em_conf);
 
 		if (app_sa_prm.enable != 0) {
 			rc = ipsec_satbl_init(ctx->sa_in, nb_sa_in,
-				socket_id);
+				socket_id, ctx, ipsec_ctx, em_conf);
 			if (rc != 0)
 				rte_exit(EXIT_FAILURE,
 					"failed to init inbound SAs\n");
@@ -1533,11 +1738,13 @@ sa_init(struct socket_ctx *ctx, int32_t socket_id)
 				"context %s in socket %d\n", rte_errno,
 				name, socket_id);
 
-		sa_out_add_rules(ctx->sa_out, sa_out, nb_sa_out, ctx);
+		RTE_LCORE_FOREACH(lcore_id)
+			ipsec_ctx[lcore_id] = &lcore_conf[lcore_id].outbound;
+		sa_out_add_rules(ctx->sa_out, sa_out, nb_sa_out, ctx, ipsec_ctx, em_conf);
 
 		if (app_sa_prm.enable != 0) {
 			rc = ipsec_satbl_init(ctx->sa_out, nb_sa_out,
-				socket_id);
+				socket_id, ctx, ipsec_ctx, em_conf);
 			if (rc != 0)
 				rte_exit(EXIT_FAILURE,
 					"failed to init outbound SAs\n");
@@ -1611,14 +1818,22 @@ outbound_sa_lookup(struct sa_ctx *sa_ctx, uint32_t sa_idx[],
  */
 int
 sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
-		uint64_t *tx_offloads)
+		uint64_t *tx_offloads, uint8_t *hw_reassembly)
 {
 	struct ipsec_sa *rule;
 	uint32_t idx_sa;
 	enum rte_security_session_action_type rule_type;
+	struct rte_eth_dev_info dev_info;
+	int ret;
 
 	*rx_offloads = 0;
 	*tx_offloads = 0;
+
+	ret = rte_eth_dev_info_get(port_id, &dev_info);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port_id, strerror(-ret));
 
 	/* Check for inbound rules that use offloads and use this port */
 	for (idx_sa = 0; idx_sa < nb_sa_in; idx_sa++) {
@@ -1629,17 +1844,55 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
 				&& rule->portid == port_id)
 			*rx_offloads |= RTE_ETH_RX_OFFLOAD_SECURITY;
+		if (IS_HW_REASSEMBLY_EN(rule->flags)) {
+			*rx_offloads |= RTE_ETH_RX_OFFLOAD_SCATTER;
+			*tx_offloads |= RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
+			*hw_reassembly = 1;
+		}
 	}
 
 	/* Check for outbound rules that use offloads and use this port */
 	for (idx_sa = 0; idx_sa < nb_sa_out; idx_sa++) {
 		rule = &sa_out[idx_sa];
 		rule_type = ipsec_get_action_type(rule);
-		if ((rule_type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
-				rule_type ==
-				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
-				&& rule->portid == port_id)
-			*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
+		if (rule->portid == port_id) {
+			switch (rule_type) {
+			case RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL:
+				/* Checksum offload is not needed for inline
+				 * protocol as all processing for Outbound IPSec
+				 * packets will be implicitly taken care and for
+				 * non-IPSec packets, there is no need of
+				 * IPv4 Checksum offload.
+				 */
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
+				if (rule->mss)
+					*tx_offloads |= (RTE_ETH_TX_OFFLOAD_TCP_TSO |
+							 RTE_ETH_TX_OFFLOAD_IPV4_CKSUM);
+				break;
+			case RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO:
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
+				if (rule->mss)
+					*tx_offloads |=
+						RTE_ETH_TX_OFFLOAD_TCP_TSO;
+				if (dev_info.tx_offload_capa &
+						RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
+					*tx_offloads |=
+						RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
+				break;
+			default:
+				/* Enable IPv4 checksum offload even if
+				 * one of lookaside SA's are present.
+				 */
+				if (dev_info.tx_offload_capa &
+				    RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
+					*tx_offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
+				break;
+			}
+		} else {
+			if (dev_info.tx_offload_capa &
+			    RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
+		}
 	}
 	return 0;
 }

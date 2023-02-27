@@ -94,25 +94,6 @@ nfp_rtsym_table_read(struct nfp_cpp *cpp)
 	return rtbl;
 }
 
-/*
- * This looks more complex than it should be. But we need to get the type for
- * the ~ right in round_down (it needs to be as wide as the result!), and we
- * want to evaluate the macro arguments just once each.
- */
-#define __round_mask(x, y) ((__typeof__(x))((y) - 1))
-
-#define round_up(x, y) \
-	(__extension__ ({ \
-		typeof(x) _x = (x); \
-		((((_x) - 1) | __round_mask(_x, y)) + 1); \
-	}))
-
-#define round_down(x, y) \
-	(__extension__ ({ \
-		typeof(x) _x = (x); \
-		((_x) & ~__round_mask(_x, y)); \
-	}))
-
 struct nfp_rtsym_table *
 __nfp_rtsym_table_read(struct nfp_cpp *cpp, const struct nfp_mip *mip)
 {
@@ -236,7 +217,7 @@ nfp_rtsym_lookup(struct nfp_rtsym_table *rtbl, const char *name)
  * nfp_rtsym_read_le() - Read a simple unsigned scalar value from symbol
  * @rtbl:	NFP RTsym table
  * @name:	Symbol name
- * @error:	Poniter to error code (optional)
+ * @error:	Pointer to error code (optional)
  *
  * Lookup a symbol, map, read it and return it's value. Value of the symbol
  * will be interpreted as a simple little-endian unsigned value. Symbol can

@@ -180,11 +180,33 @@ struct sw_meta {
 	struct ice_adv_rule_info rule_info;
 };
 
+enum ice_sw_fltr_status {
+	ICE_SW_FLTR_ADDED,
+	ICE_SW_FLTR_RMV_FAILED_ON_RIDRECT,
+	ICE_SW_FLTR_ADD_FAILED_ON_RIDRECT,
+};
+
+struct ice_switch_filter_conf {
+	enum ice_sw_fltr_status fltr_status;
+
+	struct ice_rule_query_data sw_query_data;
+
+	/*
+	 * The lookup elements and rule info are saved here when filter creation
+	 * succeeds.
+	 */
+	uint16_t vsi_num;
+	uint16_t lkups_num;
+	struct ice_adv_lkup_elem *lkups;
+	struct ice_adv_rule_info rule_info;
+};
+
 static struct ice_flow_parser ice_switch_dist_parser;
 static struct ice_flow_parser ice_switch_perm_parser;
 
 static struct
 ice_pattern_match_item ice_switch_pattern_dist_list[] = {
+	{pattern_any,					ICE_INSET_NONE,				ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_ethertype,				ICE_SW_INSET_ETHER,			ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_ethertype_vlan,			ICE_SW_INSET_MAC_VLAN,			ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_ethertype_qinq,			ICE_SW_INSET_MAC_QINQ,			ICE_INSET_NONE,				ICE_INSET_NONE},
@@ -268,6 +290,7 @@ ice_pattern_match_item ice_switch_pattern_dist_list[] = {
 
 static struct
 ice_pattern_match_item ice_switch_pattern_perm_list[] = {
+	{pattern_any,					ICE_INSET_NONE,				ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_ethertype,				ICE_SW_INSET_ETHER,			ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_ethertype_vlan,			ICE_SW_INSET_MAC_VLAN,			ICE_INSET_NONE,				ICE_INSET_NONE},
 	{pattern_ethertype_qinq,			ICE_SW_INSET_MAC_QINQ,			ICE_INSET_NONE,				ICE_INSET_NONE},
@@ -359,7 +382,7 @@ ice_switch_create(struct ice_adapter *ad,
 	struct ice_pf *pf = &ad->pf;
 	struct ice_hw *hw = ICE_PF_TO_HW(pf);
 	struct ice_rule_query_data rule_added = {0};
-	struct ice_rule_query_data *filter_ptr;
+	struct ice_switch_filter_conf *filter_conf_ptr;
 	struct ice_adv_lkup_elem *list =
 		((struct sw_meta *)meta)->list;
 	uint16_t lkups_cnt =
@@ -379,28 +402,48 @@ ice_switch_create(struct ice_adapter *ad,
 			"lookup list should not be NULL");
 		goto error;
 	}
+
+	if (ice_dcf_adminq_need_retry(ad)) {
+		rte_flow_error_set(error, EAGAIN,
+			RTE_FLOW_ERROR_TYPE_ITEM, NULL,
+			"DCF is not on");
+		goto error;
+	}
+
 	ret = ice_add_adv_rule(hw, list, lkups_cnt, rule_info, &rule_added);
 	if (!ret) {
-		filter_ptr = rte_zmalloc("ice_switch_filter",
-			sizeof(struct ice_rule_query_data), 0);
-		if (!filter_ptr) {
+		filter_conf_ptr = rte_zmalloc("ice_switch_filter",
+			sizeof(struct ice_switch_filter_conf), 0);
+		if (!filter_conf_ptr) {
 			rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 				   "No memory for ice_switch_filter");
 			goto error;
 		}
-		flow->rule = filter_ptr;
-		rte_memcpy(filter_ptr,
-			&rule_added,
-			sizeof(struct ice_rule_query_data));
+
+		filter_conf_ptr->sw_query_data = rule_added;
+
+		filter_conf_ptr->vsi_num =
+			ice_get_hw_vsi_num(hw, rule_info->sw_act.vsi_handle);
+		filter_conf_ptr->lkups = list;
+		filter_conf_ptr->lkups_num = lkups_cnt;
+		filter_conf_ptr->rule_info = *rule_info;
+
+		filter_conf_ptr->fltr_status = ICE_SW_FLTR_ADDED;
+
+		flow->rule = filter_conf_ptr;
 	} else {
-		rte_flow_error_set(error, EINVAL,
+		if (ice_dcf_adminq_need_retry(ad))
+			ret = -EAGAIN;
+		else
+			ret = -EINVAL;
+
+		rte_flow_error_set(error, -ret,
 			RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 			"switch filter create flow fail");
 		goto error;
 	}
 
-	rte_free(list);
 	rte_free(meta);
 	return 0;
 
@@ -411,6 +454,18 @@ error:
 	return -rte_errno;
 }
 
+static inline void
+ice_switch_filter_rule_free(struct rte_flow *flow)
+{
+	struct ice_switch_filter_conf *filter_conf_ptr =
+		(struct ice_switch_filter_conf *)flow->rule;
+
+	if (filter_conf_ptr)
+		rte_free(filter_conf_ptr->lkups);
+
+	rte_free(filter_conf_ptr);
+}
+
 static int
 ice_switch_destroy(struct ice_adapter *ad,
 		struct rte_flow *flow,
@@ -418,35 +473,45 @@ ice_switch_destroy(struct ice_adapter *ad,
 {
 	struct ice_hw *hw = &ad->hw;
 	int ret;
-	struct ice_rule_query_data *filter_ptr;
+	struct ice_switch_filter_conf *filter_conf_ptr;
 
-	filter_ptr = (struct ice_rule_query_data *)
+	filter_conf_ptr = (struct ice_switch_filter_conf *)
 		flow->rule;
 
-	if (!filter_ptr) {
+	if (!filter_conf_ptr ||
+	    filter_conf_ptr->fltr_status == ICE_SW_FLTR_ADD_FAILED_ON_RIDRECT) {
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 			"no such flow"
 			" create by switch filter");
+
+		ice_switch_filter_rule_free(flow);
+
 		return -rte_errno;
 	}
 
-	ret = ice_rem_adv_rule_by_id(hw, filter_ptr);
+	if (ice_dcf_adminq_need_retry(ad)) {
+		rte_flow_error_set(error, EAGAIN,
+			RTE_FLOW_ERROR_TYPE_ITEM, NULL,
+			"DCF is not on");
+		return -rte_errno;
+	}
+
+	ret = ice_rem_adv_rule_by_id(hw, &filter_conf_ptr->sw_query_data);
 	if (ret) {
-		rte_flow_error_set(error, EINVAL,
+		if (ice_dcf_adminq_need_retry(ad))
+			ret = -EAGAIN;
+		else
+			ret = -EINVAL;
+
+		rte_flow_error_set(error, -ret,
 			RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 			"fail to destroy switch filter rule");
 		return -rte_errno;
 	}
 
-	rte_free(filter_ptr);
+	ice_switch_filter_rule_free(flow);
 	return ret;
-}
-
-static void
-ice_switch_filter_rule_free(struct rte_flow *flow)
-{
-	rte_free(flow->rule);
 }
 
 static bool
@@ -519,6 +584,10 @@ ice_switch_parse_pattern(const struct rte_flow_item pattern[],
 		item_type = item->type;
 
 		switch (item_type) {
+		case RTE_FLOW_ITEM_TYPE_ANY:
+			*tun_type = ICE_SW_TUN_AND_NON_TUN;
+			break;
+
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			eth_spec = item->spec;
 			eth_mask = item->mask;
@@ -1549,33 +1618,67 @@ ice_switch_parse_dcf_action(struct ice_dcf_adapter *ad,
 			    struct rte_flow_error *error,
 			    struct ice_adv_rule_info *rule_info)
 {
-	const struct rte_flow_action_vf *act_vf;
+	const struct rte_flow_action_ethdev *act_ethdev;
 	const struct rte_flow_action *action;
+	const struct rte_eth_dev *repr_dev;
 	enum rte_flow_action_type action_type;
+	uint16_t rule_port_id, backer_port_id;
 
 	for (action = actions; action->type !=
 				RTE_FLOW_ACTION_TYPE_END; action++) {
 		action_type = action->type;
 		switch (action_type) {
-		case RTE_FLOW_ACTION_TYPE_VF:
+		case RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR:
 			rule_info->sw_act.fltr_act = ICE_FWD_TO_VSI;
-			act_vf = action->conf;
+			act_ethdev = action->conf;
 
-			if (act_vf->id >= ad->real_hw.num_vfs &&
-				!act_vf->original) {
-				rte_flow_error_set(error,
-					EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
-					actions,
-					"Invalid vf id");
-				return -rte_errno;
-			}
+			if (!rte_eth_dev_is_valid_port(act_ethdev->port_id))
+				goto invalid_port_id;
 
-			if (act_vf->original)
-				rule_info->sw_act.vsi_handle =
-					ad->real_hw.avf.bus.func;
-			else
-				rule_info->sw_act.vsi_handle = act_vf->id;
+			/* For traffic to original DCF port */
+			rule_port_id = ad->parent.pf.dev_data->port_id;
+
+			if (rule_port_id != act_ethdev->port_id)
+				goto invalid_port_id;
+
+			rule_info->sw_act.vsi_handle = 0;
+
 			break;
+
+invalid_port_id:
+			rte_flow_error_set(error,
+						EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
+						actions,
+						"Invalid port_id");
+			return -rte_errno;
+
+		case RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT:
+			rule_info->sw_act.fltr_act = ICE_FWD_TO_VSI;
+			act_ethdev = action->conf;
+
+			if (!rte_eth_dev_is_valid_port(act_ethdev->port_id))
+				goto invalid;
+
+			repr_dev = &rte_eth_devices[act_ethdev->port_id];
+
+			if (!repr_dev->data)
+				goto invalid;
+
+			rule_port_id = ad->parent.pf.dev_data->port_id;
+			backer_port_id = repr_dev->data->backer_port_id;
+
+			if (backer_port_id != rule_port_id)
+				goto invalid;
+
+			rule_info->sw_act.vsi_handle = repr_dev->data->representor_id;
+			break;
+
+invalid:
+			rte_flow_error_set(error,
+						EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
+						actions,
+						"Invalid ethdev_port_id");
+			return -rte_errno;
 
 		case RTE_FLOW_ACTION_TYPE_DROP:
 			rule_info->sw_act.fltr_act = ICE_DROP_PACKET;
@@ -1716,10 +1819,11 @@ ice_switch_check_action(const struct rte_flow_action *actions,
 				RTE_FLOW_ACTION_TYPE_END; action++) {
 		action_type = action->type;
 		switch (action_type) {
-		case RTE_FLOW_ACTION_TYPE_VF:
 		case RTE_FLOW_ACTION_TYPE_RSS:
 		case RTE_FLOW_ACTION_TYPE_QUEUE:
 		case RTE_FLOW_ACTION_TYPE_DROP:
+		case RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT:
+		case RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR:
 			actions_num++;
 			break;
 		case RTE_FLOW_ACTION_TYPE_VOID:
@@ -1794,7 +1898,10 @@ ice_switch_parse_pattern_action(struct ice_adapter *ad,
 	else if (vlan_num == 2)
 		tun_type = ICE_NON_TUN_QINQ;
 
-	list = rte_zmalloc(NULL, item_num * sizeof(*list), 0);
+	/* reserve one more memory slot for direction flag which may
+	 * consume 1 lookup item.
+	 */
+	list = rte_zmalloc(NULL, (item_num + 1) * sizeof(*list), 0);
 	if (!list) {
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -1888,8 +1995,12 @@ ice_switch_redirect(struct ice_adapter *ad,
 		    struct rte_flow *flow,
 		    struct ice_flow_redirect *rd)
 {
-	struct ice_rule_query_data *rdata = flow->rule;
+	struct ice_rule_query_data *rdata;
+	struct ice_switch_filter_conf *filter_conf_ptr =
+		(struct ice_switch_filter_conf *)flow->rule;
+	struct ice_rule_query_data added_rdata = { 0 };
 	struct ice_adv_fltr_mgmt_list_entry *list_itr;
+	struct ice_adv_lkup_elem *lkups_ref = NULL;
 	struct ice_adv_lkup_elem *lkups_dp = NULL;
 	struct LIST_HEAD_TYPE *list_head;
 	struct ice_adv_rule_info rinfo;
@@ -1897,6 +2008,8 @@ ice_switch_redirect(struct ice_adapter *ad,
 	struct ice_switch_info *sw;
 	uint16_t lkups_cnt;
 	int ret;
+
+	rdata = &filter_conf_ptr->sw_query_data;
 
 	if (rdata->vsi_handle != rd->vsi_handle)
 		return 0;
@@ -1908,44 +2021,91 @@ ice_switch_redirect(struct ice_adapter *ad,
 	if (rd->type != ICE_FLOW_REDIRECT_VSI)
 		return -ENOTSUP;
 
-	list_head = &sw->recp_list[rdata->rid].filt_rules;
-	LIST_FOR_EACH_ENTRY(list_itr, list_head, ice_adv_fltr_mgmt_list_entry,
-			    list_entry) {
-		rinfo = list_itr->rule_info;
-		if ((rinfo.fltr_rule_id == rdata->rule_id &&
-		    rinfo.sw_act.fltr_act == ICE_FWD_TO_VSI &&
-		    rinfo.sw_act.vsi_handle == rd->vsi_handle) ||
-		    (rinfo.fltr_rule_id == rdata->rule_id &&
-		    rinfo.sw_act.fltr_act == ICE_FWD_TO_VSI_LIST)){
-			lkups_cnt = list_itr->lkups_cnt;
-			lkups_dp = (struct ice_adv_lkup_elem *)
-				ice_memdup(hw, list_itr->lkups,
-					   sizeof(*list_itr->lkups) *
-					   lkups_cnt, ICE_NONDMA_TO_NONDMA);
+	switch (filter_conf_ptr->fltr_status) {
+	case ICE_SW_FLTR_ADDED:
+		list_head = &sw->recp_list[rdata->rid].filt_rules;
+		LIST_FOR_EACH_ENTRY(list_itr, list_head,
+				    ice_adv_fltr_mgmt_list_entry,
+				    list_entry) {
+			rinfo = list_itr->rule_info;
+			if ((rinfo.fltr_rule_id == rdata->rule_id &&
+			    rinfo.sw_act.fltr_act == ICE_FWD_TO_VSI &&
+			    rinfo.sw_act.vsi_handle == rd->vsi_handle) ||
+			    (rinfo.fltr_rule_id == rdata->rule_id &&
+			    rinfo.sw_act.fltr_act == ICE_FWD_TO_VSI_LIST)){
+				lkups_cnt = list_itr->lkups_cnt;
 
-			if (!lkups_dp) {
-				PMD_DRV_LOG(ERR, "Failed to allocate memory.");
-				return -EINVAL;
-			}
+				lkups_dp = (struct ice_adv_lkup_elem *)
+					ice_memdup(hw, list_itr->lkups,
+						   sizeof(*list_itr->lkups) *
+						   lkups_cnt,
+						   ICE_NONDMA_TO_NONDMA);
+				if (!lkups_dp) {
+					PMD_DRV_LOG(ERR,
+						    "Failed to allocate memory.");
+					return -EINVAL;
+				}
+				lkups_ref = lkups_dp;
 
-			if (rinfo.sw_act.fltr_act == ICE_FWD_TO_VSI_LIST) {
-				rinfo.sw_act.vsi_handle = rd->vsi_handle;
-				rinfo.sw_act.fltr_act = ICE_FWD_TO_VSI;
+				if (rinfo.sw_act.fltr_act ==
+				    ICE_FWD_TO_VSI_LIST) {
+					rinfo.sw_act.vsi_handle =
+						rd->vsi_handle;
+					rinfo.sw_act.fltr_act = ICE_FWD_TO_VSI;
+				}
+				break;
 			}
-			break;
 		}
+
+		if (!lkups_ref)
+			return -EINVAL;
+
+		goto rmv_rule;
+	case ICE_SW_FLTR_RMV_FAILED_ON_RIDRECT:
+		/* Recover VSI context */
+		hw->vsi_ctx[rd->vsi_handle]->vsi_num = filter_conf_ptr->vsi_num;
+		rinfo = filter_conf_ptr->rule_info;
+		lkups_cnt = filter_conf_ptr->lkups_num;
+		lkups_ref = filter_conf_ptr->lkups;
+
+		if (rinfo.sw_act.fltr_act == ICE_FWD_TO_VSI_LIST) {
+			rinfo.sw_act.vsi_handle = rd->vsi_handle;
+			rinfo.sw_act.fltr_act = ICE_FWD_TO_VSI;
+		}
+
+		goto rmv_rule;
+	case ICE_SW_FLTR_ADD_FAILED_ON_RIDRECT:
+		rinfo = filter_conf_ptr->rule_info;
+		lkups_cnt = filter_conf_ptr->lkups_num;
+		lkups_ref = filter_conf_ptr->lkups;
+
+		goto add_rule;
+	default:
+		return -EINVAL;
 	}
 
-	if (!lkups_dp)
-		return -EINVAL;
+rmv_rule:
+	if (ice_dcf_adminq_need_retry(ad)) {
+		PMD_DRV_LOG(WARNING, "DCF is not on");
+		ret = -EAGAIN;
+		goto out;
+	}
 
 	/* Remove the old rule */
-	ret = ice_rem_adv_rule(hw, list_itr->lkups,
-			       lkups_cnt, &rinfo);
+	ret = ice_rem_adv_rule(hw, lkups_ref, lkups_cnt, &rinfo);
 	if (ret) {
 		PMD_DRV_LOG(ERR, "Failed to delete the old rule %d",
 			    rdata->rule_id);
+		filter_conf_ptr->fltr_status =
+			ICE_SW_FLTR_RMV_FAILED_ON_RIDRECT;
 		ret = -EINVAL;
+		goto out;
+	}
+
+add_rule:
+	if (ice_dcf_adminq_need_retry(ad)) {
+		PMD_DRV_LOG(WARNING, "DCF is not on");
+		ret = -EAGAIN;
 		goto out;
 	}
 
@@ -1953,14 +2113,25 @@ ice_switch_redirect(struct ice_adapter *ad,
 	hw->vsi_ctx[rd->vsi_handle]->vsi_num = rd->new_vsi_num;
 
 	/* Replay the rule */
-	ret = ice_add_adv_rule(hw, lkups_dp, lkups_cnt,
-			       &rinfo, rdata);
+	ret = ice_add_adv_rule(hw, lkups_ref, lkups_cnt,
+			       &rinfo, &added_rdata);
 	if (ret) {
 		PMD_DRV_LOG(ERR, "Failed to replay the rule");
+		filter_conf_ptr->fltr_status =
+			ICE_SW_FLTR_ADD_FAILED_ON_RIDRECT;
 		ret = -EINVAL;
+	} else {
+		filter_conf_ptr->sw_query_data = added_rdata;
+		/* Save VSI number for failure recover */
+		filter_conf_ptr->vsi_num = rd->new_vsi_num;
+		filter_conf_ptr->fltr_status = ICE_SW_FLTR_ADDED;
 	}
 
 out:
+	if (ret == -EINVAL)
+		if (ice_dcf_adminq_need_retry(ad))
+			ret = -EAGAIN;
+
 	ice_free(hw, lkups_dp);
 	return ret;
 }

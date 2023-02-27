@@ -54,7 +54,7 @@ bnx2x_check_bull(struct bnx2x_softc *sc)
 	if (valid_bitmap & (1 << MAC_ADDR_VALID) && memcmp(bull->mac, sc->old_bulletin.mac, ETH_ALEN))
 		rte_memcpy(&sc->link_params.mac_addr, bull->mac, ETH_ALEN);
 	if (valid_bitmap & (1 << VLAN_VALID))
-		rte_memcpy(&bull->vlan, &sc->old_bulletin.vlan, VLAN_HLEN);
+		rte_memcpy(&bull->vlan, &sc->old_bulletin.vlan, RTE_VLAN_HLEN);
 
 	sc->old_bulletin = *bull;
 
@@ -73,7 +73,7 @@ bnx2x_add_tlv(__rte_unused struct bnx2x_softc *sc, void *tlvs_list,
 	tl->length = length;
 }
 
-/* Initiliaze header of the first tlv and clear mailbox*/
+/* Initialize header of the first TLV and clear mailbox */
 static void
 bnx2x_vf_prep(struct bnx2x_softc *sc, struct vf_first_tlv *first_tlv,
 	      uint16_t type, uint16_t length)

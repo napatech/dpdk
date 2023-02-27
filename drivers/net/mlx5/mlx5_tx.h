@@ -14,6 +14,7 @@
 #include <rte_common.h>
 #include <rte_spinlock.h>
 
+#include <mlx5_common.h>
 #include <mlx5_common_mr.h>
 
 #include "mlx5.h"
@@ -137,6 +138,8 @@ struct mlx5_txq_data {
 	uint16_t vlan_en:1; /* VLAN insertion in WQE is supported. */
 	uint16_t db_nc:1; /* Doorbell mapped to non-cached region. */
 	uint16_t db_heu:1; /* Doorbell heuristic write barrier. */
+	uint16_t rt_timestamp:1; /* Realtime timestamp format. */
+	uint16_t wait_on_time:1; /* WQE with timestamp is supported. */
 	uint16_t fast_free:1; /* mbuf fast free on Tx is enabled. */
 	uint16_t inlen_send; /* Ordinary send data inline size. */
 	uint16_t inlen_empw; /* eMPW max packet size to inline. */
@@ -156,35 +159,28 @@ struct mlx5_txq_data {
 	volatile uint32_t *cq_db; /* Completion queue doorbell. */
 	uint16_t port_id; /* Port ID of device. */
 	uint16_t idx; /* Queue index. */
+	uint64_t rt_timemask; /* Scheduling timestamp mask. */
 	uint64_t ts_mask; /* Timestamp flag dynamic mask. */
 	int32_t ts_offset; /* Timestamp field dynamic offset. */
 	struct mlx5_dev_ctx_shared *sh; /* Shared context. */
 	struct mlx5_txq_stats stats; /* TX queue counters. */
-#ifndef RTE_ARCH_64
-	rte_spinlock_t *uar_lock;
-	/* UAR access lock required for 32bit implementations */
-#endif
+	struct mlx5_txq_stats stats_reset; /* stats on last reset. */
+	struct mlx5_uar_data uar_data;
 	struct rte_mbuf *elts[0];
 	/* Storage for queued packets, must be the last field. */
 } __rte_cache_aligned;
-
-enum mlx5_txq_type {
-	MLX5_TXQ_TYPE_STANDARD, /* Standard Tx queue. */
-	MLX5_TXQ_TYPE_HAIRPIN, /* Hairpin Tx queue. */
-};
 
 /* TX queue control descriptor. */
 struct mlx5_txq_ctrl {
 	LIST_ENTRY(mlx5_txq_ctrl) next; /* Pointer to the next element. */
 	uint32_t refcnt; /* Reference counter. */
 	unsigned int socket; /* CPU socket ID for allocations. */
-	enum mlx5_txq_type type; /* The txq ctrl type. */
+	bool is_hairpin; /* Whether TxQ type is Hairpin. */
 	unsigned int max_inline_data; /* Max inline data. */
 	unsigned int max_tso_header; /* Max TSO header size. */
 	struct mlx5_txq_obj *obj; /* Verbs/DevX queue object. */
 	struct mlx5_priv *priv; /* Back pointer to private data. */
 	off_t uar_mmap_offset; /* UAR mmap offset for non-primary process. */
-	void *bf_reg; /* BlueFlame register from Verbs. */
 	uint16_t dump_file_n; /* Number of dump files. */
 	struct rte_eth_hairpin_conf hairpin_conf; /* Hairpin configuration. */
 	uint32_t hairpin_status; /* Hairpin binding status. */
@@ -204,7 +200,6 @@ int mlx5_tx_hairpin_queue_setup
 	(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	 const struct rte_eth_hairpin_conf *hairpin_conf);
 void mlx5_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
-void txq_uar_init(struct mlx5_txq_ctrl *txq_ctrl);
 int mlx5_tx_uar_init_secondary(struct rte_eth_dev *dev, int fd);
 void mlx5_tx_uar_uninit_secondary(struct rte_eth_dev *dev);
 int mlx5_txq_obj_verify(struct rte_eth_dev *dev);
@@ -218,6 +213,7 @@ struct mlx5_txq_ctrl *mlx5_txq_get(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_releasable(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_verify(struct rte_eth_dev *dev);
+int mlx5_txq_get_sqn(struct mlx5_txq_ctrl *txq);
 void txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl);
 void txq_free_elts(struct mlx5_txq_ctrl *txq_ctrl);
 uint64_t mlx5_get_tx_port_offloads(struct rte_eth_dev *dev);
@@ -225,8 +221,6 @@ void mlx5_txq_dynf_timestamp_set(struct rte_eth_dev *dev);
 
 /* mlx5_tx.c */
 
-uint16_t removed_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts,
-			  uint16_t pkts_n);
 void mlx5_tx_handle_completion(struct mlx5_txq_data *__rte_restrict txq,
 			       unsigned int olx __rte_unused);
 int mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset);
@@ -289,115 +283,10 @@ MLX5_TXOFF_PRE_DECL(mci_mpw);
 MLX5_TXOFF_PRE_DECL(mc_mpw);
 MLX5_TXOFF_PRE_DECL(i_mpw);
 
-static __rte_always_inline uint64_t *
+static __rte_always_inline struct mlx5_uar_data *
 mlx5_tx_bfreg(struct mlx5_txq_data *txq)
 {
-	return MLX5_PROC_PRIV(txq->port_id)->uar_table[txq->idx];
-}
-
-/**
- * Provide safe 64bit store operation to mlx5 UAR region for both 32bit and
- * 64bit architectures.
- *
- * @param val
- *   value to write in CPU endian format.
- * @param addr
- *   Address to write to.
- * @param lock
- *   Address of the lock to use for that UAR access.
- */
-static __rte_always_inline void
-__mlx5_uar_write64_relaxed(uint64_t val, void *addr,
-			   rte_spinlock_t *lock __rte_unused)
-{
-#ifdef RTE_ARCH_64
-	*(uint64_t *)addr = val;
-#else /* !RTE_ARCH_64 */
-	rte_spinlock_lock(lock);
-	*(uint32_t *)addr = val;
-	rte_io_wmb();
-	*((uint32_t *)addr + 1) = val >> 32;
-	rte_spinlock_unlock(lock);
-#endif
-}
-
-/**
- * Provide safe 64bit store operation to mlx5 UAR region for both 32bit and
- * 64bit architectures while guaranteeing the order of execution with the
- * code being executed.
- *
- * @param val
- *   value to write in CPU endian format.
- * @param addr
- *   Address to write to.
- * @param lock
- *   Address of the lock to use for that UAR access.
- */
-static __rte_always_inline void
-__mlx5_uar_write64(uint64_t val, void *addr, rte_spinlock_t *lock)
-{
-	rte_io_wmb();
-	__mlx5_uar_write64_relaxed(val, addr, lock);
-}
-
-/* Assist macros, used instead of directly calling the functions they wrap. */
-#ifdef RTE_ARCH_64
-#define mlx5_uar_write64_relaxed(val, dst, lock) \
-		__mlx5_uar_write64_relaxed(val, dst, NULL)
-#define mlx5_uar_write64(val, dst, lock) __mlx5_uar_write64(val, dst, NULL)
-#else
-#define mlx5_uar_write64_relaxed(val, dst, lock) \
-		__mlx5_uar_write64_relaxed(val, dst, lock)
-#define mlx5_uar_write64(val, dst, lock) __mlx5_uar_write64(val, dst, lock)
-#endif
-
-/**
- * Query LKey from a packet buffer for Tx.
- *
- * @param txq
- *   Pointer to Tx queue structure.
- * @param mb
- *   Pointer to mbuf.
- *
- * @return
- *   Searched LKey on success, UINT32_MAX on no match.
- */
-static __rte_always_inline uint32_t
-mlx5_tx_mb2mr(struct mlx5_txq_data *txq, struct rte_mbuf *mb)
-{
-	struct mlx5_mr_ctrl *mr_ctrl = &txq->mr_ctrl;
-	struct mlx5_txq_ctrl *txq_ctrl =
-			container_of(txq, struct mlx5_txq_ctrl, txq);
-	struct mlx5_priv *priv = txq_ctrl->priv;
-
-	/* Take slower bottom-half on miss. */
-	return mlx5_mr_mb2mr(priv->sh->cdev, &priv->mp_id, mr_ctrl, mb);
-}
-
-/**
- * Ring TX queue doorbell and flush the update if requested.
- *
- * @param txq
- *   Pointer to TX queue structure.
- * @param wqe
- *   Pointer to the last WQE posted in the NIC.
- * @param cond
- *   Request for write memory barrier after BlueFlame update.
- */
-static __rte_always_inline void
-mlx5_tx_dbrec_cond_wmb(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe,
-		       int cond)
-{
-	uint64_t *dst = mlx5_tx_bfreg(txq);
-	volatile uint64_t *src = ((volatile uint64_t *)wqe);
-
-	rte_io_wmb();
-	*txq->qp_db = rte_cpu_to_be_32(txq->wqe_ci);
-	/* Ensure ordering between DB record and BF copy. */
-	rte_wmb();
-	mlx5_uar_write64_relaxed(*src, dst, txq->uar_lock);
-	if (cond)
-		rte_wmb();
+	return &MLX5_PROC_PRIV(txq->port_id)->uar_table[txq->idx];
 }
 
 /**
@@ -411,7 +300,8 @@ mlx5_tx_dbrec_cond_wmb(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe,
 static __rte_always_inline void
 mlx5_tx_dbrec(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe)
 {
-	mlx5_tx_dbrec_cond_wmb(txq, wqe, 1);
+	mlx5_doorbell_ring(mlx5_tx_bfreg(txq), *(volatile uint64_t *)wqe,
+			   txq->wqe_ci, txq->qp_db, 1);
 }
 
 /**
@@ -887,7 +777,7 @@ mlx5_tx_cseg_init(struct mlx5_txq_data *__rte_restrict txq,
  *   compile time and may be used for optimization.
  */
 static __rte_always_inline void
-mlx5_tx_wseg_init(struct mlx5_txq_data *restrict txq,
+mlx5_tx_qseg_init(struct mlx5_txq_data *restrict txq,
 		  struct mlx5_txq_local *restrict loc __rte_unused,
 		  struct mlx5_wqe *restrict wqe,
 		  unsigned int wci,
@@ -900,6 +790,43 @@ mlx5_tx_wseg_init(struct mlx5_txq_data *restrict txq,
 	qs->qpn_cqn = rte_cpu_to_be_32(txq->sh->txpp.clock_queue.cq_obj.cq->id);
 	qs->reserved0 = RTE_BE32(0);
 	qs->reserved1 = RTE_BE32(0);
+}
+
+/**
+ * Build the Wait on Time Segment with specified timestamp value.
+ *
+ * @param txq
+ *   Pointer to TX queue structure.
+ * @param loc
+ *   Pointer to burst routine local context.
+ * @param wqe
+ *   Pointer to WQE to fill with built Control Segment.
+ * @param ts
+ *   Timesatmp value to wait.
+ * @param olx
+ *   Configured Tx offloads mask. It is fully defined at
+ *   compile time and may be used for optimization.
+ */
+static __rte_always_inline void
+mlx5_tx_wseg_init(struct mlx5_txq_data *restrict txq,
+		  struct mlx5_txq_local *restrict loc __rte_unused,
+		  struct mlx5_wqe *restrict wqe,
+		  uint64_t ts,
+		  unsigned int olx __rte_unused)
+{
+	struct mlx5_wqe_wseg *ws;
+
+	ws = RTE_PTR_ADD(wqe, MLX5_WSEG_SIZE);
+	ws->operation = rte_cpu_to_be_32(MLX5_WAIT_COND_CYCLIC_BIGGER);
+	ws->lkey = RTE_BE32(0);
+	ws->va_high = RTE_BE32(0);
+	ws->va_low = RTE_BE32(0);
+	if (txq->rt_timestamp) {
+		ts = ts % (uint64_t)NS_PER_S
+		   | (ts / (uint64_t)NS_PER_S) << 32;
+	}
+	ws->value = rte_cpu_to_be_64(ts);
+	ws->mask = txq->rt_timemask;
 }
 
 /**
@@ -1179,7 +1106,6 @@ mlx5_tx_mseg_memcpy(uint8_t *pdst,
 	uint8_t *psrc;
 
 	MLX5_ASSERT(len);
-	MLX5_ASSERT(must <= len);
 	do {
 		/* Allow zero length packets, must check first. */
 		dlen = rte_pktmbuf_data_len(loc->mbuf);
@@ -1206,9 +1132,11 @@ mlx5_tx_mseg_memcpy(uint8_t *pdst,
 				if (diff <= rte_pktmbuf_data_len(loc->mbuf)) {
 					/*
 					 * Copy only the minimal required
-					 * part of the data buffer.
+					 * part of the data buffer. Limit amount
+					 * of data to be copied to the length of
+					 * available space.
 					 */
-					len = diff;
+					len = RTE_MIN(len, diff);
 				}
 			}
 			continue;
@@ -1371,7 +1299,7 @@ mlx5_tx_dseg_ptr(struct mlx5_txq_data *__rte_restrict txq,
 {
 	MLX5_ASSERT(len);
 	dseg->bcount = rte_cpu_to_be_32(len);
-	dseg->lkey = mlx5_tx_mb2mr(txq, loc->mbuf);
+	dseg->lkey = mlx5_mr_mb2mr(&txq->mr_ctrl, loc->mbuf);
 	dseg->pbuf = rte_cpu_to_be_64((uintptr_t)buf);
 }
 
@@ -1407,7 +1335,7 @@ mlx5_tx_dseg_iptr(struct mlx5_txq_data *__rte_restrict txq,
 	MLX5_ASSERT(len);
 	if (len > MLX5_DSEG_MIN_INLINE_SIZE) {
 		dseg->bcount = rte_cpu_to_be_32(len);
-		dseg->lkey = mlx5_tx_mb2mr(txq, loc->mbuf);
+		dseg->lkey = mlx5_mr_mb2mr(&txq->mr_ctrl, loc->mbuf);
 		dseg->pbuf = rte_cpu_to_be_64((uintptr_t)buf);
 
 		return;
@@ -1715,6 +1643,9 @@ dseg_done:
  *   Pointer to TX queue structure.
  * @param loc
  *   Pointer to burst routine local context.
+ * @param elts
+ *   Number of free elements in elts buffer to be checked, for zero
+ *   value the check is optimized out by compiler.
  * @param olx
  *   Configured Tx offloads mask. It is fully defined at
  *   compile time and may be used for optimization.
@@ -1728,13 +1659,14 @@ dseg_done:
 static __rte_always_inline enum mlx5_txcmp_code
 mlx5_tx_schedule_send(struct mlx5_txq_data *restrict txq,
 		      struct mlx5_txq_local *restrict loc,
+		      uint16_t elts,
 		      unsigned int olx)
 {
 	if (MLX5_TXOFF_CONFIG(TXPP) &&
 	    loc->mbuf->ol_flags & txq->ts_mask) {
+		struct mlx5_dev_ctx_shared *sh;
 		struct mlx5_wqe *wqe;
 		uint64_t ts;
-		int32_t wci;
 
 		/*
 		 * Estimate the required space quickly and roughly.
@@ -1742,17 +1674,36 @@ mlx5_tx_schedule_send(struct mlx5_txq_data *restrict txq,
 		 * to the queue and we won't get the orphan WAIT WQE.
 		 */
 		if (loc->wqe_free <= MLX5_WQE_SIZE_MAX / MLX5_WQE_SIZE ||
-		    loc->elts_free < NB_SEGS(loc->mbuf))
+		    loc->elts_free < elts)
 			return MLX5_TXCMP_CODE_EXIT;
 		/* Convert the timestamp into completion to wait. */
 		ts = *RTE_MBUF_DYNFIELD(loc->mbuf, txq->ts_offset, uint64_t *);
-		wci = mlx5_txpp_convert_tx_ts(txq->sh, ts);
-		if (unlikely(wci < 0))
-			return MLX5_TXCMP_CODE_SINGLE;
-		/* Build the WAIT WQE with specified completion. */
 		wqe = txq->wqes + (txq->wqe_ci & txq->wqe_m);
-		mlx5_tx_cseg_init(txq, loc, wqe, 2, MLX5_OPCODE_WAIT, olx);
-		mlx5_tx_wseg_init(txq, loc, wqe, wci, olx);
+		sh = txq->sh;
+		if (txq->wait_on_time) {
+			/* The wait on time capability should be used. */
+			ts -= sh->txpp.skew;
+			mlx5_tx_cseg_init(txq, loc, wqe,
+					  1 + sizeof(struct mlx5_wqe_wseg) /
+					      MLX5_WSEG_SIZE,
+					  MLX5_OPCODE_WAIT |
+					  MLX5_OPC_MOD_WAIT_TIME << 24, olx);
+			mlx5_tx_wseg_init(txq, loc, wqe, ts, olx);
+		} else {
+			/* Legacy cross-channel operation should be used. */
+			int32_t wci;
+
+			wci = mlx5_txpp_convert_tx_ts(sh, ts);
+			if (unlikely(wci < 0))
+				return MLX5_TXCMP_CODE_SINGLE;
+			/* Build the WAIT WQE with specified completion. */
+			mlx5_tx_cseg_init(txq, loc, wqe,
+					  1 + sizeof(struct mlx5_wqe_qseg) /
+					      MLX5_WSEG_SIZE,
+					  MLX5_OPCODE_WAIT |
+					  MLX5_OPC_MOD_WAIT_CQ_PI << 24, olx);
+			mlx5_tx_qseg_init(txq, loc, wqe, wci, olx);
+		}
 		++txq->wqe_ci;
 		--loc->wqe_free;
 		return MLX5_TXCMP_CODE_MULTI;
@@ -1789,11 +1740,12 @@ mlx5_tx_packet_multi_tso(struct mlx5_txq_data *__rte_restrict txq,
 	struct mlx5_wqe *__rte_restrict wqe;
 	unsigned int ds, dlen, inlen, ntcp, vlan = 0;
 
+	MLX5_ASSERT(loc->elts_free >= NB_SEGS(loc->mbuf));
 	if (MLX5_TXOFF_CONFIG(TXPP)) {
 		enum mlx5_txcmp_code wret;
 
 		/* Generate WAIT for scheduling if requested. */
-		wret = mlx5_tx_schedule_send(txq, loc, olx);
+		wret = mlx5_tx_schedule_send(txq, loc, 0, olx);
 		if (wret == MLX5_TXCMP_CODE_EXIT)
 			return MLX5_TXCMP_CODE_EXIT;
 		if (wret == MLX5_TXCMP_CODE_ERROR)
@@ -1817,7 +1769,6 @@ mlx5_tx_packet_multi_tso(struct mlx5_txq_data *__rte_restrict txq,
 		     inlen <= MLX5_ESEG_MIN_INLINE_SIZE ||
 		     inlen > (dlen + vlan)))
 		return MLX5_TXCMP_CODE_ERROR;
-	MLX5_ASSERT(inlen >= txq->inlen_mode);
 	/*
 	 * Check whether there are enough free WQEBBs:
 	 * - Control Segment
@@ -1833,7 +1784,7 @@ mlx5_tx_packet_multi_tso(struct mlx5_txq_data *__rte_restrict txq,
 	if (unlikely(loc->wqe_free < ((ds + 3) / 4)))
 		return MLX5_TXCMP_CODE_EXIT;
 	/* Check for maximal WQE size. */
-	if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ((ds + 3) / 4)))
+	if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ds))
 		return MLX5_TXCMP_CODE_ERROR;
 #ifdef MLX5_PMD_SOFT_COUNTERS
 	/* Update sent data bytes/packets counters. */
@@ -1888,11 +1839,12 @@ mlx5_tx_packet_multi_send(struct mlx5_txq_data *__rte_restrict txq,
 	unsigned int ds, nseg;
 
 	MLX5_ASSERT(NB_SEGS(loc->mbuf) > 1);
+	MLX5_ASSERT(loc->elts_free >= NB_SEGS(loc->mbuf));
 	if (MLX5_TXOFF_CONFIG(TXPP)) {
 		enum mlx5_txcmp_code wret;
 
 		/* Generate WAIT for scheduling if requested. */
-		wret = mlx5_tx_schedule_send(txq, loc, olx);
+		wret = mlx5_tx_schedule_send(txq, loc, 0, olx);
 		if (wret == MLX5_TXCMP_CODE_EXIT)
 			return MLX5_TXCMP_CODE_EXIT;
 		if (wret == MLX5_TXCMP_CODE_ERROR)
@@ -1907,7 +1859,7 @@ mlx5_tx_packet_multi_send(struct mlx5_txq_data *__rte_restrict txq,
 	if (unlikely(loc->wqe_free < ((ds + 3) / 4)))
 		return MLX5_TXCMP_CODE_EXIT;
 	/* Check for maximal WQE size. */
-	if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ((ds + 3) / 4)))
+	if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ds))
 		return MLX5_TXCMP_CODE_ERROR;
 	/*
 	 * Some Tx offloads may cause an error if packet is not long enough,
@@ -2003,16 +1955,7 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 
 	MLX5_ASSERT(MLX5_TXOFF_CONFIG(INLINE));
 	MLX5_ASSERT(NB_SEGS(loc->mbuf) > 1);
-	if (MLX5_TXOFF_CONFIG(TXPP)) {
-		enum mlx5_txcmp_code wret;
-
-		/* Generate WAIT for scheduling if requested. */
-		wret = mlx5_tx_schedule_send(txq, loc, olx);
-		if (wret == MLX5_TXCMP_CODE_EXIT)
-			return MLX5_TXCMP_CODE_EXIT;
-		if (wret == MLX5_TXCMP_CODE_ERROR)
-			return MLX5_TXCMP_CODE_ERROR;
-	}
+	MLX5_ASSERT(loc->elts_free >= NB_SEGS(loc->mbuf));
 	/*
 	 * First calculate data length to be inlined
 	 * to estimate the required space for WQE.
@@ -2041,7 +1984,7 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 			MLX5_ASSERT(txq->inlen_mode >=
 				    MLX5_ESEG_MIN_INLINE_SIZE);
 			MLX5_ASSERT(txq->inlen_mode <= txq->inlen_send);
-			inlen = txq->inlen_mode;
+			inlen = RTE_MIN(txq->inlen_mode, inlen);
 		} else if (vlan && !txq->vlan_en) {
 			/*
 			 * VLAN insertion is requested and hardware does not
@@ -2051,9 +1994,13 @@ mlx5_tx_packet_multi_inline(struct mlx5_txq_data *__rte_restrict txq,
 		} else if (mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE ||
 			   nxlen > txq->inlen_send) {
 			return mlx5_tx_packet_multi_send(txq, loc, olx);
+		} else if (nxlen <= MLX5_ESEG_MIN_INLINE_SIZE) {
+			inlen = MLX5_ESEG_MIN_INLINE_SIZE;
 		} else {
 			goto do_first;
 		}
+		if (mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE)
+			goto do_build;
 		/*
 		 * Now we know the minimal amount of data is requested
 		 * to inline. Check whether we should inline the buffers
@@ -2086,6 +2033,8 @@ do_first:
 				mbuf = NEXT(mbuf);
 				/* There should be not end of packet. */
 				MLX5_ASSERT(mbuf);
+				if (mbuf->ol_flags & RTE_MBUF_F_TX_DYNF_NOINLINE)
+					break;
 				nxlen = inlen + rte_pktmbuf_data_len(mbuf);
 			} while (unlikely(nxlen < txq->inlen_send));
 		}
@@ -2113,6 +2062,17 @@ do_align:
 	 * Estimate the number of Data Segments conservatively,
 	 * supposing no any mbufs is being freed during inlining.
 	 */
+do_build:
+	if (MLX5_TXOFF_CONFIG(TXPP)) {
+		enum mlx5_txcmp_code wret;
+
+		/* Generate WAIT for scheduling if requested. */
+		wret = mlx5_tx_schedule_send(txq, loc, 0, olx);
+		if (wret == MLX5_TXCMP_CODE_EXIT)
+			return MLX5_TXCMP_CODE_EXIT;
+		if (wret == MLX5_TXCMP_CODE_ERROR)
+			return MLX5_TXCMP_CODE_ERROR;
+	}
 	MLX5_ASSERT(inlen <= txq->inlen_send);
 	ds = NB_SEGS(loc->mbuf) + 2 + (inlen -
 				       MLX5_ESEG_MIN_INLINE_SIZE +
@@ -2121,8 +2081,24 @@ do_align:
 	if (unlikely(loc->wqe_free < ((ds + 3) / 4)))
 		return MLX5_TXCMP_CODE_EXIT;
 	/* Check for maximal WQE size. */
-	if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ((ds + 3) / 4)))
-		return MLX5_TXCMP_CODE_ERROR;
+	if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ds)) {
+		/*  Check if we can adjust the inline length. */
+		if (unlikely(txq->inlen_mode)) {
+			ds = NB_SEGS(loc->mbuf) + 2 +
+				(txq->inlen_mode -
+				MLX5_ESEG_MIN_INLINE_SIZE +
+				MLX5_WSEG_SIZE +
+				MLX5_WSEG_SIZE - 1) / MLX5_WSEG_SIZE;
+			if (unlikely((MLX5_WQE_SIZE_MAX / MLX5_WSEG_SIZE) < ds))
+				return MLX5_TXCMP_CODE_ERROR;
+		}
+		/* We have lucky opportunity to adjust. */
+		inlen = RTE_MIN(inlen, MLX5_WQE_SIZE_MAX -
+				       MLX5_WSEG_SIZE * 2 -
+				       MLX5_WSEG_SIZE * NB_SEGS(loc->mbuf) -
+				       MLX5_WSEG_SIZE +
+				       MLX5_ESEG_MIN_INLINE_SIZE);
+	}
 #ifdef MLX5_PMD_SOFT_COUNTERS
 	/* Update sent data bytes/packets counters. */
 	txq->stats.obytes += dlen + vlan;
@@ -2273,7 +2249,7 @@ mlx5_tx_burst_tso(struct mlx5_txq_data *__rte_restrict txq,
 			enum mlx5_txcmp_code wret;
 
 			/* Generate WAIT for scheduling if requested. */
-			wret = mlx5_tx_schedule_send(txq, loc, olx);
+			wret = mlx5_tx_schedule_send(txq, loc, 1, olx);
 			if (wret == MLX5_TXCMP_CODE_EXIT)
 				return MLX5_TXCMP_CODE_EXIT;
 			if (wret == MLX5_TXCMP_CODE_ERROR)
@@ -2651,16 +2627,6 @@ mlx5_tx_burst_empw_simple(struct mlx5_txq_data *__rte_restrict txq,
 
 next_empw:
 		MLX5_ASSERT(NB_SEGS(loc->mbuf) == 1);
-		if (MLX5_TXOFF_CONFIG(TXPP)) {
-			enum mlx5_txcmp_code wret;
-
-			/* Generate WAIT for scheduling if requested. */
-			wret = mlx5_tx_schedule_send(txq, loc, olx);
-			if (wret == MLX5_TXCMP_CODE_EXIT)
-				return MLX5_TXCMP_CODE_EXIT;
-			if (wret == MLX5_TXCMP_CODE_ERROR)
-				return MLX5_TXCMP_CODE_ERROR;
-		}
 		part = RTE_MIN(pkts_n, MLX5_TXOFF_CONFIG(MPW) ?
 				       MLX5_MPW_MAX_PACKETS :
 				       MLX5_EMPW_MAX_PACKETS);
@@ -2670,6 +2636,16 @@ next_empw:
 				return MLX5_TXCMP_CODE_EXIT;
 			/* But we still able to send at least minimal eMPW. */
 			part = loc->elts_free;
+		}
+		if (MLX5_TXOFF_CONFIG(TXPP)) {
+			enum mlx5_txcmp_code wret;
+
+			/* Generate WAIT for scheduling if requested. */
+			wret = mlx5_tx_schedule_send(txq, loc, 0, olx);
+			if (wret == MLX5_TXCMP_CODE_EXIT)
+				return MLX5_TXCMP_CODE_EXIT;
+			if (wret == MLX5_TXCMP_CODE_ERROR)
+				return MLX5_TXCMP_CODE_ERROR;
 		}
 		/* Check whether we have enough WQEs */
 		if (unlikely(loc->wqe_free < ((2 + part + 3) / 4))) {
@@ -2825,16 +2801,6 @@ mlx5_tx_burst_empw_inline(struct mlx5_txq_data *__rte_restrict txq,
 		unsigned int slen = 0;
 
 		MLX5_ASSERT(NB_SEGS(loc->mbuf) == 1);
-		if (MLX5_TXOFF_CONFIG(TXPP)) {
-			enum mlx5_txcmp_code wret;
-
-			/* Generate WAIT for scheduling if requested. */
-			wret = mlx5_tx_schedule_send(txq, loc, olx);
-			if (wret == MLX5_TXCMP_CODE_EXIT)
-				return MLX5_TXCMP_CODE_EXIT;
-			if (wret == MLX5_TXCMP_CODE_ERROR)
-				return MLX5_TXCMP_CODE_ERROR;
-		}
 		/*
 		 * Limits the amount of packets in one WQE
 		 * to improve CQE latency generation.
@@ -2842,6 +2808,16 @@ mlx5_tx_burst_empw_inline(struct mlx5_txq_data *__rte_restrict txq,
 		nlim = RTE_MIN(pkts_n, MLX5_TXOFF_CONFIG(MPW) ?
 				       MLX5_MPW_INLINE_MAX_PACKETS :
 				       MLX5_EMPW_MAX_PACKETS);
+		if (MLX5_TXOFF_CONFIG(TXPP)) {
+			enum mlx5_txcmp_code wret;
+
+			/* Generate WAIT for scheduling if requested. */
+			wret = mlx5_tx_schedule_send(txq, loc, nlim, olx);
+			if (wret == MLX5_TXCMP_CODE_EXIT)
+				return MLX5_TXCMP_CODE_EXIT;
+			if (wret == MLX5_TXCMP_CODE_ERROR)
+				return MLX5_TXCMP_CODE_ERROR;
+		}
 		/* Check whether we have minimal amount WQEs */
 		if (unlikely(loc->wqe_free <
 			    ((2 + MLX5_EMPW_MIN_PACKETS + 3) / 4)))
@@ -3124,11 +3100,12 @@ mlx5_tx_burst_single_send(struct mlx5_txq_data *__rte_restrict txq,
 		enum mlx5_txcmp_code ret;
 
 		MLX5_ASSERT(NB_SEGS(loc->mbuf) == 1);
+		MLX5_ASSERT(loc->elts_free);
 		if (MLX5_TXOFF_CONFIG(TXPP)) {
 			enum mlx5_txcmp_code wret;
 
 			/* Generate WAIT for scheduling if requested. */
-			wret = mlx5_tx_schedule_send(txq, loc, olx);
+			wret = mlx5_tx_schedule_send(txq, loc, 0, olx);
 			if (wret == MLX5_TXCMP_CODE_EXIT)
 				return MLX5_TXCMP_CODE_EXIT;
 			if (wret == MLX5_TXCMP_CODE_ERROR)
@@ -3364,7 +3341,9 @@ single_no_inline:
 			 * if no inlining is configured, this is done
 			 * by calling routine in a batch copy.
 			 */
-			MLX5_ASSERT(!MLX5_TXOFF_CONFIG(INLINE));
+			if (MLX5_TXOFF_CONFIG(INLINE))
+				txq->elts[txq->elts_head++ & txq->elts_m] =
+							loc->mbuf;
 			--loc->elts_free;
 #ifdef MLX5_PMD_SOFT_COUNTERS
 			/* Update sent data bytes counter. */
@@ -3684,8 +3663,10 @@ enter_send_single:
 	 *   packets are coming and the write barrier will be issued on
 	 *   the next burst (after descriptor writing, at least).
 	 */
-	mlx5_tx_dbrec_cond_wmb(txq, loc.wqe_last, !txq->db_nc &&
-			(!txq->db_heu || pkts_n % MLX5_TX_DEFAULT_BURST));
+	mlx5_doorbell_ring(mlx5_tx_bfreg(txq),
+			   *(volatile uint64_t *)loc.wqe_last, txq->wqe_ci,
+			   txq->qp_db, !txq->db_nc &&
+			   (!txq->db_heu || pkts_n % MLX5_TX_DEFAULT_BURST));
 	/* Not all of the mbufs may be stored into elts yet. */
 	part = MLX5_TXOFF_CONFIG(INLINE) ? 0 : loc.pkts_sent - loc.pkts_copy;
 	if (!MLX5_TXOFF_CONFIG(INLINE) && part) {

@@ -6,9 +6,9 @@
 #include <stdio.h>
 #include <stdint.h>
 
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
 #include <rte_geneve.h>
@@ -469,6 +469,7 @@ static int enicpmd_dev_info_get(struct rte_eth_dev *eth_dev,
 	device_info->rx_offload_capa = enic->rx_offload_capa;
 	device_info->tx_offload_capa = enic->tx_offload_capa;
 	device_info->tx_queue_offload_capa = enic->tx_queue_offload_capa;
+	device_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 	device_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = ENIC_DEFAULT_RX_FREE_THRESH
 	};
@@ -537,7 +538,7 @@ static const uint32_t *enicpmd_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_UNKNOWN
 	};
 
-	if (dev->rx_pkt_burst != enic_dummy_recv_pkts &&
+	if (dev->rx_pkt_burst != rte_eth_pkt_burst_dummy &&
 	    dev->rx_pkt_burst != NULL) {
 		struct enic *enic = pmd_priv(dev);
 		if (enic->overlay_offload)

@@ -3,11 +3,12 @@
  */
 
 #include <inttypes.h>
+#include <stdlib.h>
 
 #include <rte_common.h>
 #include <cryptodev_pmd.h>
 #include <rte_debug.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_eal.h>
 #include <ethdev_driver.h>
 #include <rte_event_eth_rx_adapter.h>
@@ -16,7 +17,7 @@
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 
 #include "ssovf_evdev.h"
 #include "timvf_evdev.h"
@@ -155,7 +156,8 @@ ssovf_info_get(struct rte_eventdev *dev, struct rte_event_dev_info *dev_info)
 					RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK |
 					RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
 					RTE_EVENT_DEV_CAP_NONSEQ_MODE |
-					RTE_EVENT_DEV_CAP_CARRY_FLOW_ID;
+					RTE_EVENT_DEV_CAP_CARRY_FLOW_ID |
+					RTE_EVENT_DEV_CAP_MAINTENANCE_FREE;
 
 }
 
@@ -744,12 +746,12 @@ static int
 ssovf_crypto_adapter_qp_add(const struct rte_eventdev *dev,
 			    const struct rte_cryptodev *cdev,
 			    int32_t queue_pair_id,
-			    const struct rte_event *event)
+			    const struct rte_event_crypto_adapter_queue_conf *conf)
 {
 	struct cpt_instance *qp;
 	uint8_t qp_id;
 
-	RTE_SET_USED(event);
+	RTE_SET_USED(conf);
 
 	if (queue_pair_id == -1) {
 		for (qp_id = 0; qp_id < cdev->data->nb_queue_pairs; qp_id++) {

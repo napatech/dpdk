@@ -9,6 +9,11 @@ if not (is_linux or is_windows)
 endif
 
 deps += ['hash', 'common_mlx5']
+if not dpdk_conf.has('RTE_COMMON_MLX5')
+    # avoid referencing undefined variables from common/mlx5
+    subdir_done()
+endif
+
 headers = files('rte_pmd_mlx5.h')
 sources = files(
         'mlx5.c',
@@ -17,6 +22,7 @@ sources = files(
         'mlx5_flow_meter.c',
         'mlx5_flow_dv.c',
         'mlx5_flow_aso.c',
+        'mlx5_flow_flex.c',
         'mlx5_mac.c',
         'mlx5_rss.c',
         'mlx5_rx.c',
@@ -39,6 +45,8 @@ sources = files(
 
 if is_linux
     sources += files(
+            'mlx5_flow_hw.c',
+            'mlx5_hws_cnt.c',
             'mlx5_flow_verbs.c',
     )
     if (dpdk_conf.has('RTE_ARCH_X86_64')
@@ -65,4 +73,9 @@ if get_option('buildtype').contains('debug')
 else
     cflags += [ '-UPEDANTIC' ]
 endif
+
+testpmd_sources += files('mlx5_testpmd.c')
+
 subdir(exec_env)
+
+subdir('hws')

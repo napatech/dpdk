@@ -10,7 +10,6 @@
 #include <rte_hash_crc.h>
 #include <rte_malloc.h>
 #include <rte_random.h>
-#include <rte_rwlock.h>
 #include <rte_tailq.h>
 
 #include "rte_ipsec_sad.h"
@@ -62,7 +61,7 @@ EAL_REGISTER_TAILQ(rte_ipsec_sad_tailq)
  * Inserts a rule into an appropriate hash table,
  * updates the value for a given SPI in SPI_ONLY hash table
  * reflecting presence of more specific rule type in two LSBs.
- * Updates a counter that reflects the number of rules whith the same SPI.
+ * Updates a counter that reflects the number of rules with the same SPI.
  */
 static inline int
 add_specific(struct rte_ipsec_sad *sad, const void *key,
@@ -440,8 +439,7 @@ rte_ipsec_sad_destroy(struct rte_ipsec_sad *sad)
 	rte_hash_free(sad->hash[RTE_IPSEC_SAD_SPI_DIP]);
 	rte_hash_free(sad->hash[RTE_IPSEC_SAD_SPI_DIP_SIP]);
 	rte_free(sad);
-	if (te != NULL)
-		rte_free(te);
+	rte_free(te);
 }
 
 /*

@@ -2,10 +2,10 @@
  * Copyright(c) 2010-2018 Intel Corporation
  */
 
+#include <errno.h>
 #include <unistd.h>
 #include <string.h>
 
-#include <rte_compat.h>
 #include <rte_errno.h>
 #include <rte_log.h>
 #include <rte_vfio.h>
@@ -120,4 +120,12 @@ vfio_mp_sync_setup(void)
 	return 0;
 }
 
+void
+vfio_mp_sync_cleanup(void)
+{
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
+	rte_mp_action_unregister(EAL_VFIO_MP);
+}
 #endif

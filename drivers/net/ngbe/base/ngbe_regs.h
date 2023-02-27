@@ -525,7 +525,7 @@ enum ngbe_5tuple_protocol {
 #define   NGBE_PSRCTL_LBENA	       MS(18, 0x1)
 #define NGBE_FRMSZ		       0x015020
 #define   NGBE_FRMSZ_MAX_MASK	       MS(0, 0xFFFF)
-#define   NGBE_FRMSZ_MAX(v)	       LS(v, 0, 0xFFFF)
+#define   NGBE_FRMSZ_MAX(v)	       LS((v) + 4, 0, 0xFFFF)
 #define NGBE_VLANCTL		       0x015088
 #define   NGBE_VLANCTL_TPID_MASK       MS(0, 0xFFFF)
 #define   NGBE_VLANCTL_TPID(v)	       LS(v, 0, 0xFFFF)
@@ -785,30 +785,30 @@ enum ngbe_5tuple_protocol {
 #define NGBE_MACRXERRCRCH           0x01192C
 #define NGBE_MACRXERRLENL           0x011978
 #define NGBE_MACRXERRLENH           0x01197C
-#define NGBE_MACRX1TO64L            0x001940
-#define NGBE_MACRX1TO64H            0x001944
-#define NGBE_MACRX65TO127L          0x001948
-#define NGBE_MACRX65TO127H          0x00194C
-#define NGBE_MACRX128TO255L         0x001950
-#define NGBE_MACRX128TO255H         0x001954
-#define NGBE_MACRX256TO511L         0x001958
-#define NGBE_MACRX256TO511H         0x00195C
-#define NGBE_MACRX512TO1023L        0x001960
-#define NGBE_MACRX512TO1023H        0x001964
-#define NGBE_MACRX1024TOMAXL        0x001968
-#define NGBE_MACRX1024TOMAXH        0x00196C
-#define NGBE_MACTX1TO64L            0x001834
-#define NGBE_MACTX1TO64H            0x001838
-#define NGBE_MACTX65TO127L          0x00183C
-#define NGBE_MACTX65TO127H          0x001840
-#define NGBE_MACTX128TO255L         0x001844
-#define NGBE_MACTX128TO255H         0x001848
-#define NGBE_MACTX256TO511L         0x00184C
-#define NGBE_MACTX256TO511H         0x001850
-#define NGBE_MACTX512TO1023L        0x001854
-#define NGBE_MACTX512TO1023H        0x001858
-#define NGBE_MACTX1024TOMAXL        0x00185C
-#define NGBE_MACTX1024TOMAXH        0x001860
+#define NGBE_MACRX1TO64L            0x011940
+#define NGBE_MACRX1TO64H            0x011944
+#define NGBE_MACRX65TO127L          0x011948
+#define NGBE_MACRX65TO127H          0x01194C
+#define NGBE_MACRX128TO255L         0x011950
+#define NGBE_MACRX128TO255H         0x011954
+#define NGBE_MACRX256TO511L         0x011958
+#define NGBE_MACRX256TO511H         0x01195C
+#define NGBE_MACRX512TO1023L        0x011960
+#define NGBE_MACRX512TO1023H        0x011964
+#define NGBE_MACRX1024TOMAXL        0x011968
+#define NGBE_MACRX1024TOMAXH        0x01196C
+#define NGBE_MACTX1TO64L            0x011834
+#define NGBE_MACTX1TO64H            0x011838
+#define NGBE_MACTX65TO127L          0x01183C
+#define NGBE_MACTX65TO127H          0x011840
+#define NGBE_MACTX128TO255L         0x011844
+#define NGBE_MACTX128TO255H         0x011848
+#define NGBE_MACTX256TO511L         0x01184C
+#define NGBE_MACTX256TO511H         0x011850
+#define NGBE_MACTX512TO1023L        0x011854
+#define NGBE_MACTX512TO1023H        0x011858
+#define NGBE_MACTX1024TOMAXL        0x01185C
+#define NGBE_MACTX1024TOMAXH        0x011860
 
 #define NGBE_MACRXUNDERSIZE         0x011938
 #define NGBE_MACRXOVERSIZE          0x01193C
@@ -866,6 +866,9 @@ enum ngbe_5tuple_protocol {
  * PF(Physical Function) Registers
  ******************************************************************************/
 /* Interrupt */
+#define NGBE_BMECTL		0x012020
+#define   NGBE_BMECTL_VFDRP	MS(1, 0x1)
+#define   NGBE_BMECTL_PFDRP	MS(0, 0x1)
 #define NGBE_ICRMISC		0x000100
 #define   NGBE_ICRMISC_MASK	MS(8, 0xFFFFFF)
 #define   NGBE_ICRMISC_RST	MS(10, 0x1) /* device reset event */
@@ -1419,8 +1422,13 @@ po32m(struct ngbe_hw *hw, u32 reg, u32 mask, u32 expect, u32 *actual,
 	}
 
 	do {
-		all |= rd32(hw, reg);
-		value |= mask & all;
+		if (expect != 0) {
+			all |= rd32(hw, reg);
+			value |= mask & all;
+		} else {
+			all = rd32(hw, reg);
+			value = mask & all;
+		}
 		if (value == expect)
 			break;
 

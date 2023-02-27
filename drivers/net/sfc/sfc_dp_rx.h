@@ -14,6 +14,7 @@
 #include <ethdev_driver.h>
 
 #include "sfc_dp.h"
+#include "sfc_nic_dma_dp.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -95,6 +96,9 @@ struct sfc_dp_rx_qcreate_info {
 
 	/** Mask to extract user bits from Rx prefix mark field */
 	uint32_t		user_mark_mask;
+
+	/** NIC's DMA mapping information */
+	const struct sfc_nic_dma_info	*nic_dma_info;
 };
 
 /**
@@ -154,7 +158,7 @@ typedef int (sfc_dp_rx_qcreate_t)(uint16_t port_id, uint16_t queue_id,
 				  struct sfc_dp_rxq **dp_rxqp);
 
 /**
- * Free resources allocated for datapath recevie queue.
+ * Free resources allocated for datapath receive queue.
  */
 typedef void (sfc_dp_rx_qdestroy_t)(struct sfc_dp_rxq *dp_rxq);
 
@@ -187,7 +191,7 @@ typedef bool (sfc_dp_rx_qrx_ps_ev_t)(struct sfc_dp_rxq *dp_rxq,
 /**
  * Receive queue purge function called after queue flush.
  *
- * Should be used to free unused recevie buffers.
+ * Should be used to free unused receive buffers.
  */
 typedef void (sfc_dp_rx_qpurge_t)(struct sfc_dp_rxq *dp_rxq);
 

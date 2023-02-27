@@ -961,7 +961,7 @@ add_action(struct rte_flow *flow, size_t *act_index, struct action_data *adata)
 }
 
 /**
- * Helper function to send a serie of TC actions to the kernel
+ * Helper function to send a series of TC actions to the kernel
  *
  * @param[in] flow
  *   Pointer to rte flow containing the netlink message
@@ -1465,8 +1465,7 @@ tap_flow_create(struct rte_eth_dev *dev,
 	}
 	return flow;
 fail:
-	if (remote_flow)
-		rte_free(remote_flow);
+	rte_free(remote_flow);
 	if (flow)
 		tap_flow_free(pmd, flow);
 	return NULL;
@@ -1541,8 +1540,7 @@ tap_flow_destroy_pmd(struct pmd_internals *pmd,
 		}
 	}
 end:
-	if (remote_flow)
-		rte_free(remote_flow);
+	rte_free(remote_flow);
 	tap_flow_free(pmd, flow);
 	return ret;
 }
@@ -1684,7 +1682,7 @@ int tap_flow_implicit_create(struct pmd_internals *pmd,
 	struct rte_flow_item *items = implicit_rte_flows[idx].items;
 	struct rte_flow_attr *attr = &implicit_rte_flows[idx].attr;
 	struct rte_flow_item_eth eth_local = { .type = 0 };
-	uint16_t if_index = pmd->remote_if_index;
+	unsigned int if_index = pmd->remote_if_index;
 	struct rte_flow *remote_flow = NULL;
 	struct nlmsg *msg = NULL;
 	int err = 0;
@@ -1764,8 +1762,7 @@ int tap_flow_implicit_create(struct pmd_internals *pmd,
 success:
 	return 0;
 fail:
-	if (remote_flow)
-		rte_free(remote_flow);
+	rte_free(remote_flow);
 	return -1;
 }
 
@@ -2017,7 +2014,7 @@ static int bpf_rss_key(enum bpf_rss_key_e cmd, __u32 *key_idx)
 			break;
 
 		/*
-		 * Subtract offest to restore real key index
+		 * Subtract offset to restore real key index
 		 * If a non RSS flow is falsely trying to release map
 		 * entry 0 - the offset subtraction will calculate the real
 		 * map index as an out-of-range value and the release operation

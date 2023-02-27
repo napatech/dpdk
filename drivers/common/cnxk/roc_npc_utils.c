@@ -145,6 +145,9 @@ npc_parse_item_basic(const struct roc_npc_item_info *item,
 			info->mask = item->mask;
 	}
 
+	if (info->mask == NULL)
+		return NPC_ERR_INVALID_MASK;
+
 	/* mask specified must be subset of hw supported mask
 	 * mask | hw_mask == hw_mask
 	 */
@@ -166,6 +169,9 @@ npc_update_extraction_data(struct npc_parse_state *pst,
 	int len = 0;
 
 	x = xinfo;
+	if (x->len > NPC_MAX_EXTRACT_DATA_LEN)
+		return NPC_ERR_INVALID_SIZE;
+
 	len = x->len;
 	hdr_off = x->hdr_off;
 
@@ -258,9 +264,8 @@ done:
 	return 0;
 }
 
-static int
-npc_initialise_mcam_entry(struct npc *npc, struct roc_npc_flow *flow,
-			  int mcam_id)
+int
+npc_mcam_init(struct npc *npc, struct roc_npc_flow *flow, int mcam_id)
 {
 	struct npc_mcam_write_entry_req *req;
 	struct npc_mcam_write_entry_rsq *rsp;
@@ -302,8 +307,8 @@ npc_initialise_mcam_entry(struct npc *npc, struct roc_npc_flow *flow,
 	return 0;
 }
 
-static int
-npc_shift_mcam_entry(struct mbox *mbox, uint16_t old_ent, uint16_t new_ent)
+int
+npc_mcam_move(struct mbox *mbox, uint16_t old_ent, uint16_t new_ent)
 {
 	struct npc_mcam_shift_entry_req *req;
 	struct npc_mcam_shift_entry_rsp *rsp;
@@ -359,12 +364,10 @@ npc_slide_mcam_entries(struct mbox *mbox, struct npc *npc, int prio,
 			 * Initialise and enable before moving an entry into
 			 * this mcam.
 			 */
-			rc = npc_initialise_mcam_entry(npc, curr->flow,
-						       to_mcam_id);
+			rc = npc_mcam_init(npc, curr->flow, to_mcam_id);
 			if (rc)
 				return rc;
-			rc = npc_shift_mcam_entry(mbox, from_mcam_id,
-						  to_mcam_id);
+			rc = npc_mcam_move(mbox, from_mcam_id, to_mcam_id);
 			if (rc)
 				return rc;
 			curr->flow->mcam_id = to_mcam_id;
@@ -579,7 +582,7 @@ npc_allocate_mcam_entry(struct mbox *mbox, int prio,
 	if (!rsp_cmd->count)
 		return -ENOSPC;
 
-	memcpy(rsp_local, rsp_cmd, sizeof(*rsp));
+	mbox_memcpy(rsp_local, rsp_cmd, sizeof(*rsp));
 
 	return 0;
 }
@@ -632,7 +635,7 @@ retry:
 	npc_find_mcam_ref_entry(flow, npc, &prio, &ref_entry, dir);
 	rc = npc_allocate_mcam_entry(mbox, prio, rsp_local, ref_entry);
 	if (rc && !retry_done) {
-		plt_info(
+		plt_npc_dbg(
 			"npc: Failed to allocate lower priority entry. Retrying for higher priority");
 
 		dir = NPC_MCAM_HIGHER_PRIO;
@@ -664,14 +667,14 @@ npc_get_free_mcam_entry(struct mbox *mbox, struct roc_npc_flow *flow,
 
 	new_entry->flow = flow;
 
-	plt_info("npc: kernel allocated MCAM entry %d", rsp_local.entry);
+	plt_npc_dbg("kernel allocated MCAM entry %d", rsp_local.entry);
 
 	rc = npc_sort_mcams_by_user_prio_level(mbox, new_entry, npc,
 					       &rsp_local);
 	if (rc)
 		goto err;
 
-	plt_info("npc: allocated MCAM entry after sorting %d", rsp_local.entry);
+	plt_npc_dbg("allocated MCAM entry after sorting %d", rsp_local.entry);
 	flow->mcam_id = rsp_local.entry;
 	npc_insert_into_flow_list(npc, new_entry);
 

@@ -41,6 +41,14 @@ static uint32_t multiple_kthread_on;
 static char *carrier;
 uint32_t kni_dflt_carrier;
 
+/* Request processing support for bifurcated drivers. */
+static char *enable_bifurcated;
+uint32_t bifurcated_support;
+
+/* KNI thread scheduling interval */
+static long min_scheduling_interval = 100; /* us */
+static long max_scheduling_interval = 200; /* us */
+
 #define KNI_DEV_IN_USE_BIT_NUM 0 /* Bit number for device in use */
 
 static int kni_net_id;
@@ -128,11 +136,8 @@ kni_thread_single(void *data)
 			}
 		}
 		up_read(&knet->kni_list_lock);
-#ifdef RTE_KNI_PREEMPT_DEFAULT
 		/* reschedule out for a while */
-		schedule_timeout_interruptible(
-			usecs_to_jiffies(KNI_KTHREAD_RESCHEDULE_INTERVAL));
-#endif
+		usleep_range(min_scheduling_interval, max_scheduling_interval);
 	}
 
 	return 0;
@@ -149,10 +154,7 @@ kni_thread_multiple(void *param)
 			kni_net_rx(dev);
 			kni_net_poll_resp(dev);
 		}
-#ifdef RTE_KNI_PREEMPT_DEFAULT
-		schedule_timeout_interruptible(
-			usecs_to_jiffies(KNI_KTHREAD_RESCHEDULE_INTERVAL));
-#endif
+		usleep_range(min_scheduling_interval, max_scheduling_interval);
 	}
 
 	return 0;
@@ -180,12 +182,16 @@ kni_dev_remove(struct kni_dev *dev)
 	if (!dev)
 		return -ENODEV;
 
+	/*
+	 * The memory of kni device is allocated and released together
+	 * with net device. Release mbuf before freeing net device.
+	 */
+	kni_net_release_fifo_phy(dev);
+
 	if (dev->net_dev) {
 		unregister_netdev(dev->net_dev);
 		free_netdev(dev->net_dev);
 	}
-
-	kni_net_release_fifo_phy(dev);
 
 	return 0;
 }
@@ -216,8 +222,8 @@ kni_release(struct inode *inode, struct file *file)
 			dev->pthread = NULL;
 		}
 
-		kni_dev_remove(dev);
 		list_del(&dev->list);
+		kni_dev_remove(dev);
 	}
 	up_write(&knet->kni_list_lock);
 
@@ -396,14 +402,16 @@ kni_ioctl_create(struct net *net, uint32_t ioctl_num,
 	pr_debug("mbuf_size:    %u\n", kni->mbuf_size);
 
 	/* if user has provided a valid mac address */
-	if (is_valid_ether_addr(dev_info.mac_addr))
+	if (is_valid_ether_addr(dev_info.mac_addr)) {
+#ifdef HAVE_ETH_HW_ADDR_SET
+		eth_hw_addr_set(net_dev, dev_info.mac_addr);
+#else
 		memcpy(net_dev->dev_addr, dev_info.mac_addr, ETH_ALEN);
-	else
-		/*
-		 * Generate random mac address. eth_random_addr() is the
-		 * newer version of generating mac address in kernel.
-		 */
-		random_ether_addr(net_dev->dev_addr);
+#endif
+	} else {
+		/* Assign random MAC address. */
+		eth_hw_addr_random(net_dev);
+	}
 
 	if (dev_info.mtu)
 		net_dev->mtu = dev_info.mtu;
@@ -469,8 +477,8 @@ kni_ioctl_release(struct net *net, uint32_t ioctl_num,
 			dev->pthread = NULL;
 		}
 
-		kni_dev_remove(dev);
 		list_del(&dev->list);
+		kni_dev_remove(dev);
 		ret = 0;
 		break;
 	}
@@ -481,10 +489,10 @@ kni_ioctl_release(struct net *net, uint32_t ioctl_num,
 	return ret;
 }
 
-static int
-kni_ioctl(struct inode *inode, uint32_t ioctl_num, unsigned long ioctl_param)
+static long
+kni_ioctl(struct file *file, unsigned int ioctl_num, unsigned long ioctl_param)
 {
-	int ret = -EINVAL;
+	long ret = -EINVAL;
 	struct net *net = current->nsproxy->net_ns;
 
 	pr_debug("IOCTL num=0x%0x param=0x%0lx\n", ioctl_num, ioctl_param);
@@ -510,8 +518,8 @@ kni_ioctl(struct inode *inode, uint32_t ioctl_num, unsigned long ioctl_param)
 	return ret;
 }
 
-static int
-kni_compat_ioctl(struct inode *inode, uint32_t ioctl_num,
+static long
+kni_compat_ioctl(struct file *file, unsigned int ioctl_num,
 		unsigned long ioctl_param)
 {
 	/* 32 bits app on 64 bits OS to be supported later */
@@ -524,8 +532,8 @@ static const struct file_operations kni_fops = {
 	.owner = THIS_MODULE,
 	.open = kni_open,
 	.release = kni_release,
-	.unlocked_ioctl = (void *)kni_ioctl,
-	.compat_ioctl = (void *)kni_compat_ioctl,
+	.unlocked_ioctl = kni_ioctl,
+	.compat_ioctl = kni_compat_ioctl,
 };
 
 static struct miscdevice kni_misc = {
@@ -569,6 +577,22 @@ kni_parse_carrier_state(void)
 }
 
 static int __init
+kni_parse_bifurcated_support(void)
+{
+	if (!enable_bifurcated) {
+		bifurcated_support = 0;
+		return 0;
+	}
+
+	if (strcmp(enable_bifurcated, "on") == 0)
+		bifurcated_support = 1;
+	else
+		return -1;
+
+	return 0;
+}
+
+static int __init
 kni_init(void)
 {
 	int rc;
@@ -592,6 +616,21 @@ kni_init(void)
 		pr_debug("Default carrier state set to off.\n");
 	else
 		pr_debug("Default carrier state set to on.\n");
+
+	if (kni_parse_bifurcated_support() < 0) {
+		pr_err("Invalid parameter for bifurcated support\n");
+		return -EINVAL;
+	}
+	if (bifurcated_support == 1)
+		pr_debug("bifurcated support is enabled.\n");
+
+	if (min_scheduling_interval < 0 || max_scheduling_interval < 0 ||
+		min_scheduling_interval > KNI_KTHREAD_MAX_RESCHEDULE_INTERVAL ||
+		max_scheduling_interval > KNI_KTHREAD_MAX_RESCHEDULE_INTERVAL ||
+		min_scheduling_interval >= max_scheduling_interval) {
+		pr_err("Invalid parameters for scheduling interval\n");
+		return -EINVAL;
+	}
 
 #ifdef HAVE_SIMPLIFIED_PERNET_OPERATIONS
 	rc = register_pernet_subsys(&kni_net_ops);
@@ -658,4 +697,23 @@ MODULE_PARM_DESC(carrier,
 "\t\toff   Interfaces will be created with carrier state set to off.\n"
 "\t\ton    Interfaces will be created with carrier state set to on.\n"
 "\t\t"
+);
+
+module_param(enable_bifurcated, charp, 0644);
+MODULE_PARM_DESC(enable_bifurcated,
+"Enable request processing support for bifurcated drivers, "
+"which means releasing rtnl_lock before calling userspace callback and "
+"supporting async requests (default=off):\n"
+"\t\ton    Enable request processing support for bifurcated drivers.\n"
+"\t\t"
+);
+
+module_param(min_scheduling_interval, long, 0644);
+MODULE_PARM_DESC(min_scheduling_interval,
+"KNI thread min scheduling interval (default=100 microseconds)"
+);
+
+module_param(max_scheduling_interval, long, 0644);
+MODULE_PARM_DESC(max_scheduling_interval,
+"KNI thread max scheduling interval (default=200 microseconds)"
 );

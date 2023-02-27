@@ -37,20 +37,17 @@ cavium_zip = {'Class': '12', 'Vendor': '177d', 'Device': 'a037',
 avp_vnic = {'Class': '05', 'Vendor': '1af4', 'Device': '1110',
             'SVendor': None, 'SDevice': None}
 
-octeontx2_sso = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f9,a0fa',
-                 'SVendor': None, 'SDevice': None}
-octeontx2_npa = {'Class': '08', 'Vendor': '177d', 'Device': 'a0fb,a0fc',
-                 'SVendor': None, 'SDevice': None}
-octeontx2_dma = {'Class': '08', 'Vendor': '177d', 'Device': 'a081',
-                 'SVendor': None, 'SDevice': None}
-octeontx2_ree = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f4',
-                 'SVendor': None, 'SDevice': None}
 cnxk_bphy = {'Class': '08', 'Vendor': '177d', 'Device': 'a089',
              'SVendor': None, 'SDevice': None}
 cnxk_bphy_cgx = {'Class': '08', 'Vendor': '177d', 'Device': 'a059,a060',
                  'SVendor': None, 'SDevice': None}
+cnxk_dma = {'Class': '08', 'Vendor': '177d', 'Device': 'a081',
+            'SVendor': None, 'SDevice': None}
 cnxk_inl_dev = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f0,a0f1',
                 'SVendor': None, 'SDevice': None}
+
+hisilicon_dma = {'Class': '08', 'Vendor': '19e5', 'Device': 'a122',
+                 'SVendor': None, 'SDevice': None}
 
 intel_dlb = {'Class': '0b', 'Vendor': '8086', 'Device': '270b,2710,2714',
              'SVendor': None, 'SDevice': None}
@@ -68,16 +65,28 @@ intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
 intel_ntb_icx = {'Class': '06', 'Vendor': '8086', 'Device': '347e',
                  'SVendor': None, 'SDevice': None}
 
+cnxk_sso = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f9,a0fa',
+                 'SVendor': None, 'SDevice': None}
+cnxk_npa = {'Class': '08', 'Vendor': '177d', 'Device': 'a0fb,a0fc',
+                 'SVendor': None, 'SDevice': None}
+cn9k_ree = {'Class': '08', 'Vendor': '177d', 'Device': 'a0f4',
+                 'SVendor': None, 'SDevice': None}
+
+virtio_blk = {'Class': '01', 'Vendor': "1af4", 'Device': '1001,1042',
+                    'SVendor': None, 'SDevice': None}
+
 network_devices = [network_class, cavium_pkx, avp_vnic, ifpga_class]
 baseband_devices = [acceleration_class]
 crypto_devices = [encryption_class, intel_processor_class]
-dma_devices = [intel_idxd_spr, intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx]
-eventdev_devices = [cavium_sso, cavium_tim, intel_dlb, octeontx2_sso]
-mempool_devices = [cavium_fpa, octeontx2_npa]
+dma_devices = [cnxk_dma, hisilicon_dma,
+               intel_idxd_spr, intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx]
+eventdev_devices = [cavium_sso, cavium_tim, intel_dlb, cnxk_sso]
+mempool_devices = [cavium_fpa, cnxk_npa]
 compress_devices = [cavium_zip]
-regex_devices = [octeontx2_ree]
-misc_devices = [cnxk_bphy, cnxk_bphy_cgx, cnxk_inl_dev, intel_ntb_skx,
-                intel_ntb_icx, octeontx2_dma]
+regex_devices = [cn9k_ree]
+misc_devices = [cnxk_bphy, cnxk_bphy_cgx, cnxk_inl_dev,
+                intel_ntb_skx, intel_ntb_icx,
+                virtio_blk]
 
 # global dict ethernet devices present. Dictionary indexed by PCI address.
 # Each device within this is itself a dictionary of device properties

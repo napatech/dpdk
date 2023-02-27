@@ -53,4 +53,25 @@ if [ -n "$duplicate_symbols" ] ; then
     ret=1
 fi
 
+local_miss_maps=$(grep -L 'local: \*;' $@ || true)
+if [ -n "$local_miss_maps" ] ; then
+    echo "Found maps without local catch-all:"
+    echo "$local_miss_maps"
+    ret=1
+fi
+
+find_empty_maps ()
+{
+    for map in $@ ; do
+        [ $(buildtools/map-list-symbol.sh $map | wc -l) != '0' ] || echo $map
+    done
+}
+
+empty_maps=$(find_empty_maps $@)
+if [ -n "$empty_maps" ] ; then
+    echo "Found empty maps:"
+    echo "$empty_maps"
+    ret=1
+fi
+
 exit $ret

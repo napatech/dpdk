@@ -6,6 +6,10 @@
 #ifndef _RTE_COMPAT_H_
 #define _RTE_COMPAT_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef ALLOW_EXPERIMENTAL_API
 
 #define __rte_experimental \
@@ -33,14 +37,21 @@ section(".text.internal")))
 #elif !defined ALLOW_INTERNAL_API && __has_attribute(diagnose_if) /* For clang */
 
 #define __rte_internal \
+_Pragma("GCC diagnostic push") \
+_Pragma("GCC diagnostic ignored \"-Wgcc-compat\"") \
 __attribute__((diagnose_if(1, "Symbol is not public ABI", "error"), \
-section(".text.internal")))
+section(".text.internal"))) \
+_Pragma("GCC diagnostic pop")
 
 #else
 
 #define __rte_internal \
 __attribute__((section(".text.internal")))
 
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* _RTE_COMPAT_H_ */

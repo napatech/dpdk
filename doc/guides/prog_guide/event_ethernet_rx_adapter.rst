@@ -166,6 +166,23 @@ flags for handling received packets, event queue identifier, scheduler type,
 event priority, polling frequency of the receive queue and flow identifier
 in struct ``rte_event_eth_rx_adapter_queue_conf``.
 
+Getting and resetting Adapter queue stats
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``rte_event_eth_rx_adapter_queue_stats_get()`` function reports
+adapter queue counters defined in struct ``rte_event_eth_rx_adapter_queue_stats``.
+This function reports queue level stats only when queue level event buffer is
+used otherwise it returns -EINVAL.
+
+The ``rte_event_eth_rx_adapter_queue_stats_reset`` function can be used to
+reset queue level stats when queue level event buffer is in use.
+
+Getting Adapter Instance ID
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``rte_event_eth_rx_adapter_instance_get()`` function reports
+Rx adapter instance ID for a specified ethernet device ID and Rx queue index.
+
 Interrupt Based Rx Queues
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -246,8 +263,8 @@ A loop processing ``rte_event_vector`` containing mbufs is shown below.
                         /* Process each mbuf. */
                 }
         break;
-        case ...
-        ...
+        case default:
+                /* Handle other event_types. */
         }
 
 Rx event vectorization for SW Rx adapter

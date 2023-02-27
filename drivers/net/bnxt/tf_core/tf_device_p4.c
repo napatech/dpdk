@@ -59,6 +59,113 @@ const char *tf_resource_str_p4[CFA_RESOURCE_TYPE_P4_LAST + 1] = {
 	[CFA_RESOURCE_TYPE_P4_TBL_SCOPE] = "tb_scope",
 };
 
+struct tf_rm_element_cfg tf_tbl_p4[TF_DIR_MAX][TF_TBL_TYPE_MAX] = {
+	[TF_DIR_RX][TF_TBL_TYPE_FULL_ACT_RECORD] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_FULL_ACTION,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_MCAST_GROUPS] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_MCG,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_8B] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_ENCAP_8B,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_16B] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_ENCAP_16B,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_64B] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_ENCAP_64B,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_SP_SMAC] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_SP_MAC,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_SP_SMAC_IPV4] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_SP_MAC_IPV4,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_SP_SMAC_IPV6] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_SP_MAC_IPV6,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_STATS_64] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_COUNTER_64B,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_MODIFY_IPV4] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_NAT_IPV4,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_METER_PROF] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_METER_PROF,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_METER_INST] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_METER,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_MIRROR_CONFIG] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_MIRROR,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_FULL_ACT_RECORD] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_FULL_ACTION,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_MCAST_GROUPS] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_MCG,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_8B] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_ENCAP_8B,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_16B] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_ENCAP_16B,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_64B] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_ENCAP_64B,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_SP_SMAC] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_SP_MAC,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_SP_SMAC_IPV4] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_SP_MAC_IPV4,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_SP_SMAC_IPV6] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_SP_MAC_IPV6,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_STATS_64] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_COUNTER_64B,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_MODIFY_IPV4] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_NAT_IPV4,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_METER_PROF] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_METER_PROF,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_METER_INST] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_METER,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_MIRROR_CONFIG] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P4_MIRROR,
+		0, 0
+	},
+};
+
 /**
  * Device specific function that retrieves the MAX number of HCAPI
  * types the device supports.
@@ -132,14 +239,22 @@ tf_dev_p4_get_resource_str(struct tf *tfp __rte_unused,
  *   - (-EINVAL) on failure.
  */
 static int
-tf_dev_p4_set_tcam_slice_info(struct tf *tfp __rte_unused,
+tf_dev_p4_set_tcam_slice_info(struct tf *tfp,
 			      enum tf_wc_num_slice num_slices_per_row)
 {
+	int rc;
+	struct tf_session *tfs = NULL;
+
+	/* Retrieve the session information */
+	rc = tf_session_get_session_internal(tfp, &tfs);
+	if (rc)
+		return rc;
+
 	switch (num_slices_per_row) {
 	case TF_WC_TCAM_1_SLICE_PER_ROW:
 	case TF_WC_TCAM_2_SLICE_PER_ROW:
 	case TF_WC_TCAM_4_SLICE_PER_ROW:
-		g_wc_num_slices_per_row = num_slices_per_row;
+		tfs->wc_num_slices_per_row = num_slices_per_row;
 	break;
 	default:
 		return -EINVAL;
@@ -169,16 +284,24 @@ tf_dev_p4_set_tcam_slice_info(struct tf *tfp __rte_unused,
  *   - (-EINVAL) on failure.
  */
 static int
-tf_dev_p4_get_tcam_slice_info(struct tf *tfp __rte_unused,
+tf_dev_p4_get_tcam_slice_info(struct tf *tfp,
 			      enum tf_tcam_tbl_type type,
 			      uint16_t key_sz,
 			      uint16_t *num_slices_per_row)
 {
+	int rc;
+	struct tf_session *tfs;
+
+	/* Retrieve the session information */
+	rc = tf_session_get_session_internal(tfp, &tfs);
+	if (rc)
+		return rc;
+
 /* Single slice support */
 #define CFA_P4_WC_TCAM_SLICE_SIZE     12
 
 	if (type == TF_TCAM_TBL_TYPE_WC_TCAM) {
-		*num_slices_per_row = g_wc_num_slices_per_row;
+		*num_slices_per_row = tfs->wc_num_slices_per_row;
 		if (key_sz > *num_slices_per_row * CFA_P4_WC_TCAM_SLICE_SIZE)
 			return -ENOTSUP;
 	} else { /* for other type of tcam */
@@ -271,6 +394,67 @@ static bool tf_dev_p4_is_sram_managed(struct tf *tfp __rte_unused,
 {
 	return false;
 }
+
+/**
+ * Device specific function that maps the hcapi resource types
+ * to Truflow type.
+ *
+ * [in] hcapi_caps
+ *   CFA resource type bitmap
+ *
+ * [out] ident_caps
+ *   Pointer to identifier type bitmap
+ *
+ * [out] tcam_caps
+ *   Pointer to tcam type bitmap
+ *
+ * [out] tbl_caps
+ *   Pointer to table type bitmap
+ *
+ * [out] em_caps
+ *   Pointer to em type bitmap
+ *
+ * Returns
+ *   - (0) if successful.
+ *   - (-EINVAL) on failure.
+ */
+static int tf_dev_p4_map_hcapi_caps(uint64_t hcapi_caps,
+				    uint32_t *ident_caps,
+				    uint32_t *tcam_caps,
+				    uint32_t *tbl_caps,
+				    uint32_t *em_caps)
+{
+	uint32_t i;
+
+	*ident_caps = 0;
+	*tcam_caps = 0;
+	*tbl_caps = 0;
+	*em_caps = 0;
+
+	for (i = 0; i <= CFA_RESOURCE_TYPE_P4_LAST; i++) {
+		if (hcapi_caps & 1ULL << i) {
+			switch (tf_hcapi_res_map_p4[i].module_type) {
+			case TF_MODULE_TYPE_IDENTIFIER:
+				*ident_caps |= tf_hcapi_res_map_p4[i].type_caps;
+				break;
+			case TF_MODULE_TYPE_TABLE:
+				*tbl_caps |= tf_hcapi_res_map_p4[i].type_caps;
+				break;
+			case TF_MODULE_TYPE_TCAM:
+				*tcam_caps |= tf_hcapi_res_map_p4[i].type_caps;
+				break;
+			case TF_MODULE_TYPE_EM:
+				*em_caps |= tf_hcapi_res_map_p4[i].type_caps;
+				break;
+			default:
+				return -EINVAL;
+			}
+		}
+	}
+
+	return 0;
+}
+
 /**
  * Truflow P4 device specific functions
  */
@@ -321,6 +505,10 @@ const struct tf_dev_ops tf_dev_ops_p4_init = {
 	.tf_dev_get_global_cfg = NULL,
 	.tf_dev_get_mailbox = tf_dev_p4_get_mailbox,
 	.tf_dev_word_align = NULL,
+	.tf_dev_map_hcapi_caps = tf_dev_p4_map_hcapi_caps,
+	.tf_dev_get_sram_resources = NULL,
+	.tf_dev_set_sram_policy = NULL,
+	.tf_dev_get_sram_policy = NULL,
 };
 
 /**
@@ -382,5 +570,9 @@ const struct tf_dev_ops tf_dev_ops_p4 = {
 	.tf_dev_get_global_cfg = tf_global_cfg_get,
 	.tf_dev_get_mailbox = tf_dev_p4_get_mailbox,
 	.tf_dev_word_align = tf_dev_p4_word_align,
-	.tf_dev_cfa_key_hash = hcapi_cfa_p4_key_hash
+	.tf_dev_cfa_key_hash = hcapi_cfa_p4_key_hash,
+	.tf_dev_map_hcapi_caps = tf_dev_p4_map_hcapi_caps,
+	.tf_dev_get_sram_resources = NULL,
+	.tf_dev_set_sram_policy = NULL,
+	.tf_dev_get_sram_policy = NULL,
 };

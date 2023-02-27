@@ -225,7 +225,7 @@ struct qede_fastpath {
 	struct qede_tx_queue *txq;
 };
 
-/* This structure holds the inforation of fast path queues
+/* This structure holds the information of fast path queues
  * belonging to individual engines in CMT mode.
  */
 struct qede_fastpath_cmt {
@@ -272,9 +272,6 @@ uint16_t qede_recv_pkts_cmt(void *p_rxq, struct rte_mbuf **rx_pkts,
 uint16_t
 qede_recv_pkts_regular(void *p_rxq, struct rte_mbuf **rx_pkts,
 		       uint16_t nb_pkts);
-uint16_t qede_rxtx_pkts_dummy(void *p_rxq,
-			      struct rte_mbuf **pkts,
-			      uint16_t nb_pkts);
 
 int qede_start_queues(struct rte_eth_dev *eth_dev);
 

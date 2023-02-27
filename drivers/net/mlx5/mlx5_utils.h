@@ -55,7 +55,7 @@ extern int mlx5_logtype;
 
 /*
  * For the case which data is linked with sequence increased index, the
- * array table will be more efficiect than hash table once need to serarch
+ * array table will be more efficient than hash table once need to search
  * one data entry in large numbers of entries. Since the traditional hash
  * tables has fixed table size, when huge numbers of data saved to the hash
  * table, it also comes lots of hash conflict.
@@ -171,6 +171,14 @@ typedef int32_t (*mlx5_l3t_alloc_callback_fn)(void *ctx,
 					   union mlx5_l3t_data *data);
 
 /*
+ * The default ipool threshold value indicates which per_core_cache
+ * value to set.
+ */
+#define MLX5_HW_IPOOL_SIZE_THRESHOLD (1 << 19)
+/* The default min local cache size. */
+#define MLX5_HW_IPOOL_CACHE_MIN (1 << 9)
+
+/*
  * The indexed memory entry index is made up of trunk index and offset of
  * the entry in the trunk. Since the entry index is 32 bits, in case user
  * prefers to have small trunks, user can change the macro below to a big
@@ -207,7 +215,7 @@ struct mlx5_indexed_pool_config {
 	 */
 	uint32_t need_lock:1;
 	/* Lock is needed for multiple thread usage. */
-	uint32_t release_mem_en:1; /* Rlease trunk when it is free. */
+	uint32_t release_mem_en:1; /* Release trunk when it is free. */
 	uint32_t max_idx; /* The maximum index can be allocated. */
 	uint32_t per_core_cache;
 	/*
@@ -458,34 +466,6 @@ void mlx5_l3t_destroy(struct mlx5_l3t_tbl *tbl);
 
 int32_t mlx5_l3t_get_entry(struct mlx5_l3t_tbl *tbl, uint32_t idx,
 			    union mlx5_l3t_data *data);
-
-/**
- * This function gets the index entry from Three-level table.
- *
- * If the index entry is not available, allocate new one by callback
- * function and fill in the entry.
- *
- * @param tbl
- *   Pointer to the l3t.
- * @param idx
- *   Index to the entry.
- * @param data
- *   Pointer to the memory which saves the entry data.
- *   When function call returns 0, data contains the entry data get from
- *   l3t.
- *   When function call returns -1, data is not modified.
- * @param cb
- *   Callback function to allocate new data.
- * @param ctx
- *   Context for callback function.
- *
- * @return
- *   0 if success, -1 on error.
- */
-
-int32_t mlx5_l3t_prepare_entry(struct mlx5_l3t_tbl *tbl, uint32_t idx,
-			       union mlx5_l3t_data *data,
-			       mlx5_l3t_alloc_callback_fn cb, void *ctx);
 
 /**
  * This function decreases and clear index entry if reference

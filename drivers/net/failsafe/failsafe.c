@@ -11,7 +11,8 @@
 #include <ethdev_vdev.h>
 #include <rte_devargs.h>
 #include <rte_kvargs.h>
-#include <rte_bus_vdev.h>
+#include <bus_driver.h>
+#include <bus_vdev_driver.h>
 
 #include "failsafe_private.h"
 
@@ -308,8 +309,8 @@ fs_rte_eth_free(const char *name)
 	if (dev == NULL)
 		return 0; /* port already released */
 	ret = failsafe_eth_dev_close(dev);
-	rte_eth_dev_release_port(dev);
 	rte_intr_instance_free(PRIV(dev)->intr_handle);
+	rte_eth_dev_release_port(dev);
 	return ret;
 }
 
@@ -340,8 +341,7 @@ rte_pmd_failsafe_probe(struct rte_vdev_device *vdev)
 	INFO("Initializing " FAILSAFE_DRIVER_NAME " for %s",
 			name);
 
-	if (rte_eal_process_type() == RTE_PROC_SECONDARY &&
-	    strlen(rte_vdev_device_args(vdev)) == 0) {
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
 		eth_dev = rte_eth_dev_attach_secondary(name);
 		if (!eth_dev) {
 			ERROR("Failed to probe %s", name);

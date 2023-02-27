@@ -6,9 +6,13 @@
 #ifndef _RTE_ETHDEV_PCI_H_
 #define _RTE_ETHDEV_PCI_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <rte_malloc.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_config.h>
 #include <ethdev_driver.h>
 
@@ -46,8 +50,9 @@ rte_eth_copy_pci_info(struct rte_eth_dev *eth_dev,
 }
 
 static inline int
-eth_dev_pci_specific_init(struct rte_eth_dev *eth_dev, void *bus_device) {
-	struct rte_pci_device *pci_dev = bus_device;
+eth_dev_pci_specific_init(struct rte_eth_dev *eth_dev, void *bus_device)
+{
+	struct rte_pci_device *pci_dev = (struct rte_pci_device *)bus_device;
 
 	if (!pci_dev)
 		return -ENODEV;
@@ -125,7 +130,8 @@ rte_eth_dev_pci_generic_probe(struct rte_pci_device *pci_dev,
 	if (!eth_dev)
 		return -ENOMEM;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev_init, -EINVAL);
+	if (*dev_init == NULL)
+		return -EINVAL;
 	ret = dev_init(eth_dev);
 	if (ret)
 		rte_eth_dev_release_port(eth_dev);
@@ -170,5 +176,9 @@ rte_eth_dev_pci_generic_remove(struct rte_pci_device *pci_dev,
 	rte_eth_dev_release_port(eth_dev);
 	return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _RTE_ETHDEV_PCI_H_ */

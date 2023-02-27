@@ -15,7 +15,6 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/time.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -27,7 +26,6 @@
 #include <rte_errno.h>
 #include <rte_lcore.h>
 #include <rte_log.h>
-#include <rte_tailq.h>
 
 #include "eal_memcfg.h"
 #include "eal_private.h"
@@ -262,7 +260,7 @@ rte_mp_action_unregister(const char *name)
 }
 
 static int
-read_msg(struct mp_msg_internal *m, struct sockaddr_un *s)
+read_msg(int fd, struct mp_msg_internal *m, struct sockaddr_un *s)
 {
 	int msglen;
 	struct iovec iov;
@@ -282,8 +280,17 @@ read_msg(struct mp_msg_internal *m, struct sockaddr_un *s)
 	msgh.msg_control = control;
 	msgh.msg_controllen = sizeof(control);
 
-	msglen = recvmsg(mp_fd, &msgh, 0);
+retry:
+	msglen = recvmsg(fd, &msgh, 0);
+
+	/* zero length message means socket was closed */
+	if (msglen == 0)
+		return 0;
+
 	if (msglen < 0) {
+		if (errno == EINTR)
+			goto retry;
+
 		RTE_LOG(ERR, EAL, "recvmsg failed, %s\n", strerror(errno));
 		return -1;
 	}
@@ -311,7 +318,7 @@ read_msg(struct mp_msg_internal *m, struct sockaddr_un *s)
 		RTE_LOG(ERR, EAL, "invalid received data length\n");
 		return -1;
 	}
-	return 0;
+	return msglen;
 }
 
 static void
@@ -383,10 +390,16 @@ mp_handle(void *arg __rte_unused)
 {
 	struct mp_msg_internal msg;
 	struct sockaddr_un sa;
+	int fd;
 
-	while (mp_fd >= 0) {
-		if (read_msg(&msg, &sa) == 0)
-			process_msg(&msg, &sa);
+	while ((fd = __atomic_load_n(&mp_fd, __ATOMIC_RELAXED)) >= 0) {
+		int ret;
+
+		ret = read_msg(fd, &msg, &sa);
+		if (ret <= 0)
+			break;
+
+		process_msg(&msg, &sa);
 	}
 
 	return NULL;
@@ -626,9 +639,8 @@ rte_mp_channel_init(void)
 			NULL, mp_handle, NULL) < 0) {
 		RTE_LOG(ERR, EAL, "failed to create mp thread: %s\n",
 			strerror(errno));
-		close(mp_fd);
 		close(dir_fd);
-		mp_fd = -1;
+		close(__atomic_exchange_n(&mp_fd, -1, __ATOMIC_RELAXED));
 		return -1;
 	}
 
@@ -644,11 +656,10 @@ rte_mp_channel_cleanup(void)
 {
 	int fd;
 
-	if (mp_fd < 0)
+	fd = __atomic_exchange_n(&mp_fd, -1, __ATOMIC_RELAXED);
+	if (fd < 0)
 		return;
 
-	fd = mp_fd;
-	mp_fd = -1;
 	pthread_cancel(mp_handle_tid);
 	pthread_join(mp_handle_tid, NULL);
 	close_socket_fd(fd);

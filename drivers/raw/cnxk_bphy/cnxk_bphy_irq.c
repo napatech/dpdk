@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(C) 2021 Marvell.
  */
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_pci.h>
 #include <rte_rawdev.h>
 #include <rte_rawdev_pmd.h>
@@ -90,7 +90,7 @@ cnxk_bphy_intr_unregister(uint16_t dev_id, int irq_num)
 		plt_err("Missing irq chip");
 }
 
-struct bphy_mem *
+struct cnxk_bphy_mem *
 cnxk_bphy_mem_get(uint16_t dev_id)
 {
 	struct bphy_device *bphy_dev = cnxk_bphy_get_bphy_dev_by_dev_id(dev_id);

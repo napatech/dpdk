@@ -98,7 +98,6 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 		int ret;
 		struct rte_flow_error error;
 		struct rte_flow_restore_info info = { 0, };
-		struct rte_port *port = &ports[port_id];
 
 		mb = pkts[i];
 		if (rxq_share > 0)
@@ -108,9 +107,7 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 		eth_type = RTE_BE_TO_CPU_16(eth_hdr->ether_type);
 		packet_type = mb->packet_type;
 		is_encapsulation = RTE_ETH_IS_TUNNEL_PKT(packet_type);
-
-		ret = rte_flow_get_restore_info(port->flow_transfer_proxy,
-						mb, &info, &error);
+		ret = rte_flow_get_restore_info(port_id, mb, &info, &error);
 		if (!ret) {
 			MKDUMPSTR(print_buf, buf_size, cur_len,
 				  "restore info:");
@@ -153,8 +150,8 @@ dump_pkt_burst(uint16_t port_id, uint16_t queue, struct rte_mbuf *pkts[],
 		print_ether_addr(" - dst=", &eth_hdr->dst_addr,
 				 print_buf, buf_size, &cur_len);
 		MKDUMPSTR(print_buf, buf_size, cur_len,
-			  " - type=0x%04x - length=%u - nb_segs=%d",
-			  eth_type, (unsigned int) mb->pkt_len,
+			  " - pool=%s - type=0x%04x - length=%u - nb_segs=%d",
+			  mb->pool->name, eth_type, (unsigned int) mb->pkt_len,
 			  (int)mb->nb_segs);
 		ol_flags = mb->ol_flags;
 		if (ol_flags & RTE_MBUF_F_RX_RSS_HASH) {

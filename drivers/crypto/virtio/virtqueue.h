@@ -88,7 +88,7 @@ struct virtqueue {
 
 	uint16_t  *notify_addr;
 
-	struct vq_desc_extra vq_descx[0];
+	struct vq_desc_extra vq_descx[];
 };
 
 /**
@@ -145,7 +145,7 @@ virtqueue_notify(struct virtqueue *vq)
 {
 	/*
 	 * Ensure updated avail->idx is visible to host.
-	 * For virtio on IA, the notificaiton is through io port operation
+	 * For virtio on IA, the notification is through io port operation
 	 * which is a serialization instruction itself.
 	 */
 	VTPCI_OPS(vq->hw)->notify_queue(vq->hw, vq);

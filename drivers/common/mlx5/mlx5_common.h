@@ -7,7 +7,9 @@
 
 #include <stdio.h>
 
+#include <rte_compat.h>
 #include <rte_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_debug.h>
 #include <rte_atomic.h>
 #include <rte_rwlock.h>
@@ -280,12 +282,122 @@ struct mlx5_klm {
 	uint64_t address;
 };
 
+/** Control for key/values list. */
+struct mlx5_kvargs_ctrl {
+	struct rte_kvargs *kvlist; /* Structure containing list of key/values.*/
+	bool is_used[RTE_KVARGS_MAX]; /* Indicator which devargs were used. */
+};
+
+/**
+ * Call a handler function for each key/value in the list of keys.
+ *
+ * For each key/value association that matches the given key, calls the
+ * handler function with the for a given arg_name passing the value on the
+ * dictionary for that key and a given extra argument.
+ *
+ * @param mkvlist
+ *   The mlx5_kvargs structure.
+ * @param keys
+ *   A list of keys to process (table of const char *, the last must be NULL).
+ * @param handler
+ *   The function to call for each matching key.
+ * @param opaque_arg
+ *   A pointer passed unchanged to the handler.
+ *
+ * @return
+ *   - 0 on success
+ *   - Negative on error
+ */
+__rte_internal
+int
+mlx5_kvargs_process(struct mlx5_kvargs_ctrl *mkvlist, const char *const keys[],
+		    arg_handler_t handler, void *opaque_arg);
+
+/* All UAR arguments using doorbell register in datapath. */
+struct mlx5_uar_data {
+	uint64_t *db;
+	/* The doorbell's virtual address mapped to the relevant HW UAR space.*/
+#ifndef RTE_ARCH_64
+	rte_spinlock_t *sl_p;
+	/* Pointer to UAR access lock required for 32bit implementations. */
+#endif /* RTE_ARCH_64 */
+};
+
+/* DevX UAR control structure. */
+struct mlx5_uar {
+	struct mlx5_uar_data bf_db; /* UAR data for Blueflame register. */
+	struct mlx5_uar_data cq_db; /* UAR data for CQ arm db register. */
+	void *obj; /* DevX UAR object. */
+	bool dbnc; /* Doorbell mapped to non-cached region. */
+#ifndef RTE_ARCH_64
+	rte_spinlock_t bf_sl;
+	rte_spinlock_t cq_sl;
+	/* UAR access locks required for 32bit implementations. */
+#endif /* RTE_ARCH_64 */
+};
+
+/**
+ * Ring a doorbell and flush the update if requested.
+ *
+ * @param uar
+ *   Pointer to UAR data structure.
+ * @param val
+ *   value to write in big endian format.
+ * @param index
+ *   Index of doorbell record.
+ * @param db_rec
+ *   Address of doorbell record.
+ * @param flash
+ *   Decide whether to flush the DB writing using a memory barrier.
+ */
+static __rte_always_inline void
+mlx5_doorbell_ring(struct mlx5_uar_data *uar, uint64_t val, uint32_t index,
+		   volatile uint32_t *db_rec, bool flash)
+{
+	rte_io_wmb();
+	*db_rec = rte_cpu_to_be_32(index);
+	/* Ensure ordering between DB record actual update and UAR access. */
+	rte_wmb();
+#ifdef RTE_ARCH_64
+	*uar->db = val;
+#else /* !RTE_ARCH_64 */
+	rte_spinlock_lock(uar->sl_p);
+	*(volatile uint32_t *)uar->db = val;
+	rte_io_wmb();
+	*((volatile uint32_t *)uar->db + 1) = val >> 32;
+	rte_spinlock_unlock(uar->sl_p);
+#endif
+	if (flash)
+		rte_wmb();
+}
+
+/**
+ * Get the doorbell register mapping type.
+ *
+ * @param uar_mmap_offset
+ *   Mmap offset of Verbs/DevX UAR.
+ * @param page_size
+ *   System page size
+ *
+ * @return
+ *   1 for non-cached, 0 otherwise.
+ */
+static inline uint16_t
+mlx5_db_map_type_get(off_t uar_mmap_offset, size_t page_size)
+{
+	off_t cmd = uar_mmap_offset / page_size;
+
+	cmd >>= MLX5_UAR_MMAP_CMD_SHIFT;
+	cmd &= MLX5_UAR_MMAP_CMD_MASK;
+	if (cmd == MLX5_MMAP_GET_NC_PAGES_CMD)
+		return 1;
+	return 0;
+}
+
 __rte_internal
 void mlx5_translate_port_name(const char *port_name_in,
 			      struct mlx5_switch_info *port_info_out);
 void mlx5_glue_constructor(void);
-__rte_internal
-void *mlx5_devx_alloc_uar(void *ctx, int mapping);
 extern uint8_t haswell_broadwell_cpu;
 
 __rte_internal
@@ -335,6 +447,8 @@ void mlx5_common_init(void);
 struct mlx5_common_dev_config {
 	struct mlx5_hca_attr hca_attr; /* HCA attributes. */
 	int dbnc; /* Skip doorbell register write barrier. */
+	int device_fd; /* Device file descriptor for importation. */
+	int pd_handle; /* Protection Domain handle for importation.  */
 	unsigned int devx:1; /* Whether devx interface is available or not. */
 	unsigned int sys_mem_en:1; /* The default memory allocator. */
 	unsigned int mr_mempool_reg_en:1;
@@ -355,14 +469,32 @@ struct mlx5_common_device {
 };
 
 /**
+ * Indicates whether PD and CTX are imported from another process,
+ * or created by this process.
+ *
+ * @param cdev
+ *   Pointer to common device.
+ *
+ * @return
+ *   True if PD and CTX are imported from another process, False otherwise.
+ */
+static inline bool
+mlx5_imported_pd_and_ctx(struct mlx5_common_device *cdev)
+{
+	return cdev->config.device_fd != MLX5_ARG_UNSET &&
+	       cdev->config.pd_handle != MLX5_ARG_UNSET;
+}
+
+/**
  * Initialization function for the driver called during device probing.
  */
-typedef int (mlx5_class_driver_probe_t)(struct mlx5_common_device *dev);
+typedef int (mlx5_class_driver_probe_t)(struct mlx5_common_device *cdev,
+					struct mlx5_kvargs_ctrl *mkvlist);
 
 /**
  * Uninitialization function for the driver called during hot-unplugging.
  */
-typedef int (mlx5_class_driver_remove_t)(struct mlx5_common_device *dev);
+typedef int (mlx5_class_driver_remove_t)(struct mlx5_common_device *cdev);
 
 /** Device already probed can be probed again to check for new ports. */
 #define MLX5_DRV_PROBE_AGAIN 0x0004
@@ -408,6 +540,20 @@ __rte_internal
 bool
 mlx5_dev_is_pci(const struct rte_device *dev);
 
+/**
+ * Test PCI device is a VF device.
+ *
+ * @param pci_dev
+ *   Pointer to PCI device.
+ *
+ * @return
+ *   - True on PCI device is a VF device.
+ *   - False otherwise.
+ */
+__rte_internal
+bool
+mlx5_dev_is_vf_pci(struct rte_pci_device *pci_dev);
+
 __rte_internal
 int
 mlx5_dev_mempool_subscribe(struct mlx5_common_device *cdev);
@@ -417,16 +563,37 @@ void
 mlx5_dev_mempool_unregister(struct mlx5_common_device *cdev,
 			    struct rte_mempool *mp);
 
-/* mlx5_common_mr.c */
+__rte_internal
+int
+mlx5_devx_uar_prepare(struct mlx5_common_device *cdev, struct mlx5_uar *uar);
 
 __rte_internal
-uint32_t
-mlx5_mr_mb2mr(struct mlx5_common_device *cdev, struct mlx5_mp_id *mp_id,
-	      struct mlx5_mr_ctrl *mr_ctrl, struct rte_mbuf *mbuf);
+void
+mlx5_devx_uar_release(struct mlx5_uar *uar);
 
 /* mlx5_common_os.c */
 
 int mlx5_os_open_device(struct mlx5_common_device *cdev, uint32_t classes);
-int mlx5_os_pd_create(struct mlx5_common_device *cdev);
+int mlx5_os_pd_prepare(struct mlx5_common_device *cdev);
+int mlx5_os_pd_release(struct mlx5_common_device *cdev);
+int mlx5_os_remote_pd_and_ctx_validate(struct mlx5_common_dev_config *config);
+
+/* mlx5 PMD wrapped MR struct. */
+struct mlx5_pmd_wrapped_mr {
+	uint32_t	     lkey;
+	void		     *addr;
+	size_t		     len;
+	void		     *obj; /* verbs mr object or devx umem object. */
+	void		     *imkey; /* DevX indirect mkey object. */
+};
+
+__rte_internal
+int
+mlx5_os_wrapped_mkey_create(void *ctx, void *pd, uint32_t pdn, void *addr,
+			    size_t length, struct mlx5_pmd_wrapped_mr *pmd_mr);
+
+__rte_internal
+void
+mlx5_os_wrapped_mkey_destroy(struct mlx5_pmd_wrapped_mr *pmd_mr);
 
 #endif /* RTE_PMD_MLX5_COMMON_H_ */

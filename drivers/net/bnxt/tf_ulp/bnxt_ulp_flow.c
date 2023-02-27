@@ -115,9 +115,11 @@ bnxt_ulp_init_mapper_params(struct bnxt_ulp_mapper_create_parms *mapper_cparms,
 	ULP_COMP_FLD_IDX_WR(params, BNXT_ULP_CF_IDX_FLOW_SIG_ID,
 			    params->flow_sig_id);
 
+	if (bnxt_ulp_cntxt_ptr2_ulp_flags_get(params->ulp_ctx, &ulp_flags))
+		return;
+
 	/* update the WC Priority flag */
-	if (!bnxt_ulp_cntxt_ptr2_ulp_flags_get(params->ulp_ctx, &ulp_flags) &&
-	    ULP_HIGH_AVAIL_IS_ENABLED(ulp_flags)) {
+	if (ULP_HIGH_AVAIL_IS_ENABLED(ulp_flags)) {
 		enum ulp_ha_mgr_region region = ULP_HA_REGION_LOW;
 		int32_t rc;
 
@@ -128,6 +130,29 @@ bnxt_ulp_init_mapper_params(struct bnxt_ulp_mapper_create_parms *mapper_cparms,
 			ULP_COMP_FLD_IDX_WR(params,
 					    BNXT_ULP_CF_IDX_WC_IS_HA_HIGH_REG,
 					    1);
+	}
+
+	/* Update the socket direct flag */
+	if (ULP_BITMAP_ISSET(params->hdr_bitmap.bits,
+			     BNXT_ULP_HDR_BIT_SVIF_IGNORE)) {
+		uint32_t ifindex;
+		uint16_t vport;
+
+		/* Get the port db ifindex */
+		if (ulp_port_db_dev_port_to_ulp_index(params->ulp_ctx,
+						      params->port_id,
+						      &ifindex)) {
+			BNXT_TF_DBG(ERR, "Invalid port id %u\n",
+				    params->port_id);
+			return;
+		}
+		/* Update the phy port of the other interface */
+		if (ulp_port_db_vport_get(params->ulp_ctx, ifindex, &vport)) {
+			BNXT_TF_DBG(ERR, "Invalid port if index %u\n", ifindex);
+			return;
+		}
+		ULP_COMP_FLD_IDX_WR(params, BNXT_ULP_CF_IDX_SOCKET_DIRECT_VPORT,
+				    (vport == 1) ? 2 : 1);
 	}
 }
 

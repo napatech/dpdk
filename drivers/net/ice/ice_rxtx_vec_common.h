@@ -250,7 +250,8 @@ ice_rxq_vec_setup_default(struct ice_rx_queue *rxq)
 #define ICE_TX_NO_VECTOR_FLAGS (			\
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |		\
 		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |	\
-		RTE_ETH_TX_OFFLOAD_TCP_TSO)
+		RTE_ETH_TX_OFFLOAD_TCP_TSO |	\
+		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM)
 
 #define ICE_TX_VECTOR_OFFLOAD (				\
 		RTE_ETH_TX_OFFLOAD_VLAN_INSERT |		\
@@ -288,6 +289,9 @@ ice_rx_vec_queue_default(struct ice_rx_queue *rxq)
 		return -1;
 
 	if (rxq->offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP)
+		return -1;
+
+	if (rxq->offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT)
 		return -1;
 
 	if (rxq->offloads & ICE_RX_VECTOR_OFFLOAD)
@@ -366,7 +370,7 @@ ice_txd_enable_offload(struct rte_mbuf *tx_pkt,
 	/* Tx Checksum Offload */
 	/* SET MACLEN */
 	td_offset |= (tx_pkt->l2_len >> 1) <<
-			ICE_TX_DESC_LEN_MACLEN_S;
+		ICE_TX_DESC_LEN_MACLEN_S;
 
 	/* Enable L3 checksum offload */
 	if (ol_flags & RTE_MBUF_F_TX_IP_CKSUM) {

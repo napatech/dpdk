@@ -45,10 +45,10 @@
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 1024
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+#define RX_DESC_DEFAULT 1024
+#define TX_DESC_DEFAULT 1024
+static uint16_t nb_rxd = RX_DESC_DEFAULT;
+static uint16_t nb_txd = TX_DESC_DEFAULT;
 
 /* ethernet addresses of ports */
 static struct rte_ether_addr lsi_ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -78,9 +78,6 @@ struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
 
 /* Global configuration stored in a static structure. 8< */
 static struct rte_eth_conf port_conf = {
-	.rxmode = {
-		.split_hdr_size = 0,
-	},
 	.txmode = {
 		.mq_mode = RTE_ETH_MQ_TX_NONE,
 	},
@@ -101,9 +98,10 @@ struct lsi_port_statistics {
 struct lsi_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 
 /* A tsc-based timer responsible for triggering statistics printout */
-#define TIMER_MILLISECOND 2000000ULL /* around 1ms at 2 Ghz */
+#define TIMER_MILLISECOND (rte_get_timer_hz() / 1000)
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
-static int64_t timer_period = 10 * TIMER_MILLISECOND * 1000; /* default period is 10 seconds */
+#define DEFAULT_TIMER_PERIOD 10UL /* default period is 10 seconds */
+static int64_t timer_period;
 
 /* Print out statistics on packets dropped */
 static void
@@ -369,6 +367,8 @@ lsi_parse_args(int argc, char **argv)
 	static struct option lgopts[] = {
 		{NULL, 0, 0, 0}
 	};
+
+	timer_period = DEFAULT_TIMER_PERIOD * TIMER_MILLISECOND * 1000;
 
 	argvopt = argv;
 

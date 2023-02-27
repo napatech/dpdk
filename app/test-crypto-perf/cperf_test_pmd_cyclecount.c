@@ -3,6 +3,7 @@
  */
 
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include <rte_crypto.h>
 #include <rte_cryptodev.h>
@@ -27,7 +28,7 @@ struct cperf_pmd_cyclecount_ctx {
 	struct rte_crypto_op **ops;
 	struct rte_crypto_op **ops_processed;
 
-	struct rte_cryptodev_sym_session *sess;
+	void *sess;
 
 	cperf_populate_ops_t populate_ops;
 
@@ -70,30 +71,23 @@ cperf_pmd_cyclecount_test_free(struct cperf_pmd_cyclecount_ctx *ctx)
 				(struct rte_security_ctx *)
 				rte_cryptodev_get_sec_ctx(ctx->dev_id);
 			rte_security_session_destroy(sec_ctx,
-				(struct rte_security_session *)ctx->sess);
+				(void *)ctx->sess);
 		} else
 #endif
-		{
-			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
-			rte_cryptodev_sym_session_free(ctx->sess);
-		}
+			rte_cryptodev_sym_session_free(ctx->dev_id, ctx->sess);
 	}
 
-	if (ctx->pool)
-		rte_mempool_free(ctx->pool);
+	rte_mempool_free(ctx->pool);
 
-	if (ctx->ops)
-		rte_free(ctx->ops);
+	rte_free(ctx->ops);
 
-	if (ctx->ops_processed)
-		rte_free(ctx->ops_processed);
+	rte_free(ctx->ops_processed);
 
 	rte_free(ctx);
 }
 
 void *
 cperf_pmd_cyclecount_test_constructor(struct rte_mempool *sess_mp,
-		struct rte_mempool *sess_priv_mp,
 		uint8_t dev_id, uint16_t qp_id,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
@@ -120,7 +114,7 @@ cperf_pmd_cyclecount_test_constructor(struct rte_mempool *sess_mp,
 	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
 			sizeof(struct rte_crypto_sym_op);
 
-	ctx->sess = op_fns->sess_create(sess_mp, sess_priv_mp, dev_id, options,
+	ctx->sess = op_fns->sess_create(sess_mp, dev_id, options,
 			test_vector, iv_offset);
 	if (ctx->sess == NULL)
 		goto err;
@@ -334,7 +328,7 @@ pmd_cyclecount_bench_burst_sz(
 	 * queue, so we never get any failed enqs unless the driver won't accept
 	 * the exact number of descriptors we requested, or the driver won't
 	 * wrap around the end of the TX ring. However, since we're only
-	 * dequeueing once we've filled up the queue, we have to benchmark it
+	 * dequeuing once we've filled up the queue, we have to benchmark it
 	 * piecemeal and then average out the results.
 	 */
 	cur_op = 0;
@@ -404,7 +398,7 @@ cperf_pmd_cyclecount_test_runner(void *test_ctx)
 	state.lcore = rte_lcore_id();
 	state.linearize = 0;
 
-	static rte_atomic16_t display_once = RTE_ATOMIC16_INIT(0);
+	static uint16_t display_once;
 	static bool warmup = true;
 
 	/*
@@ -449,8 +443,10 @@ cperf_pmd_cyclecount_test_runner(void *test_ctx)
 			continue;
 		}
 
+		uint16_t exp = 0;
 		if (!opts->csv) {
-			if (rte_atomic16_test_and_set(&display_once))
+			if (__atomic_compare_exchange_n(&display_once, &exp, 1, 0,
+					__ATOMIC_RELAXED, __ATOMIC_RELAXED))
 				printf(PRETTY_HDR_FMT, "lcore id", "Buf Size",
 						"Burst Size", "Enqueued",
 						"Dequeued", "Enq Retries",
@@ -466,7 +462,8 @@ cperf_pmd_cyclecount_test_runner(void *test_ctx)
 					state.cycles_per_enq,
 					state.cycles_per_deq);
 		} else {
-			if (rte_atomic16_test_and_set(&display_once))
+			if (__atomic_compare_exchange_n(&display_once, &exp, 1, 0,
+					__ATOMIC_RELAXED, __ATOMIC_RELAXED))
 				printf(CSV_HDR_FMT, "# lcore id", "Buf Size",
 						"Burst Size", "Enqueued",
 						"Dequeued", "Enq Retries",

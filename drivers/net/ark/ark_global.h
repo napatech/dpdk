@@ -15,7 +15,7 @@
 #include <rte_string_fns.h>
 #include <rte_cycles.h>
 #include <rte_kvargs.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_version.h>
 
 #include "ark_pktdir.h"
@@ -67,7 +67,7 @@
 typedef void (*rx_user_meta_hook_fn)(struct rte_mbuf *mbuf,
 				     const uint32_t *meta,
 				     void *ext_user_data);
-/* TX hook poplulate *meta, with up to 20 bytes.  meta_cnt
+/* TX hook populate *meta, with up to 20 bytes.  meta_cnt
  * returns the number of uint32_t words populated, 0 to 5
  */
 typedef void (*tx_user_meta_hook_fn)(const struct rte_mbuf *mbuf,
@@ -107,11 +107,13 @@ struct ark_adapter {
 
 	/* Pointers to packet generator and checker */
 	int start_pg;
+	uint16_t pg_running;
 	ark_pkt_gen_t pg;
 	ark_pkt_chkr_t pc;
 	ark_pkt_dir_t pd;
 
 	int num_ports;
+	bool isvf;
 
 	/* Packet generator/checker args */
 	char pkt_gen_args[ARK_MAX_ARG_LEN];
