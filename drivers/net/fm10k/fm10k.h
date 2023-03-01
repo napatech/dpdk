@@ -44,7 +44,7 @@
 #define FM10K_TX_MAX_MTU_SEG UINT8_MAX
 
 /*
- * byte aligment for HW RX data buffer
+ * byte alignment for HW RX data buffer
  * Datasheet requires RX buffer addresses shall either be 512-byte aligned or
  * be 8-byte aligned but without crossing host memory pages (4KB alignment
  * boundaries). Satisfy first option.
@@ -80,8 +80,6 @@
 #define FM10K_TX_RS_THRESH_MAX(txq)        \
 	RTE_MIN(((txq)->nb_desc - 2), (txq)->free_thresh)
 #define FM10K_TX_RS_THRESH_DIV(txq)        ((txq)->nb_desc)
-
-#define FM10K_VLAN_TAG_SIZE 4
 
 /* Maximum number of MAC addresses per PF/VF */
 #define FM10K_MAX_MACADDR_NUM       64

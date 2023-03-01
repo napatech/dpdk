@@ -17,7 +17,7 @@
 #include <ethdev_vdev.h>
 #include <rte_malloc.h>
 #include <rte_kvargs.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_hash.h>
 #include <rte_jhash.h>
 #include <rte_string_fns.h>
@@ -64,6 +64,9 @@ memif_msg_send_from_queue(struct memif_control_channel *cc)
 	e = TAILQ_FIRST(&cc->msg_queue);
 	if (e == NULL)
 		return 0;
+
+	if (rte_intr_fd_get(cc->intr_handle) < 0)
+		return -1;
 
 	size = memif_msg_send(rte_intr_fd_get(cc->intr_handle), &e->msg,
 			      e->fd);
@@ -399,11 +402,10 @@ memif_msg_enq_init(struct rte_eth_dev *dev)
 {
 	struct pmd_internals *pmd = dev->data->dev_private;
 	struct memif_msg_queue_elt *e = memif_msg_enq(pmd->cc);
-	memif_msg_init_t *i = &e->msg.init;
+	memif_msg_init_t *i;
 
 	if (e == NULL)
 		return -1;
-
 	i = &e->msg.init;
 	e->msg.type = MEMIF_MSG_TYPE_INIT;
 	i->version = MEMIF_VERSION;
@@ -508,7 +510,8 @@ memif_intr_unregister_handler(struct rte_intr_handle *intr_handle, void *arg)
 	struct memif_control_channel *cc = arg;
 
 	/* close control channel fd */
-	close(rte_intr_fd_get(intr_handle));
+	if (rte_intr_fd_get(intr_handle) >= 0)
+		close(rte_intr_fd_get(intr_handle));
 	/* clear message queue */
 	while ((elt = TAILQ_FIRST(&cc->msg_queue)) != NULL) {
 		TAILQ_REMOVE(&cc->msg_queue, elt, next);
@@ -651,6 +654,9 @@ memif_msg_receive(struct memif_control_channel *cc)
 	mh.msg_control = ctl;
 	mh.msg_controllen = sizeof(ctl);
 
+	if (rte_intr_fd_get(cc->intr_handle) < 0)
+		return -1;
+
 	size = recvmsg(rte_intr_fd_get(cc->intr_handle), &mh, 0);
 	if (size != sizeof(memif_msg_t)) {
 		MIF_LOG(DEBUG, "Invalid message size = %zd", size);
@@ -719,7 +725,7 @@ memif_msg_receive(struct memif_control_channel *cc)
 		break;
 	case MEMIF_MSG_TYPE_INIT:
 		/*
-		 * This cc does not have an interface asociated with it.
+		 * This cc does not have an interface associated with it.
 		 * If suitable interface is found it will be assigned here.
 		 */
 		ret = memif_msg_receive_init(cc, &msg);

@@ -9,7 +9,6 @@
 #include <rte_random.h>
 #include <rte_memcpy.h>
 #include <rte_errno.h>
-#include <rte_eal.h>
 #include <rte_eal_memconfig.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
@@ -28,7 +27,7 @@ EAL_REGISTER_TAILQ(rte_thash_tailq)
 
 /**
  * Table of some irreducible polinomials over GF(2).
- * For lfsr they are reperesented in BE bit order, and
+ * For lfsr they are represented in BE bit order, and
  * x^0 is masked out.
  * For example, poly x^5 + x^2 + 1 will be represented
  * as (101001b & 11111b) = 01001b = 0x9
@@ -87,8 +86,40 @@ struct rte_thash_ctx {
 	uint32_t	reta_sz_log;	/** < size of the RSS ReTa in bits */
 	uint32_t	subtuples_nb;	/** < number of subtuples */
 	uint32_t	flags;
+	uint64_t	*matrices;
+	/**< matrices used with rte_thash_gfni implementation */
 	uint8_t		hash_key[0];
 };
+
+int
+rte_thash_gfni_supported(void)
+{
+#ifdef RTE_THASH_GFNI_DEFINED
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_GFNI) &&
+			(rte_vect_get_max_simd_bitwidth() >=
+			RTE_VECT_SIMD_512))
+		return 1;
+#endif
+
+	return 0;
+};
+
+void
+rte_thash_complete_matrix(uint64_t *matrixes, const uint8_t *rss_key, int size)
+{
+	int i, j;
+	uint8_t *m = (uint8_t *)matrixes;
+	uint8_t left_part, right_part;
+
+	for (i = 0; i < size; i++) {
+		for (j = 0; j < 8; j++) {
+			left_part = rss_key[i] << j;
+			right_part = (uint16_t)(rss_key[(i + 1) % size]) >>
+				(8 - j);
+			m[i * 8 + j] = left_part|right_part;
+		}
+	}
+}
 
 static inline uint32_t
 get_bit_lfsr(struct thash_lfsr *lfsr)
@@ -237,12 +268,28 @@ rte_thash_init_ctx(const char *name, uint32_t key_len, uint32_t reta_sz,
 			ctx->hash_key[i] = rte_rand();
 	}
 
+	if (rte_thash_gfni_supported()) {
+		ctx->matrices = rte_zmalloc(NULL, key_len * sizeof(uint64_t),
+			RTE_CACHE_LINE_SIZE);
+		if (ctx->matrices == NULL) {
+			RTE_LOG(ERR, HASH, "Cannot allocate matrices\n");
+			rte_errno = ENOMEM;
+			goto free_ctx;
+		}
+
+		rte_thash_complete_matrix(ctx->matrices, ctx->hash_key,
+			key_len);
+	}
+
 	te->data = (void *)ctx;
 	TAILQ_INSERT_TAIL(thash_list, te, next);
 
 	rte_mcfg_tailq_write_unlock();
 
 	return ctx;
+
+free_ctx:
+	rte_free(ctx);
 free_te:
 	rte_free(te);
 exit:
@@ -356,6 +403,10 @@ generate_subkey(struct rte_thash_ctx *ctx, struct thash_lfsr *lfsr,
 			set_bit(ctx->hash_key, get_rev_bit_lfsr(lfsr), i);
 	}
 
+	if (ctx->matrices != NULL)
+		rte_thash_complete_matrix(ctx->matrices, ctx->hash_key,
+			ctx->key_len);
+
 	return 0;
 }
 
@@ -416,10 +467,10 @@ insert_before(struct rte_thash_ctx *ctx,
 			return ret;
 		}
 	} else if ((next_ent != NULL) && (end > next_ent->offset)) {
-		rte_free(ent);
 		RTE_LOG(ERR, HASH,
 			"Can't add helper %s due to conflict with existing"
 			" helper %s\n", ent->name, next_ent->name);
+		rte_free(ent);
 		return -ENOSPC;
 	}
 	attach_lfsr(ent, cur_ent->lfsr);
@@ -465,10 +516,10 @@ insert_after(struct rte_thash_ctx *ctx,
 	int ret;
 
 	if ((next_ent != NULL) && (end > next_ent->offset)) {
-		rte_free(ent);
 		RTE_LOG(ERR, HASH,
 			"Can't add helper %s due to conflict with existing"
 			" helper %s\n", ent->name, next_ent->name);
+		rte_free(ent);
 		return -EEXIST;
 	}
 
@@ -612,6 +663,12 @@ rte_thash_get_key(struct rte_thash_ctx *ctx)
 	return ctx->hash_key;
 }
 
+const uint64_t *
+rte_thash_get_gfni_matrices(struct rte_thash_ctx *ctx)
+{
+	return ctx->matrices;
+}
+
 static inline uint8_t
 read_unaligned_byte(uint8_t *ptr, unsigned int len, unsigned int offset)
 {
@@ -723,11 +780,17 @@ rte_thash_adjust_tuple(struct rte_thash_ctx *ctx,
 	attempts = RTE_MIN(attempts, 1U << (h->tuple_len - ctx->reta_sz_log));
 
 	for (i = 0; i < attempts; i++) {
-		for (j = 0; j < (tuple_len / 4); j++)
-			tmp_tuple[j] =
-				rte_be_to_cpu_32(*(uint32_t *)&tuple[j * 4]);
+		if (ctx->matrices != NULL)
+			hash = rte_thash_gfni(ctx->matrices, tuple, tuple_len);
+		else {
+			for (j = 0; j < (tuple_len / 4); j++)
+				tmp_tuple[j] =
+					rte_be_to_cpu_32(
+						*(uint32_t *)&tuple[j * 4]);
 
-		hash = rte_softrss(tmp_tuple, tuple_len / 4, hash_key);
+			hash = rte_softrss(tmp_tuple, tuple_len / 4, hash_key);
+		}
+
 		adj_bits = rte_thash_get_complement(h, hash, desired_value);
 
 		/*

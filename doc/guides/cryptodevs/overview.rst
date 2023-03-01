@@ -19,7 +19,7 @@ Supported Feature Flags
 
    - "OOP SGL In SGL Out" feature flag stands for
      "Out-of-place Scatter-gather list Input, Scatter-gather list Output",
-     which means pmd supports different scatter-gather styled input and output buffers
+     which means PMD supports different scatter-gather styled input and output buffers
      (i.e. both can consists of multiple segments).
 
    - "OOP SGL In LB Out" feature flag stands for
@@ -80,3 +80,10 @@ Supported Asymmetric Algorithms
 .. _table_crypto_pmd_asym_algos:
 
 .. include:: overview_asym_table.txt
+
+Supported Operating Systems
+-------------------------------
+
+.. _table_crypto_pmd_os:
+
+.. include:: overview_os_table.txt

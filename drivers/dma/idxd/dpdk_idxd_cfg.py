@@ -29,9 +29,17 @@ class SysfsDir:
                 f.write(str(contents))
 
 
+def get_drv_dir(dtype):
+    "Get the sysfs path for the driver, either 'idxd' or 'user'"
+    drv_dir = "/sys/bus/dsa/drivers/" + dtype
+    if not os.path.exists(drv_dir):
+        return "/sys/bus/dsa/drivers/dsa"
+    return drv_dir
+
+
 def reset_device(dsa_id):
     "Reset the DSA device and all its queues"
-    drv_dir = SysfsDir("/sys/bus/dsa/drivers/dsa")
+    drv_dir = SysfsDir(get_drv_dir("idxd"))
     drv_dir.write_values({"unbind": f"dsa{dsa_id}"})
 
 
@@ -55,18 +63,25 @@ def get_dsa_id(pci):
     sys.exit(f"Could not get device ID for device {pci}")
 
 
-def configure_dsa(dsa_id, queues, prefix):
+def parse_wq_opts(wq_opts):
+    "Parse user-specified queue configuration, creating a dict of options"
+    try:
+        return {o.split('=')[0]: o.split('=')[1] for o in wq_opts}
+    except ValueError:
+        sys.exit("Invalid --wq-option format, use format 'option=value'")
+
+
+def configure_dsa(dsa_id, args):
     "Configure the DSA instance with appropriate number of queues"
     dsa_dir = SysfsDir(f"/sys/bus/dsa/devices/dsa{dsa_id}")
-    drv_dir = SysfsDir("/sys/bus/dsa/drivers/dsa")
 
     max_groups = dsa_dir.read_int("max_groups")
     max_engines = dsa_dir.read_int("max_engines")
     max_queues = dsa_dir.read_int("max_work_queues")
     max_work_queues_size = dsa_dir.read_int("max_work_queues_size")
 
-    nb_queues = min(queues, max_queues)
-    if queues > nb_queues:
+    nb_queues = min(args.q, max_queues)
+    if args.q > nb_queues:
         print(f"Setting number of queues to max supported value: {max_queues}")
 
     # we want one engine per group, and no more engines than queues
@@ -76,18 +91,24 @@ def configure_dsa(dsa_id, queues, prefix):
 
     # configure each queue
     for q in range(nb_queues):
+        wqcfg = {"group_id": q % nb_groups,
+                 "type": "user",
+                 "mode": "dedicated",
+                 "name": f"{args.prefix}_wq{dsa_id}.{q}",
+                 "priority": 1,
+                 "max_batch_size": 1024,
+                 "size": int(max_work_queues_size / nb_queues)}
+        wqcfg.update(parse_wq_opts(args.wq_option))
         wq_dir = SysfsDir(os.path.join(dsa_dir.path, f"wq{dsa_id}.{q}"))
-        wq_dir.write_values({"group_id": q % nb_groups,
-                             "type": "user",
-                             "mode": "dedicated",
-                             "name": f"{prefix}_wq{dsa_id}.{q}",
-                             "priority": 1,
-                             "size": int(max_work_queues_size / nb_queues)})
+        wq_dir.write_values(wqcfg)
 
     # enable device and then queues
-    drv_dir.write_values({"bind": f"dsa{dsa_id}"})
+    idxd_dir = SysfsDir(get_drv_dir("idxd"))
+    idxd_dir.write_values({"bind": f"dsa{dsa_id}"})
+
+    user_dir = SysfsDir(get_drv_dir("user"))
     for q in range(nb_queues):
-        drv_dir.write_values({"bind": f"wq{dsa_id}.{q}"})
+        user_dir.write_values({"bind": f"wq{dsa_id}.{q}"})
 
 
 def main(args):
@@ -101,6 +122,8 @@ def main(args):
     arg_p.add_argument('--name-prefix', metavar='prefix', dest='prefix',
                        default="dpdk",
                        help="Prefix for workqueue name to mark for DPDK use [default: 'dpdk']")
+    arg_p.add_argument('--wq-option', action='append', default=[],
+                       help="Provide additional config option for queues (format 'x=y')")
     arg_p.add_argument('--reset', action='store_true',
                        help="Reset DSA device and its queues")
     parsed_args = arg_p.parse_args(args[1:])
@@ -110,7 +133,7 @@ def main(args):
     if parsed_args.reset:
         reset_device(dsa_id)
     else:
-        configure_dsa(dsa_id, parsed_args.q, parsed_args.prefix)
+        configure_dsa(dsa_id, parsed_args)
 
 
 if __name__ == "__main__":

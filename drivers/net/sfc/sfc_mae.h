@@ -29,6 +29,7 @@ struct sfc_mae_fw_rsrc {
 	union {
 		efx_mae_aset_id_t	aset_id;
 		efx_mae_rule_id_t	rule_id;
+		efx_mae_mac_id_t	mac_id;
 		efx_mae_eh_id_t		eh_id;
 	};
 };
@@ -43,6 +44,16 @@ struct sfc_mae_outer_rule {
 };
 
 TAILQ_HEAD(sfc_mae_outer_rules, sfc_mae_outer_rule);
+
+/** MAC address registry entry */
+struct sfc_mae_mac_addr {
+	TAILQ_ENTRY(sfc_mae_mac_addr)	entries;
+	unsigned int			refcnt;
+	uint8_t				addr_bytes[EFX_MAC_ADDR_LEN];
+	struct sfc_mae_fw_rsrc		fw_rsrc;
+};
+
+TAILQ_HEAD(sfc_mae_mac_addrs, sfc_mae_mac_addr);
 
 /** Encap. header registry entry */
 struct sfc_mae_encap_header {
@@ -65,10 +76,10 @@ struct sfc_mae_counter_id {
 	/* RTE counter ID validity status */
 	bool				rte_id_valid;
 
-	/* Flow Tunnel (FT) GROUP hit counter (or NULL) */
-	uint64_t			*ft_group_hit_counter;
-	/* Flow Tunnel (FT) context (for JUMP rules; otherwise, NULL) */
-	struct sfc_flow_tunnel		*ft;
+	/* Flow Tunnel (FT) SWITCH hit counter (or NULL) */
+	uint64_t			*ft_switch_hit_counter;
+	/* Flow Tunnel (FT) context (for TUNNEL rules; otherwise, NULL) */
+	struct sfc_ft_ctx		*ft_ctx;
 };
 
 /** Action set registry entry */
@@ -79,6 +90,8 @@ struct sfc_mae_action_set {
 	uint32_t			n_counters;
 	efx_mae_actions_t		*spec;
 	struct sfc_mae_encap_header	*encap_header;
+	struct sfc_mae_mac_addr		*dst_mac_addr;
+	struct sfc_mae_mac_addr		*src_mac_addr;
 	struct sfc_mae_fw_rsrc		fw_rsrc;
 };
 
@@ -110,7 +123,7 @@ struct sfc_mae_counter {
 	union sfc_pkts_bytes		value;
 	union sfc_pkts_bytes		reset;
 
-	uint64_t			*ft_group_hit_counter;
+	uint64_t			*ft_switch_hit_counter;
 };
 
 struct sfc_mae_counters_xstats {
@@ -125,6 +138,13 @@ struct sfc_mae_counters {
 	struct sfc_mae_counters_xstats	xstats;
 	/** Count of all MAE counters */
 	unsigned int			n_mae_counters;
+};
+
+/** Options for MAE counter polling mode */
+enum sfc_mae_counter_polling_mode {
+	SFC_MAE_COUNTER_POLLING_OFF = 0,
+	SFC_MAE_COUNTER_POLLING_SERVICE,
+	SFC_MAE_COUNTER_POLLING_THREAD,
 };
 
 struct sfc_mae_counter_registry {
@@ -143,10 +163,21 @@ struct sfc_mae_counter_registry {
 	bool				use_credits;
 
 	/* Information used by configuration routines */
-	/** Counter service core ID */
-	uint32_t			service_core_id;
-	/** Counter service ID */
-	uint32_t			service_id;
+	enum sfc_mae_counter_polling_mode polling_mode;
+	union {
+		struct {
+			/** Counter service core ID */
+			uint32_t			core_id;
+			/** Counter service ID */
+			uint32_t			id;
+		} service;
+		struct {
+			/** Counter thread ID */
+			pthread_t			id;
+			/** The thread should keep running */
+			bool				run;
+		} thread;
+	} polling;
 };
 
 /**
@@ -193,6 +224,8 @@ struct sfc_mae {
 	struct sfc_mae_outer_rules	outer_rules;
 	/** Encap. header registry */
 	struct sfc_mae_encap_headers	encap_headers;
+	/** MAC address registry */
+	struct sfc_mae_mac_addrs	mac_addrs;
 	/** Action set registry */
 	struct sfc_mae_action_sets	action_sets;
 	/** Encap. header bounce buffer */
@@ -330,12 +363,12 @@ struct sfc_mae_parse_ctx {
 	size_t				tunnel_def_mask_size;
 	const void			*tunnel_def_mask;
 	bool				match_mport_set;
-	enum sfc_flow_tunnel_rule_type	ft_rule_type;
+	enum sfc_ft_rule_type		ft_rule_type;
 	struct sfc_mae_pattern_data	pattern_data;
 	efx_tunnel_protocol_t		encap_type;
 	const struct rte_flow_item	*pattern;
 	unsigned int			priority;
-	struct sfc_flow_tunnel		*ft;
+	struct sfc_ft_ctx		*ft_ctx;
 };
 
 int sfc_mae_attach(struct sfc_adapter *sa);

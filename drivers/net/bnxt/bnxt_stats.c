@@ -578,7 +578,7 @@ int bnxt_stats_get_op(struct rte_eth_dev *eth_dev,
 
 		bnxt_fill_rte_eth_stats(bnxt_stats, &ring_stats, i, true);
 		bnxt_stats->rx_nombuf +=
-				rte_atomic64_read(&rxq->rx_mbuf_alloc_fail);
+				__atomic_load_n(&rxq->rx_mbuf_alloc_fail, __ATOMIC_RELAXED);
 	}
 
 	num_q_stats = RTE_MIN(bp->tx_cp_nr_rings,
@@ -632,7 +632,7 @@ int bnxt_stats_reset_op(struct rte_eth_dev *eth_dev)
 	for (i = 0; i < bp->rx_cp_nr_rings; i++) {
 		struct bnxt_rx_queue *rxq = bp->rx_queues[i];
 
-		rte_atomic64_clear(&rxq->rx_mbuf_alloc_fail);
+		rxq->rx_mbuf_alloc_fail = 0;
 	}
 
 	bnxt_clear_prev_stat(bp);
@@ -741,7 +741,7 @@ int bnxt_dev_xstats_get_op(struct rte_eth_dev *eth_dev,
 					(bp->fw_tx_port_stats_ext_size /
 					 stat_size));
 
-	memset(xstats, 0, sizeof(*xstats));
+	memset(xstats, 0, sizeof(*xstats) * n);
 
 	count = 0;
 	for (i = 0; i < RTE_DIM(bnxt_rx_stats_strings); i++) {
@@ -846,7 +846,7 @@ int bnxt_flow_stats_cnt(struct bnxt *bp)
 
 int bnxt_dev_xstats_get_names_op(struct rte_eth_dev *eth_dev,
 		struct rte_eth_xstat_name *xstats_names,
-		__rte_unused unsigned int limit)
+		unsigned int size)
 {
 	struct bnxt *bp = (struct bnxt *)eth_dev->data->dev_private;
 	const unsigned int stat_cnt = RTE_DIM(bnxt_rx_stats_strings) +
@@ -862,63 +862,62 @@ int bnxt_dev_xstats_get_names_op(struct rte_eth_dev *eth_dev,
 	if (rc)
 		return rc;
 
-	if (xstats_names != NULL) {
-		count = 0;
+	if (xstats_names == NULL || size < stat_cnt)
+		return stat_cnt;
 
-		for (i = 0; i < RTE_DIM(bnxt_rx_stats_strings); i++) {
-			strlcpy(xstats_names[count].name,
-				bnxt_rx_stats_strings[i].name,
+	for (i = 0; i < RTE_DIM(bnxt_rx_stats_strings); i++) {
+		strlcpy(xstats_names[count].name,
+			bnxt_rx_stats_strings[i].name,
+			sizeof(xstats_names[count].name));
+		count++;
+	}
+
+	for (i = 0; i < RTE_DIM(bnxt_tx_stats_strings); i++) {
+		strlcpy(xstats_names[count].name,
+			bnxt_tx_stats_strings[i].name,
+			sizeof(xstats_names[count].name));
+		count++;
+	}
+
+	for (i = 0; i < RTE_DIM(bnxt_func_stats_strings); i++) {
+		strlcpy(xstats_names[count].name,
+			bnxt_func_stats_strings[i].name,
+			sizeof(xstats_names[count].name));
+		count++;
+	}
+
+	for (i = 0; i < RTE_DIM(bnxt_rx_ext_stats_strings); i++) {
+		strlcpy(xstats_names[count].name,
+			bnxt_rx_ext_stats_strings[i].name,
+			sizeof(xstats_names[count].name));
+
+		count++;
+	}
+
+	for (i = 0; i < RTE_DIM(bnxt_tx_ext_stats_strings); i++) {
+		strlcpy(xstats_names[count].name,
+			bnxt_tx_ext_stats_strings[i].name,
+			sizeof(xstats_names[count].name));
+
+		count++;
+	}
+
+	if (bp->fw_cap & BNXT_FW_CAP_ADV_FLOW_COUNTERS &&
+	    bp->fw_cap & BNXT_FW_CAP_ADV_FLOW_MGMT &&
+	    BNXT_FLOW_XSTATS_EN(bp)) {
+		for (i = 0; i < bp->max_l2_ctx; i++) {
+			char buf[RTE_ETH_XSTATS_NAME_SIZE];
+
+			sprintf(buf, "flow_%d_bytes", i);
+			strlcpy(xstats_names[count].name, buf,
 				sizeof(xstats_names[count].name));
 			count++;
-		}
 
-		for (i = 0; i < RTE_DIM(bnxt_tx_stats_strings); i++) {
-			strlcpy(xstats_names[count].name,
-				bnxt_tx_stats_strings[i].name,
-				sizeof(xstats_names[count].name));
-			count++;
-		}
-
-		for (i = 0; i < RTE_DIM(bnxt_func_stats_strings); i++) {
-			strlcpy(xstats_names[count].name,
-				bnxt_func_stats_strings[i].name,
-				sizeof(xstats_names[count].name));
-			count++;
-		}
-
-		for (i = 0; i < RTE_DIM(bnxt_rx_ext_stats_strings); i++) {
-			strlcpy(xstats_names[count].name,
-				bnxt_rx_ext_stats_strings[i].name,
+			sprintf(buf, "flow_%d_packets", i);
+			strlcpy(xstats_names[count].name, buf,
 				sizeof(xstats_names[count].name));
 
 			count++;
-		}
-
-		for (i = 0; i < RTE_DIM(bnxt_tx_ext_stats_strings); i++) {
-			strlcpy(xstats_names[count].name,
-				bnxt_tx_ext_stats_strings[i].name,
-				sizeof(xstats_names[count].name));
-
-			count++;
-		}
-
-		if (bp->fw_cap & BNXT_FW_CAP_ADV_FLOW_COUNTERS &&
-		    bp->fw_cap & BNXT_FW_CAP_ADV_FLOW_MGMT &&
-		    BNXT_FLOW_XSTATS_EN(bp)) {
-			for (i = 0; i < bp->max_l2_ctx; i++) {
-				char buf[RTE_ETH_XSTATS_NAME_SIZE];
-
-				sprintf(buf, "flow_%d_bytes", i);
-				strlcpy(xstats_names[count].name, buf,
-					sizeof(xstats_names[count].name));
-				count++;
-
-				sprintf(buf, "flow_%d_packets", i);
-				strlcpy(xstats_names[count].name, buf,
-					sizeof(xstats_names[count].name));
-
-				count++;
-			}
 		}
 	}
 

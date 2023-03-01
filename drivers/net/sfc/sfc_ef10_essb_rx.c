@@ -221,7 +221,7 @@ sfc_ef10_essb_rx_qrefill(struct sfc_ef10_essb_rxq *rxq)
 	SFC_ASSERT(rxq->added != added);
 	rxq->added = added;
 	sfc_ef10_rx_qpush(rxq->doorbell, added, rxq_ptr_mask,
-			  &rxq->dp.dpq.rx_dbells);
+			  &rxq->dp.dpq.dbells);
 }
 
 static bool
@@ -573,6 +573,10 @@ sfc_ef10_essb_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 	struct sfc_ef10_essb_rxq *rxq;
 	int rc;
 
+	rc = ENOTSUP;
+	if (info->nic_dma_info->nb_regions > 0)
+		goto fail_nic_dma;
+
 	rc = rte_mempool_ops_get_info(mp, &mp_info);
 	if (rc != 0) {
 		/* Positive errno is used in the driver */
@@ -626,7 +630,7 @@ sfc_ef10_essb_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 			      rxq->block_size, rxq->buf_stride);
 	sfc_ef10_essb_rx_info(&rxq->dp.dpq,
 			      "max fill level is %u descs (%u bufs), "
-			      "refill threashold %u descs (%u bufs)",
+			      "refill threshold %u descs (%u bufs)",
 			      rxq->max_fill_level,
 			      rxq->max_fill_level * rxq->block_size,
 			      rxq->refill_threshold,
@@ -641,6 +645,7 @@ fail_desc_alloc:
 fail_rxq_alloc:
 fail_no_block_dequeue:
 fail_get_contig_block_size:
+fail_nic_dma:
 	return rc;
 }
 

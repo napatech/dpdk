@@ -192,13 +192,11 @@ cpt_free_asym_session_parameters(struct cpt_asym_sess_misc *sess)
 	switch (sess->xfrm_type) {
 	case RTE_CRYPTO_ASYM_XFORM_RSA:
 		rsa = &sess->rsa_ctx;
-		if (rsa->n.data)
-			rte_free(rsa->n.data);
+		rte_free(rsa->n.data);
 		break;
 	case RTE_CRYPTO_ASYM_XFORM_MODEX:
 		mod = &sess->mod_ctx;
-		if (mod->modulus.data)
-			rte_free(mod->modulus.data);
+		rte_free(mod->modulus.data);
 		break;
 	case RTE_CRYPTO_ASYM_XFORM_ECDSA:
 		/* Fall through */
@@ -329,7 +327,7 @@ cpt_rsa_prep(struct asym_op_params *rsa_params,
 	/* Result buffer */
 	rlen = mod_len;
 
-	if (rsa_op.pad == RTE_CRYPTO_RSA_PADDING_NONE) {
+	if (rsa_op.padding.type == RTE_CRYPTO_RSA_PADDING_NONE) {
 		/* Use mod_exp operation for no_padding type */
 		vq_cmd_w0.s.opcode.minor = CPT_MINOR_OP_MODEX;
 		vq_cmd_w0.s.param2 = exp_len;
@@ -414,7 +412,7 @@ cpt_rsa_crt_prep(struct asym_op_params *rsa_params,
 	/* Result buffer */
 	rlen = mod_len;
 
-	if (rsa_op.pad == RTE_CRYPTO_RSA_PADDING_NONE) {
+	if (rsa_op.padding.type == RTE_CRYPTO_RSA_PADDING_NONE) {
 		/*Use mod_exp operation for no_padding type */
 		vq_cmd_w0.s.opcode.minor = CPT_MINOR_OP_MODEX_CRT;
 	} else {
@@ -779,7 +777,7 @@ cpt_ecdsa_verify_prep(struct rte_crypto_ecdsa_op_param *ecdsa,
 	 * Set dlen = sum(sizeof(fpm address), ROUNDUP8(message len),
 	 * ROUNDUP8(sign len(r and s), public key len(x and y coordinates),
 	 * prime len, order len)).
-	 * Please note sign, public key and order can not excede prime length
+	 * Please note sign, public key and order can not exceed prime length
 	 * i.e. 6 * p_align
 	 */
 	dlen = sizeof(fpm_table_iova) + m_align + (8 * p_align);

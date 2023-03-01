@@ -12,11 +12,10 @@
 #include "rte_time.h"
 
 #define IRQ				0xff
-#define VLAN_HLEN			4
 
 #define AXGBE_TX_MAX_BUF_SIZE		(0x3fff & ~(64 - 1))
 #define AXGBE_RX_MAX_BUF_SIZE		(0x3fff & ~(64 - 1))
-#define AXGBE_RX_MIN_BUF_SIZE		(RTE_ETHER_MAX_LEN + VLAN_HLEN)
+#define AXGBE_RX_MIN_BUF_SIZE		(RTE_ETHER_MAX_LEN + RTE_VLAN_HLEN)
 #define AXGBE_MAX_MAC_ADDRS		32
 #define AXGBE_MAX_HASH_MAC_ADDRS	256
 
@@ -583,6 +582,7 @@ struct axgbe_port {
 	unsigned int tx_pbl;
 	unsigned int tx_osp_mode;
 	unsigned int tx_max_fifo_size;
+	unsigned int multi_segs_tx;
 
 	/* Rx settings */
 	unsigned int rx_sf_mode;
@@ -642,7 +642,7 @@ struct axgbe_port {
 
 	unsigned int kr_redrv;
 
-	/* Auto-negotiation atate machine support */
+	/* Auto-negotiation state machine support */
 	unsigned int an_int;
 	unsigned int an_status;
 	enum axgbe_an an_result;

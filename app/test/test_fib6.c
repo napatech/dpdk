@@ -9,10 +9,28 @@
 
 #include <rte_memory.h>
 #include <rte_log.h>
-#include <rte_rib6.h>
-#include <rte_fib6.h>
 
 #include "test.h"
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+static int
+test_fib6(void)
+{
+	printf("fib not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+static int
+test_slow_fib6(void)
+{
+	printf("slow_fib not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+#else
+
+#include <rte_rib6.h>
+#include <rte_fib6.h>
 
 typedef int32_t (*rte_fib6_test)(void);
 
@@ -38,6 +56,7 @@ test_create_invalid(void)
 	struct rte_fib6_conf config;
 
 	config.max_routes = MAX_ROUTES;
+	config.rib_ext_sz = 0;
 	config.default_nh = 0;
 	config.type = RTE_FIB6_DUMMY;
 
@@ -96,6 +115,7 @@ test_multiple_create(void)
 	struct rte_fib6_conf config;
 	int32_t i;
 
+	config.rib_ext_sz = 0;
 	config.default_nh = 0;
 	config.type = RTE_FIB6_DUMMY;
 
@@ -122,6 +142,7 @@ test_free_null(void)
 	struct rte_fib6_conf config;
 
 	config.max_routes = MAX_ROUTES;
+	config.rib_ext_sz = 0;
 	config.default_nh = 0;
 	config.type = RTE_FIB6_DUMMY;
 
@@ -149,6 +170,7 @@ test_add_del_invalid(void)
 	uint8_t depth = 24;
 
 	config.max_routes = MAX_ROUTES;
+	config.rib_ext_sz = 0;
 	config.default_nh = 0;
 	config.type = RTE_FIB6_DUMMY;
 
@@ -338,6 +360,7 @@ test_lookup(void)
 	int ret;
 
 	config.max_routes = MAX_ROUTES;
+	config.rib_ext_sz = 0;
 	config.default_nh = def_nh;
 	config.type = RTE_FIB6_DUMMY;
 
@@ -418,6 +441,8 @@ test_slow_fib6(void)
 {
 	return unit_test_suite_runner(&fib6_slow_tests);
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */
 
 REGISTER_TEST_COMMAND(fib6_autotest, test_fib6);
 REGISTER_TEST_COMMAND(fib6_slow_autotest, test_slow_fib6);

@@ -247,7 +247,7 @@ Following rte_flow filters are supported:
 |`RTE_FLOW_ITEM_TYPE_NVGRE` | Only packet type = `NVGRE`                                                                                                                                                    |
 |`RTE_FLOW_ITEM_TYPE_VXLAN` | Only packet type = `VXLAN`                                                                                                                                                    |
 | `RTE_FLOW_ITEM_TYPE_GRE`  | `c_rsvd0_ver` (only version = bit b0-b2)|
-| `RTE_FLOW_ITEM_TYPE_PHY_PORT`  | `index`<br>The port numbers used must be the local port numbers for the SmartNic. <br>For a 4 port SmartNic the port numbers are 0 to 3.|
+| `RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT`  | `port_id`<br>The port numbers used must be the local port numbers for the SmartNic. <br>For a 4 port SmartNic the port numbers are 0 to 3.|
 |`RTE_FLOW_ITEM_TYPE_GRE`    | `c_rsvd0_ver=1`: Packet type = `GREv1`<br>`c_rsvd0_ver=0`: Packet type = `GREv0`   |
 |`RTE_FLOW_ITEM_TYPE_GTPU`  | `v_pt_rsv_flags=0`: Packet type = `GTPv0_U`<br>`v_pt_rsv_flags=0x20`: Packet type = `GTPv1_U` |
 |`RTE_FLOW_ITEM_TYPE_GTPC`  | `v_pt_rsv_flags=0x20`: Packet type = `GTPv1_C`<br>`v_pt_rsv_flags=0x40`: Packet type = `GTPv2_C`<br>No parameter:  Packet type = `GTPv1_C` or `GTPv2_C` |
@@ -305,7 +305,7 @@ Following rte_flow filter actions are supported:
 |`RTE_FLOW_ACTION_TYPE_QUEUE` | `index`                                 |
 |`RTE_FLOW_ACTION_TYPE_DROP`  |                                         |
 |`RTE_FLOW_ACTION_TYPE_PORT_ID`| `id`                                   |
-|`RTE_FLOW_ACTION_TYPE_PHY_PORT`| `index`                               |
+|`RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT`| `port_id`                     |
 
 - `RTE_FLOW_ACTION_TYPE_MARK`
   - If MARK is set and a packet matching the filter is received, the mark value will be copied to mbuf->hash.fdir.hi and the RTE_MBUF_F_RX_FDIR_ID flag in mbuf->ol_flags is set.
@@ -317,7 +317,7 @@ The supported HASH functions are described below.
 All packets matching the filter will be dropped by the SmartNIC (HW). The packets will not be sent to the APP.
 - `RTE_FLOW_ACTION_TYPE_PORT_ID`
 All packets matching the filter will be retransmitted on the DPDK port `id`. The packets will not be sent to the APP. The DPDK port must be on the same SmartNIC as the RX port.
-- `RTE_FLOW_ACTION_TYPE_PHY_PORT`
+- `RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT`
 As `RTE_FLOW_ACTION_TYPE_PORT_ID`, but the port number used must be the physical port number on the SmartNIC.
 If a 4 ported SmartNIC is used. The port number must be 0 to 3.
 

@@ -5,6 +5,10 @@
 #ifndef _RTE_EVENTDEV_PMD_VDEV_H_
 #define _RTE_EVENTDEV_PMD_VDEV_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** @file
  * RTE Eventdev VDEV PMD APIs
  *
@@ -15,10 +19,11 @@
 
 #include <string.h>
 
+#include <rte_compat.h>
 #include <rte_config.h>
 #include <rte_debug.h>
 #include <rte_eal.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 
 #include "eventdev_pmd.h"
 
@@ -98,5 +103,9 @@ rte_event_pmd_vdev_uninit(const char *name)
 
 	return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _RTE_EVENTDEV_PMD_VDEV_H_ */

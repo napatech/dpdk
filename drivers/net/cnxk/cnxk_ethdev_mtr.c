@@ -28,7 +28,6 @@ static const enum roc_nix_bpf_level_flag lvl_map[] = {ROC_NIX_BPF_LEVEL_F_LEAF,
 						      ROC_NIX_BPF_LEVEL_F_TOP};
 
 static struct rte_mtr_capabilities mtr_capa = {
-	.n_max = NIX_MTR_COUNT_MAX,
 	.n_shared_max = NIX_MTR_COUNT_PER_FLOW,
 	/* .identical = , */
 	.shared_identical = true,
@@ -36,11 +35,6 @@ static struct rte_mtr_capabilities mtr_capa = {
 	.chaining_n_mtrs_per_flow_max = NIX_MTR_COUNT_PER_FLOW,
 	.chaining_use_prev_mtr_color_supported = true,
 	.chaining_use_prev_mtr_color_enforced = true,
-	.meter_srtcm_rfc2697_n_max = NIX_MTR_COUNT_MAX,
-	.meter_trtcm_rfc2698_n_max = NIX_MTR_COUNT_MAX,
-	.meter_trtcm_rfc4115_n_max = NIX_MTR_COUNT_MAX,
-	.meter_rate_max = NIX_BPF_RATE_MAX / 8, /* Bytes per second */
-	.meter_policy_n_max = NIX_MTR_COUNT_MAX,
 	.color_aware_srtcm_rfc2697_supported = true,
 	.color_aware_trtcm_rfc2698_supported = true,
 	.color_aware_trtcm_rfc4115_supported = true,
@@ -54,7 +48,12 @@ static struct rte_mtr_capabilities mtr_capa = {
 		      RTE_MTR_STATS_N_PKTS_RED | RTE_MTR_STATS_N_PKTS_DROPPED |
 		      RTE_MTR_STATS_N_BYTES_GREEN |
 		      RTE_MTR_STATS_N_BYTES_YELLOW | RTE_MTR_STATS_N_BYTES_RED |
-		      RTE_MTR_STATS_N_BYTES_DROPPED};
+		      RTE_MTR_STATS_N_BYTES_DROPPED,
+	.input_color_proto_mask = RTE_MTR_COLOR_IN_PROTO_OUTER_VLAN |
+			RTE_MTR_COLOR_IN_PROTO_INNER_VLAN |
+			RTE_MTR_COLOR_IN_PROTO_OUTER_IP |
+			RTE_MTR_COLOR_IN_PROTO_INNER_IP,
+	.separate_input_color_table_per_port = true};
 
 static struct cnxk_meter_node *
 nix_mtr_find(struct cnxk_eth_dev *dev, uint32_t meter_id)
@@ -185,12 +184,42 @@ cnxk_nix_mtr_capabilities_get(struct rte_eth_dev *dev,
 			      struct rte_mtr_capabilities *capa,
 			      struct rte_mtr_error *error)
 {
+	uint8_t lvl_mask = ROC_NIX_BPF_LEVEL_F_LEAF | ROC_NIX_BPF_LEVEL_F_MID |
+			   ROC_NIX_BPF_LEVEL_F_TOP;
+	struct cnxk_eth_dev *eth_dev = cnxk_eth_pmd_priv(dev);
+	uint16_t count[ROC_NIX_BPF_LEVEL_MAX] = {0};
+	struct roc_nix *nix = &eth_dev->nix;
+	uint32_t time_unit;
+	int rc, i;
+
 	RTE_SET_USED(dev);
 
 	if (!capa)
 		return -rte_mtr_error_set(error, EINVAL,
-					  RTE_MTR_ERROR_TYPE_MTR_PARAMS, NULL,
-					  "NULL input parameter");
+				RTE_MTR_ERROR_TYPE_MTR_PARAMS, NULL,
+				"NULL input parameter");
+
+	rc = roc_nix_bpf_count_get(nix, lvl_mask, count);
+	if (rc)
+		return rc;
+
+	for (i = 0; i < ROC_NIX_BPF_LEVEL_MAX; i++)
+		mtr_capa.n_max += count[i];
+
+	mtr_capa.meter_srtcm_rfc2697_n_max = mtr_capa.n_max;
+	mtr_capa.meter_trtcm_rfc2698_n_max = mtr_capa.n_max;
+	mtr_capa.meter_trtcm_rfc4115_n_max = mtr_capa.n_max;
+	mtr_capa.meter_policy_n_max = mtr_capa.n_max;
+
+	rc = roc_nix_bpf_timeunit_get(nix, &time_unit);
+	if (rc)
+		return rc;
+
+	mtr_capa.meter_rate_max =
+		NIX_BPF_RATE(time_unit, NIX_BPF_MAX_RATE_EXPONENT,
+			     NIX_BPF_MAX_RATE_MANTISSA, 0) /
+		8;
+
 	*capa = mtr_capa;
 	return 0;
 }
@@ -262,14 +291,53 @@ cnxk_nix_mtr_profile_delete(struct rte_eth_dev *eth_dev, uint32_t profile_id,
 }
 
 static int
+update_mtr_err(uint32_t act_color, struct rte_mtr_error *error, bool action)
+{
+	const char *str = NULL;
+	switch (act_color) {
+	case RTE_COLOR_GREEN:
+		if (action) {
+			str = "Green action is not valid";
+			goto notsup;
+		} else {
+			str = "Green action is null";
+			goto notvalid;
+		}
+		break;
+	case RTE_COLOR_YELLOW:
+		if (action) {
+			str = "Yellow action is not valid";
+			goto notsup;
+		} else {
+			str = "Yellow action is null";
+			goto notvalid;
+		}
+		break;
+	case RTE_COLOR_RED:
+		if (action) {
+			str = "Red action is not valid";
+			goto notsup;
+		} else {
+			str = "Red action is null";
+			goto notvalid;
+		}
+		break;
+	}
+notsup:
+	return -rte_mtr_error_set(error, ENOTSUP,
+				  RTE_MTR_ERROR_TYPE_METER_POLICY, NULL, str);
+notvalid:
+	return -rte_mtr_error_set(error, EINVAL,
+				  RTE_MTR_ERROR_TYPE_METER_POLICY, NULL, str);
+}
+
+static int
 cnxk_nix_mtr_policy_validate(struct rte_eth_dev *dev,
 			     struct rte_mtr_meter_policy_params *policy,
 			     struct rte_mtr_error *error)
 {
-	static const char *const action_color[] = {"Green", "Yellow", "Red"};
 	bool supported[RTE_COLORS] = {false, false, false};
 	const struct rte_flow_action *action;
-	char message[1024];
 	uint32_t i;
 
 	RTE_SET_USED(dev);
@@ -288,21 +356,14 @@ cnxk_nix_mtr_policy_validate(struct rte_eth_dev *dev,
 				if (action->type == RTE_FLOW_ACTION_TYPE_DROP)
 					supported[i] = true;
 
-				if (!supported[i]) {
-					sprintf(message,
-						"%s action is not valid",
-						action_color[i]);
-					return -rte_mtr_error_set(error,
-					  ENOTSUP,
-					  RTE_MTR_ERROR_TYPE_METER_POLICY, NULL,
-					  message);
-				}
+				if (action->type == RTE_FLOW_ACTION_TYPE_VOID)
+					supported[i] = true;
+
+				if (!supported[i])
+					return update_mtr_err(i, error, true);
 			}
 		} else {
-			sprintf(message, "%s action is null", action_color[i]);
-			return -rte_mtr_error_set(error, EINVAL,
-				RTE_MTR_ERROR_TYPE_METER_POLICY, NULL,
-				message);
+			return update_mtr_err(i, error, false);
 		}
 	}
 
@@ -414,6 +475,7 @@ cnxk_nix_mtr_create(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
 	struct cnxk_mtr_profile_node *profile;
 	struct cnxk_mtr_policy_node *policy;
 	struct cnxk_mtr *fm = &dev->mtr;
+	enum rte_color *table = NULL;
 	struct cnxk_meter_node *mtr;
 	int i;
 
@@ -465,18 +527,40 @@ cnxk_nix_mtr_create(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
 	mtr->is_next = false;
 	mtr->level = ROC_NIX_BPF_LEVEL_IDX_INVALID;
 
+	/* populate dscp table for input coloring */
 	if (params->dscp_table) {
-		mtr->params.dscp_table =
-			plt_zmalloc(ROC_NIX_BPF_PRE_COLOR_MAX, ROC_ALIGN);
-		if (mtr->params.dscp_table == NULL) {
+		table = (enum rte_color *)plt_zmalloc(sizeof(enum rte_color) *
+			ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP, ROC_ALIGN);
+		if (table == NULL) {
 			plt_free(mtr);
 			return -rte_mtr_error_set(error, ENOMEM,
 					RTE_MTR_ERROR_TYPE_UNSPECIFIED,
 					NULL, "Memory alloc failed.");
 		}
 
-		for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
-			mtr->params.dscp_table[i] = params->dscp_table[i];
+		for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP; i++)
+			table[i] = params->dscp_table[i];
+
+		mtr->params.dscp_table = table;
+	}
+
+
+	/* populate vlan table for input coloring */
+	if (params->vlan_table) {
+		table = (enum rte_color *)plt_zmalloc(sizeof(enum rte_color) *
+			ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN, ROC_ALIGN);
+		if (table == NULL) {
+			plt_free(mtr->params.dscp_table);
+			plt_free(mtr);
+			return -rte_mtr_error_set(error, ENOMEM,
+					RTE_MTR_ERROR_TYPE_UNSPECIFIED,
+					NULL, "Memory alloc failed.");
+		}
+
+		for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN; i++)
+			table[i] = params->vlan_table[i];
+
+		mtr->params.vlan_table = table;
 	}
 
 	profile->ref_cnt++;
@@ -563,7 +647,13 @@ cnxk_nix_mtr_destroy(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
 	mtr->policy->ref_cnt--;
 	mtr->profile->ref_cnt--;
 	TAILQ_REMOVE(fm, mtr, next);
-	plt_free(mtr->params.dscp_table);
+
+	if (mtr->params.dscp_table)
+		plt_free(mtr->params.dscp_table);
+
+	if (mtr->params.vlan_table)
+		plt_free(mtr->params.vlan_table);
+
 	plt_free(mtr);
 
 exit:
@@ -630,10 +720,11 @@ cnxk_nix_mtr_disable(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
 
 static int
 cnxk_nix_mtr_dscp_table_update(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
+			       enum rte_mtr_color_in_protocol proto,
 			       enum rte_color *dscp_table,
 			       struct rte_mtr_error *error)
 {
-	enum roc_nix_bpf_color nix_dscp_tbl[ROC_NIX_BPF_PRE_COLOR_MAX];
+	enum roc_nix_bpf_color nix_dscp_tbl[ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP];
 	enum roc_nix_bpf_color color_map[] = {ROC_NIX_BPF_COLOR_GREEN,
 					      ROC_NIX_BPF_COLOR_YELLOW,
 					      ROC_NIX_BPF_COLOR_RED};
@@ -651,16 +742,37 @@ cnxk_nix_mtr_dscp_table_update(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
 	}
 
 	if (!dscp_table) {
-		for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
+		for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP; i++)
 			nix_dscp_tbl[i] = ROC_NIX_BPF_COLOR_GREEN;
 	} else {
-		for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
+		for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP; i++)
 			nix_dscp_tbl[i] = color_map[dscp_table[i]];
 	}
 
-	table.count = ROC_NIX_BPF_PRE_COLOR_MAX;
-	table.mode = ROC_NIX_BPF_PC_MODE_DSCP_OUTER;
-	for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
+	table.count = ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP;
+
+	switch (proto) {
+	case RTE_MTR_COLOR_IN_PROTO_OUTER_IP:
+		table.mode = ROC_NIX_BPF_PC_MODE_DSCP_OUTER;
+		break;
+	case RTE_MTR_COLOR_IN_PROTO_INNER_IP:
+		table.mode = ROC_NIX_BPF_PC_MODE_DSCP_INNER;
+		break;
+	default:
+		rc = -rte_mtr_error_set(error, EINVAL,
+			RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+			"Invalid input color protocol");
+		goto exit;
+	}
+
+	if (dev->proto != proto) {
+		rc = -rte_mtr_error_set(error, EINVAL,
+			RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+			"input color protocol is not configured");
+		goto exit;
+	}
+
+	for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP; i++)
 		table.color[i] = nix_dscp_tbl[i];
 
 	rc = roc_nix_bpf_pre_color_tbl_setup(nix, mtr->bpf_id,
@@ -671,11 +783,144 @@ cnxk_nix_mtr_dscp_table_update(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
 		goto exit;
 	}
 
-	for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
+	for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP; i++)
 		dev->precolor_tbl[i] = nix_dscp_tbl[i];
 
 exit:
 	return rc;
+}
+
+static int
+cnxk_nix_mtr_vlan_table_update(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
+			       enum rte_mtr_color_in_protocol proto,
+			       enum rte_color *vlan_table,
+			       struct rte_mtr_error *error)
+{
+	enum roc_nix_bpf_color nix_vlan_tbl[ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN];
+	enum roc_nix_bpf_color color_map[] = {ROC_NIX_BPF_COLOR_GREEN,
+					      ROC_NIX_BPF_COLOR_YELLOW,
+					      ROC_NIX_BPF_COLOR_RED};
+	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct roc_nix_bpf_precolor table;
+	struct roc_nix *nix = &dev->nix;
+	struct cnxk_meter_node *mtr;
+	int rc, i;
+
+	mtr = nix_mtr_find(dev, mtr_id);
+	if (mtr == NULL) {
+		return -rte_mtr_error_set(error, ENOENT,
+					  RTE_MTR_ERROR_TYPE_MTR_ID, NULL,
+					  "Meter object not found");
+	}
+
+	if (!vlan_table) {
+		for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN; i++)
+			nix_vlan_tbl[i] = ROC_NIX_BPF_COLOR_GREEN;
+	} else {
+		for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN; i++)
+			nix_vlan_tbl[i] = color_map[vlan_table[i]];
+	}
+
+	table.count = ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN;
+
+	switch (proto) {
+	case RTE_MTR_COLOR_IN_PROTO_OUTER_VLAN:
+		table.mode = ROC_NIX_BPF_PC_MODE_VLAN_OUTER;
+		break;
+	case RTE_MTR_COLOR_IN_PROTO_INNER_VLAN:
+		table.mode = ROC_NIX_BPF_PC_MODE_VLAN_INNER;
+		break;
+	default:
+		rc = -rte_mtr_error_set(error, EINVAL,
+			RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+			"Invalid input color protocol");
+		goto exit;
+	}
+
+	if (dev->proto != proto) {
+		rc = -rte_mtr_error_set(error, EINVAL,
+			RTE_MTR_ERROR_TYPE_UNSPECIFIED, NULL,
+			"input color protocol is not configured");
+		goto exit;
+	}
+
+	for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN; i++)
+		table.color[i] = nix_vlan_tbl[i];
+
+	rc = roc_nix_bpf_pre_color_tbl_setup(nix, mtr->bpf_id,
+					     lvl_map[mtr->level], &table);
+	if (rc) {
+		rte_mtr_error_set(error, rc, RTE_MTR_ERROR_TYPE_UNSPECIFIED,
+				  NULL, NULL);
+		goto exit;
+	}
+
+	for (i = 0; i < ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN; i++)
+		dev->precolor_tbl[i] = nix_vlan_tbl[i];
+
+exit:
+	return rc;
+}
+
+static int
+cnxk_nix_mtr_in_proto_set(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
+			  enum rte_mtr_color_in_protocol proto,
+			  uint32_t priority, struct rte_mtr_error *error)
+{
+	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct cnxk_meter_node *mtr;
+
+	RTE_SET_USED(priority);
+
+	mtr = nix_mtr_find(dev, mtr_id);
+	if (mtr == NULL) {
+		return -rte_mtr_error_set(error, ENOENT,
+					  RTE_MTR_ERROR_TYPE_MTR_ID, NULL,
+					  "Meter object not found");
+	}
+
+	dev->proto = proto;
+	return 0;
+}
+
+static int
+cnxk_nix_mtr_in_proto_get(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
+			  uint64_t *proto_mask, struct rte_mtr_error *error)
+{
+	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct cnxk_meter_node *mtr;
+
+	mtr = nix_mtr_find(dev, mtr_id);
+	if (mtr == NULL) {
+		return -rte_mtr_error_set(error, ENOENT,
+					  RTE_MTR_ERROR_TYPE_MTR_ID, NULL,
+					  "Meter object not found");
+	}
+
+	*proto_mask = dev->proto;
+	return 0;
+}
+
+static int
+cnxk_nix_mtr_in_proto_prio_get(struct rte_eth_dev *eth_dev, uint32_t mtr_id,
+			       enum rte_mtr_color_in_protocol proto,
+			       uint32_t *priority, struct rte_mtr_error *error)
+{
+	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct cnxk_meter_node *mtr;
+
+	RTE_SET_USED(proto);
+
+	mtr = nix_mtr_find(dev, mtr_id);
+	if (mtr == NULL) {
+		return -rte_mtr_error_set(error, ENOENT,
+					  RTE_MTR_ERROR_TYPE_MTR_ID, NULL,
+					  "Meter object not found");
+	}
+
+	plt_info("Only single priority supported i.e. 0");
+	*priority = 0;
+	return 0;
 }
 
 static int
@@ -814,6 +1059,10 @@ const struct rte_mtr_ops nix_mtr_ops = {
 	.meter_enable = cnxk_nix_mtr_enable,
 	.meter_disable = cnxk_nix_mtr_disable,
 	.meter_dscp_table_update = cnxk_nix_mtr_dscp_table_update,
+	.meter_vlan_table_update = cnxk_nix_mtr_vlan_table_update,
+	.in_proto_set = cnxk_nix_mtr_in_proto_set,
+	.in_proto_get = cnxk_nix_mtr_in_proto_get,
+	.in_proto_prio_get = cnxk_nix_mtr_in_proto_prio_get,
 	.stats_update = cnxk_nix_mtr_stats_update,
 	.stats_read = cnxk_nix_mtr_stats_read,
 };
@@ -985,6 +1234,9 @@ nix_mtr_level_update(struct rte_eth_dev *eth_dev, uint32_t id, uint32_t level)
 static void
 nix_mtr_config_map(struct cnxk_meter_node *mtr, struct roc_nix_bpf_cfg *cfg)
 {
+	enum roc_nix_bpf_color color_map[] = {ROC_NIX_BPF_COLOR_GREEN,
+					      ROC_NIX_BPF_COLOR_YELLOW,
+					      ROC_NIX_BPF_COLOR_RED};
 	enum roc_nix_bpf_algo alg_map[] = {
 		ROC_NIX_BPF_ALGO_NONE, ROC_NIX_BPF_ALGO_2697,
 		ROC_NIX_BPF_ALGO_2698, ROC_NIX_BPF_ALGO_4115};
@@ -993,6 +1245,28 @@ nix_mtr_config_map(struct cnxk_meter_node *mtr, struct roc_nix_bpf_cfg *cfg)
 
 	cfg->alg = alg_map[profile->profile.alg];
 	cfg->lmode = profile->profile.packet_mode;
+	cfg->icolor = color_map[mtr->params.default_input_color];
+
+	switch (RTE_MTR_COLOR_IN_PROTO_OUTER_IP) {
+	case RTE_MTR_COLOR_IN_PROTO_OUTER_IP:
+		cfg->pc_mode = ROC_NIX_BPF_PC_MODE_DSCP_OUTER;
+		cfg->tnl_ena = false;
+		break;
+	case RTE_MTR_COLOR_IN_PROTO_INNER_IP:
+		cfg->pc_mode = ROC_NIX_BPF_PC_MODE_DSCP_INNER;
+		cfg->tnl_ena = true;
+		break;
+	case RTE_MTR_COLOR_IN_PROTO_OUTER_VLAN:
+		cfg->pc_mode = ROC_NIX_BPF_PC_MODE_VLAN_OUTER;
+		cfg->tnl_ena = false;
+		break;
+	case RTE_MTR_COLOR_IN_PROTO_INNER_VLAN:
+		cfg->pc_mode = ROC_NIX_BPF_PC_MODE_VLAN_INNER;
+		cfg->tnl_ena = true;
+		break;
+	default:
+		break;
+	}
 
 	switch (cfg->alg) {
 	case ROC_NIX_BPF_ALGO_2697:
@@ -1034,23 +1308,50 @@ nix_mtr_config_map(struct cnxk_meter_node *mtr, struct roc_nix_bpf_cfg *cfg)
 }
 
 static void
-nix_dscp_table_map(struct cnxk_meter_node *mtr,
-		   struct roc_nix_bpf_precolor *tbl)
+nix_precolor_table_map(struct cnxk_meter_node *mtr,
+		       struct roc_nix_bpf_precolor *tbl,
+		       enum rte_mtr_color_in_protocol proto)
 {
 	enum roc_nix_bpf_color color_map[] = {ROC_NIX_BPF_COLOR_GREEN,
 					      ROC_NIX_BPF_COLOR_YELLOW,
 					      ROC_NIX_BPF_COLOR_RED};
 	int i;
 
-	tbl->count = ROC_NIX_BPF_PRE_COLOR_MAX;
-	tbl->mode = ROC_NIX_BPF_PC_MODE_DSCP_OUTER;
+	switch (proto) {
+	case RTE_MTR_COLOR_IN_PROTO_OUTER_IP:
+	case RTE_MTR_COLOR_IN_PROTO_INNER_IP:
+		tbl->count = ROC_NIX_BPF_PRECOLOR_TBL_SIZE_DSCP;
+		tbl->mode = (proto == RTE_MTR_COLOR_IN_PROTO_OUTER_IP) ?
+				    ROC_NIX_BPF_PC_MODE_DSCP_OUTER :
+				    ROC_NIX_BPF_PC_MODE_DSCP_INNER;
 
-	for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
-		tbl->color[i] = ROC_NIX_BPF_COLOR_GREEN;
+		for (i = 0; i < tbl->count; i++)
+			tbl->color[i] = ROC_NIX_BPF_COLOR_GREEN;
 
-	if (mtr->params.dscp_table) {
-		for (i = 0; i < ROC_NIX_BPF_PRE_COLOR_MAX; i++)
-			tbl->color[i] = color_map[mtr->params.dscp_table[i]];
+		if (mtr->params.dscp_table) {
+			for (i = 0; i < tbl->count; i++)
+				tbl->color[i] =
+					color_map[mtr->params.dscp_table[i]];
+		}
+		break;
+	case RTE_MTR_COLOR_IN_PROTO_OUTER_VLAN:
+	case RTE_MTR_COLOR_IN_PROTO_INNER_VLAN:
+		tbl->count = ROC_NIX_BPF_PRECOLOR_TBL_SIZE_VLAN;
+		tbl->mode = (proto == RTE_MTR_COLOR_IN_PROTO_OUTER_VLAN) ?
+				    ROC_NIX_BPF_PC_MODE_VLAN_OUTER :
+				    ROC_NIX_BPF_PC_MODE_VLAN_INNER;
+
+		for (i = 0; i < tbl->count; i++)
+			tbl->color[i] = ROC_NIX_BPF_COLOR_GREEN;
+
+		if (mtr->params.vlan_table) {
+			for (i = 0; i < tbl->count; i++)
+				tbl->color[i] =
+					color_map[mtr->params.vlan_table[i]];
+		}
+		break;
+	default:
+		break;
 	}
 }
 
@@ -1189,7 +1490,8 @@ nix_mtr_configure(struct rte_eth_dev *eth_dev, uint32_t id)
 
 				memset(&tbl, 0,
 				       sizeof(struct roc_nix_bpf_precolor));
-				nix_dscp_table_map(mtr[i], &tbl);
+				nix_precolor_table_map(mtr[i], &tbl,
+						       dev->proto);
 				rc = roc_nix_bpf_pre_color_tbl_setup(nix,
 					mtr[i]->bpf_id, lvl_map[mtr[i]->level],
 					&tbl);
@@ -1338,4 +1640,13 @@ nix_mtr_color_action_validate(struct rte_eth_dev *eth_dev, uint32_t id,
 	}
 
 	return 0;
+}
+
+int
+nix_mtr_capabilities_init(struct rte_eth_dev *eth_dev)
+{
+	struct rte_mtr_capabilities capa;
+	struct rte_mtr_error error;
+
+	return cnxk_nix_mtr_capabilities_get(eth_dev, &capa, &error);
 }

@@ -3,7 +3,7 @@
  */
 
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <ethdev_pci.h>
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
@@ -255,7 +255,7 @@ static int hinic_vlan_offload_set(struct rte_eth_dev *dev, int mask);
  * Interrupt handler triggered by NIC  for handling
  * specific event.
  *
- * @param: The address of parameter (struct rte_eth_dev *) regsitered before.
+ * @param: The address of parameter (struct rte_eth_dev *) registered before.
  */
 static void hinic_dev_interrupt_handler(void *param)
 {
@@ -336,7 +336,7 @@ static int hinic_dev_configure(struct rte_eth_dev *dev)
 		return err;
 	}
 
-	/* init vlan offoad */
+	/* init VLAN offload */
 	err = hinic_vlan_offload_set(dev,
 				RTE_ETH_VLAN_STRIP_MASK | RTE_ETH_VLAN_FILTER_MASK);
 	if (err) {
@@ -750,6 +750,8 @@ hinic_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 				RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
 				RTE_ETH_TX_OFFLOAD_TCP_TSO |
 				RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
+
+	info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	info->hash_key_size = HINIC_RSS_KEY_SIZE;
 	info->reta_size = HINIC_RSS_INDIR_SIZE;
@@ -2660,8 +2662,7 @@ static int hinic_copy_mempool_init(struct hinic_nic_dev *nic_dev)
 
 static void hinic_copy_mempool_uninit(struct hinic_nic_dev *nic_dev)
 {
-	if (nic_dev->cpy_mpool != NULL)
-		rte_mempool_free(nic_dev->cpy_mpool);
+	rte_mempool_free(nic_dev->cpy_mpool);
 }
 
 static int hinic_init_sw_rxtxqs(struct hinic_nic_dev *nic_dev)

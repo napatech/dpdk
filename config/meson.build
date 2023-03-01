@@ -22,7 +22,8 @@ is_ms_linker = is_windows and (cc.get_id() == 'clang')
 # depending on the configuration options
 pver = meson.project_version().split('.')
 major_version = '@0@.@1@'.format(pver.get(0), pver.get(1))
-abi_version = run_command(find_program('cat', 'more'), abi_version_file).stdout().strip()
+abi_version = run_command(find_program('cat', 'more'), abi_version_file,
+        check: true).stdout().strip()
 
 # Libraries have the abi_version as the filename extension
 # and have the soname be all but the final part of the abi_version.
@@ -120,6 +121,8 @@ if cpu_instruction_set == 'generic'
         cpu_instruction_set = 'generic'
     elif host_machine.cpu_family().startswith('ppc')
         cpu_instruction_set = 'power8'
+    elif host_machine.cpu_family().startswith('riscv')
+        cpu_instruction_set = 'riscv'
     endif
 endif
 
@@ -218,6 +221,17 @@ if libbsd.found()
     dpdk_conf.set('RTE_USE_LIBBSD', 1)
 endif
 
+jansson_dep = dependency('jansson', required: false, method: 'pkg-config')
+if jansson_dep.found()
+    dpdk_conf.set('RTE_HAS_JANSSON', 1)
+endif
+
+# check for OpenSSL
+openssl_dep = dependency('openssl', required: false, method: 'pkg-config')
+if openssl_dep.found()
+    dpdk_conf.set('RTE_HAS_OPENSSL', 1)
+endif
+
 # check for pcap
 pcap_dep = dependency('libpcap', required: false, method: 'pkg-config')
 pcap_lib = is_windows ? 'wpcap' : 'pcap'
@@ -226,7 +240,7 @@ if not pcap_dep.found()
     pcap_dep = cc.find_library(pcap_lib, required: false)
 endif
 if pcap_dep.found() and cc.has_header('pcap.h', dependencies: pcap_dep)
-    dpdk_conf.set('RTE_PORT_PCAP', 1)
+    dpdk_conf.set('RTE_HAS_LIBPCAP', 1)
     dpdk_extra_ldflags += '-l@0@'.format(pcap_lib)
 endif
 
@@ -241,10 +255,9 @@ endif
 add_project_arguments('-include', 'rte_config.h', language: 'c')
 
 # enable extra warnings and disable any unwanted warnings
+# -Wall is added by default at warning level 1, and -Wextra
+# at warning level 2 (DPDK default)
 warning_flags = [
-        # -Wall is added by meson by default, so add -Wextra only
-        '-Wextra',
-
         # additional warnings in alphabetical order
         '-Wcast-qual',
         '-Wdeprecated',
@@ -302,6 +315,7 @@ endif
 if get_option('mbuf_refcnt_atomic')
     dpdk_conf.set('RTE_MBUF_REFCNT_ATOMIC', true)
 endif
+dpdk_conf.set10('RTE_IOVA_AS_PA', get_option('enable_iova_as_pa'))
 
 compile_time_cpuflags = []
 subdir(arch_subdir)
@@ -324,47 +338,47 @@ endif
 
 max_lcores = get_option('max_lcores')
 if max_lcores == 'detect'
-	# discovery makes sense only for non-cross builds
-	if meson.is_cross_build()
-		error('Discovery of max_lcores is not supported for cross-compilation.')
-	endif
-	# overwrite the default value with discovered values
-	max_lcores = run_command(get_cpu_count_cmd).stdout().to_int()
-	min_lcores = 2
-	# DPDK must be built for at least 2 cores
-	if max_lcores < min_lcores
-		message('Found less than @0@ cores, building for @0@ cores'.format(min_lcores))
-		max_lcores = min_lcores
-	else
-		message('Found @0@ cores'.format(max_lcores))
-	endif
-	dpdk_conf.set('RTE_MAX_LCORE', max_lcores)
+    # discovery makes sense only for non-cross builds
+    if meson.is_cross_build()
+        error('Discovery of max_lcores is not supported for cross-compilation.')
+    endif
+    # overwrite the default value with discovered values
+    max_lcores = run_command(get_cpu_count_cmd, check: true).stdout().to_int()
+    min_lcores = 2
+    # DPDK must be built for at least 2 cores
+    if max_lcores < min_lcores
+        message('Found less than @0@ cores, building for @0@ cores'.format(min_lcores))
+        max_lcores = min_lcores
+    else
+        message('Found @0@ cores'.format(max_lcores))
+    endif
+    dpdk_conf.set('RTE_MAX_LCORE', max_lcores)
 elif max_lcores != 'default'
-	# overwrite the default value from arch_subdir with user input
-	dpdk_conf.set('RTE_MAX_LCORE', max_lcores.to_int())
+    # overwrite the default value from arch_subdir with user input
+    dpdk_conf.set('RTE_MAX_LCORE', max_lcores.to_int())
 endif
 
 max_numa_nodes = get_option('max_numa_nodes')
 if max_numa_nodes == 'detect'
-	# discovery makes sense only for non-cross builds
-	if meson.is_cross_build()
-		error('Discovery of max_numa_nodes not supported for cross-compilation.')
-	endif
-	# overwrite the default value with discovered values
-	max_numa_nodes = run_command(get_numa_count_cmd).stdout().to_int()
-	message('Found @0@ numa nodes'.format(max_numa_nodes))
-	dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes)
+    # discovery makes sense only for non-cross builds
+    if meson.is_cross_build()
+        error('Discovery of max_numa_nodes not supported for cross-compilation.')
+    endif
+    # overwrite the default value with discovered values
+    max_numa_nodes = run_command(get_numa_count_cmd).stdout().to_int()
+    message('Found @0@ numa nodes'.format(max_numa_nodes))
+    dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes)
 elif max_numa_nodes != 'default'
-	# overwrite the default value from arch_subdir with user input
-	dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes.to_int())
+    # overwrite the default value from arch_subdir with user input
+    dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes.to_int())
 endif
 
 # check that CPU and NUMA counts are set
 if not dpdk_conf.has('RTE_MAX_LCORE')
-	error('Number of CPU cores not specified.')
+    error('Number of CPU cores not specified.')
 endif
 if not dpdk_conf.has('RTE_MAX_NUMA_NODES')
-	error('Number of NUMA nodes not specified.')
+    error('Number of NUMA nodes not specified.')
 endif
 
 # set the install path for the drivers
@@ -410,6 +424,26 @@ if get_option('b_lto')
     if cc.get_id() == 'gcc' and cc.version().version_compare('<8.0')
         add_project_arguments('-Wno-lto-type-mismatch', language: 'c')
         add_project_link_arguments('-Wno-lto-type-mismatch', language: 'c')
+    endif
+endif
+
+if get_option('b_sanitize') == 'address' or get_option('b_sanitize') == 'address,undefined'
+    if is_windows
+        error('ASan is not supported on windows')
+    endif
+
+    if cc.get_id() == 'gcc'
+        asan_dep = cc.find_library('asan', required: true)
+        if (not cc.links('int main(int argc, char *argv[]) { return 0; }',
+                dependencies: asan_dep))
+            error('broken dependency, "libasan"')
+        endif
+        add_project_link_arguments('-lasan', language: 'c')
+        dpdk_extra_ldflags += '-lasan'
+    endif
+
+    if is_linux and dpdk_conf.get('RTE_ARCH_64')
+        dpdk_conf.set10('RTE_MALLOC_ASAN', true)
     endif
 endif
 

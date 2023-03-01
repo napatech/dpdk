@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <unistd.h>
 
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_ethdev.h>
 #include <rte_pci.h>
 #include <rte_malloc.h>
@@ -18,7 +18,7 @@
 #include <rte_io.h>
 #include <rte_rawdev.h>
 #include <rte_rawdev_pmd.h>
-#include <rte_bus_ifpga.h>
+#include <bus_ifpga_driver.h>
 #include <ifpga_logs.h>
 
 #include "ipn3ke_rawdev_api.h"
@@ -96,6 +96,7 @@ ipn3ke_rpst_dev_infos_get(struct rte_eth_dev *ethdev,
 	dev_info->dev_capa =
 		RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
 		RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
+	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	dev_info->switch_info.name = ethdev->device->name;
 	dev_info->switch_info.domain_id = rpst->switch_domain_id;
@@ -2217,9 +2218,6 @@ ipn3ke_rpst_xstats_get
 	struct ipn3ke_rpst_hw_port_stats hw_stats;
 	struct rte_eth_stats stats;
 
-	if (!xstats)
-		return 0;
-
 	if (!ethdev) {
 		IPN3KE_AFU_PMD_ERR("ethernet device to get statistics is NULL");
 		return -EINVAL;
@@ -2281,7 +2279,7 @@ ipn3ke_rpst_xstats_get
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_hw_port */
+	/* Get individual stats from ipn3ke_rpst_hw_port */
 	for (i = 0; i < IPN3KE_RPST_HW_PORT_XSTATS_CNT; i++) {
 		xstats[count].value = *(uint64_t *)(((char *)(&hw_stats)) +
 			ipn3ke_rpst_hw_port_strings[i].offset);
@@ -2289,7 +2287,7 @@ ipn3ke_rpst_xstats_get
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_rxq_pri */
+	/* Get individual stats from ipn3ke_rpst_rxq_pri */
 	for (i = 0; i < IPN3KE_RPST_RXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < IPN3KE_RPST_PRIO_XSTATS_CNT; prio++) {
 			xstats[count].value =
@@ -2301,7 +2299,7 @@ ipn3ke_rpst_xstats_get
 		}
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_txq_prio */
+	/* Get individual stats from ipn3ke_rpst_txq_prio */
 	for (i = 0; i < IPN3KE_RPST_TXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < IPN3KE_RPST_PRIO_XSTATS_CNT; prio++) {
 			xstats[count].value =
@@ -2339,7 +2337,7 @@ __rte_unused unsigned int limit)
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_hw_port */
+	/* Get individual stats from ipn3ke_rpst_hw_port */
 	for (i = 0; i < IPN3KE_RPST_HW_PORT_XSTATS_CNT; i++) {
 		snprintf(xstats_names[count].name,
 			 sizeof(xstats_names[count].name),
@@ -2348,7 +2346,7 @@ __rte_unused unsigned int limit)
 		count++;
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_rxq_pri */
+	/* Get individual stats from ipn3ke_rpst_rxq_pri */
 	for (i = 0; i < IPN3KE_RPST_RXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < 8; prio++) {
 			snprintf(xstats_names[count].name,
@@ -2360,7 +2358,7 @@ __rte_unused unsigned int limit)
 		}
 	}
 
-	/* Get individiual stats from ipn3ke_rpst_txq_prio */
+	/* Get individual stats from ipn3ke_rpst_txq_prio */
 	for (i = 0; i < IPN3KE_RPST_TXQ_PRIO_XSTATS_CNT; i++) {
 		for (prio = 0; prio < 8; prio++) {
 			snprintf(xstats_names[count].name,

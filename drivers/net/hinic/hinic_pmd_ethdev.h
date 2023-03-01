@@ -35,9 +35,8 @@
 #define HINIC_MAX_MTU_SIZE              9600
 #define HINIC_MIN_MTU_SIZE              256
 
-#define HINIC_VLAN_TAG_SIZE             4
 #define HINIC_ETH_OVERHEAD \
-	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + HINIC_VLAN_TAG_SIZE * 2)
+	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + RTE_VLAN_HLEN * 2)
 
 #define HINIC_MIN_FRAME_SIZE        (HINIC_MIN_MTU_SIZE + HINIC_ETH_OVERHEAD)
 #define HINIC_MAX_JUMBO_FRAME_SIZE  (HINIC_MAX_MTU_SIZE + HINIC_ETH_OVERHEAD)
@@ -171,7 +170,7 @@ struct tag_tcam_key_mem {
 		/*
 		 * tunnel packet, mask must be 0xff, spec value is 1;
 		 * normal packet, mask must be 0, spec value is 0;
-		 * if tunnal packet, ucode use
+		 * if tunnel packet, ucode use
 		 * sip/dip/protocol/src_port/dst_dport from inner packet
 		 */
 		u32 tunnel_flag:8;

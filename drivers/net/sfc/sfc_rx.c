@@ -139,7 +139,7 @@ sfc_efx_rx_qrefill(struct sfc_efx_rxq *rxq)
 	SFC_ASSERT(added != rxq->added);
 	rxq->added = added;
 	efx_rx_qpush(rxq->common, added, &rxq->pushed);
-	rxq->dp.dpq.rx_dbells++;
+	rxq->dp.dpq.dbells++;
 }
 
 static uint64_t
@@ -483,6 +483,10 @@ sfc_efx_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 	struct sfc_efx_rxq *rxq;
 	int rc;
 
+	rc = ENOTSUP;
+	if (info->nic_dma_info->nb_regions > 0)
+		goto fail_nic_dma;
+
 	rc = ENOMEM;
 	rxq = rte_zmalloc_socket("sfc-efx-rxq", sizeof(*rxq),
 				 RTE_CACHE_LINE_SIZE, socket_id);
@@ -518,6 +522,7 @@ fail_desc_alloc:
 	rte_free(rxq);
 
 fail_rxq_alloc:
+fail_nic_dma:
 	return rc;
 }
 
@@ -1052,7 +1057,7 @@ sfc_rx_mb_pool_buf_size(struct sfc_adapter *sa, struct rte_mempool *mb_pool)
 	/* Make sure that end padding does not write beyond the buffer */
 	if (buf_aligned < nic_align_end) {
 		/*
-		 * Estimate space which can be lost. If guarnteed buffer
+		 * Estimate space which can be lost. If guaranteed buffer
 		 * size is odd, lost space is (nic_align_end - 1). More
 		 * accurate formula is below.
 		 */
@@ -1076,7 +1081,11 @@ sfc_rx_mb_pool_buf_size(struct sfc_adapter *sa, struct rte_mempool *mb_pool)
 		buf_size = EFX_P2ALIGN(uint32_t, buf_size, nic_align_end);
 	}
 
-	return buf_size;
+	/*
+	 * Buffer length field of a Rx descriptor may not be wide
+	 * enough to store a 16-bit data count taken from an mbuf.
+	 */
+	return MIN(buf_size, encp->enc_rx_dma_desc_size_max);
 }
 
 int
@@ -1181,7 +1190,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, sfc_sw_index_t sw_index,
 		rxq_info->type_flags |= EFX_RXQ_FLAG_USER_FLAG;
 
 	if ((sa->negotiated_rx_metadata & RTE_ETH_RX_METADATA_USER_MARK) != 0 ||
-	    sfc_flow_tunnel_is_active(sa))
+	    sfc_ft_is_active(sa))
 		rxq_info->type_flags |= EFX_RXQ_FLAG_USER_MARK;
 
 	rc = sfc_ev_qinit(sa, SFC_EVQ_TYPE_RX, sw_index,
@@ -1218,7 +1227,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, sfc_sw_index_t sw_index,
 
 	rxq->buf_size = buf_size;
 
-	rc = sfc_dma_alloc(sa, "rxq", sw_index,
+	rc = sfc_dma_alloc(sa, "rxq", sw_index, EFX_NIC_DMA_ADDR_RX_RING,
 			   efx_rxq_size(sa->nic, rxq_info->entries),
 			   socket_id, &rxq->mem);
 	if (rc != 0)
@@ -1232,7 +1241,7 @@ sfc_rx_qinit(struct sfc_adapter *sa, sfc_sw_index_t sw_index,
 	info.batch_max = encp->enc_rx_batch_max;
 	info.prefix_size = encp->enc_rx_prefix_size;
 
-	if (sfc_flow_tunnel_is_active(sa))
+	if (sfc_ft_is_active(sa))
 		info.user_mark_mask = SFC_FT_USER_MARK_MASK;
 	else
 		info.user_mark_mask = UINT32_MAX;
@@ -1247,6 +1256,8 @@ sfc_rx_qinit(struct sfc_adapter *sa, sfc_sw_index_t sw_index,
 	info.mem_bar = sa->mem_bar.esb_base;
 	info.vi_window_shift = encp->enc_vi_window_shift;
 	info.fcw_offset = sa->fcw_offset;
+
+	info.nic_dma_info = &sas->nic_dma_info;
 
 	rc = sa->priv.dp_rx->qcreate(sa->eth_dev->data->port_id, sw_index,
 				     &RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
@@ -1695,7 +1706,7 @@ sfc_rx_fini_queues(struct sfc_adapter *sa, unsigned int nb_rx_queues)
 
 	/*
 	 * Finalize only ethdev queues since other ones are finalized only
-	 * on device close and they may require additional deinitializaton.
+	 * on device close and they may require additional deinitialization.
 	 */
 	ethdev_qid = sas->ethdev_rxq_count;
 	while (--ethdev_qid >= (int)nb_rx_queues) {
@@ -1768,7 +1779,7 @@ sfc_rx_configure(struct sfc_adapter *sa)
 
 		reconfigure = true;
 
-		/* Do not ununitialize reserved queues */
+		/* Do not uninitialize reserved queues */
 		if (nb_rx_queues < sas->ethdev_rxq_count)
 			sfc_rx_fini_queues(sa, nb_rx_queues);
 

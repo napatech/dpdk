@@ -23,7 +23,6 @@ mlx5_list_init(struct mlx5_list_inconst *l_inconst,
 		l_inconst->cache[MLX5_LIST_GLOBAL] = gc;
 		LIST_INIT(&l_inconst->cache[MLX5_LIST_GLOBAL]->h);
 	}
-	DRV_LOG(DEBUG, "mlx5 list %s initialized.", l_const->name);
 	return 0;
 }
 
@@ -66,6 +65,7 @@ mlx5_list_create(const char *name, void *ctx, bool lcores_share,
 		mlx5_free(list);
 		return NULL;
 	}
+	DRV_LOG(DEBUG, "mlx5 list %s was created.", name);
 	return list;
 }
 
@@ -293,11 +293,9 @@ _mlx5_list_unregister(struct mlx5_list_inconst *l_inconst,
 			l_const->cb_clone_free(l_const->ctx, entry);
 		else
 			l_const->cb_remove(l_const->ctx, entry);
-	} else if (likely(lcore_idx != -1)) {
+	} else {
 		__atomic_add_fetch(&l_inconst->cache[entry->lcore_idx]->inv_cnt,
 				   1, __ATOMIC_RELAXED);
-	} else {
-		return 0;
 	}
 	if (!l_const->lcores_share) {
 		__atomic_sub_fetch(&l_inconst->count, 1, __ATOMIC_RELAXED);

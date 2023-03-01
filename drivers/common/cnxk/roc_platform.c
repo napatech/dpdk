@@ -37,7 +37,11 @@ roc_plt_init(void)
 				plt_err("Failed to reserve mem for roc_model");
 				return -ENOMEM;
 			}
-			roc_model_init(mz->addr);
+			if (roc_model_init(mz->addr)) {
+				plt_err("Failed to init roc_model");
+				rte_memzone_free(mz);
+				return -EINVAL;
+			}
 		}
 	} else {
 		if (mz == NULL) {
@@ -65,3 +69,4 @@ RTE_LOG_REGISTER(cnxk_logtype_npc, pmd.net.cnxk.flow, NOTICE);
 RTE_LOG_REGISTER(cnxk_logtype_sso, pmd.event.cnxk, NOTICE);
 RTE_LOG_REGISTER(cnxk_logtype_tim, pmd.event.cnxk.timer, NOTICE);
 RTE_LOG_REGISTER(cnxk_logtype_tm, pmd.net.cnxk.tm, NOTICE);
+RTE_LOG_REGISTER_DEFAULT(cnxk_logtype_ree, NOTICE);

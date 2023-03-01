@@ -16,13 +16,19 @@
 
 #define MLX5_CRYPTO_DEK_HTABLE_SZ (1 << 11)
 #define MLX5_CRYPTO_KEY_LENGTH 80
+#define MLX5_CRYPTO_UMR_WQE_STATIC_SIZE (sizeof(struct mlx5_wqe_cseg) +\
+					sizeof(struct mlx5_wqe_umr_cseg) +\
+					sizeof(struct mlx5_wqe_mkey_cseg) +\
+					sizeof(struct mlx5_wqe_umr_bsf_seg))
+#define MLX5_CRYPTO_KLM_SEGS_NUM(umr_wqe_sz) ((umr_wqe_sz -\
+					MLX5_CRYPTO_UMR_WQE_STATIC_SIZE) /\
+					MLX5_WSEG_SIZE)
 
 struct mlx5_crypto_priv {
 	TAILQ_ENTRY(mlx5_crypto_priv) next;
 	struct mlx5_common_device *cdev; /* Backend mlx5 device. */
 	struct rte_cryptodev *crypto_dev;
-	void *uar; /* User Access Region. */
-	volatile uint64_t *uar_addr;
+	struct mlx5_uar uar; /* User Access Region. */
 	uint32_t max_segs_num; /* Maximum supported data segs. */
 	struct mlx5_hlist *dek_hlist; /* Dek hash list. */
 	struct rte_cryptodev_config dev_config;
@@ -32,9 +38,7 @@ struct mlx5_crypto_priv {
 	uint16_t umr_wqe_size;
 	uint16_t umr_wqe_stride;
 	uint16_t max_rdmar_ds;
-#ifndef RTE_ARCH_64
-	rte_spinlock_t uar32_sl;
-#endif /* RTE_ARCH_64 */
+	uint32_t is_wrapped_mode:1;
 };
 
 struct mlx5_crypto_qp {
@@ -56,7 +60,7 @@ struct mlx5_crypto_dek {
 	struct mlx5_list_entry entry; /* Pointer to DEK hash list entry. */
 	struct mlx5_devx_obj *obj; /* Pointer to DEK DevX object. */
 	uint8_t data[MLX5_CRYPTO_KEY_LENGTH]; /* DEK key data. */
-	bool size_is_48; /* Whether the key\data size is 48 bytes or not. */
+	uint32_t size; /* key+keytag size. */
 } __rte_cache_aligned;
 
 struct mlx5_crypto_devarg_params {

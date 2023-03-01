@@ -304,7 +304,7 @@ static int test_mempool_single_consumer(void)
 }
 
 /*
- * test function for mempool test based on singple consumer and single producer,
+ * test function for mempool test based on single consumer and single producer,
  * can run on one lcore only
  */
 static int
@@ -322,7 +322,7 @@ my_mp_init(struct rte_mempool *mp, __rte_unused void *arg)
 }
 
 /*
- * it tests the mempool operations based on singple producer and single consumer
+ * it tests the mempool operations based on single producer and single consumer
  */
 static int
 test_mempool_sp_sc(void)
@@ -515,17 +515,19 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 #undef RTE_TEST_TRACE_FAILURE
 #define RTE_TEST_TRACE_FAILURE(...) do { goto fail; } while (0)
 
-	static const size_t CB_NUM = 3;
-	static const size_t MP_NUM = 2;
+	static const size_t callback_num = 3;
+	static const size_t mempool_num = 2;
+	static const unsigned int mempool_elt_size = 64;
+	static const unsigned int mempool_size = 64;
 
-	struct test_mempool_events_data data[CB_NUM];
-	struct rte_mempool *mp[MP_NUM], *freed;
+	struct test_mempool_events_data data[callback_num];
+	struct rte_mempool *mp[mempool_num], *freed;
 	char name[RTE_MEMPOOL_NAMESIZE];
 	size_t i, j;
 	int ret;
 
 	memset(mp, 0, sizeof(mp));
-	for (i = 0; i < CB_NUM; i++) {
+	for (i = 0; i < callback_num; i++) {
 		ret = rte_mempool_event_callback_register
 				(test_mempool_events_cb, &data[i]);
 		RTE_TEST_ASSERT_EQUAL(ret, 0, "Failed to register the callback %zu: %s",
@@ -541,12 +543,12 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 	/* Create mempool 0 that will be observed by all callbacks. */
 	memset(&data, 0, sizeof(data));
 	strcpy(name, "empty0");
-	mp[0] = rte_mempool_create_empty(name, MEMPOOL_SIZE,
-					 MEMPOOL_ELT_SIZE, 0, 0,
+	mp[0] = rte_mempool_create_empty(name, mempool_size,
+					 mempool_elt_size, 0, 0,
 					 SOCKET_ID_ANY, 0);
 	RTE_TEST_ASSERT_NOT_NULL(mp[0], "Cannot create mempool %s: %s",
 				 name, rte_strerror(rte_errno));
-	for (j = 0; j < CB_NUM; j++)
+	for (j = 0; j < callback_num; j++)
 		RTE_TEST_ASSERT_EQUAL(data[j].invoked, false,
 				      "Callback %zu invoked on %s mempool creation",
 				      j, name);
@@ -555,7 +557,7 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 	ret = populate(mp[0]);
 	RTE_TEST_ASSERT_EQUAL(ret, (int)mp[0]->size, "Failed to populate mempool %s: %s",
 			      name, rte_strerror(-ret));
-	for (j = 0; j < CB_NUM; j++) {
+	for (j = 0; j < callback_num; j++) {
 		RTE_TEST_ASSERT_EQUAL(data[j].invoked, true,
 					"Callback %zu not invoked on mempool %s population",
 					j, name);
@@ -574,8 +576,8 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 			      rte_strerror(rte_errno));
 	memset(&data, 0, sizeof(data));
 	strcpy(name, "empty1");
-	mp[1] = rte_mempool_create_empty(name, MEMPOOL_SIZE,
-					 MEMPOOL_ELT_SIZE, 0, 0,
+	mp[1] = rte_mempool_create_empty(name, mempool_size,
+					 mempool_elt_size, 0, 0,
 					 SOCKET_ID_ANY, 0);
 	RTE_TEST_ASSERT_NOT_NULL(mp[1], "Cannot create mempool %s: %s",
 				 name, rte_strerror(rte_errno));
@@ -587,7 +589,7 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 			      "Unregistered callback 0 invoked on %s mempool populaton",
 			      name);
 
-	for (i = 0; i < MP_NUM; i++) {
+	for (i = 0; i < mempool_num; i++) {
 		memset(&data, 0, sizeof(data));
 		sprintf(name, "empty%zu", i);
 		rte_mempool_free(mp[i]);
@@ -597,7 +599,7 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 		 */
 		freed = mp[i];
 		mp[i] = NULL;
-		for (j = 1; j < CB_NUM; j++) {
+		for (j = 1; j < callback_num; j++) {
 			RTE_TEST_ASSERT_EQUAL(data[j].invoked, true,
 					      "Callback %zu not invoked on mempool %s destruction",
 					      j, name);
@@ -613,7 +615,7 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 				      name);
 	}
 
-	for (j = 1; j < CB_NUM; j++) {
+	for (j = 1; j < callback_num; j++) {
 		ret = rte_mempool_event_callback_unregister
 					(test_mempool_events_cb, &data[j]);
 		RTE_TEST_ASSERT_EQUAL(ret, 0, "Failed to unregister the callback %zu: %s",
@@ -622,10 +624,10 @@ test_mempool_events(int (*populate)(struct rte_mempool *mp))
 	return TEST_SUCCESS;
 
 fail:
-	for (j = 0; j < CB_NUM; j++)
+	for (j = 0; j < callback_num; j++)
 		rte_mempool_event_callback_unregister
 					(test_mempool_events_cb, &data[j]);
-	for (i = 0; i < MP_NUM; i++)
+	for (i = 0; i < mempool_num; i++)
 		rte_mempool_free(mp[i]);
 	return TEST_FAILED;
 
@@ -740,16 +742,17 @@ exit:
 static int
 test_mempool_flag_non_io_set_when_no_iova_contig_set(void)
 {
-	void *virt = NULL;
+	const struct rte_memzone *mz = NULL;
+	void *virt;
 	rte_iova_t iova;
 	size_t size = MEMPOOL_ELT_SIZE * 16;
 	struct rte_mempool *mp = NULL;
 	int ret;
 
-	virt = rte_malloc("test_mempool", size, rte_mem_page_size());
-	RTE_TEST_ASSERT_NOT_NULL(virt, "Cannot allocate memory");
-	iova = rte_mem_virt2iova(virt);
-	RTE_TEST_ASSERT_NOT_EQUAL(iova,  RTE_BAD_IOVA, "Cannot get IOVA");
+	mz = rte_memzone_reserve("test_mempool", size, SOCKET_ID_ANY, 0);
+	RTE_TEST_ASSERT_NOT_NULL(mz, "Cannot allocate memory");
+	virt = mz->addr;
+	iova = mz->iova;
 	mp = rte_mempool_create_empty("empty", MEMPOOL_SIZE,
 				      MEMPOOL_ELT_SIZE, 0, 0,
 				      SOCKET_ID_ANY, RTE_MEMPOOL_F_NO_IOVA_CONTIG);
@@ -772,14 +775,15 @@ test_mempool_flag_non_io_set_when_no_iova_contig_set(void)
 	ret = TEST_SUCCESS;
 exit:
 	rte_mempool_free(mp);
-	rte_free(virt);
+	rte_memzone_free(mz);
 	return ret;
 }
 
 static int
 test_mempool_flag_non_io_unset_when_populated_with_valid_iova(void)
 {
-	void *virt = NULL;
+	const struct rte_memzone *mz = NULL;
+	void *virt;
 	rte_iova_t iova;
 	size_t total_size = MEMPOOL_ELT_SIZE * MEMPOOL_SIZE;
 	size_t block_size = total_size / 3;
@@ -789,12 +793,12 @@ test_mempool_flag_non_io_unset_when_populated_with_valid_iova(void)
 	/*
 	 * Since objects from the pool are never used in the test,
 	 * we don't care for contiguous IOVA, on the other hand,
-	 * reiuring it could cause spurious test failures.
+	 * requiring it could cause spurious test failures.
 	 */
-	virt = rte_malloc("test_mempool", total_size, rte_mem_page_size());
-	RTE_TEST_ASSERT_NOT_NULL(virt, "Cannot allocate memory");
-	iova = rte_mem_virt2iova(virt);
-	RTE_TEST_ASSERT_NOT_EQUAL(iova,  RTE_BAD_IOVA, "Cannot get IOVA");
+	mz = rte_memzone_reserve("test_mempool", total_size, SOCKET_ID_ANY, 0);
+	RTE_TEST_ASSERT_NOT_NULL(mz, "Cannot allocate memory");
+	virt = mz->addr;
+	iova = mz->iova;
 	mp = rte_mempool_create_empty("empty", MEMPOOL_SIZE,
 				      MEMPOOL_ELT_SIZE, 0, 0,
 				      SOCKET_ID_ANY, 0);
@@ -827,7 +831,7 @@ test_mempool_flag_non_io_unset_when_populated_with_valid_iova(void)
 
 exit:
 	rte_mempool_free(mp);
-	rte_free(virt);
+	rte_memzone_free(mz);
 	return ret;
 }
 
@@ -990,7 +994,7 @@ test_mempool(void)
 	if (test_mempool_basic_ex(mp_nocache) < 0)
 		GOTO_ERR(ret, err);
 
-	/* mempool operation test based on single producer and single comsumer */
+	/* mempool operation test based on single producer and single consumer */
 	if (test_mempool_sp_sc() < 0)
 		GOTO_ERR(ret, err);
 

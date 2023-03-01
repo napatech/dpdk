@@ -187,7 +187,7 @@ order_test_setup(struct evt_test *test, struct evt_options *opt)
 		evt_err("failed to allocate t->expected_flow_seq memory");
 		goto exp_nomem;
 	}
-	rte_atomic64_set(&t->outstand_pkts, opt->nb_pkts);
+	__atomic_store_n(&t->outstand_pkts, opt->nb_pkts, __ATOMIC_RELAXED);
 	t->err = false;
 	t->nb_pkts = opt->nb_pkts;
 	t->nb_flows = opt->nb_flows;
@@ -253,7 +253,7 @@ void
 order_opt_dump(struct evt_options *opt)
 {
 	evt_dump_producer_lcores(opt);
-	evt_dump("nb_wrker_lcores", "%d", evt_nr_active_lcores(opt->wlcores));
+	evt_dump("nb_worker_lcores", "%d", evt_nr_active_lcores(opt->wlcores));
 	evt_dump_worker_lcores(opt);
 	evt_dump("nb_evdev_ports", "%d", order_nb_event_ports(opt));
 }
@@ -294,7 +294,7 @@ order_launch_lcores(struct evt_test *test, struct evt_options *opt,
 
 	while (t->err == false) {
 		uint64_t new_cycles = rte_get_timer_cycles();
-		int64_t remaining = rte_atomic64_read(&t->outstand_pkts);
+		int64_t remaining = __atomic_load_n(&t->outstand_pkts, __ATOMIC_RELAXED);
 
 		if (remaining <= 0) {
 			t->result = EVT_TEST_SUCCESS;
@@ -328,7 +328,6 @@ order_event_dev_port_setup(struct evt_test *test, struct evt_options *opt,
 	struct test_order *t = evt_test_priv(test);
 	struct rte_event_dev_info dev_info;
 
-	memset(&dev_info, 0, sizeof(struct rte_event_dev_info));
 	ret = rte_event_dev_info_get(opt->dev_id, &dev_info);
 	if (ret) {
 		evt_err("failed to get eventdev info %d", opt->dev_id);

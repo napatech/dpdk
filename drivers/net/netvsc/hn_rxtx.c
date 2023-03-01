@@ -25,9 +25,9 @@
 #include <rte_errno.h>
 #include <rte_memory.h>
 #include <rte_eal.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_net.h>
-#include <rte_bus_vmbus.h>
+#include <bus_vmbus_driver.h>
 #include <rte_spinlock.h>
 
 #include "hn_logs.h"
@@ -315,8 +315,7 @@ hn_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	}
 
 error:
-	if (txq->txdesc_pool)
-		rte_mempool_free(txq->txdesc_pool);
+	rte_mempool_free(txq->txdesc_pool);
 	rte_memzone_free(txq->tx_rndis_mz);
 	rte_free(txq);
 	return err;
@@ -365,8 +364,7 @@ hn_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 	if (!txq)
 		return;
 
-	if (txq->txdesc_pool)
-		rte_mempool_free(txq->txdesc_pool);
+	rte_mempool_free(txq->txdesc_pool);
 
 	rte_memzone_free(txq->tx_rndis_mz);
 	rte_free(txq);
@@ -578,11 +576,11 @@ static void hn_rxpkt(struct hn_rx_queue *rxq, struct hn_rx_bufinfo *rxb,
 		rte_iova_t iova;
 
 		/*
-		 * Build an external mbuf that points to recveive area.
+		 * Build an external mbuf that points to receive area.
 		 * Use refcount to handle multiple packets in same
 		 * receive buffer section.
 		 */
-		rxbuf = hv->rxbuf_res->addr;
+		rxbuf = hv->rxbuf_res.addr;
 		iova = rte_mem_virt2iova(rxbuf) + RTE_PTR_DIFF(data, rxbuf);
 		shinfo = &rxb->shinfo;
 
@@ -765,8 +763,8 @@ hn_nvs_handle_rxbuf(struct rte_eth_dev *dev,
 {
 	const struct vmbus_chanpkt_rxbuf *pkt;
 	const struct hn_nvs_hdr *nvs_hdr = buf;
-	uint32_t rxbuf_sz = hv->rxbuf_res->len;
-	char *rxbuf = hv->rxbuf_res->addr;
+	uint32_t rxbuf_sz = hv->rxbuf_res.len;
+	char *rxbuf = hv->rxbuf_res.addr;
 	unsigned int i, hlen, count;
 	struct hn_rx_bufinfo *rxb;
 
@@ -1031,7 +1029,7 @@ hn_dev_rx_queue_count(void *rx_queue)
  * returns:
  *  - -EINVAL               - offset outside of ring
  *  - RTE_ETH_RX_DESC_AVAIL - no data available yet
- *  - RTE_ETH_RX_DESC_DONE  - data is waiting in stagin ring
+ *  - RTE_ETH_RX_DESC_DONE  - data is waiting in staging ring
  */
 int hn_dev_rx_queue_status(void *arg, uint16_t offset)
 {
@@ -1266,7 +1264,7 @@ hn_try_txagg(struct hn_data *hv, struct hn_tx_queue *txq,
 	if (txd->chim_index == NVS_CHIM_IDX_INVALID)
 		return NULL;
 
-	chim = (uint8_t *)hv->chim_res->addr
+	chim = (uint8_t *)hv->chim_res.addr
 			+ txd->chim_index * hv->chim_szmax;
 
 	txq->agg_txd = txd;
@@ -1348,8 +1346,11 @@ static void hn_encap(struct rndis_packet_msg *pkt,
 			*pi_data = NDIS_LSO2_INFO_MAKEIPV4(hlen,
 							   m->tso_segsz);
 		}
-	} else if (m->ol_flags &
-		   (RTE_MBUF_F_TX_TCP_CKSUM | RTE_MBUF_F_TX_UDP_CKSUM | RTE_MBUF_F_TX_IP_CKSUM)) {
+	} else if ((m->ol_flags & RTE_MBUF_F_TX_L4_MASK) ==
+			RTE_MBUF_F_TX_TCP_CKSUM ||
+		   (m->ol_flags & RTE_MBUF_F_TX_L4_MASK) ==
+			RTE_MBUF_F_TX_UDP_CKSUM ||
+		   (m->ol_flags & RTE_MBUF_F_TX_IP_CKSUM)) {
 		pi_data = hn_rndis_pktinfo_append(pkt, NDIS_TXCSUM_INFO_SIZE,
 						  NDIS_PKTINFO_TYPE_CSUM);
 		*pi_data = 0;
@@ -1363,9 +1364,11 @@ static void hn_encap(struct rndis_packet_msg *pkt,
 				*pi_data |= NDIS_TXCSUM_INFO_IPCS;
 		}
 
-		if (m->ol_flags & RTE_MBUF_F_TX_TCP_CKSUM)
+		if ((m->ol_flags & RTE_MBUF_F_TX_L4_MASK) ==
+				RTE_MBUF_F_TX_TCP_CKSUM)
 			*pi_data |= NDIS_TXCSUM_INFO_MKTCPCS(hlen);
-		else if (m->ol_flags & RTE_MBUF_F_TX_UDP_CKSUM)
+		else if ((m->ol_flags & RTE_MBUF_F_TX_L4_MASK) ==
+				RTE_MBUF_F_TX_UDP_CKSUM)
 			*pi_data |= NDIS_TXCSUM_INFO_MKUDPCS(hlen);
 	}
 

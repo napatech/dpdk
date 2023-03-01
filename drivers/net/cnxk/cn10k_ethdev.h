@@ -9,7 +9,6 @@
 
 struct cn10k_eth_txq {
 	uint64_t send_hdr_w0;
-	uint64_t sg_w0;
 	int64_t fc_cache_pkts;
 	uint64_t *fc_mem;
 	uintptr_t lmt_base;
@@ -20,8 +19,11 @@ struct cn10k_eth_txq {
 	uint64_t sa_base;
 	uint64_t *cpt_fc;
 	uint16_t cpt_desc;
-	uint64_t cmd[4];
+	int32_t *cpt_fc_sw;
 	uint64_t lso_tun_fmt;
+	uint64_t ts_mem;
+	uint64_t mark_flag : 8;
+	uint64_t mark_fmt : 48;
 } __plt_cache_aligned;
 
 struct cn10k_eth_rxq {
@@ -37,7 +39,7 @@ struct cn10k_eth_rxq {
 	uint16_t data_off;
 	uint64_t sa_base;
 	uint64_t lmt_base;
-	uint64_t aura_handle;
+	uint64_t meta_aura;
 	uint16_t rq;
 	struct cnxk_timesync_info *tstamp;
 } __plt_cache_aligned;
@@ -45,6 +47,8 @@ struct cn10k_eth_rxq {
 /* Private data in sw rsvd area of struct roc_ot_ipsec_inb_sa */
 struct cn10k_inb_priv_data {
 	void *userdata;
+	int reass_dynfield_off;
+	int reass_dynflag_bit;
 	struct cnxk_eth_sec_sess *eth_sec;
 };
 
@@ -53,7 +57,7 @@ struct cn10k_outb_priv_data {
 	void *userdata;
 	/* Rlen computation data */
 	struct cnxk_ipsec_outb_rlens rlens;
-	/* Back pinter to eth sec session */
+	/* Back pointer to eth sec session */
 	struct cnxk_eth_sec_sess *eth_sec;
 	/* SA index */
 	uint32_t sa_idx;
@@ -68,7 +72,11 @@ struct cn10k_sec_sess_priv {
 			uint8_t mode : 1;
 			uint8_t roundup_byte : 5;
 			uint8_t roundup_len;
-			uint16_t partial_len;
+			uint16_t partial_len : 10;
+			uint16_t chksum : 2;
+			uint16_t dec_ttl : 1;
+			uint16_t nixtx_off : 1;
+			uint16_t rsvd : 2;
 		};
 
 		uint64_t u64;
@@ -81,6 +89,10 @@ void cn10k_eth_set_tx_function(struct rte_eth_dev *eth_dev);
 
 /* Security context setup */
 void cn10k_eth_sec_ops_override(void);
+
+/* SSO Work callback */
+void cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args,
+			       uint32_t soft_exp_event);
 
 #define LMT_OFF(lmt_addr, lmt_num, offset)                                     \
 	(void *)((uintptr_t)(lmt_addr) +                                       \

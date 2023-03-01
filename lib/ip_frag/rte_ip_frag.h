@@ -19,6 +19,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdio.h>
 
+#include <rte_compat.h>
 #include <rte_config.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
@@ -27,91 +28,19 @@ extern "C" {
 
 struct rte_mbuf;
 
-enum {
-	IP_LAST_FRAG_IDX,    /**< index of last fragment */
-	IP_FIRST_FRAG_IDX,   /**< index of first fragment */
-	IP_MIN_FRAG_NUM,     /**< minimum number of fragments */
-	IP_MAX_FRAG_NUM = RTE_LIBRTE_IP_FRAG_MAX_FRAG,
-	/**< maximum number of fragments per packet */
-};
+/** death row size (in packets) */
+#define RTE_IP_FRAG_DEATH_ROW_LEN 32
 
-/** @internal fragmented mbuf */
-struct ip_frag {
-	uint16_t ofs;          /**< offset into the packet */
-	uint16_t len;          /**< length of fragment */
-	struct rte_mbuf *mb;   /**< fragment mbuf */
-};
-
-/** @internal <src addr, dst_addr, id> to uniquely identify fragmented datagram. */
-struct ip_frag_key {
-	uint64_t src_dst[4];
-	/**< src and dst address, only first 8 bytes used for IPv4 */
-	RTE_STD_C11
-	union {
-		uint64_t id_key_len; /**< combined for easy fetch */
-		__extension__
-		struct {
-			uint32_t id;       /**< packet id */
-			uint32_t key_len;  /**< src/dst key length */
-		};
-	};
-};
-
-/**
- * @internal Fragmented packet to reassemble.
- * First two entries in the frags[] array are for the last and first fragments.
- */
-struct ip_frag_pkt {
-	RTE_TAILQ_ENTRY(ip_frag_pkt) lru; /**< LRU list */
-	struct ip_frag_key key;           /**< fragmentation key */
-	uint64_t             start;       /**< creation timestamp */
-	uint32_t             total_size;  /**< expected reassembled size */
-	uint32_t             frag_size;   /**< size of fragments received */
-	uint32_t             last_idx;    /**< index of next entry to fill */
-	struct ip_frag       frags[IP_MAX_FRAG_NUM]; /**< fragments */
-} __rte_cache_aligned;
-
-#define IP_FRAG_DEATH_ROW_LEN 32 /**< death row size (in packets) */
-
-/* death row size in mbufs */
-#define IP_FRAG_DEATH_ROW_MBUF_LEN (IP_FRAG_DEATH_ROW_LEN * (IP_MAX_FRAG_NUM + 1))
+/** death row size in mbufs */
+#define RTE_IP_FRAG_DEATH_ROW_MBUF_LEN \
+	(RTE_IP_FRAG_DEATH_ROW_LEN * (RTE_LIBRTE_IP_FRAG_MAX_FRAG + 1))
 
 /** mbuf death row (packets to be freed) */
 struct rte_ip_frag_death_row {
 	uint32_t cnt;          /**< number of mbufs currently on death row */
-	struct rte_mbuf *row[IP_FRAG_DEATH_ROW_MBUF_LEN];
+	struct rte_mbuf *row[RTE_IP_FRAG_DEATH_ROW_MBUF_LEN];
 	/**< mbufs to be freed */
 };
-
-RTE_TAILQ_HEAD(ip_pkt_list, ip_frag_pkt); /**< @internal fragments tailq */
-
-/** fragmentation table statistics */
-struct ip_frag_tbl_stat {
-	uint64_t find_num;      /**< total # of find/insert attempts. */
-	uint64_t add_num;       /**< # of add ops. */
-	uint64_t del_num;       /**< # of del ops. */
-	uint64_t reuse_num;     /**< # of reuse (del/add) ops. */
-	uint64_t fail_total;    /**< total # of add failures. */
-	uint64_t fail_nospace;  /**< # of 'no space' add failures. */
-} __rte_cache_aligned;
-
-/** fragmentation table */
-struct rte_ip_frag_tbl {
-	uint64_t             max_cycles;      /**< ttl for table entries. */
-	uint32_t             entry_mask;      /**< hash value mask. */
-	uint32_t             max_entries;     /**< max entries allowed. */
-	uint32_t             use_entries;     /**< entries in use. */
-	uint32_t             bucket_entries;  /**< hash associativity. */
-	uint32_t             nb_entries;      /**< total size of the table. */
-	uint32_t             nb_buckets;      /**< num of associativity lines. */
-	struct ip_frag_pkt *last;         /**< last used entry. */
-	struct ip_pkt_list lru;           /**< LRU list for table entries. */
-	struct ip_frag_tbl_stat stat;     /**< statistics counters. */
-	__extension__ struct ip_frag_pkt pkt[0]; /**< hash table. */
-};
-
-/* struct ipv6_extension_fragment moved to librte_net/rte_ip.h and renamed. */
-#define ipv6_extension_fragment	rte_ipv6_fragment_ext
 
 /**
  * Create a new IP fragmentation table.
@@ -198,7 +127,7 @@ rte_ipv6_fragment_packet(struct rte_mbuf *pkt_in,
 struct rte_mbuf *rte_ipv6_frag_reassemble_packet(struct rte_ip_frag_tbl *tbl,
 		struct rte_ip_frag_death_row *dr,
 		struct rte_mbuf *mb, uint64_t tms, struct rte_ipv6_hdr *ip_hdr,
-		struct ipv6_extension_fragment *frag_hdr);
+		struct rte_ipv6_fragment_ext *frag_hdr);
 
 /**
  * Return a pointer to the packet's fragment header, if found.
@@ -211,11 +140,11 @@ struct rte_mbuf *rte_ipv6_frag_reassemble_packet(struct rte_ip_frag_tbl *tbl,
  *   Pointer to the IPv6 fragment extension header, or NULL if it's not
  *   present.
  */
-static inline struct ipv6_extension_fragment *
+static inline struct rte_ipv6_fragment_ext *
 rte_ipv6_frag_get_ipv6_fragment_header(struct rte_ipv6_hdr *hdr)
 {
 	if (hdr->proto == IPPROTO_FRAGMENT) {
-		return (struct ipv6_extension_fragment *) ++hdr;
+		return (struct rte_ipv6_fragment_ext *) ++hdr;
 	}
 	else
 		return NULL;
@@ -249,6 +178,40 @@ int32_t rte_ipv4_fragment_packet(struct rte_mbuf *pkt_in,
 			uint16_t nb_pkts_out, uint16_t mtu_size,
 			struct rte_mempool *pool_direct,
 			struct rte_mempool *pool_indirect);
+
+/**
+ * IPv4 fragmentation by copy.
+ *
+ * This function implements the fragmentation of IPv4 packets by copy
+ * non-segmented mbuf.
+ * This function is mainly used to adapt Tx MBUF_FAST_FREE offload.
+ * MBUF_FAST_FREE: Device supports optimization for fast release of mbufs.
+ * When set, application must guarantee that per-queue all mbufs comes from
+ * the same mempool, has refcnt = 1, direct and non-segmented.
+ *
+ * @param pkt_in
+ *   The input packet.
+ * @param pkts_out
+ *   Array storing the output fragments.
+ * @param nb_pkts_out
+ *   Number of fragments.
+ * @param mtu_size
+ *   Size in bytes of the Maximum Transfer Unit (MTU) for the outgoing IPv4
+ *   datagrams. This value includes the size of the IPv4 header.
+ * @param pool_direct
+ *   MBUF pool used for allocating direct buffers for the output fragments.
+ * @return
+ *   Upon successful completion - number of output fragments placed
+ *   in the pkts_out array.
+ *   Otherwise - (-1) * errno.
+ */
+__rte_experimental
+int32_t
+rte_ipv4_fragment_copy_nonseg_packet(struct rte_mbuf *pkt_in,
+	struct rte_mbuf **pkts_out,
+	uint16_t nb_pkts_out,
+	uint16_t mtu_size,
+	struct rte_mempool *pool_direct);
 
 /**
  * This function implements reassembly of fragmented IPv4 packets.
@@ -328,8 +291,19 @@ rte_ip_frag_table_statistics_dump(FILE * f, const struct rte_ip_frag_tbl *tbl);
  */
 __rte_experimental
 void
-rte_frag_table_del_expired_entries(struct rte_ip_frag_tbl *tbl,
+rte_ip_frag_table_del_expired_entries(struct rte_ip_frag_tbl *tbl,
 	struct rte_ip_frag_death_row *dr, uint64_t tms);
+
+/**@{@name Obsolete macros, kept here for compatibility reasons.
+ * Will be deprecated/removed in future DPDK releases.
+ */
+/** Obsolete */
+#define IP_FRAG_DEATH_ROW_LEN		RTE_IP_FRAG_DEATH_ROW_LEN
+/** Obsolete */
+#define IP_FRAG_DEATH_ROW_MBUF_LEN	RTE_IP_FRAG_DEATH_ROW_MBUF_LEN
+/** Obsolete */
+#define ipv6_extension_fragment		rte_ipv6_fragment_ext
+/**@}*/
 
 #ifdef __cplusplus
 }

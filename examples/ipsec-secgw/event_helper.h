@@ -88,6 +88,8 @@ struct eventdev_params {
 	uint8_t nb_eventport;
 	uint8_t ev_queue_mode;
 	uint8_t all_internal_ports;
+	int tx_queue_id;
+	int ev_cpt_queue_id;
 };
 
 /**
@@ -171,10 +173,22 @@ struct eventmode_conf {
 		 * When enabled, all event queues need to be mapped to
 		 * each event port
 		 */
+			uint64_t event_vector                   : 1;
+		/**<
+		 * Enable event vector, when enabled application can
+		 * receive vector of events.
+		 */
+			uint64_t vector_size                    : 16;
 		};
 		uint64_t u64;
 	} ext_params;
 		/**< 64 bit field to specify extended params */
+	uint64_t vector_tmo_ns;
+		/**< Max vector timeout in nanoseconds */
+	uint64_t vector_pool_sz;
+		/**< Vector pool size */
+	bool enable_event_crypto_adapter;
+		/**< Enables event crypto adapter related configuration */
 };
 
 /**

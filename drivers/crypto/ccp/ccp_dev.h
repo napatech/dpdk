@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_atomic.h>
 #include <rte_byteorder.h>
 #include <rte_io.h>
@@ -19,7 +19,7 @@
 #include <rte_crypto_sym.h>
 #include <cryptodev_pmd.h>
 
-/**< CCP sspecific */
+/**< CCP specific */
 #define MAX_HW_QUEUES                   5
 #define CCP_MAX_TRNG_RETRIES		10
 #define CCP_ALIGN(x, y) ((((x) + (y - 1)) / y) * y)

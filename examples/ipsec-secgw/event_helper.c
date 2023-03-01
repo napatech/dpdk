@@ -1,15 +1,25 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (C) 2020 Marvell International Ltd.
  */
+#include <stdlib.h>
+
 #include <rte_bitmap.h>
+#include <rte_cryptodev.h>
 #include <rte_ethdev.h>
 #include <rte_eventdev.h>
+#include <rte_event_crypto_adapter.h>
 #include <rte_event_eth_rx_adapter.h>
 #include <rte_event_eth_tx_adapter.h>
 #include <rte_malloc.h>
 #include <stdbool.h>
 
 #include "event_helper.h"
+#include "ipsec-secgw.h"
+
+#define DEFAULT_VECTOR_SIZE  16
+#define DEFAULT_VECTOR_TMO   102400
+
+#define INVALID_EV_QUEUE_ID -1
 
 static volatile bool eth_core_running;
 
@@ -145,11 +155,10 @@ eh_dev_has_burst_mode(uint8_t dev_id)
 }
 
 static int
-eh_set_default_conf_eventdev(struct eventmode_conf *em_conf)
+eh_set_nb_eventdev(struct eventmode_conf *em_conf)
 {
-	int lcore_count, nb_eventdev, nb_eth_dev, ret;
 	struct eventdev_params *eventdev_config;
-	struct rte_event_dev_info dev_info;
+	int nb_eventdev;
 
 	/* Get the number of event devices */
 	nb_eventdev = rte_event_dev_count();
@@ -163,6 +172,23 @@ eh_set_default_conf_eventdev(struct eventmode_conf *em_conf)
 			   "Please provide only one event device.");
 		return -EINVAL;
 	}
+
+	/* Set event dev id*/
+	eventdev_config = &(em_conf->eventdev_config[0]);
+	eventdev_config->eventdev_id = 0;
+
+	/* Update the number of event devices */
+	em_conf->nb_eventdev = 1;
+
+	return 0;
+}
+
+static int
+eh_set_default_conf_eventdev(struct eventmode_conf *em_conf)
+{
+	int lcore_count, nb_eth_dev, ret;
+	struct eventdev_params *eventdev_config;
+	struct rte_event_dev_info dev_info;
 
 	/* Get the number of eth devs */
 	nb_eth_dev = rte_eth_dev_count_avail();
@@ -191,15 +217,30 @@ eh_set_default_conf_eventdev(struct eventmode_conf *em_conf)
 	eventdev_config = &(em_conf->eventdev_config[0]);
 
 	/* Save number of queues & ports available */
-	eventdev_config->eventdev_id = 0;
-	eventdev_config->nb_eventqueue = dev_info.max_event_queues;
+	eventdev_config->nb_eventqueue = nb_eth_dev;
 	eventdev_config->nb_eventport = dev_info.max_event_ports;
 	eventdev_config->ev_queue_mode = RTE_EVENT_QUEUE_CFG_ALL_TYPES;
 
-	/* Check if there are more queues than required */
-	if (eventdev_config->nb_eventqueue > nb_eth_dev + 1) {
-		/* One queue is reserved for Tx */
-		eventdev_config->nb_eventqueue = nb_eth_dev + 1;
+	/* One queue is reserved for Tx */
+	eventdev_config->tx_queue_id = INVALID_EV_QUEUE_ID;
+	if (eventdev_config->all_internal_ports) {
+		if (eventdev_config->nb_eventqueue >= dev_info.max_event_queues) {
+			EH_LOG_ERR("Not enough event queues available");
+			return -EINVAL;
+		}
+		eventdev_config->tx_queue_id =
+			eventdev_config->nb_eventqueue++;
+	}
+
+	/* One queue is reserved for event crypto adapter */
+	eventdev_config->ev_cpt_queue_id = INVALID_EV_QUEUE_ID;
+	if (em_conf->enable_event_crypto_adapter) {
+		if (eventdev_config->nb_eventqueue >= dev_info.max_event_queues) {
+			EH_LOG_ERR("Not enough event queues available");
+			return -EINVAL;
+		}
+		eventdev_config->ev_cpt_queue_id =
+			eventdev_config->nb_eventqueue++;
 	}
 
 	/* Check if there are more ports than required */
@@ -207,9 +248,6 @@ eh_set_default_conf_eventdev(struct eventmode_conf *em_conf)
 		/* One port per lcore is enough */
 		eventdev_config->nb_eventport = lcore_count;
 	}
-
-	/* Update the number of event devices */
-	em_conf->nb_eventdev++;
 
 	return 0;
 }
@@ -239,15 +277,10 @@ eh_do_capability_check(struct eventmode_conf *em_conf)
 
 	/*
 	 * If Rx & Tx internal ports are supported by all event devices then
-	 * eth cores won't be required. Override the eth core mask requested
-	 * and decrement number of event queues by one as it won't be needed
-	 * for Tx.
+	 * eth cores won't be required. Override the eth core mask requested.
 	 */
-	if (all_internal_ports) {
+	if (all_internal_ports)
 		rte_bitmap_reset(em_conf->eth_core_mask);
-		for (i = 0; i < em_conf->nb_eventdev; i++)
-			em_conf->eventdev_config[i].nb_eventqueue--;
-	}
 }
 
 static int
@@ -363,6 +396,10 @@ eh_set_default_conf_rx_adapter(struct eventmode_conf *em_conf)
 	nb_eventqueue = eventdev_config->all_internal_ports ?
 			eventdev_config->nb_eventqueue :
 			eventdev_config->nb_eventqueue - 1;
+
+	/* Reserve one queue for event crypto adapter */
+	if (em_conf->enable_event_crypto_adapter)
+		nb_eventqueue--;
 
 	/*
 	 * Map all queues of eth device (port) to an event queue. If there
@@ -535,13 +572,17 @@ eh_validate_conf(struct eventmode_conf *em_conf)
 	 * and initialize the config with all ports & queues available
 	 */
 	if (em_conf->nb_eventdev == 0) {
+		ret = eh_set_nb_eventdev(em_conf);
+		if (ret != 0)
+			return ret;
+		eh_do_capability_check(em_conf);
 		ret = eh_set_default_conf_eventdev(em_conf);
 		if (ret != 0)
 			return ret;
+	} else {
+		/* Perform capability check for the selected event devices */
+		eh_do_capability_check(em_conf);
 	}
-
-	/* Perform capability check for the selected event devices */
-	eh_do_capability_check(em_conf);
 
 	/*
 	 * Check if links are specified. Else generate a default config for
@@ -588,8 +629,8 @@ eh_initialize_eventdev(struct eventmode_conf *em_conf)
 	uint8_t *queue = NULL;
 	uint8_t eventdev_id;
 	int nb_eventqueue;
-	uint8_t i, j;
-	int ret;
+	int ret, j;
+	uint8_t i;
 
 	for (i = 0; i < nb_eventdev; i++) {
 
@@ -651,13 +692,23 @@ eh_initialize_eventdev(struct eventmode_conf *em_conf)
 			 * stage if event device does not have internal
 			 * ports. This will be an atomic queue.
 			 */
-			if (!eventdev_config->all_internal_ports &&
-			    j == nb_eventqueue-1) {
+			if (j == eventdev_config->tx_queue_id) {
 				eventq_conf.schedule_type =
 					RTE_SCHED_TYPE_ATOMIC;
 			} else {
 				eventq_conf.schedule_type =
 					em_conf->ext_params.sched_type;
+			}
+			/*
+			 * Give event crypto device's queue higher priority then Rx queues. This
+			 * will allow crypto events to be processed with highest priority.
+			 */
+			if (j == eventdev_config->ev_cpt_queue_id) {
+				eventq_conf.priority =
+					RTE_EVENT_DEV_PRIORITY_HIGHEST;
+			} else {
+				eventq_conf.priority =
+					RTE_EVENT_DEV_PRIORITY_NORMAL;
 			}
 
 			/* Set max atomic flows to 1024 */
@@ -712,6 +763,16 @@ eh_initialize_eventdev(struct eventmode_conf *em_conf)
 		}
 	}
 
+	return 0;
+}
+
+static int
+eh_start_eventdev(struct eventmode_conf *em_conf)
+{
+	struct eventdev_params *eventdev_config;
+	int nb_eventdev = em_conf->nb_eventdev;
+	int i, ret;
+
 	/* Start event devices */
 	for (i = 0; i < nb_eventdev; i++) {
 
@@ -729,6 +790,193 @@ eh_initialize_eventdev(struct eventmode_conf *em_conf)
 }
 
 static int
+eh_initialize_crypto_adapter(struct eventmode_conf *em_conf)
+{
+	struct rte_event_crypto_adapter_queue_conf queue_conf;
+	struct rte_event_dev_info evdev_default_conf = {0};
+	struct rte_event_port_conf port_conf = {0};
+	struct eventdev_params *eventdev_config;
+	char mp_name[RTE_MEMPOOL_NAMESIZE];
+	const uint8_t nb_qp_per_cdev = 1;
+	uint8_t eventdev_id, cdev_id, n;
+	uint32_t cap, nb_elem;
+	int ret, socket_id;
+
+	if (!em_conf->enable_event_crypto_adapter)
+		return 0;
+
+	/*
+	 * More then one eventdev is not supported,
+	 * all event crypto adapters will be assigned to one eventdev
+	 */
+	RTE_ASSERT(em_conf->nb_eventdev == 1);
+
+	/* Get event device configuration */
+	eventdev_config = &(em_conf->eventdev_config[0]);
+	eventdev_id = eventdev_config->eventdev_id;
+
+	n = rte_cryptodev_count();
+
+	for (cdev_id = 0; cdev_id != n; cdev_id++) {
+		/* Check event's crypto capabilities */
+		ret = rte_event_crypto_adapter_caps_get(eventdev_id, cdev_id, &cap);
+		if (ret < 0) {
+			EH_LOG_ERR("Failed to get event device's crypto capabilities %d", ret);
+			return ret;
+		}
+
+		if (!(cap & RTE_EVENT_CRYPTO_ADAPTER_CAP_INTERNAL_PORT_OP_FWD)) {
+			EH_LOG_ERR("Event crypto adapter does not support forward mode!");
+			return -EINVAL;
+		}
+
+		/* Create event crypto adapter */
+
+		/* Get default configuration of event dev */
+		ret = rte_event_dev_info_get(eventdev_id, &evdev_default_conf);
+		if (ret < 0) {
+			EH_LOG_ERR("Failed to get event dev info %d", ret);
+			return ret;
+		}
+
+		/* Setup port conf */
+		port_conf.new_event_threshold =
+				evdev_default_conf.max_num_events;
+		port_conf.dequeue_depth =
+				evdev_default_conf.max_event_port_dequeue_depth;
+		port_conf.enqueue_depth =
+				evdev_default_conf.max_event_port_enqueue_depth;
+
+		/* Create adapter */
+		ret = rte_event_crypto_adapter_create(cdev_id, eventdev_id,
+				&port_conf, RTE_EVENT_CRYPTO_ADAPTER_OP_FORWARD);
+		if (ret < 0) {
+			EH_LOG_ERR("Failed to create event crypto adapter %d", ret);
+			return ret;
+		}
+
+		memset(&queue_conf, 0, sizeof(queue_conf));
+		if ((cap & RTE_EVENT_CRYPTO_ADAPTER_CAP_EVENT_VECTOR) &&
+		    (em_conf->ext_params.event_vector)) {
+			queue_conf.flags |= RTE_EVENT_CRYPTO_ADAPTER_EVENT_VECTOR;
+			queue_conf.vector_sz = em_conf->ext_params.vector_size;
+			/*
+			 * Currently all sessions configured with same response
+			 * info fields, so packets will be aggregated to the
+			 * same vector. This allows us to configure number of
+			 * vectors only to hold all queue pair descriptors.
+			 */
+			nb_elem = (qp_desc_nb / queue_conf.vector_sz) + 1;
+			nb_elem *= nb_qp_per_cdev;
+			socket_id = rte_cryptodev_socket_id(cdev_id);
+			snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+					"QP_VEC_%u_%u", socket_id, cdev_id);
+			queue_conf.vector_mp = rte_event_vector_pool_create(
+					mp_name, nb_elem, 0,
+					queue_conf.vector_sz, socket_id);
+			if (queue_conf.vector_mp == NULL) {
+				EH_LOG_ERR("failed to create event vector pool");
+				return -ENOMEM;
+			}
+		}
+
+		/* Add crypto queue pairs to event crypto adapter */
+		ret = rte_event_crypto_adapter_queue_pair_add(cdev_id, eventdev_id,
+				-1, /* adds all the pre configured queue pairs to the instance */
+				&queue_conf);
+		if (ret < 0) {
+			EH_LOG_ERR("Failed to add queue pairs to event crypto adapter %d", ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int
+eh_start_crypto_adapter(struct eventmode_conf *em_conf)
+{
+	uint8_t cdev_id, n;
+	int ret;
+
+	if (!em_conf->enable_event_crypto_adapter)
+		return 0;
+
+	n = rte_cryptodev_count();
+	for (cdev_id = 0; cdev_id != n; cdev_id++) {
+		ret = rte_event_crypto_adapter_start(cdev_id);
+		if (ret < 0) {
+			EH_LOG_ERR("Failed to start event crypto device %d (%d)",
+					cdev_id, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int
+eh_stop_crypto_adapter(struct eventmode_conf *em_conf)
+{
+	uint8_t cdev_id, n;
+	int ret;
+
+	if (!em_conf->enable_event_crypto_adapter)
+		return 0;
+
+	n = rte_cryptodev_count();
+	for (cdev_id = 0; cdev_id != n; cdev_id++) {
+		ret = rte_event_crypto_adapter_stop(cdev_id);
+		if (ret < 0) {
+			EH_LOG_ERR("Failed to stop event crypto device %d (%d)",
+					cdev_id, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int
+eh_event_vector_limits_validate(struct eventmode_conf *em_conf,
+				uint8_t ev_dev_id, uint8_t ethdev_id)
+{
+	struct rte_event_eth_rx_adapter_vector_limits limits = {0};
+	uint16_t vector_size = em_conf->ext_params.vector_size;
+	int ret;
+
+	ret = rte_event_eth_rx_adapter_vector_limits_get(ev_dev_id, ethdev_id,
+							 &limits);
+	if (ret) {
+		EH_LOG_ERR("failed to get vector limits");
+		return ret;
+	}
+
+	if (vector_size < limits.min_sz || vector_size > limits.max_sz) {
+		EH_LOG_ERR("Vector size [%d] not within limits min[%d] max[%d]",
+			   vector_size, limits.min_sz, limits.max_sz);
+		return -EINVAL;
+	}
+
+	if (limits.log2_sz && !rte_is_power_of_2(vector_size)) {
+		EH_LOG_ERR("Vector size [%d] not power of 2", vector_size);
+		return -EINVAL;
+	}
+
+	if (em_conf->vector_tmo_ns > limits.max_timeout_ns ||
+	    em_conf->vector_tmo_ns < limits.min_timeout_ns) {
+		EH_LOG_ERR("Vector timeout [%" PRIu64
+			   "] not within limits max[%" PRIu64
+			   "] min[%" PRIu64 "]",
+			   em_conf->vector_tmo_ns,
+			   limits.max_timeout_ns,
+			   limits.min_timeout_ns);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int
 eh_rx_adapter_configure(struct eventmode_conf *em_conf,
 		struct rx_adapter_conf *adapter)
 {
@@ -736,9 +984,11 @@ eh_rx_adapter_configure(struct eventmode_conf *em_conf,
 	struct rte_event_dev_info evdev_default_conf = {0};
 	struct rte_event_port_conf port_conf = {0};
 	struct rx_adapter_connection_info *conn;
+	uint32_t service_id, socket_id, nb_elem;
+	struct rte_mempool *vector_pool = NULL;
+	uint32_t lcore_id = rte_lcore_id();
+	int ret, portid, nb_ports = 0;
 	uint8_t eventdev_id;
-	uint32_t service_id;
-	int ret;
 	int j;
 
 	/* Get event dev ID */
@@ -751,6 +1001,31 @@ eh_rx_adapter_configure(struct eventmode_conf *em_conf,
 		return ret;
 	}
 
+	RTE_ETH_FOREACH_DEV(portid)
+		if ((em_conf->eth_portmask & (1 << portid)))
+			nb_ports++;
+
+	if (em_conf->ext_params.event_vector) {
+		socket_id = rte_lcore_to_socket_id(lcore_id);
+
+		if (em_conf->vector_pool_sz) {
+			nb_elem = em_conf->vector_pool_sz;
+		} else {
+			nb_elem = (nb_bufs_in_pool /
+				   em_conf->ext_params.vector_size) + 1;
+			if (per_port_pool)
+				nb_elem = nb_ports * nb_elem;
+			nb_elem = RTE_MAX(512U, nb_elem);
+		}
+		nb_elem += rte_lcore_count() * 32;
+		vector_pool = rte_event_vector_pool_create(
+			"vector_pool", nb_elem, 32,
+			em_conf->ext_params.vector_size, socket_id);
+		if (vector_pool == NULL) {
+			EH_LOG_ERR("failed to create event vector pool");
+			return -ENOMEM;
+		}
+	}
 	/* Setup port conf */
 	port_conf.new_event_threshold = 1200;
 	port_conf.dequeue_depth =
@@ -775,6 +1050,20 @@ eh_rx_adapter_configure(struct eventmode_conf *em_conf,
 		queue_conf.ev.queue_id = conn->eventq_id;
 		queue_conf.ev.sched_type = em_conf->ext_params.sched_type;
 		queue_conf.ev.event_type = RTE_EVENT_TYPE_ETHDEV;
+
+		if (em_conf->ext_params.event_vector) {
+			ret = eh_event_vector_limits_validate(em_conf,
+							      eventdev_id,
+							      conn->ethdev_id);
+			if (ret)
+				return ret;
+
+			queue_conf.vector_sz = em_conf->ext_params.vector_size;
+			queue_conf.vector_timeout_ns = em_conf->vector_tmo_ns;
+			queue_conf.vector_mp = vector_pool;
+			queue_conf.rx_queue_flags =
+				RTE_EVENT_ETH_RX_ADAPTER_QUEUE_EVENT_VECTOR;
+		}
 
 		/* Add queue to the adapter */
 		ret = rte_event_eth_rx_adapter_queue_add(adapter->adapter_id,
@@ -1280,7 +1569,7 @@ eh_display_rx_adapter_conf(struct eventmode_conf *em_conf)
 	for (i = 0; i < nb_rx_adapter; i++) {
 		adapter = &(em_conf->rx_adapter[i]);
 		sprintf(print_buf,
-			"\tRx adaper ID: %-2d\tConnections: %-2d\tEvent dev ID: %-2d",
+			"\tRx adapter ID: %-2d\tConnections: %-2d\tEvent dev ID: %-2d",
 			adapter->adapter_id,
 			adapter->nb_connections,
 			adapter->eventdev_id);
@@ -1475,6 +1764,9 @@ eh_conf_init(void)
 
 	rte_bitmap_set(em_conf->eth_core_mask, eth_core_id);
 
+	em_conf->ext_params.vector_size = DEFAULT_VECTOR_SIZE;
+	em_conf->vector_tmo_ns = DEFAULT_VECTOR_TMO;
+
 	return conf;
 
 free_bitmap:
@@ -1598,6 +1890,13 @@ eh_devs_init(struct eh_conf *conf)
 		return ret;
 	}
 
+	/* Setup event crypto adapter */
+	ret = eh_initialize_crypto_adapter(em_conf);
+	if (ret < 0) {
+		EH_LOG_ERR("Failed to start event dev %d", ret);
+		return ret;
+	}
+
 	/* Setup Rx adapter */
 	ret = eh_initialize_rx_adapter(em_conf);
 	if (ret < 0) {
@@ -1611,6 +1910,21 @@ eh_devs_init(struct eh_conf *conf)
 		EH_LOG_ERR("Failed to initialize tx adapter %d", ret);
 		return ret;
 	}
+
+	/* Start eventdev */
+	ret = eh_start_eventdev(em_conf);
+	if (ret < 0) {
+		EH_LOG_ERR("Failed to start event dev %d", ret);
+		return ret;
+	}
+
+	/* Start event crypto adapter */
+	ret = eh_start_crypto_adapter(em_conf);
+	if (ret < 0) {
+		EH_LOG_ERR("Failed to start event crypto dev %d", ret);
+		return ret;
+	}
+
 
 	/* Start eth devices after setting up adapter */
 	RTE_ETH_FOREACH_DEV(port_id) {
@@ -1680,6 +1994,13 @@ eh_devs_uninit(struct eh_conf *conf)
 			EH_LOG_ERR("Failed to free rx adapter %d", ret);
 			return ret;
 		}
+	}
+
+	/* Stop event crypto adapter */
+	ret = eh_stop_crypto_adapter(em_conf);
+	if (ret < 0) {
+		EH_LOG_ERR("Failed to start event crypto dev %d", ret);
+		return ret;
 	}
 
 	/* Stop and release event devices */

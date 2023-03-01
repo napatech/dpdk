@@ -12,7 +12,7 @@
 /* Bits manipulation */
 #include "roc_bits.h"
 
-/* Bitfields manipulation */
+/* Bit fields manipulation */
 #include "roc_bitfield.h"
 
 /* ROC Constants */
@@ -33,9 +33,11 @@
 
 /* HW structure definition */
 #include "hw/cpt.h"
+#include "hw/dpi.h"
 #include "hw/nix.h"
 #include "hw/npa.h"
 #include "hw/npc.h"
+#include "hw/ree.h"
 #include "hw/rvu.h"
 #include "hw/sdp.h"
 #include "hw/sso.h"
@@ -44,6 +46,9 @@
 
 /* Model */
 #include "roc_model.h"
+
+/* HW Errata */
+#include "roc_errata.h"
 
 /* Mbox */
 #include "roc_mbox.h"
@@ -85,6 +90,15 @@
 #include "roc_ie_on.h"
 #include "roc_ie_ot.h"
 #include "roc_se.h"
+
+/* DPI */
+#include "roc_dpi.h"
+
+/* REE */
+#include "roc_ree.h"
+
+/* AES */
+#include "roc_aes.h"
 
 /* HASH computation */
 #include "roc_hash.h"

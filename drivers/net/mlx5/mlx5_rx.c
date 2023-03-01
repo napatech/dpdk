@@ -19,13 +19,18 @@
 #include <mlx5_prm.h>
 #include <mlx5_common.h>
 #include <mlx5_common_mr.h>
+#include <rte_pmd_mlx5.h>
 
 #include "mlx5_autoconf.h"
 #include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
+#include "mlx5_devx.h"
 #include "mlx5_rx.h"
+#ifdef HAVE_MLX5_MSTFLINT
+#include <mstflint/mtcr.h>
+#endif
 
 
 static __rte_always_inline uint32_t
@@ -73,7 +78,7 @@ rx_queue_count(struct mlx5_rxq_data *rxq)
 	const unsigned int cqe_n = (1 << rxq->cqe_n);
 	const unsigned int sges_n = (1 << rxq->sges_n);
 	const unsigned int elts_n = (1 << rxq->elts_n);
-	const unsigned int strd_n = (1 << rxq->strd_num_n);
+	const unsigned int strd_n = RTE_BIT32(rxq->log_strd_num);
 	const unsigned int cqe_cnt = cqe_n - 1;
 	unsigned int cq_ci, used;
 
@@ -118,15 +123,7 @@ int
 mlx5_rx_descriptor_status(void *rx_queue, uint16_t offset)
 {
 	struct mlx5_rxq_data *rxq = rx_queue;
-	struct mlx5_rxq_ctrl *rxq_ctrl =
-			container_of(rxq, struct mlx5_rxq_ctrl, rxq);
-	struct rte_eth_dev *dev = ETH_DEV(rxq_ctrl->priv);
 
-	if (dev->rx_pkt_burst == NULL ||
-	    dev->rx_pkt_burst == removed_rx_burst) {
-		rte_errno = ENOTSUP;
-		return -rte_errno;
-	}
 	if (offset >= (1 << rxq->cqe_n)) {
 		rte_errno = EINVAL;
 		return -rte_errno;
@@ -134,6 +131,16 @@ mlx5_rx_descriptor_status(void *rx_queue, uint16_t offset)
 	if (offset < rx_queue_count(rxq))
 		return RTE_ETH_RX_DESC_DONE;
 	return RTE_ETH_RX_DESC_AVAIL;
+}
+
+/* Get rxq lwm percentage according to lwm number. */
+static uint8_t
+mlx5_rxq_lwm_to_percentage(struct mlx5_rxq_priv *rxq)
+{
+	struct mlx5_rxq_data *rxq_data = &rxq->ctrl->rxq;
+	uint32_t wqe_cnt = 1 << (rxq_data->elts_n - rxq_data->sges_n);
+
+	return rxq->lwm * 100 / wqe_cnt;
 }
 
 /**
@@ -156,10 +163,9 @@ void
 mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 		  struct rte_eth_rxq_info *qinfo)
 {
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_rxq_data *rxq = (*priv->rxqs)[rx_queue_id];
-	struct mlx5_rxq_ctrl *rxq_ctrl =
-		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
+	struct mlx5_rxq_ctrl *rxq_ctrl = mlx5_rxq_ctrl_get(dev, rx_queue_id);
+	struct mlx5_rxq_data *rxq = mlx5_rxq_data_get(dev, rx_queue_id);
+	struct mlx5_rxq_priv *rxq_priv = mlx5_rxq_get(dev, rx_queue_id);
 
 	if (!rxq)
 		return;
@@ -170,12 +176,17 @@ mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 	qinfo->conf.rx_thresh.wthresh = 0;
 	qinfo->conf.rx_free_thresh = rxq->rq_repl_thresh;
 	qinfo->conf.rx_drop_en = 1;
-	qinfo->conf.rx_deferred_start = rxq_ctrl ? 0 : 1;
+	if (rxq_ctrl == NULL || rxq_ctrl->obj == NULL)
+		qinfo->conf.rx_deferred_start = 0;
+	else
+		qinfo->conf.rx_deferred_start = 1;
 	qinfo->conf.offloads = dev->data->dev_conf.rxmode.offloads;
 	qinfo->scattered_rx = dev->data->scattered_rx;
 	qinfo->nb_desc = mlx5_rxq_mprq_enabled(rxq) ?
-		(1 << rxq->elts_n) * (1 << rxq->strd_num_n) :
-		(1 << rxq->elts_n);
+		RTE_BIT32(rxq->elts_n) * RTE_BIT32(rxq->log_strd_num) :
+		RTE_BIT32(rxq->elts_n);
+	qinfo->avail_thresh = rxq_priv ?
+		mlx5_rxq_lwm_to_percentage(rxq_priv) : 0;
 }
 
 /**
@@ -185,7 +196,7 @@ mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
  *   Pointer to the device structure.
  *
  * @param rx_queue_id
- *   Rx queue identificatior.
+ *   Rx queue identification.
  *
  * @param mode
  *   Pointer to the burts mode information.
@@ -199,10 +210,8 @@ mlx5_rx_burst_mode_get(struct rte_eth_dev *dev,
 		       struct rte_eth_burst_mode *mode)
 {
 	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_rxq_data *rxq;
+	struct mlx5_rxq_priv *rxq = mlx5_rxq_get(dev, rx_queue_id);
 
-	rxq = (*priv->rxqs)[rx_queue_id];
 	if (!rxq) {
 		rte_errno = EINVAL;
 		return -rte_errno;
@@ -261,7 +270,7 @@ mlx5_rx_queue_count(void *rx_queue)
 	dev = &rte_eth_devices[rxq->port_id];
 
 	if (dev->rx_pkt_burst == NULL ||
-	    dev->rx_pkt_burst == removed_rx_burst) {
+	    dev->rx_pkt_burst == rte_eth_pkt_burst_dummy) {
 		rte_errno = ENOTSUP;
 		return -rte_errno;
 	}
@@ -356,16 +365,18 @@ mlx5_rxq_initialize(struct mlx5_rxq_data *rxq)
 		volatile struct mlx5_wqe_data_seg *scat;
 		uintptr_t addr;
 		uint32_t byte_count;
+		uint32_t lkey;
 
 		if (mlx5_rxq_mprq_enabled(rxq)) {
 			struct mlx5_mprq_buf *buf = (*rxq->mprq_bufs)[i];
 
 			scat = &((volatile struct mlx5_wqe_mprq *)
 				rxq->wqes)[i].dseg;
-			addr = (uintptr_t)mlx5_mprq_buf_addr(buf,
-							 1 << rxq->strd_num_n);
-			byte_count = (1 << rxq->strd_sz_n) *
-					(1 << rxq->strd_num_n);
+			addr = (uintptr_t)mlx5_mprq_buf_addr
+					(buf, RTE_BIT32(rxq->log_strd_num));
+			byte_count = RTE_BIT32(rxq->log_strd_sz) *
+				     RTE_BIT32(rxq->log_strd_num);
+			lkey = mlx5_rx_addr2mr(rxq, addr);
 		} else {
 			struct rte_mbuf *buf = (*rxq->elts)[i];
 
@@ -373,13 +384,14 @@ mlx5_rxq_initialize(struct mlx5_rxq_data *rxq)
 					rxq->wqes)[i];
 			addr = rte_pktmbuf_mtod(buf, uintptr_t);
 			byte_count = DATA_LEN(buf);
+			lkey = mlx5_rx_mb2mr(rxq, buf);
 		}
 		/* scat->addr must be able to store a pointer. */
 		MLX5_ASSERT(sizeof(scat->addr) >= sizeof(uintptr_t));
 		*scat = (struct mlx5_wqe_data_seg){
 			.addr = rte_cpu_to_be_64(addr),
 			.byte_count = rte_cpu_to_be_32(byte_count),
-			.lkey = mlx5_rx_addr2mr(rxq, addr),
+			.lkey = lkey,
 		};
 	}
 	rxq->consumed_strd = 0;
@@ -389,12 +401,17 @@ mlx5_rxq_initialize(struct mlx5_rxq_data *rxq)
 		.ai = 0,
 	};
 	rxq->elts_ci = mlx5_rxq_mprq_enabled(rxq) ?
-		(wqe_n >> rxq->sges_n) * (1 << rxq->strd_num_n) : 0;
+		(wqe_n >> rxq->sges_n) * RTE_BIT32(rxq->log_strd_num) : 0;
 	/* Update doorbell counter. */
 	rxq->rq_ci = wqe_n >> rxq->sges_n;
 	rte_io_wmb();
 	*rxq->rq_db = rte_cpu_to_be_32(rxq->rq_ci);
 }
+
+/* Must be negative. */
+#define MLX5_ERROR_CQE_RET (-1)
+/* Must not be negative. */
+#define MLX5_RECOVERY_ERROR_RET 0
 
 /**
  * Handle a Rx error.
@@ -410,7 +427,7 @@ mlx5_rxq_initialize(struct mlx5_rxq_data *rxq)
  *   0 when called from non-vectorized Rx burst.
  *
  * @return
- *   -1 in case of recovery error, otherwise the CQE status.
+ *   MLX5_RECOVERY_ERROR_RET in case of recovery error, otherwise the CQE status.
  */
 int
 mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
@@ -418,7 +435,7 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
 	const uint16_t cqe_n = 1 << rxq->cqe_n;
 	const uint16_t cqe_mask = cqe_n - 1;
 	const uint16_t wqe_n = 1 << rxq->elts_n;
-	const uint16_t strd_n = 1 << rxq->strd_num_n;
+	const uint16_t strd_n = RTE_BIT32(rxq->log_strd_num);
 	struct mlx5_rxq_ctrl *rxq_ctrl =
 			container_of(rxq, struct mlx5_rxq_ctrl, rxq);
 	union {
@@ -438,10 +455,10 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
 		sm.is_wq = 1;
 		sm.queue_id = rxq->idx;
 		sm.state = IBV_WQS_RESET;
-		if (mlx5_queue_state_modify(ETH_DEV(rxq_ctrl->priv), &sm))
-			return -1;
+		if (mlx5_queue_state_modify(RXQ_DEV(rxq_ctrl), &sm))
+			return MLX5_RECOVERY_ERROR_RET;
 		if (rxq_ctrl->dump_file_n <
-		    rxq_ctrl->priv->config.max_dump_files_num) {
+		    RXQ_PORT(rxq_ctrl)->config.max_dump_files_num) {
 			MKSTR(err_str, "Unexpected CQE error syndrome "
 			      "0x%02x CQN = %u RQN = %u wqe_counter = %u"
 			      " rq_ci = %u cq_ci = %u", u.err_cqe->syndrome,
@@ -478,9 +495,8 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
 			sm.is_wq = 1;
 			sm.queue_id = rxq->idx;
 			sm.state = IBV_WQS_RDY;
-			if (mlx5_queue_state_modify(ETH_DEV(rxq_ctrl->priv),
-						    &sm))
-				return -1;
+			if (mlx5_queue_state_modify(RXQ_DEV(rxq_ctrl), &sm))
+				return MLX5_RECOVERY_ERROR_RET;
 			if (vec) {
 				const uint32_t elts_n =
 					mlx5_rxq_mprq_enabled(rxq) ?
@@ -508,7 +524,7 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
 							rte_pktmbuf_free_seg
 								(*elt);
 						}
-						return -1;
+						return MLX5_RECOVERY_ERROR_RET;
 					}
 				}
 				for (i = 0; i < (int)elts_n; ++i) {
@@ -527,7 +543,7 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
 		}
 		return ret;
 	default:
-		return -1;
+		return MLX5_RECOVERY_ERROR_RET;
 	}
 }
 
@@ -545,7 +561,9 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec)
  *   written.
  *
  * @return
- *   0 in case of empty CQE, otherwise the packet size in bytes.
+ *   0 in case of empty CQE, MLX5_ERROR_CQE_RET in case of error CQE,
+ *   otherwise the packet size in regular RxQ, and striding byte
+ *   count format in mprq case.
  */
 static inline int
 mlx5_rx_poll_len(struct mlx5_rxq_data *rxq, volatile struct mlx5_cqe *cqe,
@@ -612,8 +630,8 @@ mlx5_rx_poll_len(struct mlx5_rxq_data *rxq, volatile struct mlx5_cqe *cqe,
 					     rxq->err_state)) {
 					ret = mlx5_rx_err_handle(rxq, 0);
 					if (ret == MLX5_CQE_STATUS_HW_OWN ||
-					    ret == -1)
-						return 0;
+					    ret == MLX5_RECOVERY_ERROR_RET)
+						return MLX5_ERROR_CQE_RET;
 				} else {
 					return 0;
 				}
@@ -719,6 +737,7 @@ rxq_cq_to_mbuf(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt,
 {
 	/* Update packet information. */
 	pkt->packet_type = rxq_cq_to_pkt_type(rxq, cqe, mcqe);
+	pkt->port = unlikely(rxq->shared) ? cqe->user_index_low : rxq->port_id;
 
 	if (rxq->rss_hash) {
 		uint32_t rss_hash_res = 0;
@@ -857,8 +876,10 @@ mlx5_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		if (!pkt) {
 			cqe = &(*rxq->cqes)[rxq->cq_ci & cqe_cnt];
 			len = mlx5_rx_poll_len(rxq, cqe, cqe_cnt, &mcqe);
-			if (!len) {
+			if (len <= 0) {
 				rte_mbuf_raw_free(rep);
+				if (unlikely(len == MLX5_ERROR_CQE_RET))
+					rq_ci = rxq->rq_ci << sges_n;
 				break;
 			}
 			pkt = seg;
@@ -1051,8 +1072,8 @@ uint16_t
 mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct mlx5_rxq_data *rxq = dpdk_rxq;
-	const uint32_t strd_n = 1 << rxq->strd_num_n;
-	const uint32_t strd_sz = 1 << rxq->strd_sz_n;
+	const uint32_t strd_n = RTE_BIT32(rxq->log_strd_num);
+	const uint32_t strd_sz = RTE_BIT32(rxq->log_strd_sz);
 	const uint32_t cq_mask = (1 << rxq->cqe_n) - 1;
 	const uint32_t wq_mask = (1 << rxq->elts_n) - 1;
 	volatile struct mlx5_cqe *cqe = &(*rxq->cqes)[rxq->cq_ci & cq_mask];
@@ -1081,8 +1102,13 @@ mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		}
 		cqe = &(*rxq->cqes)[rxq->cq_ci & cq_mask];
 		ret = mlx5_rx_poll_len(rxq, cqe, cq_mask, &mcqe);
-		if (!ret)
+		if (ret == 0)
 			break;
+		if (unlikely(ret == MLX5_ERROR_CQE_RET)) {
+			rq_ci = rxq->rq_ci;
+			consumed_strd = rxq->consumed_strd;
+			break;
+		}
 		byte_cnt = ret;
 		len = (byte_cnt & MLX5_MPRQ_LEN_MASK) >> MLX5_MPRQ_LEN_SHIFT;
 		MLX5_ASSERT((int)len >= (rxq->crc_present << 2));
@@ -1159,31 +1185,6 @@ mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return i;
 }
 
-/**
- * Dummy DPDK callback for RX.
- *
- * This function is used to temporarily replace the real callback during
- * unsafe control operations on the queue, or in case of error.
- *
- * @param dpdk_rxq
- *   Generic pointer to RX queue structure.
- * @param[out] pkts
- *   Array to store received packets.
- * @param pkts_n
- *   Maximum number of packets in array.
- *
- * @return
- *   Number of packets successfully received (<= pkts_n).
- */
-uint16_t
-removed_rx_burst(void *dpdk_rxq __rte_unused,
-		 struct rte_mbuf **pkts __rte_unused,
-		 uint16_t pkts_n __rte_unused)
-{
-	rte_mb();
-	return 0;
-}
-
 /*
  * Vectorized Rx routines are not compiled in when required vector instructions
  * are not supported on a target architecture.
@@ -1219,3 +1220,272 @@ mlx5_check_vec_rx_support(struct rte_eth_dev *dev __rte_unused)
 	return -ENOTSUP;
 }
 
+int
+mlx5_rx_queue_lwm_query(struct rte_eth_dev *dev,
+			uint16_t *queue_id, uint8_t *lwm)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	unsigned int rxq_id, found = 0, n;
+	struct mlx5_rxq_priv *rxq;
+
+	if (!queue_id)
+		return -EINVAL;
+	/* Query all the Rx queues of the port in a circular way. */
+	for (rxq_id = *queue_id, n = 0; n < priv->rxqs_n; n++) {
+		rxq = mlx5_rxq_get(dev, rxq_id);
+		if (rxq && rxq->lwm_event_pending) {
+			pthread_mutex_lock(&priv->sh->lwm_config_lock);
+			rxq->lwm_event_pending = 0;
+			pthread_mutex_unlock(&priv->sh->lwm_config_lock);
+			*queue_id = rxq_id;
+			found = 1;
+			if (lwm)
+				*lwm =  mlx5_rxq_lwm_to_percentage(rxq);
+			break;
+		}
+		rxq_id = (rxq_id + 1) % priv->rxqs_n;
+	}
+	return found;
+}
+
+/**
+ * Rte interrupt handler for LWM event.
+ * It first checks if the event arrives, if so process the callback for
+ * RTE_ETH_EVENT_RX_LWM.
+ *
+ * @param args
+ *   Generic pointer to mlx5_priv.
+ */
+void
+mlx5_dev_interrupt_handler_lwm(void *args)
+{
+	struct mlx5_priv *priv = args;
+	struct mlx5_rxq_priv *rxq;
+	struct rte_eth_dev *dev;
+	int ret, rxq_idx = 0, port_id = 0;
+
+	ret = priv->obj_ops.rxq_event_get_lwm(priv, &rxq_idx, &port_id);
+	if (unlikely(ret < 0)) {
+		DRV_LOG(WARNING, "Cannot get LWM event context.");
+		return;
+	}
+	DRV_LOG(INFO, "%s get LWM event, port_id:%d rxq_id:%d.", __func__,
+		port_id, rxq_idx);
+	dev = &rte_eth_devices[port_id];
+	rxq = mlx5_rxq_get(dev, rxq_idx);
+	if (rxq) {
+		pthread_mutex_lock(&priv->sh->lwm_config_lock);
+		rxq->lwm_event_pending = 1;
+		pthread_mutex_unlock(&priv->sh->lwm_config_lock);
+	}
+	rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_RX_AVAIL_THRESH, NULL);
+}
+
+/**
+ * DPDK callback to arm an Rx queue LWM(limit watermark) event.
+ * While the Rx queue fullness reaches the LWM limit, the driver catches
+ * an HW event and invokes the user event callback.
+ * After the last event handling, the user needs to call this API again
+ * to arm an additional event.
+ *
+ * @param dev
+ *   Pointer to the device structure.
+ * @param[in] rx_queue_id
+ *   Rx queue identificator.
+ * @param[in] lwm
+ *   The LWM value, is defined by a percentage of the Rx queue size.
+ *   [1-99] to set a new LWM (update the old value).
+ *   0 to unarm the event.
+ *
+ * @return
+ *   0 : operation success.
+ *   Otherwise:
+ *   - ENOMEM - not enough memory to create LWM event channel.
+ *   - EINVAL - the input Rxq is not created by devx.
+ *   - E2BIG  - lwm is bigger than 99.
+ */
+int
+mlx5_rx_queue_lwm_set(struct rte_eth_dev *dev, uint16_t rx_queue_id,
+		      uint8_t lwm)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	uint16_t port_id = PORT_ID(priv);
+	struct mlx5_rxq_priv *rxq = mlx5_rxq_get(dev, rx_queue_id);
+	uint16_t event_nums[1] = {MLX5_EVENT_TYPE_SRQ_LIMIT_REACHED};
+	struct mlx5_rxq_data *rxq_data;
+	uint32_t wqe_cnt;
+	uint64_t cookie;
+	int ret = 0;
+
+	if (!rxq) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	rxq_data = &rxq->ctrl->rxq;
+	/* Ensure the Rq is created by devx. */
+	if (priv->obj_ops.rxq_obj_new != devx_obj_ops.rxq_obj_new) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	if (lwm > 99) {
+		DRV_LOG(WARNING, "Too big LWM configuration.");
+		rte_errno = E2BIG;
+		return -rte_errno;
+	}
+	/* Start config LWM. */
+	pthread_mutex_lock(&priv->sh->lwm_config_lock);
+	if (rxq->lwm == 0 && lwm == 0) {
+		/* Both old/new values are 0, do nothing. */
+		ret = 0;
+		goto end;
+	}
+	wqe_cnt = 1 << (rxq_data->elts_n - rxq_data->sges_n);
+	if (lwm) {
+		if (!priv->sh->devx_channel_lwm) {
+			ret = mlx5_lwm_setup(priv);
+			if (ret) {
+				DRV_LOG(WARNING,
+					"Failed to create shared_lwm.");
+				rte_errno = ENOMEM;
+				ret = -rte_errno;
+				goto end;
+			}
+		}
+		if (!rxq->lwm_devx_subscribed) {
+			cookie = ((uint32_t)
+				  (port_id << LWM_COOKIE_PORTID_OFFSET)) |
+				(rx_queue_id << LWM_COOKIE_RXQID_OFFSET);
+			ret = mlx5_os_devx_subscribe_devx_event
+				(priv->sh->devx_channel_lwm,
+				 rxq->devx_rq.rq->obj,
+				 sizeof(event_nums),
+				 event_nums,
+				 cookie);
+			if (ret) {
+				rte_errno = rte_errno ? rte_errno : EINVAL;
+				ret = -rte_errno;
+				goto end;
+			}
+			rxq->lwm_devx_subscribed = 1;
+		}
+	}
+	/* Save LWM to rxq and send modify_rq devx command. */
+	rxq->lwm = lwm * wqe_cnt / 100;
+	/* Prevent integer division loss when switch lwm number to percentage. */
+	if (lwm && (lwm * wqe_cnt % 100)) {
+		rxq->lwm = ((uint32_t)(rxq->lwm + 1) >= wqe_cnt) ?
+			rxq->lwm : (rxq->lwm + 1);
+	}
+	if (lwm && !rxq->lwm) {
+		/* With mprq, wqe_cnt may be < 100. */
+		DRV_LOG(WARNING, "Too small LWM configuration.");
+		rte_errno = EINVAL;
+		ret = -rte_errno;
+		goto end;
+	}
+	ret = mlx5_devx_modify_rq(rxq, MLX5_RXQ_MOD_RDY2RDY);
+end:
+	pthread_mutex_unlock(&priv->sh->lwm_config_lock);
+	return ret;
+}
+
+/**
+ * Mlx5 access register function to configure host shaper.
+ * It calls API in libmtcr_ul to access QSHR(Qos Shaper Host Register)
+ * in firmware.
+ *
+ * @param dev
+ *   Pointer to rte_eth_dev.
+ * @param lwm_triggered
+ *   Flag to enable/disable lwm_triggered bit in QSHR.
+ * @param rate
+ *   Host shaper rate, unit is 100Mbps, set to 0 means disable the shaper.
+ * @return
+ *   0 : operation success.
+ *   Otherwise:
+ *   - ENOENT - no ibdev interface.
+ *   - EBUSY  - the register access unit is busy.
+ *   - EIO    - the register access command meets IO error.
+ */
+static int
+mlxreg_host_shaper_config(struct rte_eth_dev *dev,
+			  bool lwm_triggered, uint8_t rate)
+{
+#ifdef HAVE_MLX5_MSTFLINT
+	struct mlx5_priv *priv = dev->data->dev_private;
+	uint32_t data[MLX5_ST_SZ_DW(register_qshr)] = {0};
+	int rc, retry_count = 3;
+	mfile *mf = NULL;
+	int status;
+	void *ptr;
+
+	mf = mopen(priv->sh->ibdev_name);
+	if (!mf) {
+		DRV_LOG(WARNING, "mopen failed\n");
+		rte_errno = ENOENT;
+		return -rte_errno;
+	}
+	MLX5_SET(register_qshr, data, connected_host, 1);
+	MLX5_SET(register_qshr, data, fast_response, lwm_triggered ? 1 : 0);
+	MLX5_SET(register_qshr, data, local_port, 1);
+	ptr = MLX5_ADDR_OF(register_qshr, data, global_config);
+	MLX5_SET(ets_global_config_register, ptr, rate_limit_update, 1);
+	MLX5_SET(ets_global_config_register, ptr, max_bw_units,
+		 rate ? ETS_GLOBAL_CONFIG_BW_UNIT_HUNDREDS_MBPS :
+		 ETS_GLOBAL_CONFIG_BW_UNIT_DISABLED);
+	MLX5_SET(ets_global_config_register, ptr, max_bw_value, rate);
+	do {
+		rc = maccess_reg(mf,
+				 MLX5_QSHR_REGISTER_ID,
+				 MACCESS_REG_METHOD_SET,
+				 (u_int32_t *)&data[0],
+				 sizeof(data),
+				 sizeof(data),
+				 sizeof(data),
+				 &status);
+		if ((rc != ME_ICMD_STATUS_IFC_BUSY &&
+		     status != ME_REG_ACCESS_BAD_PARAM) ||
+		    !(mf->flags & MDEVS_REM)) {
+			break;
+		}
+		DRV_LOG(WARNING, "%s retry.", __func__);
+		usleep(10000);
+	} while (retry_count-- > 0);
+	mclose(mf);
+	rte_errno = (rc == ME_REG_ACCESS_DEV_BUSY) ? EBUSY : EIO;
+	return rc ? -rte_errno : 0;
+#else
+	(void)dev;
+	(void)lwm_triggered;
+	(void)rate;
+	return -1;
+#endif
+}
+
+int rte_pmd_mlx5_host_shaper_config(int port_id, uint8_t rate,
+				    uint32_t flags)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	struct mlx5_priv *priv = dev->data->dev_private;
+	bool lwm_triggered =
+	     !!(flags & RTE_BIT32(MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED));
+
+	if (!lwm_triggered) {
+		priv->sh->host_shaper_rate = rate;
+	} else {
+		switch (rate) {
+		case 0:
+		/* Rate 0 means disable lwm_triggered. */
+			priv->sh->lwm_triggered = 0;
+			break;
+		case 1:
+		/* Rate 1 means enable lwm_triggered. */
+			priv->sh->lwm_triggered = 1;
+			break;
+		default:
+			return -ENOTSUP;
+		}
+	}
+	return mlxreg_host_shaper_config(dev, priv->sh->lwm_triggered,
+					 priv->sh->host_shaper_rate);
+}

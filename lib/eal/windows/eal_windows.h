@@ -40,10 +40,12 @@ int eal_create_cpu_map(void);
  *
  * @param thread
  *   The location to store the thread id if successful.
+ * @param lcore_id
+ *   The lcore_id of this worker thread.
  * @return
  *   0 for success, -1 if the thread is not created.
  */
-int eal_thread_create(pthread_t *thread);
+int eal_thread_create(pthread_t *thread, unsigned int lcore_id);
 
 /**
  * Get system NUMA node number for a socket ID.
@@ -56,6 +58,16 @@ int eal_thread_create(pthread_t *thread);
 unsigned int eal_socket_numa_node(unsigned int socket_id);
 
 /**
+ * Get pointer to the group affinity for the cpu.
+ *
+ * @param cpu_index
+ *  Index of the cpu, as it comes from rte_cpuset_t.
+ * @return
+ *  Pointer to the group affinity for the cpu.
+ */
+PGROUP_AFFINITY eal_get_cpu_affinity(size_t cpu_index);
+
+/**
  * Schedule code for execution in the interrupt thread.
  *
  * @param func
@@ -63,7 +75,7 @@ unsigned int eal_socket_numa_node(unsigned int socket_id);
  * @param arg
  *  Argument to the called function.
  * @return
- *  0 on success, netagive error code on failure.
+ *  0 on success, negative error code on failure.
  */
 int eal_intr_thread_schedule(void (*func)(void *arg), void *arg);
 

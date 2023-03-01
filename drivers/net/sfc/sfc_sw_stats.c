@@ -2,7 +2,7 @@
  *
  * Copyright(c) 2021 Xilinx, Inc.
  */
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_bitmap.h>
 
 #include "sfc.h"
@@ -95,7 +95,7 @@ sfc_get_sw_stat_val_rx_dbells(struct sfc_adapter *sa, uint16_t qid,
 	SFC_ASSERT(values_count == 1);
 	rxq_info = sfc_rxq_info_by_ethdev_qid(sas, qid);
 	values[0] = rxq_info->state & SFC_RXQ_INITIALIZED ?
-		    rxq_info->dp->dpq.rx_dbells : 0;
+		    rxq_info->dp->dpq.dbells : 0;
 }
 
 static sfc_get_sw_stat_val_t sfc_get_sw_stat_val_tx_dbells;
@@ -110,7 +110,7 @@ sfc_get_sw_stat_val_tx_dbells(struct sfc_adapter *sa, uint16_t qid,
 	SFC_ASSERT(values_count == 1);
 	txq_info = sfc_txq_info_by_ethdev_qid(sas, qid);
 	values[0] = txq_info->state & SFC_TXQ_INITIALIZED ?
-		    txq_info->dp->dpq.tx_dbells : 0;
+		    txq_info->dp->dpq.dbells : 0;
 }
 
 /*
@@ -777,7 +777,7 @@ sfc_sw_xstats_configure(struct sfc_adapter *sa)
 
 	memset(*reset_vals, 0, nb_supported * sizeof(**reset_vals));
 
-	*cache = rte_realloc(*cache, cache_count * sizeof(*cache), 0);
+	*cache = rte_realloc(*cache, cache_count * sizeof(**cache), 0);
 	if (*cache == NULL) {
 		rc = ENOMEM;
 		goto fail_cache;

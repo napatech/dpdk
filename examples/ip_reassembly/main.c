@@ -87,11 +87,11 @@ static uint32_t max_flow_ttl = DEF_FLOW_TTL;
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 1024
+#define RX_DESC_DEFAULT 1024
+#define TX_DESC_DEFAULT 1024
 
-static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+static uint16_t nb_rxd = RX_DESC_DEFAULT;
+static uint16_t nb_txd = TX_DESC_DEFAULT;
 
 /* ethernet addresses of ports */
 static struct rte_ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
@@ -126,7 +126,7 @@ struct mbuf_table {
 	uint32_t len;
 	uint32_t head;
 	uint32_t tail;
-	struct rte_mbuf *m_table[0];
+	struct rte_mbuf *m_table[];
 };
 
 struct rx_queue {
@@ -163,7 +163,6 @@ static struct rte_eth_conf port_conf = {
 		.mq_mode        = RTE_ETH_MQ_RX_RSS,
 		.mtu = JUMBO_FRAME_MAX_SIZE - RTE_ETHER_HDR_LEN -
 			RTE_ETHER_CRC_LEN,
-		.split_hdr_size = 0,
 		.offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
@@ -244,7 +243,7 @@ static struct rte_lpm6 *socket_lpm6[RTE_MAX_NUMA_NODES];
 #endif /* RTE_LIBRTE_IP_FRAG_TBL_STAT */
 
 /*
- * If number of queued packets reached given threahold, then
+ * If number of queued packets reached given threshold, then
  * send burst of packets on an output interface.
  */
 static inline uint32_t
@@ -371,7 +370,7 @@ reassemble(struct rte_mbuf *m, uint16_t portid, uint32_t queue,
 		eth_hdr->ether_type = rte_be_to_cpu_16(RTE_ETHER_TYPE_IPV4);
 	} else if (RTE_ETH_IS_IPV6_HDR(m->packet_type)) {
 		/* if packet is IPv6 */
-		struct ipv6_extension_fragment *frag_hdr;
+		struct rte_ipv6_fragment_ext *frag_hdr;
 		struct rte_ipv6_hdr *ip_hdr;
 
 		ip_hdr = (struct rte_ipv6_hdr *)(eth_hdr + 1);
@@ -873,11 +872,11 @@ setup_queue_tbl(struct rx_queue *rxq, uint32_t lcore, uint32_t queue)
 
 	/*
 	 * At any given moment up to <max_flow_num * (MAX_FRAG_NUM)>
-	 * mbufs could be stored int the fragment table.
+	 * mbufs could be stored in the fragment table.
 	 * Plus, each TX queue can hold up to <max_flow_num> packets.
 	 */
 
-	/* mbufs stored int the gragment table. 8< */
+	/* mbufs stored in the fragment table. 8< */
 	nb_mbuf = RTE_MAX(max_flow_num, 2UL * MAX_PKT_BURST) * MAX_FRAG_NUM;
 	nb_mbuf *= (port_conf.rxmode.mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN
 			+ BUF_SIZE - 1) / BUF_SIZE;
@@ -895,7 +894,7 @@ setup_queue_tbl(struct rx_queue *rxq, uint32_t lcore, uint32_t queue)
 			"rte_pktmbuf_pool_create(%s) failed", buf);
 		return -1;
 	}
-	/* >8 End of mbufs stored int the fragmentation table. */
+	/* >8 End of mbufs stored in the fragmentation table. */
 
 	return 0;
 }

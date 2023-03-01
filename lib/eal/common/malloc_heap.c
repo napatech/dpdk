@@ -5,7 +5,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <errno.h>
 #include <sys/queue.h>
 
@@ -13,15 +12,11 @@
 #include <rte_errno.h>
 #include <rte_eal.h>
 #include <rte_eal_memconfig.h>
-#include <rte_launch.h>
-#include <rte_per_lcore.h>
 #include <rte_lcore.h>
 #include <rte_common.h>
 #include <rte_string_fns.h>
 #include <rte_spinlock.h>
-#include <rte_memcpy.h>
 #include <rte_memzone.h>
-#include <rte_atomic.h>
 #include <rte_fbarray.h>
 
 #include "eal_internal_cfg.h"
@@ -93,11 +88,11 @@ malloc_socket_to_heap_id(unsigned int socket_id)
  */
 static struct malloc_elem *
 malloc_heap_add_memory(struct malloc_heap *heap, struct rte_memseg_list *msl,
-		void *start, size_t len)
+		void *start, size_t len, bool dirty)
 {
 	struct malloc_elem *elem = start;
 
-	malloc_elem_init(elem, heap, msl, len, elem, len);
+	malloc_elem_init(elem, heap, msl, len, elem, len, dirty);
 
 	malloc_elem_insert(elem);
 
@@ -135,7 +130,8 @@ malloc_add_seg(const struct rte_memseg_list *msl,
 
 	found_msl = &mcfg->memsegs[msl_idx];
 
-	malloc_heap_add_memory(heap, found_msl, ms->addr, len);
+	malloc_heap_add_memory(heap, found_msl, ms->addr, len,
+			ms->flags & RTE_MEMSEG_FLAG_DIRTY);
 
 	heap->total_size += len;
 
@@ -237,6 +233,7 @@ heap_alloc(struct malloc_heap *heap, const char *type __rte_unused, size_t size,
 		unsigned int flags, size_t align, size_t bound, bool contig)
 {
 	struct malloc_elem *elem;
+	size_t user_size = size;
 
 	size = RTE_CACHE_LINE_ROUNDUP(size);
 	align = RTE_CACHE_LINE_ROUNDUP(align);
@@ -250,6 +247,8 @@ heap_alloc(struct malloc_heap *heap, const char *type __rte_unused, size_t size,
 
 		/* increase heap's count of allocated elements */
 		heap->alloc_count++;
+
+		asan_set_redzone(elem, user_size);
 	}
 
 	return elem == NULL ? NULL : (void *)(&elem[1]);
@@ -270,6 +269,8 @@ heap_alloc_biggest(struct malloc_heap *heap, const char *type __rte_unused,
 
 		/* increase heap's count of allocated elements */
 		heap->alloc_count++;
+
+		asan_set_redzone(elem, size);
 	}
 
 	return elem == NULL ? NULL : (void *)(&elem[1]);
@@ -298,7 +299,8 @@ alloc_pages_on_heap(struct malloc_heap *heap, uint64_t pg_sz, size_t elt_size,
 	struct rte_memseg_list *msl;
 	struct malloc_elem *elem = NULL;
 	size_t alloc_sz;
-	int allocd_pages;
+	int allocd_pages, i;
+	bool dirty = false;
 	void *ret, *map_addr;
 
 	alloc_sz = (size_t)pg_sz * n_segs;
@@ -367,8 +369,12 @@ alloc_pages_on_heap(struct malloc_heap *heap, uint64_t pg_sz, size_t elt_size,
 		goto fail;
 	}
 
+	/* Element is dirty if it contains at least one dirty page. */
+	for (i = 0; i < allocd_pages; i++)
+		dirty |= ms[i]->flags & RTE_MEMSEG_FLAG_DIRTY;
+
 	/* add newly minted memsegs to malloc heap */
-	elem = malloc_heap_add_memory(heap, msl, map_addr, alloc_sz);
+	elem = malloc_heap_add_memory(heap, msl, map_addr, alloc_sz, dirty);
 
 	/* try once more, as now we have allocated new memory */
 	ret = find_suitable_element(heap, elt_size, flags, align, bound,
@@ -396,8 +402,8 @@ try_expand_heap_primary(struct malloc_heap *heap, uint64_t pg_sz,
 	int n_segs;
 	bool callback_triggered = false;
 
-	alloc_sz = RTE_ALIGN_CEIL(align + elt_size +
-			MALLOC_ELEM_TRAILER_LEN, pg_sz);
+	alloc_sz = RTE_ALIGN_CEIL(RTE_ALIGN_CEIL(elt_size, align) +
+			MALLOC_ELEM_OVERHEAD, pg_sz);
 	n_segs = alloc_sz / pg_sz;
 
 	/* we can't know in advance how many pages we'll need, so we malloc */
@@ -694,6 +700,26 @@ alloc_unlock:
 	return ret;
 }
 
+static unsigned int
+malloc_get_numa_socket(void)
+{
+	const struct internal_config *conf = eal_get_internal_configuration();
+	unsigned int socket_id = rte_socket_id();
+	unsigned int idx;
+
+	if (socket_id != (unsigned int)SOCKET_ID_ANY)
+		return socket_id;
+
+	/* for control threads, return first socket where memory is available */
+	for (idx = 0; idx < rte_socket_count(); idx++) {
+		socket_id = rte_socket_id_by_idx(idx);
+		if (conf->socket_mem[socket_id] != 0)
+			return socket_id;
+	}
+
+	return rte_socket_id_by_idx(0);
+}
+
 void *
 malloc_heap_alloc(const char *type, size_t size, int socket_arg,
 		unsigned int flags, size_t align, size_t bound, bool contig)
@@ -835,11 +861,14 @@ malloc_heap_free(struct malloc_elem *elem)
 	struct rte_memseg_list *msl;
 	unsigned int i, n_segs, before_space, after_space;
 	int ret;
+	bool unmapped = false;
 	const struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
 	if (!malloc_elem_cookies_ok(elem) || elem->state != ELEM_BUSY)
 		return -1;
+
+	asan_clear_redzone(elem);
 
 	/* elem may be merged with previous element, so keep heap address */
 	heap = elem->heap;
@@ -847,6 +876,9 @@ malloc_heap_free(struct malloc_elem *elem)
 	page_sz = (size_t)msl->page_sz;
 
 	rte_spinlock_lock(&(heap->lock));
+
+	void *asan_ptr = RTE_PTR_ADD(elem, MALLOC_ELEM_HEADER_LEN + elem->pad);
+	size_t asan_data_len = elem->size - MALLOC_ELEM_OVERHEAD - elem->pad;
 
 	/* mark element as free */
 	elem->state = ELEM_FREE;
@@ -996,11 +1028,47 @@ malloc_heap_free(struct malloc_elem *elem)
 		request_to_primary(&req);
 	}
 
+	/* we didn't exit early, meaning we have unmapped some pages */
+	unmapped = true;
+
 	RTE_LOG(DEBUG, EAL, "Heap on socket %d was shrunk by %zdMB\n",
 		msl->socket_id, aligned_len >> 20ULL);
 
 	rte_mcfg_mem_write_unlock();
 free_unlock:
+	asan_set_freezone(asan_ptr, asan_data_len);
+
+	/* if we unmapped some memory, we need to do additional work for ASan */
+	if (unmapped) {
+		void *asan_end = RTE_PTR_ADD(asan_ptr, asan_data_len);
+		void *aligned_end = RTE_PTR_ADD(aligned_start, aligned_len);
+		void *aligned_trailer = RTE_PTR_SUB(aligned_start,
+				MALLOC_ELEM_TRAILER_LEN);
+
+		/*
+		 * There was a memory area that was unmapped. This memory area
+		 * will have to be marked as available for ASan, because we will
+		 * want to use it next time it gets mapped again. The OS memory
+		 * protection should trigger a fault on access to these areas
+		 * anyway, so we are not giving up any protection.
+		 */
+		asan_set_zone(aligned_start, aligned_len, 0x00);
+
+		/*
+		 * ...however, when we unmap pages, we create new free elements
+		 * which might have been marked as "freed" with an earlier
+		 * `asan_set_freezone` call. So, if there is an area past the
+		 * unmapped space that was marked as freezone for ASan, we need
+		 * to mark the malloc header as available.
+		 */
+		if (asan_end > aligned_end)
+			asan_set_zone(aligned_end, MALLOC_ELEM_HEADER_LEN, 0x00);
+
+		/* if there's space before unmapped memory, mark as available */
+		if (asan_ptr < aligned_start)
+			asan_set_zone(aligned_trailer, MALLOC_ELEM_TRAILER_LEN, 0x00);
+	}
+
 	rte_spinlock_unlock(&(heap->lock));
 	return ret;
 }
@@ -1228,7 +1296,7 @@ malloc_heap_add_external_memory(struct malloc_heap *heap,
 	memset(msl->base_va, 0, msl->len);
 
 	/* now, add newly minted memory to the malloc heap */
-	malloc_heap_add_memory(heap, msl, msl->base_va, msl->len);
+	malloc_heap_add_memory(heap, msl, msl->base_va, msl->len, false);
 
 	heap->total_size += msl->len;
 
@@ -1370,4 +1438,10 @@ rte_eal_malloc_heap_init(void)
 
 	/* add all IOVA-contiguous areas to the heap */
 	return rte_memseg_contig_walk(malloc_add_seg, NULL);
+}
+
+void
+rte_eal_malloc_heap_cleanup(void)
+{
+	unregister_mp_requests();
 }

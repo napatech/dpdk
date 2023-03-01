@@ -17,7 +17,7 @@ With this enhancement, virtio could achieve quite promising performance.
 For basic qemu-KVM installation and other Intel EM poll mode driver in guest VM,
 please refer to Chapter "Driver for VM Emulated Devices".
 
-In this chapter, we will demonstrate usage of virtio PMD driver with two backends,
+In this chapter, we will demonstrate usage of virtio PMD with two backends,
 standard qemu vhost back end and vhost kni back end.
 
 Virtio Implementation in DPDK
@@ -40,10 +40,10 @@ end if necessary.
 Features and Limitations of virtio PMD
 --------------------------------------
 
-In this release, the virtio PMD driver provides the basic functionality of packet reception and transmission.
+In this release, the virtio PMD provides the basic functionality of packet reception and transmission.
 
 *   It supports merge-able buffers per packet when receiving packets and scattered buffer per packet
-    when transmitting packets. The packet size supported is from 64 to 1518.
+    when transmitting packets. The packet size supported is from 64 to 9728.
 
 *   It supports multicast packets and promiscuous mode.
 
@@ -73,6 +73,9 @@ In this release, the virtio PMD driver provides the basic functionality of packe
 
 *   Virtio supports using port IO to get PCI resource when UIO module is not available.
 
+*   Virtio supports RSS Rx mode with 40B configurable hash key length, 128
+    configurable RETA entries and configurable hash types.
+
 Prerequisites
 -------------
 
@@ -82,6 +85,9 @@ The following prerequisites apply:
 
 *   Linux kernel with KVM module; vhost module loaded and ioeventfd supported.
     Qemu standard backend without vhost support isn't tested, and probably isn't supported.
+
+*   When using legacy interface, ``SYS_RAWIO`` capability is required
+    for ``iopl()`` call to enable access to PCI I/O ports.
 
 Virtio with kni vhost Back End
 ------------------------------

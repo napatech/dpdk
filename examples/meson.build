@@ -12,19 +12,18 @@ all_examples = [
         'bond',
         'cmdline',
         'distributor',
+        'dma',
         'ethtool',
         'eventdev_pipeline',
         'fips_validation',
         'flow_classify',
         'flow_filtering',
         'helloworld',
-        'ioat',
         'ip_fragmentation',
         'ip_pipeline',
         'ip_reassembly',
         'ipsec-secgw',
         'ipv4_multicast',
-        'kni',
         'l2fwd',
         'l2fwd-cat',
         'l2fwd-crypto',
@@ -32,7 +31,6 @@ all_examples = [
         'l2fwd-jobstats',
         'l2fwd-keepalive',
         'l3fwd',
-        'l3fwd-acl',
         'l3fwd-graph',
         'l3fwd-power',
         'link_status_interrupt',
@@ -43,8 +41,6 @@ all_examples = [
         'multi_process/symmetric_mp',
         'ntb',
         'packet_ordering',
-        'performance-thread/l3fwd-thread',
-        'performance-thread/pthread_shim',
         'pipeline',
         'ptpclient',
         'qos_meter',
@@ -100,9 +96,22 @@ foreach example: examples
     ldflags = default_ldflags
 
     ext_deps = []
-    includes = [include_directories(example)]
+    includes = [include_directories(example, 'common')]
     deps = ['eal', 'mempool', 'net', 'mbuf', 'ethdev', 'cmdline']
     subdir(example)
+
+    if build
+        dep_objs = ext_deps
+        foreach d:deps
+            var_name = get_option('default_library') + '_rte_' + d
+            if not is_variable(var_name)
+                build = false
+                message('Missing dependency "@0@" for example "@1@"'.format(d, name))
+                break
+            endif
+            dep_objs += [get_variable(var_name)]
+        endforeach
+    endif
 
     if not build
         if not allow_skips
@@ -112,14 +121,6 @@ foreach example: examples
         continue
     endif
 
-    dep_objs = ext_deps
-    foreach d:deps
-        var_name = get_option('default_library') + '_rte_' + d
-        if not is_variable(var_name)
-            error('Missing dependency "@0@" for example "@1@"'.format(d, name))
-        endif
-        dep_objs += [get_variable(var_name)]
-    endforeach
     if allow_experimental_apis
         cflags += '-DALLOW_EXPERIMENTAL_API'
     endif

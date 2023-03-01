@@ -12,13 +12,13 @@
 #include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_debug.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_eal.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
 #include <rte_lcore.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 
 #include "skeleton_eventdev.h"
 
@@ -102,7 +102,8 @@ skeleton_eventdev_info_get(struct rte_eventdev *dev,
 	dev_info->event_dev_cap = RTE_EVENT_DEV_CAP_QUEUE_QOS |
 					RTE_EVENT_DEV_CAP_BURST_MODE |
 					RTE_EVENT_DEV_CAP_EVENT_QOS |
-					RTE_EVENT_DEV_CAP_CARRY_FLOW_ID;
+					RTE_EVENT_DEV_CAP_CARRY_FLOW_ID |
+					RTE_EVENT_DEV_CAP_MAINTENANCE_FREE;
 }
 
 static int

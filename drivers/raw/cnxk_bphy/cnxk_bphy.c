@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(C) 2021 Marvell.
  */
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_common.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_eal.h>
 #include <rte_lcore.h>
 #include <rte_pci.h>
@@ -39,6 +39,22 @@ bphy_test_handler_fn(int irq_num, void *isr_data)
 {
 	test[irq_num].handled_intr = true;
 	test[irq_num].handled_data = *((int *)isr_data);
+}
+
+int
+rte_pmd_bphy_npa_pf_func_get_rmt(uint16_t *pf_func)
+{
+	*pf_func = roc_bphy_npa_pf_func_get();
+
+	return 0;
+}
+
+int
+rte_pmd_bphy_sso_pf_func_get_rmt(uint16_t *pf_func)
+{
+	*pf_func = roc_bphy_sso_pf_func_get();
+
+	return 0;
 }
 
 static int
@@ -158,7 +174,7 @@ err_desc:
 static void
 bphy_rawdev_get_name(char *name, struct rte_pci_device *pci_dev)
 {
-	snprintf(name, RTE_RAWDEV_NAME_MAX_LEN, "BPHY:%x:%02x.%x",
+	snprintf(name, RTE_RAWDEV_NAME_MAX_LEN, "BPHY:%02x:%02x.%x",
 		 pci_dev->addr.bus, pci_dev->addr.devid,
 		 pci_dev->addr.function);
 }
@@ -341,6 +357,13 @@ bphy_rawdev_probe(struct rte_pci_driver *pci_drv,
 	bphy_dev = (struct bphy_device *)bphy_rawdev->dev_private;
 	bphy_dev->mem.res0 = pci_dev->mem_resource[0];
 	bphy_dev->mem.res2 = pci_dev->mem_resource[2];
+	bphy_dev->bphy.pci_dev = pci_dev;
+
+	ret = roc_bphy_dev_init(&bphy_dev->bphy);
+	if (ret) {
+		rte_rawdev_pmd_release(bphy_rawdev);
+		return ret;
+	}
 
 	return 0;
 }
@@ -349,6 +372,7 @@ static int
 bphy_rawdev_remove(struct rte_pci_device *pci_dev)
 {
 	char name[RTE_RAWDEV_NAME_MAX_LEN];
+	struct bphy_device *bphy_dev;
 	struct rte_rawdev *rawdev;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
@@ -365,6 +389,9 @@ bphy_rawdev_remove(struct rte_pci_device *pci_dev)
 		plt_err("invalid device name (%s)", name);
 		return -EINVAL;
 	}
+
+	bphy_dev = (struct bphy_device *)rawdev->dev_private;
+	roc_bphy_dev_fini(&bphy_dev->bphy);
 
 	return rte_rawdev_pmd_release(rawdev);
 }

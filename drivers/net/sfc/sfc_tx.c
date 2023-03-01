@@ -194,7 +194,7 @@ sfc_tx_qinit(struct sfc_adapter *sa, sfc_sw_index_t sw_index,
 		SFC_TX_DEFAULT_FREE_THRESH;
 	txq_info->offloads = offloads;
 
-	rc = sfc_dma_alloc(sa, "txq", sw_index,
+	rc = sfc_dma_alloc(sa, "txq", sw_index, EFX_NIC_DMA_ADDR_TX_RING,
 			   efx_txq_size(sa->nic, txq_info->entries),
 			   socket_id, &txq->mem);
 	if (rc != 0)
@@ -225,6 +225,8 @@ sfc_tx_qinit(struct sfc_adapter *sa, sfc_sw_index_t sw_index,
 			(uint32_t)UINT16_MAX);
 	info.tso_max_payload_len = encp->enc_tx_tso_max_payload_length;
 	info.tso_max_nb_outgoing_frames = encp->enc_tx_tso_max_nframes;
+
+	info.nic_dma_info = &sas->nic_dma_info;
 
 	rc = sa->priv.dp_tx->qcreate(sa->eth_dev->data->port_id, sw_index,
 				     &RTE_ETH_DEV_TO_PCI(sa->eth_dev)->addr,
@@ -306,6 +308,7 @@ sfc_tx_qinit_info(struct sfc_adapter *sa, sfc_sw_index_t sw_index)
 static int
 sfc_tx_check_mode(struct sfc_adapter *sa, const struct rte_eth_txmode *txmode)
 {
+	uint64_t dev_tx_offload_cap = sfc_tx_get_dev_offload_caps(sa);
 	int rc = 0;
 
 	switch (txmode->mq_mode) {
@@ -314,6 +317,13 @@ sfc_tx_check_mode(struct sfc_adapter *sa, const struct rte_eth_txmode *txmode)
 	default:
 		sfc_err(sa, "Tx multi-queue mode %u not supported",
 			txmode->mq_mode);
+		rc = EINVAL;
+	}
+
+	if ((dev_tx_offload_cap & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) != 0 &&
+	    (txmode->offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) == 0) {
+		sfc_err(sa, "There is no FAST_FREE flag in the attempted Tx mode configuration");
+		sfc_err(sa, "FAST_FREE is always active as per the current Tx datapath variant");
 		rc = EINVAL;
 	}
 
@@ -354,7 +364,7 @@ sfc_tx_fini_queues(struct sfc_adapter *sa, unsigned int nb_tx_queues)
 
 	/*
 	 * Finalize only ethdev queues since other ones are finalized only
-	 * on device close and they may require additional deinitializaton.
+	 * on device close and they may require additional deinitialization.
 	 */
 	ethdev_qid = sas->ethdev_txq_count;
 	while (--ethdev_qid >= (int)nb_tx_queues) {
@@ -996,7 +1006,7 @@ sfc_efx_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 		if (likely(pushed != txq->added)) {
 			efx_tx_qpush(txq->common, txq->added, pushed);
-			txq->dp.dpq.tx_dbells++;
+			txq->dp.dpq.dbells++;
 		}
 	}
 
@@ -1082,6 +1092,10 @@ sfc_efx_tx_qcreate(uint16_t port_id, uint16_t queue_id,
 	struct sfc_txq *ctrl_txq;
 	int rc;
 
+	rc = ENOTSUP;
+	if (info->nic_dma_info->nb_regions > 0)
+		goto fail_nic_dma;
+
 	rc = ENOMEM;
 	txq = rte_zmalloc_socket("sfc-efx-txq", sizeof(*txq),
 				 RTE_CACHE_LINE_SIZE, socket_id);
@@ -1133,6 +1147,7 @@ fail_pend_desc_alloc:
 	rte_free(txq);
 
 fail_txq_alloc:
+fail_nic_dma:
 	return rc;
 }
 

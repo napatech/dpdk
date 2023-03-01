@@ -2,6 +2,10 @@
 # Copyright 2021 HiSilicon Limited
 
 drivers = [
+        'cnxk',
+        'dpaa',
+        'dpaa2',
+        'hisilicon',
         'idxd',
         'ioat',
         'skeleton',

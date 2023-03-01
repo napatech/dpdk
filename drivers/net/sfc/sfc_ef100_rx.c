@@ -27,6 +27,7 @@
 #include "sfc_dp_rx.h"
 #include "sfc_kvargs.h"
 #include "sfc_ef100.h"
+#include "sfc_nic_dma_dp.h"
 
 
 #define sfc_ef100_rx_err(_rxq, ...) \
@@ -66,6 +67,7 @@ struct sfc_ef100_rxq {
 #define SFC_EF100_RXQ_FLAG_INTR_EN	0x40
 #define SFC_EF100_RXQ_INGRESS_MPORT	0x80
 #define SFC_EF100_RXQ_USER_FLAG		0x100
+#define SFC_EF100_RXQ_NIC_DMA_MAP	0x200
 	unsigned int			ptr_mask;
 	unsigned int			evq_phase_bit_shift;
 	unsigned int			ready_pkts;
@@ -92,6 +94,8 @@ struct sfc_ef100_rxq {
 
 	/* Datapath receive queue anchor */
 	struct sfc_dp_rxq		dp;
+
+	const struct sfc_nic_dma_info	*nic_dma_info;
 };
 
 static inline struct sfc_ef100_rxq *
@@ -124,7 +128,7 @@ sfc_ef100_rx_qpush(struct sfc_ef100_rxq *rxq, unsigned int added)
 	 * operations that follow it (i.e. doorbell write).
 	 */
 	rte_write32(dword.ed_u32[0], rxq->doorbell);
-	rxq->dp.dpq.rx_dbells++;
+	rxq->dp.dpq.dbells++;
 
 	sfc_ef100_rx_debug(rxq, "RxQ pushed doorbell at pidx %u (added=%u)",
 			   EFX_DWORD_FIELD(dword, ERF_GZ_RX_RING_PIDX),
@@ -150,7 +154,6 @@ sfc_ef100_rx_qrefill(struct sfc_ef100_rxq *rxq)
 	SFC_ASSERT(bulks > 0);
 
 	do {
-		unsigned int id;
 		unsigned int i;
 
 		if (unlikely(rte_mempool_get_bulk(rxq->refill_mb_pool, objs,
@@ -170,17 +173,28 @@ sfc_ef100_rx_qrefill(struct sfc_ef100_rxq *rxq)
 			break;
 		}
 
-		for (i = 0, id = added & ptr_mask;
-		     i < RTE_DIM(objs);
-		     ++i, ++id) {
+		for (i = 0; i < RTE_DIM(objs); ++i) {
 			struct rte_mbuf *m = objs[i];
 			struct sfc_ef100_rx_sw_desc *rxd;
-			rte_iova_t phys_addr;
+			rte_iova_t dma_addr;
 
 			__rte_mbuf_raw_sanity_check(m);
 
-			SFC_ASSERT((id & ~ptr_mask) == 0);
-			rxd = &rxq->sw_ring[id];
+			dma_addr = rte_mbuf_data_iova_default(m);
+			if (rxq->flags & SFC_EF100_RXQ_NIC_DMA_MAP) {
+				dma_addr = sfc_nic_dma_map(rxq->nic_dma_info,
+						dma_addr,
+						rte_pktmbuf_data_len(m));
+				if (unlikely(dma_addr == RTE_BAD_IOVA)) {
+					sfc_ef100_rx_err(rxq,
+						"failed to map DMA address on Rx");
+					/* Just skip buffer and try to continue */
+					rte_mempool_put(rxq->refill_mb_pool, m);
+					continue;
+				}
+			}
+
+			rxd = &rxq->sw_ring[added & ptr_mask];
 			rxd->mbuf = m;
 
 			/*
@@ -189,12 +203,10 @@ sfc_ef100_rx_qrefill(struct sfc_ef100_rxq *rxq)
 			 * structure members.
 			 */
 
-			phys_addr = rte_mbuf_data_iova_default(m);
-			EFX_POPULATE_QWORD_1(rxq->rxq_hw_ring[id],
-			    ESF_GZ_RX_BUF_ADDR, phys_addr);
+			EFX_POPULATE_QWORD_1(rxq->rxq_hw_ring[added & ptr_mask],
+			    ESF_GZ_RX_BUF_ADDR, dma_addr);
+			added++;
 		}
-
-		added += RTE_DIM(objs);
 	} while (--bulks > 0);
 
 	SFC_ASSERT(rxq->added != added);
@@ -425,7 +437,7 @@ sfc_ef100_rx_prefix_to_offloads(const struct sfc_ef100_rxq *rxq,
 	}
 
 	if (rxq->flags & SFC_EF100_RXQ_USER_MARK) {
-		uint8_t tunnel_mark;
+		uint8_t ft_ctx_mark;
 		uint32_t user_mark;
 		uint32_t mark;
 
@@ -439,15 +451,15 @@ sfc_ef100_rx_prefix_to_offloads(const struct sfc_ef100_rxq *rxq,
 			m->hash.fdir.hi = user_mark;
 		}
 
-		tunnel_mark = SFC_FT_GET_TUNNEL_MARK(mark);
-		if (tunnel_mark != SFC_FT_TUNNEL_MARK_INVALID) {
-			sfc_ft_id_t ft_id;
+		ft_ctx_mark = SFC_FT_FLOW_MARK_TO_CTX_MARK(mark);
+		if (ft_ctx_mark != SFC_FT_CTX_MARK_INVALID) {
+			sfc_ft_ctx_id_t ft_ctx_id;
 
-			ft_id = SFC_FT_TUNNEL_MARK_TO_ID(tunnel_mark);
+			ft_ctx_id = SFC_FT_CTX_MARK_TO_CTX_ID(ft_ctx_mark);
 
-			ol_flags |= sfc_dp_ft_id_valid;
-			*RTE_MBUF_DYNFIELD(m, sfc_dp_ft_id_offset,
-					   sfc_ft_id_t *) = ft_id;
+			ol_flags |= sfc_dp_ft_ctx_id_valid;
+			*RTE_MBUF_DYNFIELD(m, sfc_dp_ft_ctx_id_offset,
+					   sfc_ft_ctx_id_t *) = ft_ctx_id;
 		}
 	}
 
@@ -794,6 +806,10 @@ sfc_ef100_rx_qcreate(uint16_t port_id, uint16_t queue_id,
 			 info->fcw_offset +
 			 ER_GZ_EVQ_INT_PRIME_OFST;
 
+	rxq->nic_dma_info = info->nic_dma_info;
+	if (rxq->nic_dma_info->nb_regions > 0)
+		rxq->flags |= SFC_EF100_RXQ_NIC_DMA_MAP;
+
 	sfc_ef100_rx_debug(rxq, "RxQ doorbell is %p", rxq->doorbell);
 
 	*dp_rxqp = &rxq->dp;
@@ -835,7 +851,7 @@ sfc_ef100_rx_qstart(struct sfc_dp_rxq *dp_rxq, unsigned int evq_read_ptr,
 	unsup_rx_prefix_fields =
 		efx_rx_prefix_layout_check(pinfo, &sfc_ef100_rx_prefix_layout);
 
-	/* LENGTH and CLASS filds must always be present */
+	/* LENGTH and CLASS fields must always be present */
 	if ((unsup_rx_prefix_fields &
 	     ((1U << EFX_RX_PREFIX_FIELD_LENGTH) |
 	      (1U << EFX_RX_PREFIX_FIELD_CLASS))) != 0)

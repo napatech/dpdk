@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -417,7 +418,7 @@ virtio_user_fill_intr_handle(struct virtio_user_dev *dev)
 
 	for (i = 0; i < dev->max_queue_pairs; ++i) {
 		if (rte_intr_efds_index_set(eth_dev->intr_handle, i,
-				dev->callfds[i]))
+				dev->callfds[2 * i + VTNET_SQ_RQ_QUEUE_IDX]))
 			return -rte_errno;
 	}
 

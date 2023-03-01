@@ -27,12 +27,15 @@
 #include <linux/list.h>
 
 #include <rte_kni_common.h>
-#define KNI_KTHREAD_RESCHEDULE_INTERVAL 5 /* us */
+#define KNI_KTHREAD_MAX_RESCHEDULE_INTERVAL 1000000 /* us */
 
 #define MBUF_BURST_SZ 32
 
 /* Default carrier state for created KNI network interfaces */
 extern uint32_t kni_dflt_carrier;
+
+/* Request processing support for bifurcated drivers. */
+extern uint32_t bifurcated_support;
 
 /**
  * A structure describing the private information for a kni device.

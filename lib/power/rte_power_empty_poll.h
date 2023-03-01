@@ -12,11 +12,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <rte_compat.h>
 #include <rte_common.h>
-#include <rte_byteorder.h>
-#include <rte_log.h>
 #include <rte_string_fns.h>
-#include <rte_power.h>
 #include <rte_timer.h>
 
 #ifdef __cplusplus
@@ -71,7 +69,6 @@ struct priority_worker {
 	enum queue_state queue_state;
 
 	uint64_t empty_dequeues_prev;
-	uint64_t num_dequeue_pkts_prev;
 
 	/* Used for training only */
 	struct freq_threshold thresh[NUM_FREQ];
@@ -82,10 +79,6 @@ struct priority_worker {
 	uint64_t edpi_av[BINS_AV];
 	/* empty poll counter */
 	uint32_t ec;
-	/* ppi mean valid poll counter per interval */
-	uint64_t ppi_av[BINS_AV];
-	/* valid poll counter */
-	uint32_t pc;
 
 	uint32_t lcore_id;
 	uint32_t iter_counter;

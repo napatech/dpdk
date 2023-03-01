@@ -140,7 +140,7 @@ _eventdev_setup(int mode)
 	struct rte_event_dev_info info;
 	int i, ret;
 
-	/* Create and destrory pool for each test case to make it standalone */
+	/* Create and destroy pool for each test case to make it standalone */
 	eventdev_test_mempool = rte_pktmbuf_pool_create(
 		pool_name, MAX_EVENTS, 0, 0, 512, rte_socket_id());
 	if (!eventdev_test_mempool) {
@@ -626,6 +626,12 @@ launch_workers_and_wait(int (*main_thread)(void *),
 		/* start core */ -1,
 		/* skip main */ 1,
 		/* wrap */ 0);
+	if (w_lcore == RTE_MAX_LCORE) {
+		plt_err("Failed to get next available lcore");
+		free(param);
+		return -1;
+	}
+
 	rte_eal_remote_launch(main_thread, &param[0], w_lcore);
 
 	for (port = 1; port < nb_workers; port++) {
@@ -635,6 +641,12 @@ launch_workers_and_wait(int (*main_thread)(void *),
 		param[port].dequeue_tmo_ticks = dequeue_tmo_ticks;
 		rte_atomic_thread_fence(__ATOMIC_RELEASE);
 		w_lcore = rte_get_next_lcore(w_lcore, 1, 0);
+		if (w_lcore == RTE_MAX_LCORE) {
+			plt_err("Failed to get next available lcore");
+			free(param);
+			return -1;
+		}
+
 		rte_eal_remote_launch(worker_thread, &param[port], w_lcore);
 	}
 
@@ -1543,7 +1555,7 @@ cnxk_sso_selftest(const char *dev_name)
 		cn9k_sso_set_rsrc(dev);
 		if (cnxk_sso_testsuite_run(dev_name))
 			return rc;
-		/* Verift dual ws mode. */
+		/* Verify dual ws mode. */
 		printf("Verifying CN9K Dual workslot mode\n");
 		dev->dual_ws = 1;
 		cn9k_sso_set_rsrc(dev);

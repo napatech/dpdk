@@ -131,6 +131,9 @@ struct bond_dev_private {
 	uint32_t link_down_delay_ms;
 	uint32_t link_up_delay_ms;
 
+	uint32_t speed_capa;
+	/**< Supported speeds bitmap (RTE_ETH_LINK_SPEED_). */
+
 	uint16_t nb_rx_queues;			/**< Total number of rx queues */
 	uint16_t nb_tx_queues;			/**< Total number of tx queues*/
 
@@ -139,7 +142,7 @@ struct bond_dev_private {
 
 	uint16_t slave_count;			/**< Number of bonded slaves */
 	struct bond_slave_details slaves[RTE_MAX_ETHPORTS];
-	/**< Arary of bonded slaves details */
+	/**< Array of bonded slaves details */
 
 	struct mode8023ad_private mode4;
 	uint16_t tlb_slaves_order[RTE_MAX_ETHPORTS];
@@ -175,6 +178,8 @@ struct bond_dev_private {
 
 	struct rte_kvargs *kvlist;
 	uint8_t slave_update_idx;
+
+	bool kvargs_processing_is_done;
 
 	uint32_t candidate_max_rx_pktlen;
 	uint32_t max_rx_pktlen;
@@ -240,10 +245,14 @@ slave_remove_mac_addresses(struct rte_eth_dev *bonded_eth_dev,
 		uint16_t slave_port_id);
 
 int
-bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, int mode);
+bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, uint8_t mode);
 
 int
 slave_configure(struct rte_eth_dev *bonded_eth_dev,
+		struct rte_eth_dev *slave_eth_dev);
+
+int
+slave_start(struct rte_eth_dev *bonded_eth_dev,
 		struct rte_eth_dev *slave_eth_dev);
 
 void

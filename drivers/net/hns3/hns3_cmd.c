@@ -5,7 +5,7 @@
 #include <ethdev_pci.h>
 #include <rte_io.h>
 
-#include "hns3_ethdev.h"
+#include "hns3_common.h"
 #include "hns3_regs.h"
 #include "hns3_intr.h"
 #include "hns3_logs.h"
@@ -60,18 +60,14 @@ hns3_allocate_dma_mem(struct hns3_hw *hw, struct hns3_cmq_ring *ring,
 	ring->desc = mz->addr;
 	ring->desc_dma_addr = mz->iova;
 	ring->zone = (const void *)mz;
-	hns3_dbg(hw, "memzone %s allocated with physical address: %" PRIu64,
-		 mz->name, ring->desc_dma_addr);
+	hns3_dbg(hw, "cmd ring memzone name: %s", mz->name);
 
 	return 0;
 }
 
 static void
-hns3_free_dma_mem(struct hns3_hw *hw, struct hns3_cmq_ring *ring)
+hns3_free_dma_mem(struct hns3_cmq_ring *ring)
 {
-	hns3_dbg(hw, "memzone %s to be freed with physical address: %" PRIu64,
-		 ((const struct rte_memzone *)ring->zone)->name,
-		 ring->desc_dma_addr);
 	rte_memzone_free((const struct rte_memzone *)ring->zone);
 	ring->buf_size = 0;
 	ring->desc = NULL;
@@ -93,10 +89,10 @@ hns3_alloc_cmd_desc(struct hns3_hw *hw, struct hns3_cmq_ring *ring)
 }
 
 static void
-hns3_free_cmd_desc(struct hns3_hw *hw, struct hns3_cmq_ring *ring)
+hns3_free_cmd_desc(__rte_unused struct hns3_hw *hw, struct hns3_cmq_ring *ring)
 {
 	if (ring->desc)
-		hns3_free_dma_mem(hw, ring);
+		hns3_free_dma_mem(ring);
 }
 
 static int
@@ -112,7 +108,7 @@ hns3_alloc_cmd_queue(struct hns3_hw *hw, int ring_type)
 	ret = hns3_alloc_cmd_desc(hw, ring);
 	if (ret)
 		hns3_err(hw, "descriptor %s alloc error %d",
-			    (ring_type == HNS3_TYPE_CSQ) ? "CSQ" : "CRQ", ret);
+			 (ring_type == HNS3_TYPE_CSQ) ? "CSQ" : "CRQ", ret);
 
 	return ret;
 }
@@ -466,7 +462,7 @@ hns3_mask_capability(struct hns3_hw *hw,
 	for (i = 0; i < MAX_CAPS_BIT; i++) {
 		if (!(caps_masked & BIT_ULL(i)))
 			continue;
-		hns3_info(hw, "mask capabiliy: id-%u, name-%s.",
+		hns3_info(hw, "mask capability: id-%u, name-%s.",
 			  i, hns3_get_caps_name(i));
 	}
 }
@@ -635,39 +631,6 @@ hns3_firmware_compat_config(struct hns3_hw *hw, bool is_init)
 	struct hns3_cmd_desc desc;
 	uint32_t compat = 0;
 
-#if defined(RTE_HNS3_ONLY_1630_FPGA)
-	/* If resv reg enabled phy driver of imp is not configured, driver
-	 * will use temporary phy driver.
-	 */
-	struct rte_pci_device *pci_dev;
-	struct rte_eth_dev *eth_dev;
-	uint8_t revision;
-	int ret;
-
-	eth_dev = &rte_eth_devices[hw->data->port_id];
-	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	/* Get PCI revision id */
-	ret = rte_pci_read_config(pci_dev, &revision, HNS3_PCI_REVISION_ID_LEN,
-				  HNS3_PCI_REVISION_ID);
-	if (ret != HNS3_PCI_REVISION_ID_LEN) {
-		PMD_INIT_LOG(ERR, "failed to read pci revision id, ret = %d",
-			     ret);
-		return -EIO;
-	}
-	if (revision == PCI_REVISION_ID_HIP09_A) {
-		struct hns3_pf *pf = HNS3_DEV_HW_TO_PF(hw);
-		if (hns3_dev_get_support(hw, COPPER) == 0 || pf->is_tmp_phy) {
-			PMD_INIT_LOG(ERR, "***use temp phy driver in dpdk***");
-			pf->is_tmp_phy = true;
-			hns3_set_bit(hw->capability,
-				     HNS3_DEV_SUPPORT_COPPER_B, 1);
-			return 0;
-		}
-
-		PMD_INIT_LOG(ERR, "***use phy driver in imp***");
-	}
-#endif
-
 	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_FIRMWARE_COMPAT_CFG, false);
 	req = (struct hns3_firmware_compat_cmd *)desc.data;
 
@@ -736,7 +699,7 @@ hns3_cmd_init(struct hns3_hw *hw)
 		return 0;
 
 	/*
-	 * Requiring firmware to enable some features, firber port can still
+	 * Requiring firmware to enable some features, fiber port can still
 	 * work without it, but copper port can't work because the firmware
 	 * fails to take over the PHY.
 	 */

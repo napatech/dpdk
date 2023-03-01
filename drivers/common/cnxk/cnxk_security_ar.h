@@ -13,7 +13,7 @@
 
 /* u64 array size to fit anti replay window bits */
 #define AR_WIN_ARR_SZ                                                          \
-	(PLT_ALIGN_CEIL(CNXK_ON_AR_WIN_SIZE_MAX, BITS_PER_LONG_LONG) /        \
+	(PLT_ALIGN_CEIL(CNXK_ON_AR_WIN_SIZE_MAX + 1, BITS_PER_LONG_LONG) /     \
 	 BITS_PER_LONG_LONG)
 
 #define WORD_SHIFT 6
@@ -29,6 +29,27 @@ struct cnxk_on_ipsec_ar {
 	uint64_t base;			/**< base of the anti-replay window */
 	uint64_t window[AR_WIN_ARR_SZ]; /**< anti-replay window */
 };
+
+static inline uint32_t
+cnxk_on_anti_replay_get_seqh(uint32_t winsz, uint32_t seql, uint32_t esn_hi,
+			     uint32_t esn_low)
+{
+	uint32_t win_low = esn_low - winsz + 1;
+
+	if (esn_low > winsz - 1) {
+		/* Window is in one sequence number subspace */
+		if (seql > win_low)
+			return esn_hi;
+		else
+			return esn_hi + 1;
+	} else {
+		/* Window is split across two sequence number subspaces */
+		if (seql > win_low)
+			return esn_hi - 1;
+		else
+			return esn_hi;
+	}
+}
 
 static inline int
 cnxk_on_anti_replay_check(uint64_t seq, struct cnxk_on_ipsec_ar *ar,

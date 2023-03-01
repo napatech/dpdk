@@ -7,7 +7,7 @@
 
 #include <rte_string_fns.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
 #include <rte_malloc.h>
@@ -96,7 +96,14 @@ static const struct rte_pci_id pci_id_igc_map[] = {
 	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I225_LM) },
 	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I225_V)  },
 	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I225_I)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I225_IT)  },
 	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I225_K)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I226_K)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I226_LMVP)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I226_LM)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I226_V)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I226_IT)  },
+	{ RTE_PCI_DEVICE(IGC_INTEL_VENDOR_ID, IGC_DEV_ID_I226_BLANK_NVM)  },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -727,7 +734,7 @@ igc_configure_msix_intr(struct rte_eth_dev *dev)
 	uint32_t vec = IGC_MISC_VEC_ID;
 	uint32_t base = IGC_MISC_VEC_ID;
 	uint32_t misc_shift = 0;
-	int i;
+	int i, nb_efd;
 
 	/* won't configure msix register if no mapping is done
 	 * between intr vector and event fd
@@ -745,8 +752,12 @@ igc_configure_msix_intr(struct rte_eth_dev *dev)
 	IGC_WRITE_REG(hw, IGC_GPIE, IGC_GPIE_MSIX_MODE |
 				IGC_GPIE_PBA | IGC_GPIE_EIAME |
 				IGC_GPIE_NSICR);
-	intr_mask = RTE_LEN2MASK(rte_intr_nb_efd_get(intr_handle),
-				 uint32_t) << misc_shift;
+
+	nb_efd = rte_intr_nb_efd_get(intr_handle);
+	if (nb_efd < 0)
+		return;
+
+	intr_mask = RTE_LEN2MASK(nb_efd, uint32_t) << misc_shift;
 
 	if (dev->data->dev_conf.intr_conf.lsc)
 		intr_mask |= (1u << IGC_MSIX_OTHER_INTR_VEC);
@@ -802,6 +813,7 @@ igc_rxq_interrupt_setup(struct rte_eth_dev *dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int misc_shift = rte_intr_allow_others(intr_handle) ? 1 : 0;
+	int nb_efd;
 
 	/* won't configure msix register if no mapping is done
 	 * between intr vector and event fd
@@ -809,8 +821,11 @@ igc_rxq_interrupt_setup(struct rte_eth_dev *dev)
 	if (!rte_intr_dp_is_en(intr_handle))
 		return;
 
-	mask = RTE_LEN2MASK(rte_intr_nb_efd_get(intr_handle), uint32_t)
-		<< misc_shift;
+	nb_efd = rte_intr_nb_efd_get(intr_handle);
+	if (nb_efd < 0)
+		return;
+
+	mask = RTE_LEN2MASK(nb_efd, uint32_t) << misc_shift;
 	IGC_WRITE_REG(hw, IGC_EIMS, mask);
 }
 
@@ -1226,8 +1241,15 @@ eth_igc_dev_init(struct rte_eth_dev *dev)
 	 * has already done this work. Only check we don't need a different
 	 * RX function.
 	 */
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		dev->rx_pkt_burst = igc_recv_pkts;
+		if (dev->data->scattered_rx)
+			dev->rx_pkt_burst = igc_recv_scattered_pkts;
+
+		dev->tx_pkt_burst = igc_xmit_pkts;
+		dev->tx_pkt_prepare = eth_igc_prep_pkts;
 		return 0;
+	}
 
 	rte_eth_copy_pci_info(dev, pci_dev);
 	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
@@ -1477,6 +1499,7 @@ eth_igc_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_rx_bufsize = 256; /* See BSIZE field of RCTL register. */
 	dev_info->max_rx_pktlen = MAX_RX_JUMBO_FRAME_SIZE;
 	dev_info->max_mac_addrs = hw->mac.rar_entry_count;
+	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 	dev_info->rx_offload_capa = IGC_RX_OFFLOAD_ALL;
 	dev_info->tx_offload_capa = IGC_TX_OFFLOAD_ALL;
 	dev_info->rx_queue_offload_capa = RTE_ETH_RX_OFFLOAD_VLAN_STRIP;

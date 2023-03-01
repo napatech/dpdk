@@ -124,6 +124,12 @@
 /* empty pattern */
 extern enum rte_flow_item_type pattern_empty[];
 
+/* any pattern */
+extern enum rte_flow_item_type pattern_any[];
+
+/* raw pattern */
+extern enum rte_flow_item_type pattern_raw[];
+
 /* L2 */
 extern enum rte_flow_item_type pattern_ethertype[];
 extern enum rte_flow_item_type pattern_ethertype_vlan[];

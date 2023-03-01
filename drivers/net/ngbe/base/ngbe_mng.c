@@ -26,10 +26,8 @@ ngbe_hic_unlocked(struct ngbe_hw *hw, u32 *buffer, u32 length, u32 timeout)
 	u32 value, loop;
 	u16 i, dword_len;
 
-	DEBUGFUNC("ngbe_hic_unlocked");
-
 	if (!length || length > NGBE_PMMBX_BSIZE) {
-		DEBUGOUT("Buffer length failure buffersize=%d.\n", length);
+		DEBUGOUT("Buffer length failure buffersize=%d.", length);
 		return NGBE_ERR_HOST_INTERFACE_COMMAND;
 	}
 
@@ -59,7 +57,7 @@ ngbe_hic_unlocked(struct ngbe_hw *hw, u32 *buffer, u32 length, u32 timeout)
 		NGBE_MNGMBXCTL_FWRDY, NGBE_MNGMBXCTL_FWRDY,
 		&value, timeout, 1000);
 	if (!loop || !(value & NGBE_MNGMBXCTL_FWACK)) {
-		DEBUGOUT("Command has failed with no status valid.\n");
+		DEBUGOUT("Command has failed with no status valid.");
 		return NGBE_ERR_HOST_INTERFACE_COMMAND;
 	}
 
@@ -95,10 +93,8 @@ ngbe_host_interface_command(struct ngbe_hw *hw, u32 *buffer,
 	u32 bi;
 	u32 dword_len;
 
-	DEBUGFUNC("ngbe_host_interface_command");
-
 	if (length == 0 || length > NGBE_PMMBX_BSIZE) {
-		DEBUGOUT("Buffer length failure buffersize=%d.\n", length);
+		DEBUGOUT("Buffer length failure buffersize=%d.", length);
 		return NGBE_ERR_HOST_INTERFACE_COMMAND;
 	}
 
@@ -140,7 +136,7 @@ ngbe_host_interface_command(struct ngbe_hw *hw, u32 *buffer,
 		goto rel_out;
 
 	if (length < buf_len + hdr_size) {
-		DEBUGOUT("Buffer not large enough for reply message.\n");
+		DEBUGOUT("Buffer not large enough for reply message.");
 		err = NGBE_ERR_HOST_INTERFACE_COMMAND;
 		goto rel_out;
 	}
@@ -158,13 +154,153 @@ rel_out:
 	return err;
 }
 
+/**
+ *  ngbe_hic_sr_read - Read EEPROM word using a host interface cmd
+ *  assuming that the semaphore is already obtained.
+ *  @hw: pointer to hardware structure
+ *  @offset: offset of  word in the EEPROM to read
+ *  @data: word read from the EEPROM
+ *
+ *  Reads a 16 bit word from the EEPROM using the hostif.
+ **/
+s32 ngbe_hic_sr_read(struct ngbe_hw *hw, u32 addr, u8 *buf, int len)
+{
+	struct ngbe_hic_read_shadow_ram command;
+	u32 value;
+	int err, i = 0, j = 0;
+
+	if (len > NGBE_PMMBX_DATA_SIZE)
+		return NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+	memset(&command, 0, sizeof(command));
+	command.hdr.req.cmd = FW_READ_SHADOW_RAM_CMD;
+	command.hdr.req.buf_lenh = 0;
+	command.hdr.req.buf_lenl = FW_READ_SHADOW_RAM_LEN;
+	command.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+	command.address = cpu_to_be32(addr);
+	command.length = cpu_to_be16(len);
+
+	err = ngbe_hic_unlocked(hw, (u32 *)&command,
+			sizeof(command), NGBE_HI_COMMAND_TIMEOUT);
+	if (err)
+		return err;
+
+	while (i < (len >> 2)) {
+		value = rd32a(hw, NGBE_MNGMBX, FW_NVM_DATA_OFFSET + i);
+		((u32 *)buf)[i] = value;
+		i++;
+	}
+
+	value = rd32a(hw, NGBE_MNGMBX, FW_NVM_DATA_OFFSET + i);
+	for (i <<= 2; i < len; i++)
+		((u8 *)buf)[i] = ((u8 *)&value)[j++];
+
+	return 0;
+}
+
+/**
+ *  ngbe_hic_sr_write - Write EEPROM word using hostif
+ *  @hw: pointer to hardware structure
+ *  @offset: offset of  word in the EEPROM to write
+ *  @data: word write to the EEPROM
+ *
+ *  Write a 16 bit word to the EEPROM using the hostif.
+ **/
+s32 ngbe_hic_sr_write(struct ngbe_hw *hw, u32 addr, u8 *buf, int len)
+{
+	struct ngbe_hic_write_shadow_ram command;
+	u32 value;
+	int err = 0, i = 0, j = 0;
+
+	if (len > NGBE_PMMBX_DATA_SIZE)
+		return NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+	memset(&command, 0, sizeof(command));
+	command.hdr.req.cmd = FW_WRITE_SHADOW_RAM_CMD;
+	command.hdr.req.buf_lenh = 0;
+	command.hdr.req.buf_lenl = FW_WRITE_SHADOW_RAM_LEN;
+	command.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+	command.address = cpu_to_be32(addr);
+	command.length = cpu_to_be16(len);
+
+	while (i < (len >> 2)) {
+		value = ((u32 *)buf)[i];
+		wr32a(hw, NGBE_MNGMBX, FW_NVM_DATA_OFFSET + i, value);
+		i++;
+	}
+
+	for (i <<= 2; i < len; i++)
+		((u8 *)&value)[j++] = ((u8 *)buf)[i];
+
+	wr32a(hw, NGBE_MNGMBX, FW_NVM_DATA_OFFSET + (i >> 2), value);
+
+	UNREFERENCED_PARAMETER(&command);
+
+	return err;
+}
+
+s32 ngbe_hic_pcie_read(struct ngbe_hw *hw, u16 addr, u32 *buf, int len)
+{
+	struct ngbe_hic_read_pcie command;
+	u32 value = 0;
+	int err, i = 0;
+
+	if (len > NGBE_PMMBX_DATA_SIZE)
+		return NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+	memset(&command, 0, sizeof(command));
+	command.hdr.cmd = FW_PCIE_READ_CMD;
+	command.hdr.buf_len = sizeof(command) - sizeof(command.hdr);
+	command.hdr.checksum = FW_DEFAULT_CHECKSUM;
+	command.lan_id = hw->bus.lan_id;
+	command.addr = addr;
+
+	err = ngbe_host_interface_command(hw, (u32 *)&command,
+			sizeof(command), NGBE_HI_COMMAND_TIMEOUT, false);
+	if (err)
+		return err;
+
+	while (i < (len >> 2)) {
+		value = rd32a(hw, NGBE_MNGMBX, FW_PCIE_BUSMASTER_OFFSET + i);
+		((u32 *)buf)[i] = value;
+		i++;
+	}
+
+	return 0;
+}
+
+s32 ngbe_hic_pcie_write(struct ngbe_hw *hw, u16 addr, u32 *buf, int len)
+{
+	struct ngbe_hic_write_pcie command;
+	u32 value = 0;
+	int err, i = 0;
+
+	while (i < (len >> 2)) {
+		value = ((u32 *)buf)[i];
+		i++;
+	}
+
+	memset(&command, 0, sizeof(command));
+	command.hdr.cmd = FW_PCIE_WRITE_CMD;
+	command.hdr.buf_len = sizeof(command) - sizeof(command.hdr);
+	command.hdr.checksum = FW_DEFAULT_CHECKSUM;
+	command.lan_id = hw->bus.lan_id;
+	command.addr = addr;
+	command.data = value;
+
+	err = ngbe_host_interface_command(hw, (u32 *)&command,
+			sizeof(command), NGBE_HI_COMMAND_TIMEOUT, false);
+	if (err)
+		return err;
+
+	return 0;
+}
+
 s32 ngbe_hic_check_cap(struct ngbe_hw *hw)
 {
 	struct ngbe_hic_read_shadow_ram command;
 	s32 err;
 	int i;
-
-	DEBUGFUNC("\n");
 
 	command.hdr.req.cmd = FW_EEPROM_CHECK_STATUS;
 	command.hdr.req.buf_lenh = 0;
@@ -193,6 +329,53 @@ s32 ngbe_hic_check_cap(struct ngbe_hw *hw)
 
 	if (!err && command.address != FW_CHECKSUM_CAP_ST_PASS)
 		err = NGBE_ERR_EEPROM_CHECKSUM;
+
+	return err;
+}
+
+s32 ngbe_phy_led_oem_chk(struct ngbe_hw *hw, u32 *data)
+{
+	struct ngbe_hic_read_shadow_ram command;
+	s32 err;
+	int i;
+
+	command.hdr.req.cmd = FW_PHY_LED_CONF;
+	command.hdr.req.buf_lenh = 0;
+	command.hdr.req.buf_lenl = 0;
+	command.hdr.req.checksum = FW_DEFAULT_CHECKSUM;
+
+	/* convert offset from words to bytes */
+	command.address = 0;
+	/* one word */
+	command.length = 0;
+
+	for (i = 0; i <= FW_CEM_MAX_RETRIES; i++) {
+		err = ngbe_host_interface_command(hw, (u32 *)&command,
+				sizeof(command),
+				NGBE_HI_COMMAND_TIMEOUT, true);
+		if (err)
+			continue;
+
+		command.hdr.rsp.ret_status &= 0x1F;
+		if (command.hdr.rsp.ret_status !=
+			FW_CEM_RESP_STATUS_SUCCESS)
+			err = NGBE_ERR_HOST_INTERFACE_COMMAND;
+
+		break;
+	}
+
+	if (err)
+		return err;
+
+	if (command.address == FW_CHECKSUM_CAP_ST_PASS) {
+		*data = ((u32 *)&command)[2];
+		err = 0;
+	} else if (command.address == FW_CHECKSUM_CAP_ST_FAIL) {
+		*data = FW_CHECKSUM_CAP_ST_FAIL;
+		err = -1;
+	} else {
+		err = NGBE_ERR_EEPROM_CHECKSUM;
+	}
 
 	return err;
 }

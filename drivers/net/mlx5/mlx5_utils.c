@@ -340,6 +340,8 @@ check_again:
 	/* Enqueue half of the index to global. */
 	ts_idx = mlx5_trunk_idx_offset_get(pool, trunk_idx) + 1;
 	fetch_size = trunk->free >> 1;
+	if (fetch_size > pool->cfg.per_core_cache)
+		fetch_size = trunk->free - pool->cfg.per_core_cache;
 	for (i = 0; i < fetch_size; i++)
 		lc->idx[i] = ts_idx + i;
 	lc->len = fetch_size;
@@ -477,7 +479,7 @@ _mlx5_ipool_free_cache(struct mlx5_indexed_pool *pool, int cidx, uint32_t idx)
 	mlx5_ipool_lock(pool);
 	gc = pool->gc;
 	if (ilc->lc != gc) {
-		if (!(--ilc->lc->ref_cnt))
+		if (ilc->lc && !(--ilc->lc->ref_cnt))
 			olc = ilc->lc;
 		gc->ref_cnt++;
 		ilc->lc = gc;
@@ -1181,47 +1183,6 @@ mlx5_l3t_set_entry(struct mlx5_l3t_tbl *tbl, uint32_t idx,
 
 	rte_spinlock_lock(&tbl->sl);
 	ret = __l3t_set_entry(tbl, idx, data);
-	rte_spinlock_unlock(&tbl->sl);
-	return ret;
-}
-
-int32_t
-mlx5_l3t_prepare_entry(struct mlx5_l3t_tbl *tbl, uint32_t idx,
-		       union mlx5_l3t_data *data,
-		       mlx5_l3t_alloc_callback_fn cb, void *ctx)
-{
-	int32_t ret;
-
-	rte_spinlock_lock(&tbl->sl);
-	/* Check if entry data is ready. */
-	ret = __l3t_get_entry(tbl, idx, data);
-	if (!ret) {
-		switch (tbl->type) {
-		case MLX5_L3T_TYPE_WORD:
-			if (data->word)
-				goto out;
-			break;
-		case MLX5_L3T_TYPE_DWORD:
-			if (data->dword)
-				goto out;
-			break;
-		case MLX5_L3T_TYPE_QWORD:
-			if (data->qword)
-				goto out;
-			break;
-		default:
-			if (data->ptr)
-				goto out;
-			break;
-		}
-	}
-	/* Entry data is not ready, use user callback to create it. */
-	ret = cb(ctx, data);
-	if (ret)
-		goto out;
-	/* Save the new allocated data to entry. */
-	ret = __l3t_set_entry(tbl, idx, data);
-out:
 	rte_spinlock_unlock(&tbl->sl);
 	return ret;
 }

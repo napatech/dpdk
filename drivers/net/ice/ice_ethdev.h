@@ -5,16 +5,17 @@
 #ifndef _ICE_ETHDEV_H_
 #define _ICE_ETHDEV_H_
 
+#include <rte_compat.h>
 #include <rte_kvargs.h>
 #include <rte_time.h>
 
 #include <ethdev_driver.h>
+#include <rte_tm_driver.h>
 
 #include "base/ice_common.h"
 #include "base/ice_adminq_cmd.h"
 #include "base/ice_flow.h"
-
-#define ICE_VLAN_TAG_SIZE        4
+#include "base/ice_sched.h"
 
 #define ICE_ADMINQ_LEN               32
 #define ICE_SBIOQ_LEN                32
@@ -23,8 +24,8 @@
 #define ICE_ADMINQ_BUF_SZ            4096
 #define ICE_SBIOQ_BUF_SZ             4096
 #define ICE_MAILBOXQ_BUF_SZ          4096
-/* Number of queues per TC should be one of 1, 2, 4, 8, 16, 32, 64 */
-#define ICE_MAX_Q_PER_TC         64
+/* Number of queues per TC should be one of 1, 2, 4, 8, 16, 32, 64, 128, 256 */
+#define ICE_MAX_Q_PER_TC         256
 #define ICE_NUM_DESC_DEFAULT     512
 #define ICE_BUF_SIZE_MIN         1024
 #define ICE_FRAME_SIZE_MAX       9728
@@ -136,7 +137,7 @@
  * Considering QinQ packet, the VLAN tag needs to be counted twice.
  */
 #define ICE_ETH_OVERHEAD \
-	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + ICE_VLAN_TAG_SIZE * 2)
+	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + RTE_VLAN_HLEN * 2)
 #define ICE_ETH_MAX_LEN (RTE_ETHER_MTU + ICE_ETH_OVERHEAD)
 
 #define ICE_RXTX_BYTES_HIGH(bytes) ((bytes) & ~ICE_40_BIT_MASK)
@@ -144,6 +145,31 @@
 
 /* Max number of flexible descriptor rxdid */
 #define ICE_FLEX_DESC_RXDID_MAX_NUM 64
+
+#define ICE_I2C_EEPROM_DEV_ADDR		0xA0
+#define ICE_I2C_EEPROM_DEV_ADDR2	0xA2
+#define ICE_MODULE_TYPE_SFP		0x03
+#define ICE_MODULE_TYPE_QSFP_PLUS	0x0D
+#define ICE_MODULE_TYPE_QSFP28		0x11
+#define ICE_MODULE_SFF_ADDR_MODE	0x04
+#define ICE_MODULE_SFF_DIAG_CAPAB	0x40
+#define ICE_MODULE_REVISION_ADDR	0x01
+#define ICE_MODULE_SFF_8472_COMP	0x5E
+#define ICE_MODULE_SFF_8472_SWAP	0x5C
+#define ICE_MODULE_QSFP_MAX_LEN		640
+
+/* EEPROM Standards for plug in modules */
+#define ICE_MODULE_SFF_8079		0x1
+#define ICE_MODULE_SFF_8079_LEN		256
+#define ICE_MODULE_SFF_8472		0x2
+#define ICE_MODULE_SFF_8472_LEN		512
+#define ICE_MODULE_SFF_8636		0x3
+#define ICE_MODULE_SFF_8636_LEN		256
+#define ICE_MODULE_SFF_8636_MAX_LEN     640
+#define ICE_MODULE_SFF_8436		0x4
+#define ICE_MODULE_SFF_8436_LEN		256
+#define ICE_MODULE_SFF_8436_MAX_LEN     640
+
 
 /* Per-channel register definitions */
 #define GLTSYN_AUX_OUT(_chan, _idx)     (GLTSYN_AUX_OUT_0(_idx) + ((_chan) * 8))
@@ -244,7 +270,7 @@ struct ice_vsi {
 	 * needs to add, HW needs to know the layout that VSIs are organized.
 	 * Besides that, VSI isan element and can't switch packets, which needs
 	 * to add new component VEB to perform switching. So, a new VSI needs
-	 * to specify the the uplink VSI (Parent VSI) before created. The
+	 * to specify the uplink VSI (Parent VSI) before created. The
 	 * uplink VSI will check whether it had a VEB to switch packets. If no,
 	 * it will try to create one. Then, uplink VSI will move the new VSI
 	 * into its' sib_vsi_list to manage all the downlink VSI.
@@ -318,6 +344,11 @@ struct ice_fdir_filter_conf {
 	uint64_t input_set_o; /* used for non-tunnel or tunnel outer fields */
 	uint64_t input_set_i; /* only for tunnel inner fields */
 	uint32_t mark_flag;
+
+	struct ice_parser_profile *prof;
+	bool parser_ena;
+	u8 *pkt_buf;
+	u8 pkt_len;
 };
 
 #define ICE_MAX_FDIR_FILTER_NUM		(1024 * 16)
@@ -425,6 +456,55 @@ struct ice_acl_info {
 	uint64_t hw_entry_id[MAX_ACL_NORMAL_ENTRIES];
 };
 
+TAILQ_HEAD(ice_shaper_profile_list, ice_tm_shaper_profile);
+TAILQ_HEAD(ice_tm_node_list, ice_tm_node);
+
+struct ice_tm_shaper_profile {
+	TAILQ_ENTRY(ice_tm_shaper_profile) node;
+	uint32_t shaper_profile_id;
+	uint32_t reference_count;
+	struct rte_tm_shaper_params profile;
+};
+
+/* Struct to store Traffic Manager node configuration. */
+struct ice_tm_node {
+	TAILQ_ENTRY(ice_tm_node) node;
+	uint32_t id;
+	uint32_t tc;
+	uint32_t priority;
+	uint32_t weight;
+	uint32_t reference_count;
+	struct ice_tm_node *parent;
+	struct ice_tm_node **children;
+	struct ice_tm_shaper_profile *shaper_profile;
+	struct rte_tm_node_params params;
+};
+
+/* node type of Traffic Manager */
+enum ice_tm_node_type {
+	ICE_TM_NODE_TYPE_PORT,
+	ICE_TM_NODE_TYPE_TC,
+	ICE_TM_NODE_TYPE_VSI,
+	ICE_TM_NODE_TYPE_QGROUP,
+	ICE_TM_NODE_TYPE_QUEUE,
+	ICE_TM_NODE_TYPE_MAX,
+};
+
+/* Struct to store all the Traffic Manager configuration. */
+struct ice_tm_conf {
+	struct ice_shaper_profile_list shaper_profile_list;
+	struct ice_tm_node *root; /* root node - port */
+	struct ice_tm_node_list tc_list; /* node list for all the TCs */
+	struct ice_tm_node_list vsi_list; /* node list for all the VSIs */
+	struct ice_tm_node_list qgroup_list; /* node list for all the queue groups */
+	struct ice_tm_node_list queue_list; /* node list for all the queues */
+	uint32_t nb_tc_node;
+	uint32_t nb_vsi_node;
+	uint32_t nb_qgroup_node;
+	uint32_t nb_queue_node;
+	bool committed;
+};
+
 struct ice_pf {
 	struct ice_adapter *adapter; /* The adapter this PF associate to */
 	struct ice_vsi *main_vsi; /* pointer to main VSI structure */
@@ -469,6 +549,7 @@ struct ice_pf {
 	uint64_t old_tx_bytes;
 	uint64_t supported_rxdid; /* bitmap for supported RXDID */
 	uint64_t rss_hf;
+	struct ice_tm_conf tm_conf;
 };
 
 #define ICE_MAX_QUEUE_NUM  2048
@@ -485,6 +566,26 @@ struct ice_devargs {
 	uint8_t proto_xtr[ICE_MAX_QUEUE_NUM];
 	uint8_t pin_idx;
 	uint8_t pps_out_ena;
+	int xtr_field_offs;
+	uint8_t xtr_flag_offs[PROTO_XTR_MAX];
+	/* Name of the field. */
+	char xtr_field_name[RTE_MBUF_DYN_NAMESIZE];
+};
+
+/**
+ * Structure to store fdir fv entry.
+ */
+struct ice_fdir_prof_info {
+	struct ice_parser_profile prof;
+	u64 fdir_actived_cnt;
+};
+
+/**
+ * Structure to store rss fv entry.
+ */
+struct ice_rss_prof_info {
+	struct ice_parser_profile prof;
+	bool symm;
 };
 
 /**
@@ -509,11 +610,20 @@ struct ice_adapter {
 	struct rte_timecounter rx_tstamp_tc;
 	struct rte_timecounter tx_tstamp_tc;
 	bool ptp_ena;
+	uint64_t time_hw;
+	struct ice_fdir_prof_info fdir_prof_info[ICE_MAX_PTGS];
+	struct ice_rss_prof_info rss_prof_info[ICE_MAX_PTGS];
+	/* True if DCF state of the associated PF is on */
+	bool dcf_state_on;
+	/* Set bit if the engine is disabled */
+	unsigned long disabled_engine_mask;
+	struct ice_parser *psr;
 #ifdef RTE_ARCH_X86
 	bool rx_use_avx2;
 	bool rx_use_avx512;
 	bool tx_use_avx2;
 	bool tx_use_avx512;
+	bool rx_vec_offload_support;
 #endif
 };
 
@@ -557,6 +667,7 @@ struct ice_vsi_vlan_pvid_info {
 #define ICE_PF_TO_ETH_DEV(pf) \
 	(((struct ice_pf *)pf)->adapter->eth_dev)
 
+bool is_ice_supported(struct rte_eth_dev *dev);
 int
 ice_load_pkg(struct ice_adapter *adapter, bool use_dsn, uint64_t dsn);
 struct ice_vsi *
@@ -570,6 +681,9 @@ int ice_add_rss_cfg_wrap(struct ice_pf *pf, uint16_t vsi_id,
 			 struct ice_rss_hash_cfg *cfg);
 int ice_rem_rss_cfg_wrap(struct ice_pf *pf, uint16_t vsi_id,
 			 struct ice_rss_hash_cfg *cfg);
+void ice_tm_conf_init(struct rte_eth_dev *dev);
+void ice_tm_conf_uninit(struct rte_eth_dev *dev);
+extern const struct rte_tm_ops ice_tm_ops;
 
 static inline int
 ice_align_floor(int n)
@@ -618,4 +732,9 @@ ice_align_floor(int n)
 	((phy_type) & ICE_PHY_TYPE_HIGH_100G_AUI2_AOC_ACC) || \
 	((phy_type) & ICE_PHY_TYPE_HIGH_100G_AUI2))
 
+__rte_experimental
+int rte_pmd_ice_dump_package(uint16_t port, uint8_t **buff, uint32_t *size);
+
+__rte_experimental
+int rte_pmd_ice_dump_switch(uint16_t port, uint8_t **buff, uint32_t *size);
 #endif /* _ICE_ETHDEV_H_ */

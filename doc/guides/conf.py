@@ -3,7 +3,7 @@
 # Copyright(c) 2010-2015 Intel Corporation
 
 from docutils import nodes
-from distutils.version import LooseVersion
+from packaging.version import Version
 from sphinx import __version__ as sphinx_version
 from os import listdir
 from os import environ
@@ -28,7 +28,7 @@ stop_on_error = ('-W' in argv)
 
 project = 'Data Plane Development Kit'
 html_logo = '../logo/DPDK_logo_vertical_rev_small.png'
-if LooseVersion(sphinx_version) >= LooseVersion('3.5'):
+if Version(sphinx_version) >= Version('3.5'):
     html_permalinks = False
 else:
     html_add_permalinks = ""
@@ -152,6 +152,9 @@ def generate_overview_table(output_filename, table_id, section, table_name, titl
         name = ini_filename[:-4]
         name = name.replace('_vf', 'vf')
         pmd_names.append(name)
+    if not pmd_names:
+        # Add an empty column if table is empty (required by RST syntax)
+        pmd_names.append(' ')
 
     # Pad the table header names.
     max_header_len = len(max(pmd_names, key=len))
@@ -368,6 +371,11 @@ def setup(app):
                             'Asymmetric',
                             'Asymmetric algorithms in crypto drivers',
                             'Asymmetric algorithm')
+    table_file = dirname(__file__) + '/cryptodevs/overview_os_table.txt'
+    generate_overview_table(table_file, 6,
+                            'OS',
+                            'Operating systems support for crypto drivers',
+                            'Operating system')
     table_file = dirname(__file__) + '/compressdevs/overview_feature_table.txt'
     generate_overview_table(table_file, 1,
                             'Features',
@@ -388,8 +396,38 @@ def setup(app):
                             'Features',
                             'Features availability in bbdev drivers',
                             'Feature')
+    table_file = dirname(__file__) + '/gpus/overview_feature_table.txt'
+    generate_overview_table(table_file, 1,
+                            'Features',
+                            'Features availability in GPU drivers',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_feature_table.txt'
+    generate_overview_table(table_file, 1,
+                            'Scheduling Features',
+                            'Features availability in eventdev drivers',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_rx_adptr_feature_table.txt'
+    generate_overview_table(table_file, 2,
+                            'Eth Rx adapter Features',
+                            'Features availability for Ethdev Rx adapters',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_tx_adptr_feature_table.txt'
+    generate_overview_table(table_file, 3,
+                            'Eth Tx adapter Features',
+                            'Features availability for Ethdev Tx adapters',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_crypto_adptr_feature_table.txt'
+    generate_overview_table(table_file, 4,
+                            'Crypto adapter Features',
+                            'Features availability for Crypto adapters',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_timer_adptr_feature_table.txt'
+    generate_overview_table(table_file, 5,
+                            'Timer adapter Features',
+                            'Features availability for Timer adapters',
+                            'Feature')
 
-    if LooseVersion(sphinx_version) < LooseVersion('1.3.1'):
+    if Version(sphinx_version) < Version('1.3.1'):
         print('Upgrade sphinx to version >= 1.3.1 for '
               'improved Figure/Table number handling.',
               file=stderr)

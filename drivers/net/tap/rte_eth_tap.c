@@ -10,7 +10,7 @@
 #include <ethdev_driver.h>
 #include <ethdev_vdev.h>
 #include <rte_malloc.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_net.h>
 #include <rte_debug.h>
@@ -30,6 +30,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -54,6 +55,7 @@
 #define ETH_TAP_REMOTE_ARG      "remote"
 #define ETH_TAP_MAC_ARG         "mac"
 #define ETH_TAP_MAC_FIXED       "fixed"
+#define ETH_TAP_PERSIST_ARG     "persist"
 
 #define ETH_TAP_USR_MAC_FMT     "xx:xx:xx:xx:xx:xx"
 #define ETH_TAP_CMP_MAC_FMT     "0123456789ABCDEFabcdef"
@@ -67,6 +69,7 @@
 
 /* IPC key for queue fds sync */
 #define TAP_MP_KEY "tap_mp_sync_queues"
+#define TAP_MP_REQ_START_RXTX "tap_mp_req_start_rxtx"
 
 #define TAP_IOV_DEFAULT_MAX 1024
 
@@ -91,6 +94,7 @@ static const char *valid_arguments[] = {
 	ETH_TAP_IFACE_ARG,
 	ETH_TAP_REMOTE_ARG,
 	ETH_TAP_MAC_ARG,
+	ETH_TAP_PERSIST_ARG,
 	NULL
 };
 
@@ -139,11 +143,14 @@ static int tap_intr_handle_set(struct rte_eth_dev *dev, int set);
  * @param[in] is_keepalive
  *   Keepalive flag
  *
+ * @param[in] persistent
+ *   Mark device as persistent
+ *
  * @return
  *   -1 on failure, fd on success
  */
 static int
-tun_alloc(struct pmd_internals *pmd, int is_keepalive)
+tun_alloc(struct pmd_internals *pmd, int is_keepalive, int persistent)
 {
 	struct ifreq ifr;
 #ifdef IFF_MULTI_QUEUE
@@ -189,6 +196,14 @@ tun_alloc(struct pmd_internals *pmd, int is_keepalive)
 	/* Set the TUN/TAP configuration and set the name if needed */
 	if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
 		TAP_LOG(WARNING, "Unable to set TUNSETIFF for %s: %s",
+			ifr.ifr_name, strerror(errno));
+		goto error;
+	}
+
+	/* Keep the device after application exit */
+	if (persistent && ioctl(fd, TUNSETPERSIST, 1) < 0) {
+		TAP_LOG(WARNING,
+			"Unable to set persist %s: %s",
 			ifr.ifr_name, strerror(errno));
 		goto error;
 	}
@@ -525,7 +540,7 @@ tap_tx_l4_cksum(uint16_t *l4_cksum, uint16_t l4_phdr_cksum,
 	}
 }
 
-/* Accumaulate L4 raw checksums */
+/* Accumulate L4 raw checksums */
 static void
 tap_tx_l4_add_rcksum(char *l4_data, unsigned int l4_len, uint16_t *l4_cksum,
 			uint32_t *l4_raw_cksum)
@@ -881,9 +896,47 @@ tap_link_set_up(struct rte_eth_dev *dev)
 }
 
 static int
+tap_mp_req_on_rxtx(struct rte_eth_dev *dev)
+{
+	struct rte_mp_msg msg;
+	struct ipc_queues *request_param = (struct ipc_queues *)msg.param;
+	int err;
+	int fd_iterator = 0;
+	struct pmd_process_private *process_private = dev->process_private;
+	int i;
+
+	memset(&msg, 0, sizeof(msg));
+	strlcpy(msg.name, TAP_MP_REQ_START_RXTX, sizeof(msg.name));
+	strlcpy(request_param->port_name, dev->data->name, sizeof(request_param->port_name));
+	msg.len_param = sizeof(*request_param);
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		msg.fds[fd_iterator++] = process_private->txq_fds[i];
+		msg.num_fds++;
+		request_param->txq_count++;
+	}
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		msg.fds[fd_iterator++] = process_private->rxq_fds[i];
+		msg.num_fds++;
+		request_param->rxq_count++;
+	}
+
+	err = rte_mp_sendmsg(&msg);
+	if (err < 0) {
+		TAP_LOG(ERR, "Failed to send start req to secondary %d",
+			rte_errno);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
 tap_dev_start(struct rte_eth_dev *dev)
 {
 	int err, i;
+
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		tap_mp_req_on_rxtx(dev);
 
 	err = tap_intr_handle_set(dev, 1);
 	if (err)
@@ -901,11 +954,40 @@ tap_dev_start(struct rte_eth_dev *dev)
 	return err;
 }
 
+static int
+tap_mp_req_start_rxtx(const struct rte_mp_msg *request, __rte_unused const void *peer)
+{
+	struct rte_eth_dev *dev;
+	const struct ipc_queues *request_param =
+		(const struct ipc_queues *)request->param;
+	int fd_iterator;
+	int queue;
+	struct pmd_process_private *process_private;
+
+	dev = rte_eth_dev_get_by_name(request_param->port_name);
+	if (!dev) {
+		TAP_LOG(ERR, "Failed to get dev for %s",
+			request_param->port_name);
+		return -1;
+	}
+	process_private = dev->process_private;
+	fd_iterator = 0;
+	TAP_LOG(DEBUG, "tap_attach rx_q:%d tx_q:%d\n", request_param->rxq_count,
+		request_param->txq_count);
+	for (queue = 0; queue < request_param->txq_count; queue++)
+		process_private->txq_fds[queue] = request->fds[fd_iterator++];
+	for (queue = 0; queue < request_param->rxq_count; queue++)
+		process_private->rxq_fds[queue] = request->fds[fd_iterator++];
+
+	return 0;
+}
+
 /* This function gets called when the current port gets stopped.
  */
 static int
 tap_dev_stop(struct rte_eth_dev *dev)
 {
+	struct pmd_internals *pmd = dev->data->dev_private;
 	int i;
 
 	for (i = 0; i < dev->data->nb_tx_queues; i++)
@@ -914,7 +996,8 @@ tap_dev_stop(struct rte_eth_dev *dev)
 		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	tap_intr_handle_set(dev, 0);
-	tap_link_set_down(dev);
+	if (!pmd->persist)
+		tap_link_set_down(dev);
 
 	return 0;
 }
@@ -938,6 +1021,14 @@ tap_dev_configure(struct rte_eth_dev *dev)
 			dev->device->name,
 			dev->data->nb_tx_queues,
 			RTE_PMD_TAP_MAX_QUEUES);
+		return -1;
+	}
+	if (dev->data->nb_rx_queues != dev->data->nb_tx_queues) {
+		TAP_LOG(ERR,
+			"%s: number of rx queues %d must be equal to number of tx queues %d",
+			dev->device->name,
+			dev->data->nb_rx_queues,
+			dev->data->nb_tx_queues);
 		return -1;
 	}
 
@@ -1006,6 +1097,7 @@ tap_dev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	 * functions together and not in partial combinations
 	 */
 	dev_info->flow_type_rss_offloads = ~TAP_RSS_HF_MASK;
+	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	return 0;
 }
@@ -1083,10 +1175,14 @@ tap_dev_close(struct rte_eth_dev *dev)
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		rte_free(dev->process_private);
+		if (tap_devices_count == 1)
+			rte_mp_action_unregister(TAP_MP_REQ_START_RXTX);
+		tap_devices_count--;
 		return 0;
 	}
 
-	tap_link_set_down(dev);
+	if (!internals->persist)
+		tap_link_set_down(dev);
 	if (internals->nlsk_fd != -1) {
 		tap_flow_flush(dev, NULL);
 		tap_flow_implicit_flush(internals, NULL);
@@ -1133,6 +1229,8 @@ tap_dev_close(struct rte_eth_dev *dev)
 	internals = dev->data->dev_private;
 	TAP_LOG(DEBUG, "Closing %s Ethernet device on numa %u",
 		tuntap_types[internals->type], rte_socket_id());
+
+	rte_intr_instance_free(internals->intr_handle);
 
 	if (internals->ioctl_sock != -1) {
 		close(internals->ioctl_sock);
@@ -1472,7 +1570,7 @@ tap_setup_queue(struct rte_eth_dev *dev,
 			pmd->name, *other_fd, dir, qid, *fd);
 	} else {
 		/* Both RX and TX fds do not exist (equal -1). Create fd */
-		*fd = tun_alloc(pmd, 0);
+		*fd = tun_alloc(pmd, 0, 0);
 		if (*fd < 0) {
 			*fd = -1; /* restore original value */
 			TAP_LOG(ERR, "%s: tun_alloc() failed.", pmd->name);
@@ -1663,8 +1761,9 @@ tap_dev_intr_handler(void *cb_arg)
 	struct rte_eth_dev *dev = cb_arg;
 	struct pmd_internals *pmd = dev->data->dev_private;
 
-	tap_nl_recv(rte_intr_fd_get(pmd->intr_handle),
-		    tap_nl_msg_handler, dev);
+	if (rte_intr_fd_get(pmd->intr_handle) >= 0)
+		tap_nl_recv(rte_intr_fd_get(pmd->intr_handle),
+			    tap_nl_msg_handler, dev);
 }
 
 static int
@@ -1703,8 +1802,10 @@ clean:
 		}
 	} while (true);
 
-	tap_nl_final(rte_intr_fd_get(pmd->intr_handle));
-	rte_intr_fd_set(pmd->intr_handle, -1);
+	if (rte_intr_fd_get(pmd->intr_handle) >= 0) {
+		tap_nl_final(rte_intr_fd_get(pmd->intr_handle));
+		rte_intr_fd_set(pmd->intr_handle, -1);
+	}
 
 	return 0;
 }
@@ -1874,7 +1975,7 @@ static const struct eth_dev_ops ops = {
 static int
 eth_dev_tap_create(struct rte_vdev_device *vdev, const char *tap_name,
 		   char *remote_iface, struct rte_ether_addr *mac_addr,
-		   enum rte_tuntap_type type)
+		   enum rte_tuntap_type type, int persist)
 {
 	int numa_node = rte_socket_id();
 	struct rte_eth_dev *dev;
@@ -1966,7 +2067,7 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, const char *tap_name,
 	 * This keep-alive file descriptor will guarantee that the TUN device
 	 * exists even when all of its queues are closed
 	 */
-	pmd->ka_fd = tun_alloc(pmd, 1);
+	pmd->ka_fd = tun_alloc(pmd, 1, persist);
 	if (pmd->ka_fd == -1) {
 		TAP_LOG(ERR, "Unable to create %s interface", tuntap_name);
 		goto error_exit;
@@ -1985,6 +2086,9 @@ eth_dev_tap_create(struct rte_vdev_device *vdev, const char *tap_name,
 		if (tap_ioctl(pmd, SIOCSIFHWADDR, &ifr, 0, LOCAL_ONLY) < 0)
 			goto error_exit;
 	}
+
+	/* Make network device persist after application exit */
+	pmd->persist = persist;
 
 	/*
 	 * Set up everything related to rte_flow:
@@ -2095,8 +2199,8 @@ error_exit:
 		close(pmd->ioctl_sock);
 	/* mac_addrs must not be freed alone because part of dev_private */
 	dev->data->mac_addrs = NULL;
-	rte_eth_dev_release_port(dev);
 	rte_intr_instance_free(pmd->intr_handle);
+	rte_eth_dev_release_port(dev);
 
 error_exit_nodev:
 	TAP_LOG(ERR, "%s Unable to initialize %s",
@@ -2276,7 +2380,7 @@ rte_pmd_tun_probe(struct rte_vdev_device *dev)
 	TAP_LOG(DEBUG, "Initializing pmd_tun for %s", name);
 
 	ret = eth_dev_tap_create(dev, tun_name, remote_iface, 0,
-				 ETH_TUNTAP_TYPE_TUN);
+				 ETH_TUNTAP_TYPE_TUN, 0);
 
 leave:
 	if (ret == -1) {
@@ -2346,19 +2450,16 @@ tap_mp_sync_queues(const struct rte_mp_msg *request, const void *peer)
 		(const struct ipc_queues *)request->param;
 	struct ipc_queues *reply_param =
 		(struct ipc_queues *)reply.param;
-	uint16_t port_id;
 	int queue;
-	int ret;
 
 	/* Get requested port */
 	TAP_LOG(DEBUG, "Received IPC request for %s", request_param->port_name);
-	ret = rte_eth_dev_get_port_by_name(request_param->port_name, &port_id);
-	if (ret) {
+	dev = rte_eth_dev_get_by_name(request_param->port_name);
+	if (!dev) {
 		TAP_LOG(ERR, "Failed to get port id for %s",
 			request_param->port_name);
 		return -1;
 	}
-	dev = &rte_eth_devices[port_id];
 	process_private = dev->process_private;
 
 	/* Fill file descriptors for all queues */
@@ -2409,6 +2510,7 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 	struct rte_ether_addr user_mac = { .addr_bytes = {0} };
 	struct rte_eth_dev *eth_dev;
 	int tap_devices_count_increased = 0;
+	int persist = 0;
 
 	name = rte_vdev_device_name(dev);
 	params = rte_vdev_device_args(dev);
@@ -2441,6 +2543,16 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 		ret = tap_mp_attach_queues(name, eth_dev);
 		if (ret != 0)
 			return -1;
+
+		if (!tap_devices_count) {
+			ret = rte_mp_action_register(TAP_MP_REQ_START_RXTX, tap_mp_req_start_rxtx);
+			if (ret < 0 && rte_errno != ENOTSUP) {
+				TAP_LOG(ERR, "tap: Failed to register IPC callback: %s",
+					strerror(rte_errno));
+				return -1;
+			}
+		}
+		tap_devices_count++;
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
@@ -2482,6 +2594,9 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 				if (ret == -1)
 					goto leave;
 			}
+
+			if (rte_kvargs_count(kvlist, ETH_TAP_PERSIST_ARG) == 1)
+				persist = 1;
 		}
 	}
 	pmd_link.link_speed = speed;
@@ -2500,7 +2615,7 @@ rte_pmd_tap_probe(struct rte_vdev_device *dev)
 	tap_devices_count++;
 	tap_devices_count_increased = 1;
 	ret = eth_dev_tap_create(dev, tap_name, remote_iface, &user_mac,
-		ETH_TUNTAP_TYPE_TAP);
+				 ETH_TUNTAP_TYPE_TAP, persist);
 
 leave:
 	if (ret == -1) {

@@ -2,10 +2,11 @@
  * Copyright(c) 2017 Intel Corporation
  */
 
+#include <stdlib.h>
 #include <string.h>
 
 #include <rte_common.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_ring.h>
 #include <rte_kvargs.h>
@@ -31,7 +32,7 @@ struct bbdev_null_params {
 	uint16_t queues_num;  /*< Null BBDEV queues number */
 };
 
-/* Accecptable params for null BBDEV devices */
+/* Acceptable params for null BBDEV devices */
 #define BBDEV_NULL_MAX_NB_QUEUES_ARG  "max_nb_queues"
 #define BBDEV_NULL_SOCKET_ID_ARG      "socket_id"
 
@@ -82,6 +83,7 @@ info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 	 * here for code completeness.
 	 */
 	dev_info->data_endianness = RTE_LITTLE_ENDIAN;
+	dev_info->device_status = RTE_BBDEV_DEV_NOT_SUPPORTED;
 
 	rte_bbdev_log_debug("got device info from %u", dev->data->dev_id);
 }
@@ -251,8 +253,7 @@ parse_bbdev_null_params(struct bbdev_null_params *params,
 	}
 
 exit:
-	if (kvlist)
-		rte_kvargs_free(kvlist);
+	rte_kvargs_free(kvlist);
 	return ret;
 }
 

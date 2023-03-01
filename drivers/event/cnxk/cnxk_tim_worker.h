@@ -131,7 +131,8 @@ cnxk_tim_get_target_bucket(struct cnxk_tim_ring *const tim_ring,
 			   const uint32_t rel_bkt, struct cnxk_tim_bkt **bkt,
 			   struct cnxk_tim_bkt **mirr_bkt)
 {
-	const uint64_t bkt_cyc = cnxk_tim_cntvct() - tim_ring->ring_start_cyc;
+	const uint64_t bkt_cyc =
+		tim_ring->tick_fn(tim_ring->tbase) - tim_ring->ring_start_cyc;
 	uint64_t bucket =
 		rte_reciprocal_divide_u64(bkt_cyc, &tim_ring->fast_div) +
 		rel_bkt;
@@ -216,6 +217,7 @@ cnxk_tim_insert_chunk(struct cnxk_tim_bkt *const bkt,
 	if (unlikely(rte_mempool_get(tim_ring->chunk_pool, (void **)&chunk)))
 		return NULL;
 
+	RTE_MEMPOOL_CHECK_COOKIES(tim_ring->chunk_pool, (void **)&chunk, 1, 0);
 	*(uint64_t *)(chunk + tim_ring->nb_chunk_slots) = 0;
 	if (bkt->nb_entry) {
 		*(uint64_t *)(((struct cnxk_tim_ent *)(uintptr_t)
@@ -233,8 +235,8 @@ cnxk_tim_add_entry_sp(struct cnxk_tim_ring *const tim_ring,
 		      const struct cnxk_tim_ent *const pent,
 		      const uint8_t flags)
 {
+	struct cnxk_tim_ent *chunk = NULL;
 	struct cnxk_tim_bkt *mirr_bkt;
-	struct cnxk_tim_ent *chunk;
 	struct cnxk_tim_bkt *bkt;
 	uint64_t lock_sema;
 	int16_t rem;
@@ -316,8 +318,8 @@ cnxk_tim_add_entry_mp(struct cnxk_tim_ring *const tim_ring,
 		      const struct cnxk_tim_ent *const pent,
 		      const uint8_t flags)
 {
+	struct cnxk_tim_ent *chunk = NULL;
 	struct cnxk_tim_bkt *mirr_bkt;
-	struct cnxk_tim_ent *chunk;
 	struct cnxk_tim_bkt *bkt;
 	uint64_t lock_sema;
 	int64_t rem;

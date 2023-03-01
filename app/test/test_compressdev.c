@@ -1256,7 +1256,7 @@ test_deflate_comp_run(const struct interim_data_params *int_data,
 		/*
 		 * Store original operation index in private data,
 		 * since ordering does not have to be maintained,
-		 * when dequeueing from compressdev, so a comparison
+		 * when dequeuing from compressdev, so a comparison
 		 * at the end of the test can be done.
 		 */
 		priv_data = (struct priv_op_data *) (ops[i] + 1);
@@ -2033,7 +2033,7 @@ test_deflate_comp_decomp(const struct interim_data_params *int_data,
 	test_priv_data.all_decomp_data = &all_decomp_data;
 	test_priv_data.decomp_produced_data_size = &decomp_produced_data_size;
 
-	test_priv_data.num_priv_xforms = 0; /* it's used for deompression only */
+	test_priv_data.num_priv_xforms = 0; /* it's used for decompression only */
 
 	capa = rte_compressdev_capability_get(0, RTE_COMP_ALGO_DEFLATE);
 	if (capa == NULL) {
@@ -2144,8 +2144,7 @@ exit:
 
 	if (stream != NULL)
 		rte_compressdev_stream_free(0, stream);
-	if (all_decomp_data != NULL)
-		rte_free(all_decomp_data);
+	rte_free(all_decomp_data);
 
 	/* Free compress private xforms */
 	for (i = 0; i < test_priv_data.num_priv_xforms; i++) {

@@ -74,7 +74,7 @@ bnxt_process_default_vnic_change(struct bnxt *bp,
 			BNXT_DEFAULT_VNIC_CHANGE_VF_ID_SFT;
 	PMD_DRV_LOG(INFO, "async event received vf_id 0x%x\n", vf_fid);
 
-	for (vf_id = 0; vf_id < BNXT_MAX_VF_REPS; vf_id++) {
+	for (vf_id = 0; vf_id < BNXT_MAX_VF_REPS(bp); vf_id++) {
 		eth_dev = bp->rep_info[vf_id].vfr_eth_dev;
 		if (!eth_dev)
 			continue;
@@ -104,6 +104,26 @@ static void bnxt_handle_event_error_report(struct bnxt *bp,
 		PMD_DRV_LOG(INFO, "FW reported unknown error type data1 %d"
 			    " data2: %d\n", data1, data2);
 		break;
+	}
+}
+
+void bnxt_handle_vf_cfg_change(void *arg)
+{
+	struct bnxt *bp = arg;
+	struct rte_eth_dev *eth_dev = bp->eth_dev;
+	int rc;
+
+	/* Free and recreate filters with default VLAN */
+	if (eth_dev->data->dev_started) {
+		rc = bnxt_dev_stop_op(eth_dev);
+		if (rc != 0) {
+			PMD_DRV_LOG(ERR, "Failed to stop Port:%u\n", eth_dev->data->port_id);
+			return;
+		}
+
+		rc = bnxt_dev_start_op(eth_dev);
+		if (rc != 0)
+			PMD_DRV_LOG(ERR, "Failed to start Port:%u\n", eth_dev->data->port_id);
 	}
 }
 
@@ -138,8 +158,11 @@ void bnxt_handle_async_event(struct bnxt *bp,
 		PMD_DRV_LOG(INFO, "Async event: PF driver unloaded\n");
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE:
-		PMD_DRV_LOG(INFO, "Async event: VF config changed\n");
+		PMD_DRV_LOG(INFO, "Port %u: VF config change async event\n", port_id);
+		PMD_DRV_LOG(INFO, "event: data1 %#x data2 %#x\n", data1, data2);
 		bnxt_hwrm_func_qcfg(bp, NULL);
+		if (BNXT_VF(bp))
+			rte_eal_alarm_set(1, bnxt_handle_vf_cfg_change, (void *)bp);
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PORT_CONN_NOT_ALLOWED:
 		PMD_DRV_LOG(INFO, "Port conn async event\n");
@@ -149,13 +172,17 @@ void bnxt_handle_async_event(struct bnxt *bp,
 		 * Avoid any rx/tx packet processing during firmware reset
 		 * operation.
 		 */
-		bnxt_stop_rxtx(bp);
+		bnxt_stop_rxtx(bp->eth_dev);
 
 		/* Ignore reset notify async events when stopping the port */
 		if (!bp->eth_dev->data->dev_started) {
 			bp->flags |= BNXT_FLAG_FATAL_ERROR;
 			return;
 		}
+
+		rte_eth_dev_callback_process(bp->eth_dev,
+					     RTE_ETH_EVENT_ERR_RECOVERING,
+					     NULL);
 
 		pthread_mutex_lock(&bp->err_recovery_lock);
 		event_data = data1;
@@ -383,8 +410,17 @@ bool bnxt_is_recovery_enabled(struct bnxt *bp)
 	return false;
 }
 
-void bnxt_stop_rxtx(struct bnxt *bp)
+void bnxt_stop_rxtx(struct rte_eth_dev *eth_dev)
 {
-	bp->eth_dev->rx_pkt_burst = &bnxt_dummy_recv_pkts;
-	bp->eth_dev->tx_pkt_burst = &bnxt_dummy_xmit_pkts;
+	eth_dev->rx_pkt_burst = rte_eth_pkt_burst_dummy;
+	eth_dev->tx_pkt_burst = rte_eth_pkt_burst_dummy;
+
+	rte_eth_fp_ops[eth_dev->data->port_id].rx_pkt_burst =
+		eth_dev->rx_pkt_burst;
+	rte_eth_fp_ops[eth_dev->data->port_id].tx_pkt_burst =
+		eth_dev->tx_pkt_burst;
+	rte_mb();
+
+	/* Allow time for threads to exit the real burst functions. */
+	rte_delay_ms(100);
 }

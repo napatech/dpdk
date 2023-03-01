@@ -128,6 +128,9 @@ init_shared_mem(void)
 		 */
 		memset(shm, 0, sizeof(*shm));
 		mark_free(dynfield1);
+#if !RTE_IOVA_AS_PA
+		mark_free(dynfield2);
+#endif
 
 		/* init free_flags */
 		for (mask = RTE_MBUF_F_FIRST_FREE; mask <= RTE_MBUF_F_LAST_FREE; mask <<= 1)
@@ -531,7 +534,7 @@ void rte_mbuf_dyn_dump(FILE *out)
 	size_t i;
 
 	rte_mcfg_tailq_write_lock();
-	if (init_shared_mem() < 0) {
+	if (shm == NULL && init_shared_mem() < 0) {
 		rte_mcfg_tailq_write_unlock();
 		return;
 	}

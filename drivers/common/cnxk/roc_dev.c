@@ -57,7 +57,7 @@ pf_af_sync_msg(struct dev *dev, struct mbox_msghdr **rsp)
 	struct mbox *mbox = dev->mbox;
 	struct mbox_dev *mdev = &mbox->dev[0];
 
-	volatile uint64_t int_status;
+	volatile uint64_t int_status = 0;
 	struct mbox_msghdr *msghdr;
 	uint64_t off;
 	int rc = 0;
@@ -152,6 +152,11 @@ af_pf_wait_msg(struct dev *dev, uint16_t vf, int num_msg)
 		/* Reserve PF/VF mbox message */
 		size = PLT_ALIGN(size, MBOX_MSG_ALIGN);
 		rsp = mbox_alloc_msg(&dev->mbox_vfpf, vf, size);
+		if (!rsp) {
+			plt_err("Failed to reserve VF%d message", vf);
+			continue;
+		}
+
 		mbox_rsp_init(msg->id, rsp);
 
 		/* Copy message from AF<->PF mbox to PF<->VF mbox */
@@ -236,6 +241,12 @@ vf_pf_process_msgs(struct dev *dev, uint16_t vf)
 				BIT_ULL(vf % max_bits);
 			rsp = (struct ready_msg_rsp *)mbox_alloc_msg(
 				mbox, vf, sizeof(*rsp));
+			if (!rsp) {
+				plt_err("Failed to alloc VF%d READY message",
+					vf);
+				continue;
+			}
+
 			mbox_rsp_init(msg->id, rsp);
 
 			/* PF/VF function ID */
@@ -409,6 +420,24 @@ process_msgs(struct dev *dev, struct mbox *mbox)
 		case MBOX_MSG_READY:
 			/* Get our identity */
 			dev->pf_func = msg->pcifunc;
+			break;
+		case MBOX_MSG_CGX_PRIO_FLOW_CTRL_CFG:
+			/* Handling the case where one VF tries to disable PFC
+			 * while PFC already configured on other VFs. This is
+			 * not an error but a warning which can be ignored.
+			 */
+#define LMAC_AF_ERR_PERM_DENIED -1103
+			if (msg->rc) {
+				if (msg->rc == LMAC_AF_ERR_PERM_DENIED) {
+					plt_mbox_dbg(
+						"Receive Flow control disable not permitted "
+						"as its used by other PFVFs");
+					msg->rc = 0;
+				} else {
+					plt_err("Message (%s) response has err=%d",
+						mbox_id2name(msg->id), msg->rc);
+				}
+			}
 			break;
 
 		default:
@@ -988,6 +1017,9 @@ dev_setup_shared_lmt_region(struct mbox *mbox, bool valid_iova, uint64_t iova)
 	struct lmtst_tbl_setup_req *req;
 
 	req = mbox_alloc_msg_lmtst_tbl_setup(mbox);
+	if (!req)
+		return -ENOSPC;
+
 	/* This pcifunc is defined with primary pcifunc whose LMT address
 	 * will be shared. If call contains valid IOVA, following pcifunc
 	 * field is of no use.
@@ -1061,6 +1093,11 @@ dev_lmt_setup(struct dev *dev)
 	 */
 	if (!dev->disable_shared_lmt) {
 		idev = idev_get_cfg();
+		if (!idev) {
+			errno = EFAULT;
+			goto free;
+		}
+
 		if (!__atomic_load_n(&idev->lmt_pf_func, __ATOMIC_ACQUIRE)) {
 			idev->lmt_base_addr = dev->lmt_base;
 			idev->lmt_pf_func = dev->pf_func;
@@ -1075,6 +1112,29 @@ fail:
 	return -errno;
 }
 
+static bool
+dev_cache_line_size_valid(void)
+{
+	if (roc_model_is_cn9k()) {
+		if (PLT_CACHE_LINE_SIZE != 128) {
+			plt_err("Cache line size of %d is wrong for CN9K",
+				PLT_CACHE_LINE_SIZE);
+			return false;
+		}
+	} else if (roc_model_is_cn10k()) {
+		if (PLT_CACHE_LINE_SIZE == 128) {
+			plt_warn("Cache line size of %d might affect performance",
+				 PLT_CACHE_LINE_SIZE);
+		} else if (PLT_CACHE_LINE_SIZE != 64) {
+			plt_err("Cache line size of %d is wrong for CN10K",
+				PLT_CACHE_LINE_SIZE);
+			return false;
+		}
+	}
+
+	return true;
+}
+
 int
 dev_init(struct dev *dev, struct plt_pci_device *pci_dev)
 {
@@ -1082,6 +1142,9 @@ dev_init(struct dev *dev, struct plt_pci_device *pci_dev)
 	uintptr_t bar2, bar4, mbox;
 	uintptr_t vf_mbase = 0;
 	uint64_t intr_offset;
+
+	if (!dev_cache_line_size_valid())
+		return -EFAULT;
 
 	bar2 = (uintptr_t)pci_dev->mem_resource[2].addr;
 	bar4 = (uintptr_t)pci_dev->mem_resource[4].addr;

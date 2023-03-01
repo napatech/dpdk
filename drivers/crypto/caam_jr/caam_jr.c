@@ -12,7 +12,7 @@
 #include <cryptodev_pmd.h>
 #include <rte_crypto.h>
 #include <rte_cryptodev.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_malloc.h>
 #include <rte_security_driver.h>
 #include <rte_hexdump.h>
@@ -1356,14 +1356,10 @@ caam_jr_enqueue_op(struct rte_crypto_op *op, struct caam_jr_qp *qp)
 
 	switch (op->sess_type) {
 	case RTE_CRYPTO_OP_WITH_SESSION:
-		ses = (struct caam_jr_session *)
-		get_sym_session_private_data(op->sym->session,
-					cryptodev_driver_id);
+		ses = CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
 		break;
 	case RTE_CRYPTO_OP_SECURITY_SESSION:
-		ses = (struct caam_jr_session *)
-			get_sec_session_private_data(
-					op->sym->sec_session);
+		ses = SECURITY_GET_SESS_PRIV(op->sym->session);
 		break;
 	default:
 		CAAM_JR_DP_ERR("sessionless crypto op not supported");
@@ -1692,54 +1688,38 @@ err1:
 }
 
 static int
-caam_jr_sym_session_configure(struct rte_cryptodev *dev,
+caam_jr_sym_session_configure(struct rte_cryptodev *dev __rte_unused,
 			      struct rte_crypto_sym_xform *xform,
-			      struct rte_cryptodev_sym_session *sess,
-			      struct rte_mempool *mempool)
+			      struct rte_cryptodev_sym_session *sess)
 {
 	void *sess_private_data;
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
-
-	if (rte_mempool_get(mempool, &sess_private_data)) {
-		CAAM_JR_ERR("Couldn't get object from session mempool");
-		return -ENOMEM;
-	}
-
+	sess_private_data = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 	memset(sess_private_data, 0, sizeof(struct caam_jr_session));
 	ret = caam_jr_set_session_parameters(dev, xform, sess_private_data);
 	if (ret != 0) {
 		CAAM_JR_ERR("failed to configure session parameters");
 		/* Return session to mempool */
-		rte_mempool_put(mempool, sess_private_data);
 		return ret;
 	}
-
-	set_sym_session_private_data(sess, dev->driver_id, sess_private_data);
 
 	return 0;
 }
 
 /* Clear the memory of session so it doesn't leave key material behind */
 static void
-caam_jr_sym_session_clear(struct rte_cryptodev *dev,
+caam_jr_sym_session_clear(struct rte_cryptodev *dev __rte_unused,
 		struct rte_cryptodev_sym_session *sess)
 {
-	uint8_t index = dev->driver_id;
-	void *sess_priv = get_sym_session_private_data(sess, index);
-	struct caam_jr_session *s = (struct caam_jr_session *)sess_priv;
+	struct caam_jr_session *s = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (sess_priv) {
-		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-
+	if (s) {
 		rte_free(s->cipher_key.data);
 		rte_free(s->auth_key.data);
-		memset(s, 0, sizeof(struct caam_jr_session));
-		set_sym_session_private_data(sess, index, NULL);
-		rte_mempool_put(sess_mp, sess_priv);
 	}
 }
 
@@ -1755,6 +1735,12 @@ caam_jr_set_ipsec_session(__rte_unused struct rte_cryptodev *dev,
 	struct caam_jr_session *session = (struct caam_jr_session *)sess;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (ipsec_xform->life.bytes_hard_limit != 0 ||
+	    ipsec_xform->life.bytes_soft_limit != 0 ||
+	    ipsec_xform->life.packets_hard_limit != 0 ||
+	    ipsec_xform->life.packets_soft_limit != 0)
+		return -ENOTSUP;
 
 	if (ipsec_xform->direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS) {
 		cipher_xform = &conf->crypto_xform->cipher;
@@ -1881,8 +1867,9 @@ caam_jr_set_ipsec_session(__rte_unused struct rte_cryptodev *dev,
 		session->encap_pdb.options =
 			(IPVERSION << PDBNH_ESP_ENCAP_SHIFT) |
 			PDBOPTS_ESP_OIHI_PDB_INL |
-			PDBOPTS_ESP_IVSRC |
-			PDBHMO_ESP_ENCAP_DTTL;
+			PDBOPTS_ESP_IVSRC;
+		if (ipsec_xform->options.dec_ttl)
+			session->encap_pdb.options |= PDBHMO_ESP_ENCAP_DTTL;
 		if (ipsec_xform->options.esn)
 			session->encap_pdb.options |= PDBOPTS_ESP_ESN;
 		session->encap_pdb.spi = ipsec_xform->spi;
@@ -1911,17 +1898,11 @@ out:
 static int
 caam_jr_security_session_create(void *dev,
 				struct rte_security_session_conf *conf,
-				struct rte_security_session *sess,
-				struct rte_mempool *mempool)
+				struct rte_security_session *sess)
 {
-	void *sess_private_data;
+	void *sess_private_data = SECURITY_GET_SESS_PRIV(sess);
 	struct rte_cryptodev *cdev = (struct rte_cryptodev *)dev;
 	int ret;
-
-	if (rte_mempool_get(mempool, &sess_private_data)) {
-		CAAM_JR_ERR("Couldn't get object from session mempool");
-		return -ENOMEM;
-	}
 
 	switch (conf->protocol) {
 	case RTE_SECURITY_PROTOCOL_IPSEC:
@@ -1935,12 +1916,7 @@ caam_jr_security_session_create(void *dev,
 	}
 	if (ret != 0) {
 		CAAM_JR_ERR("failed to configure session parameters");
-		/* Return session to mempool */
-		rte_mempool_put(mempool, sess_private_data);
-		return ret;
 	}
-
-	set_sec_session_private_data(sess, sess_private_data);
 
 	return ret;
 }
@@ -1951,22 +1927,21 @@ caam_jr_security_session_destroy(void *dev __rte_unused,
 				 struct rte_security_session *sess)
 {
 	PMD_INIT_FUNC_TRACE();
-	void *sess_priv = get_sec_session_private_data(sess);
+	struct caam_jr_session *s = SECURITY_GET_SESS_PRIV(sess);
 
-	struct caam_jr_session *s = (struct caam_jr_session *)sess_priv;
-
-	if (sess_priv) {
-		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-
+	if (s) {
 		rte_free(s->cipher_key.data);
 		rte_free(s->auth_key.data);
-		memset(sess, 0, sizeof(struct caam_jr_session));
-		set_sec_session_private_data(sess, NULL);
-		rte_mempool_put(sess_mp, sess_priv);
+		memset(s, 0, sizeof(struct caam_jr_session));
 	}
 	return 0;
 }
 
+static unsigned int
+caam_jr_security_session_get_size(void *device __rte_unused)
+{
+	return sizeof(struct caam_jr_session);
+}
 
 static int
 caam_jr_dev_configure(struct rte_cryptodev *dev,
@@ -2061,6 +2036,7 @@ static struct rte_cryptodev_ops caam_jr_ops = {
 static struct rte_security_ops caam_jr_security_ops = {
 	.session_create = caam_jr_security_session_create,
 	.session_update = NULL,
+	.session_get_size = caam_jr_security_session_get_size,
 	.session_stats_get = NULL,
 	.session_destroy = caam_jr_security_session_destroy,
 	.set_pkt_metadata = NULL,

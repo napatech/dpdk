@@ -14,7 +14,7 @@
 #include <fcntl.h>
 
 #include <rte_errno.h>
-#include <rte_bus.h>
+#include <bus_driver.h>
 #include <rte_per_lcore.h>
 #include <rte_memory.h>
 #include <rte_memzone.h>
@@ -28,7 +28,7 @@
 
 #include "rte_rawdev.h"
 #include "rte_rawdev_pmd.h"
-#include "rte_bus_ifpga.h"
+#include "bus_ifpga_driver.h"
 #include "ifpga_logs.h"
 #include "ifpga_common.h"
 
@@ -37,9 +37,9 @@
  */
 static struct rte_bus rte_ifpga_bus;
 
-static struct ifpga_afu_dev_list ifpga_afu_dev_list =
+static TAILQ_HEAD(, rte_afu_device) ifpga_afu_dev_list =
 	TAILQ_HEAD_INITIALIZER(ifpga_afu_dev_list);
-static struct ifpga_afu_drv_list ifpga_afu_drv_list =
+static TAILQ_HEAD(, rte_afu_driver) ifpga_afu_drv_list =
 	TAILQ_HEAD_INITIALIZER(ifpga_afu_drv_list);
 
 
@@ -64,8 +64,7 @@ ifpga_find_afu_dev(const struct rte_rawdev *rdev,
 	struct rte_afu_device *afu_dev = NULL;
 
 	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		if (afu_dev &&
-			afu_dev->rawdev == rdev &&
+		if (afu_dev->rawdev == rdev &&
 			!ifpga_afu_id_cmp(&afu_dev->id, afu_id))
 			return afu_dev;
 	}
@@ -78,8 +77,7 @@ rte_ifpga_find_afu_by_name(const char *name)
 	struct rte_afu_device *afu_dev = NULL;
 
 	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		if (afu_dev &&
-			!strcmp(afu_dev->device.name, name))
+		if (!strcmp(afu_dev->device.name, name))
 			return afu_dev;
 	}
 	return NULL;
@@ -119,9 +117,9 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 
 	if (rte_kvargs_count(kvlist, IFPGA_ARG_PORT) == 1) {
 		if (rte_kvargs_process(kvlist, IFPGA_ARG_PORT,
-		&rte_ifpga_get_integer32_arg, &afu_pr_conf.afu_id.port) < 0) {
-			IFPGA_BUS_ERR("error to parse %s",
-				     IFPGA_ARG_PORT);
+				ifpga_get_integer32_arg,
+				&afu_pr_conf.afu_id.port) < 0) {
+			IFPGA_BUS_ERR("error to parse %s", IFPGA_ARG_PORT);
 			goto end;
 		}
 	} else {
@@ -132,9 +130,8 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 
 	if (rte_kvargs_count(kvlist, IFPGA_AFU_BTS) == 1) {
 		if (rte_kvargs_process(kvlist, IFPGA_AFU_BTS,
-				       &rte_ifpga_get_string_arg, &path) < 0) {
-			IFPGA_BUS_ERR("Failed to parse %s",
-				     IFPGA_AFU_BTS);
+				ifpga_get_string_arg, &path) < 0) {
+			IFPGA_BUS_ERR("Failed to parse %s", IFPGA_AFU_BTS);
 			goto end;
 		}
 		afu_pr_conf.pr_enable = 1;
@@ -193,10 +190,8 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 	return afu_dev;
 
 end:
-	if (kvlist)
-		rte_kvargs_free(kvlist);
-	if (path)
-		free(path);
+	rte_kvargs_free(kvlist);
+	free(path);
 	if (afu_dev) {
 		rte_intr_instance_free(afu_dev->intr_handle);
 		free(afu_dev);
@@ -232,7 +227,7 @@ ifpga_scan(void)
 
 		if (rte_kvargs_count(kvlist, IFPGA_ARG_NAME) == 1) {
 			if (rte_kvargs_process(kvlist, IFPGA_ARG_NAME,
-				       &rte_ifpga_get_string_arg, &name) < 0) {
+					ifpga_get_string_arg, &name) < 0) {
 				IFPGA_BUS_ERR("error to parse %s",
 				     IFPGA_ARG_NAME);
 				goto end;
@@ -256,10 +251,8 @@ ifpga_scan(void)
 	}
 
 end:
-	if (kvlist)
-		rte_kvargs_free(kvlist);
-	if (name)
-		free(name);
+	rte_kvargs_free(kvlist);
+	free(name);
 
 	return 0;
 }

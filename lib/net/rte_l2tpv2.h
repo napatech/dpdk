@@ -78,6 +78,19 @@
 extern "C" {
 #endif
 
+/*
+ * L2TPv2 Message Type
+ */
+#define RTE_L2TPV2_MSG_TYPE_CONTROL	0xC802
+#define RTE_L2TPV2_MSG_TYPE_DATA	0x0002
+#define RTE_L2TPV2_MSG_TYPE_DATA_L	0x4002
+#define RTE_L2TPV2_MSG_TYPE_DATA_S	0x0802
+#define RTE_L2TPV2_MSG_TYPE_DATA_O	0x0202
+#define RTE_L2TPV2_MSG_TYPE_DATA_L_S	0x4802
+#define RTE_L2TPV2_MSG_TYPE_DATA_L_O	0x4202
+#define RTE_L2TPV2_MSG_TYPE_DATA_S_O	0x0A02
+#define RTE_L2TPV2_MSG_TYPE_DATA_L_S_O	0x4A02
+
 /**
  * L2TPv2 Common Header
  */
@@ -89,25 +102,25 @@ struct rte_l2tpv2_common_hdr {
 		__extension__
 		struct {
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
-			rte_be16_t t:1;		/**< message Type */
-			rte_be16_t l:1;		/**< length option bit */
-			rte_be16_t res1:2;	/**< reserved */
-			rte_be16_t s:1;		/**< ns/nr option bit */
-			rte_be16_t res2:1;	/**< reserved */
-			rte_be16_t o:1;		/**< offset option bit */
-			rte_be16_t p:1;		/**< priority option bit */
-			rte_be16_t res3:4;	/**< reserved */
-			rte_be16_t ver:4;	/**< protocol version */
+			uint16_t ver:4;		/**< protocol version */
+			uint16_t res3:4;	/**< reserved */
+			uint16_t p:1;		/**< priority option bit */
+			uint16_t o:1;		/**< offset option bit */
+			uint16_t res2:1;	/**< reserved */
+			uint16_t s:1;		/**< ns/nr option bit */
+			uint16_t res1:2;	/**< reserved */
+			uint16_t l:1;		/**< length option bit */
+			uint16_t t:1;		/**< message Type */
 #elif RTE_BYTE_ORDER == RTE_BIG_ENDIAN
-			rte_be16_t ver:4;	/**< protocol version */
-			rte_be16_t res3:4;	/**< reserved */
-			rte_be16_t p:1;		/**< priority option bit */
-			rte_be16_t o:1;		/**< offset option bit */
-			rte_be16_t res2:1;	/**< reserved */
-			rte_be16_t s:1;		/**< ns/nr option bit */
-			rte_be16_t res1:2;	/**< reserved */
-			rte_be16_t l:1;		/**< length option bit */
-			rte_be16_t t:1;		/**< message Type */
+			uint16_t t:1;		/**< message Type */
+			uint16_t l:1;		/**< length option bit */
+			uint16_t res1:2;	/**< reserved */
+			uint16_t s:1;		/**< ns/nr option bit */
+			uint16_t res2:1;	/**< reserved */
+			uint16_t o:1;		/**< offset option bit */
+			uint16_t p:1;		/**< priority option bit */
+			uint16_t res3:4;	/**< reserved */
+			uint16_t ver:4;		/**< protocol version */
 #endif
 		};
 	};
@@ -143,7 +156,7 @@ struct rte_l2tpv2_msg_without_length {
 /**
  * L2TPv2 message Header contains all options except ns_nr(length,
  * offset size, offset padding).
- * Ns and Nr MUST be toghter.
+ * Ns and Nr MUST be together.
  */
 struct rte_l2tpv2_msg_without_ns_nr {
 	rte_be16_t length;		/**< length(16) */
@@ -155,7 +168,7 @@ struct rte_l2tpv2_msg_without_ns_nr {
 
 /**
  * L2TPv2 message Header contains all options except ns_nr(length, ns, nr).
- * offset size and offset padding MUST be toghter.
+ * offset size and offset padding MUST be together.
  */
 struct rte_l2tpv2_msg_without_offset {
 	rte_be16_t length;		/**< length(16) */

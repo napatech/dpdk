@@ -723,6 +723,7 @@ enum iavf_tx_desc_dtype_value {
 	IAVF_TX_DESC_DTYPE_NOP		= 0x1, /* same as Context desc */
 	IAVF_TX_DESC_DTYPE_CONTEXT	= 0x1,
 	IAVF_TX_DESC_DTYPE_FCOE_CTX	= 0x2,
+	IAVF_TX_DESC_DTYPE_IPSEC	= 0x3,
 	IAVF_TX_DESC_DTYPE_FILTER_PROG	= 0x8,
 	IAVF_TX_DESC_DTYPE_DDP_CTX	= 0x9,
 	IAVF_TX_DESC_DTYPE_FLEX_DATA	= 0xB,
@@ -1005,7 +1006,7 @@ struct iavf_profile_tlv_section_record {
 	u8 data[12];
 };
 
-/* Generic AQ section in proflie */
+/* Generic AQ section in profile */
 struct iavf_profile_aq_section {
 	u16 opcode;
 	u16 flags;

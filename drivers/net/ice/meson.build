@@ -6,13 +6,17 @@ objs = [base_objs]
 
 sources = files(
         'ice_acl_filter.c',
+        'ice_ddp_package.c',
         'ice_ethdev.c',
         'ice_fdir_filter.c',
         'ice_generic_flow.c',
         'ice_hash.c',
         'ice_rxtx.c',
         'ice_switch_filter.c',
+        'ice_tm.c',
 )
+
+testpmd_sources = files('ice_testpmd.c')
 
 deps += ['hash', 'net', 'common_iavf']
 includes += include_directories('base', '../../common/iavf')
@@ -67,10 +71,10 @@ if arch_subdir == 'x86'
     endif
 endif
 
-sources += files('ice_dcf.c',
-         'ice_dcf_vf_representor.c',
-         'ice_dcf_ethdev.c',
-         'ice_dcf_parent.c',
-	 'ice_dcf_sched.c')
-
-headers = files('rte_pmd_ice.h')
+sources += files(
+        'ice_dcf.c',
+        'ice_dcf_vf_representor.c',
+        'ice_dcf_ethdev.c',
+        'ice_dcf_parent.c',
+        'ice_dcf_sched.c',
+)

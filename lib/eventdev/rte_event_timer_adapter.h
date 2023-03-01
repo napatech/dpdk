@@ -111,8 +111,6 @@
 extern "C" {
 #endif
 
-#include <rte_spinlock.h>
-#include <rte_memory.h>
 
 #include "rte_eventdev.h"
 #include "rte_eventdev_trace_fp.h"
@@ -195,6 +193,8 @@ struct rte_event_timer_adapter_stats {
 	/**< Event timer retry count */
 	uint64_t adapter_tick_count;
 	/**< Tick count for the adapter, at its resolution */
+	uint64_t evtim_drop_count;
+	/**< event timer expiries dropped */
 };
 
 struct rte_event_timer_adapter;
@@ -488,7 +488,7 @@ struct rte_event_timer {
 	 */
 	enum rte_event_timer_state state;
 	/**< State of the event timer. */
-	uint8_t user_meta[0];
+	uint8_t user_meta[];
 	/**< Memory to store user specific metadata.
 	 * The event timer adapter implementation should not modify this area.
 	 */
@@ -677,5 +677,9 @@ rte_event_timer_cancel_burst(const struct rte_event_timer_adapter *adapter,
 		nb_evtims);
 	return adapter->cancel_burst(adapter, evtims, nb_evtims);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __RTE_EVENT_TIMER_ADAPTER_H__ */

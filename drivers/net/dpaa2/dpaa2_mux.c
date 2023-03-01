@@ -16,7 +16,7 @@
 #include <rte_flow_driver.h>
 #include <rte_tailq.h>
 
-#include <rte_fslmc.h>
+#include <bus_fslmc_driver.h>
 #include <fsl_dpdmux.h>
 #include <fsl_dpkg.h>
 
@@ -95,7 +95,7 @@ rte_pmd_dpaa2_mux_flow_create(uint32_t dpdmux_id,
 	mask_iova = (void *)((size_t)key_iova + DIST_PARAM_IOVA_SIZE);
 
 	/* Currently taking only IP protocol as an extract type.
-	 * This can be exended to other fields using pattern->type.
+	 * This can be extended to other fields using pattern->type.
 	 */
 	memset(&kg_cfg, 0, sizeof(struct dpkg_profile_cfg));
 
@@ -296,7 +296,7 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 	}
 
 	ret = dpdmux_if_set_default(&dpdmux_dev->dpdmux, CMD_PRI_LOW,
-				    dpdmux_dev->token, 1);
+				    dpdmux_dev->token, attr.default_if);
 	if (ret) {
 		DPAA2_PMD_ERR("setting default interface failed in %s",
 			      __func__);
@@ -336,7 +336,7 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 
 		ret = dpdmux_if_set_errors_behavior(&dpdmux_dev->dpdmux,
 				CMD_PRI_LOW,
-				dpdmux_dev->token, dpdmux_id,
+				dpdmux_dev->token, DPAA2_DPDMUX_DPMAC_IDX,
 				&mux_err_cfg);
 		if (ret) {
 			DPAA2_PMD_ERR("dpdmux_if_set_errors_behavior %s err %d",
@@ -353,8 +353,7 @@ dpaa2_create_dpdmux_device(int vdev_fd __rte_unused,
 	return 0;
 
 init_err:
-	if (dpdmux_dev)
-		rte_free(dpdmux_dev);
+	rte_free(dpdmux_dev);
 
 	return -1;
 }

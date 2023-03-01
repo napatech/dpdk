@@ -1027,6 +1027,10 @@ efx_mae_match_spec_field_set(
 			memcpy(mvp + descp->emmd_value_offset,
 			    &dword, sizeof (dword));
 			break;
+		case 1:
+			memcpy(mvp + descp->emmd_value_offset,
+			    value, 1);
+			break;
 		default:
 			EFSYS_ASSERT(B_FALSE);
 		}
@@ -1038,6 +1042,10 @@ efx_mae_match_spec_field_set(
 
 			memcpy(mvp + descp->emmd_mask_offset,
 			    &dword, sizeof (dword));
+			break;
+		case 1:
+			memcpy(mvp + descp->emmd_mask_offset,
+			    mask, 1);
 			break;
 		default:
 			EFSYS_ASSERT(B_FALSE);
@@ -1376,6 +1384,7 @@ efx_mae_action_set_spec_init(
 	__in				efx_nic_t *enp,
 	__out				efx_mae_actions_t **specp)
 {
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(enp);
 	efx_mae_actions_t *spec;
 	efx_rc_t rc;
 
@@ -1385,8 +1394,16 @@ efx_mae_action_set_spec_init(
 		goto fail1;
 	}
 
+	spec->ema_rsrc.emar_dst_mac_id.id = EFX_MAE_RSRC_ID_INVALID;
+	spec->ema_rsrc.emar_src_mac_id.id = EFX_MAE_RSRC_ID_INVALID;
 	spec->ema_rsrc.emar_eh_id.id = EFX_MAE_RSRC_ID_INVALID;
 	spec->ema_rsrc.emar_counter_id.id = EFX_MAE_RSRC_ID_INVALID;
+
+	/*
+	 * Helpers which populate v2 actions must reject them when v2 is not
+	 * supported. As they have no EFX NIC argument, save v2 status here.
+	 */
+	spec->ema_v2_is_supported = encp->enc_mae_aset_v2_supported;
 
 	*specp = spec;
 
@@ -1406,7 +1423,7 @@ efx_mae_action_set_spec_fini(
 }
 
 static	__checkReturn			efx_rc_t
-efx_mae_action_set_add_decap(
+efx_mae_action_set_no_op(
 	__in				efx_mae_actions_t *spec,
 	__in				size_t arg_size,
 	__in_bcount(arg_size)		const uint8_t *arg)
@@ -1511,50 +1528,6 @@ fail1:
 }
 
 static	__checkReturn			efx_rc_t
-efx_mae_action_set_add_encap(
-	__in				efx_mae_actions_t *spec,
-	__in				size_t arg_size,
-	__in_bcount(arg_size)		const uint8_t *arg)
-{
-	efx_rc_t rc;
-
-	/*
-	 * Adding this specific action to an action set spec and setting encap.
-	 * header ID in the spec are two individual steps. This design allows
-	 * the client driver to avoid encap. header allocation when it simply
-	 * needs to check the order of actions submitted by user ("validate"),
-	 * without actually allocating an action set and inserting a rule.
-	 *
-	 * For now, mark encap. header ID as invalid; the caller will invoke
-	 * efx_mae_action_set_fill_in_eh_id() to override the field prior
-	 * to action set allocation; otherwise, the allocation will fail.
-	 */
-	spec->ema_rsrc.emar_eh_id.id = EFX_MAE_RSRC_ID_INVALID;
-
-	/*
-	 * As explained above, there are no arguments to handle here.
-	 * efx_mae_action_set_fill_in_eh_id() will take care of them.
-	 */
-	if (arg_size != 0) {
-		rc = EINVAL;
-		goto fail1;
-	}
-
-	if (arg != NULL) {
-		rc = EINVAL;
-		goto fail2;
-	}
-
-	return (0);
-
-fail2:
-	EFSYS_PROBE(fail2);
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-	return (rc);
-}
-
-static	__checkReturn			efx_rc_t
 efx_mae_action_set_add_count(
 	__in				efx_mae_actions_t *spec,
 	__in				size_t arg_size,
@@ -1570,13 +1543,14 @@ efx_mae_action_set_add_count(
 	 * two steps: first add this action to the action spec, and then
 	 * add the counter ID to the spec. This allows validity checking
 	 * and resource allocation to be done separately.
-	 * Mark the counter ID as invalid in the spec to ensure that the
-	 * caller must also invoke efx_mae_action_set_fill_in_counter_id()
-	 * before action set allocation.
+	 *
+	 * In order to fill in the counter ID, the caller is supposed to invoke
+	 * efx_mae_action_set_fill_in_counter_id(). If they do not do that,
+	 * efx_mae_action_set_alloc() invocation will throw an error.
+	 *
+	 * For now, no arguments are supposed to be handled.
 	 */
-	spec->ema_rsrc.emar_counter_id.id = EFX_MAE_RSRC_ID_INVALID;
 
-	/* Nothing else is supposed to take place over here. */
 	if (arg_size != 0) {
 		rc = EINVAL;
 		goto fail1;
@@ -1588,37 +1562,6 @@ efx_mae_action_set_add_count(
 	}
 
 	++(spec->ema_n_count_actions);
-
-	return (0);
-
-fail2:
-	EFSYS_PROBE(fail2);
-fail1:
-	EFSYS_PROBE1(fail1, efx_rc_t, rc);
-	return (rc);
-}
-
-static	__checkReturn			efx_rc_t
-efx_mae_action_set_add_flag(
-	__in				efx_mae_actions_t *spec,
-	__in				size_t arg_size,
-	__in_bcount(arg_size)		const uint8_t *arg)
-{
-	efx_rc_t rc;
-
-	_NOTE(ARGUNUSED(spec))
-
-	if (arg_size != 0) {
-		rc = EINVAL;
-		goto fail1;
-	}
-
-	if (arg != NULL) {
-		rc = EINVAL;
-		goto fail2;
-	}
-
-	/* This action does not have any arguments, so do nothing here. */
 
 	return (0);
 
@@ -1695,22 +1638,31 @@ typedef struct efx_mae_action_desc_s {
 
 static const efx_mae_action_desc_t efx_mae_actions[EFX_MAE_NACTIONS] = {
 	[EFX_MAE_ACTION_DECAP] = {
-		.emad_add = efx_mae_action_set_add_decap
+		.emad_add = efx_mae_action_set_no_op
 	},
 	[EFX_MAE_ACTION_VLAN_POP] = {
 		.emad_add = efx_mae_action_set_add_vlan_pop
+	},
+	[EFX_MAE_ACTION_SET_DST_MAC] = {
+		.emad_add = efx_mae_action_set_no_op
+	},
+	[EFX_MAE_ACTION_SET_SRC_MAC] = {
+		.emad_add = efx_mae_action_set_no_op
+	},
+	[EFX_MAE_ACTION_DECR_IP_TTL] = {
+		.emad_add = efx_mae_action_set_no_op
 	},
 	[EFX_MAE_ACTION_VLAN_PUSH] = {
 		.emad_add = efx_mae_action_set_add_vlan_push
 	},
 	[EFX_MAE_ACTION_ENCAP] = {
-		.emad_add = efx_mae_action_set_add_encap
+		.emad_add = efx_mae_action_set_no_op
 	},
 	[EFX_MAE_ACTION_COUNT] = {
 		.emad_add = efx_mae_action_set_add_count
 	},
 	[EFX_MAE_ACTION_FLAG] = {
-		.emad_add = efx_mae_action_set_add_flag
+		.emad_add = efx_mae_action_set_no_op
 	},
 	[EFX_MAE_ACTION_MARK] = {
 		.emad_add = efx_mae_action_set_add_mark
@@ -1723,6 +1675,9 @@ static const efx_mae_action_desc_t efx_mae_actions[EFX_MAE_NACTIONS] = {
 static const uint32_t efx_mae_action_ordered_map =
 	(1U << EFX_MAE_ACTION_DECAP) |
 	(1U << EFX_MAE_ACTION_VLAN_POP) |
+	(1U << EFX_MAE_ACTION_SET_DST_MAC) |
+	(1U << EFX_MAE_ACTION_SET_SRC_MAC) |
+	(1U << EFX_MAE_ACTION_DECR_IP_TTL) |
 	(1U << EFX_MAE_ACTION_VLAN_PUSH) |
 	/*
 	 * HW will conduct action COUNT after
@@ -1839,6 +1794,63 @@ efx_mae_action_set_populate_vlan_pop(
 {
 	return (efx_mae_action_set_spec_populate(spec,
 	    EFX_MAE_ACTION_VLAN_POP, 0, NULL));
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_set_dst_mac(
+	__in				efx_mae_actions_t *spec)
+{
+	efx_rc_t rc;
+
+	if (spec->ema_v2_is_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	return (efx_mae_action_set_spec_populate(spec,
+	    EFX_MAE_ACTION_SET_DST_MAC, 0, NULL));
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_set_src_mac(
+	__in				efx_mae_actions_t *spec)
+{
+	efx_rc_t rc;
+
+	if (spec->ema_v2_is_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	return (efx_mae_action_set_spec_populate(spec,
+	    EFX_MAE_ACTION_SET_SRC_MAC, 0, NULL));
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_populate_decr_ip_ttl(
+	__in				efx_mae_actions_t *spec)
+{
+	efx_rc_t rc;
+
+	if (spec->ema_v2_is_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	return (efx_mae_action_set_spec_populate(spec,
+	    EFX_MAE_ACTION_DECR_IP_TTL, 0, NULL));
+
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
 }
 
 	__checkReturn			efx_rc_t
@@ -2238,7 +2250,8 @@ efx_mae_outer_rule_insert(
 	memcpy(payload + offset, spec->emms_mask_value_pairs.outer,
 	    MAE_ENC_FIELD_PAIRS_LEN);
 
-	MCDI_IN_SET_BYTE(req, MAE_OUTER_RULE_INSERT_IN_RECIRC_ID,
+	MCDI_IN_SET_DWORD_FIELD(req, MAE_OUTER_RULE_INSERT_IN_LOOKUP_CONTROL,
+	    MAE_OUTER_RULE_INSERT_IN_RECIRC_ID,
 	    spec->emms_outer_rule_recirc_id);
 
 	efx_mcdi_execute(enp, &req);
@@ -2358,6 +2371,224 @@ efx_mae_match_spec_outer_rule_id_set(
 	    sizeof (full_mask), (const uint8_t *)&full_mask);
 	if (rc != 0)
 		goto fail3;
+
+	return (0);
+
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	 __checkReturn	efx_rc_t
+efx_mae_mac_addr_alloc(
+	__in		efx_nic_t *enp,
+	__in		uint8_t addr_bytes[EFX_MAC_ADDR_LEN],
+	__out		efx_mae_mac_id_t *mac_idp)
+{
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(enp);
+	efx_mcdi_req_t req;
+	EFX_MCDI_DECLARE_BUF(payload,
+	    MC_CMD_MAE_MAC_ADDR_ALLOC_IN_LEN,
+	    MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_LEN);
+	efx_mae_mac_id_t mac_id;
+	efx_rc_t rc;
+
+	EFX_STATIC_ASSERT(sizeof (mac_idp->id) ==
+	    MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_MAC_ID_LEN);
+
+	EFX_STATIC_ASSERT(EFX_MAE_RSRC_ID_INVALID ==
+	    MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_MAC_ID_NULL);
+
+	if (encp->enc_mae_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	if (encp->enc_mae_aset_v2_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail2;
+	}
+
+	req.emr_cmd = MC_CMD_MAE_MAC_ADDR_ALLOC;
+	req.emr_in_buf = payload;
+	req.emr_in_length = MC_CMD_MAE_MAC_ADDR_ALLOC_IN_LEN;
+	req.emr_out_buf = payload;
+	req.emr_out_length = MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_LEN;
+
+	memcpy(payload + MC_CMD_MAE_MAC_ADDR_ALLOC_IN_MAC_ADDR_OFST,
+	    addr_bytes, EFX_MAC_ADDR_LEN);
+
+	efx_mcdi_execute(enp, &req);
+
+	if (req.emr_rc != 0) {
+		rc = req.emr_rc;
+		goto fail3;
+	}
+
+	if (req.emr_out_length_used < MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_LEN) {
+		rc = EMSGSIZE;
+		goto fail4;
+	}
+
+	mac_id.id = MCDI_OUT_DWORD(req, MAE_MAC_ADDR_ALLOC_OUT_MAC_ID);
+	if (mac_id.id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = ENOENT;
+		goto fail5;
+	}
+
+	mac_idp->id = mac_id.id;
+
+	return (0);
+
+fail5:
+	EFSYS_PROBE(fail5);
+fail4:
+	EFSYS_PROBE(fail4);
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn	efx_rc_t
+efx_mae_mac_addr_free(
+	__in		efx_nic_t *enp,
+	__in		const efx_mae_mac_id_t *mac_idp)
+{
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(enp);
+	efx_mcdi_req_t req;
+	EFX_MCDI_DECLARE_BUF(payload,
+	    MC_CMD_MAE_MAC_ADDR_FREE_IN_LEN(1),
+	    MC_CMD_MAE_MAC_ADDR_FREE_OUT_LEN(1));
+	efx_rc_t rc;
+
+	if (encp->enc_mae_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail1;
+	}
+
+	if (encp->enc_mae_aset_v2_supported == B_FALSE) {
+		rc = ENOTSUP;
+		goto fail2;
+	}
+
+	req.emr_cmd = MC_CMD_MAE_MAC_ADDR_FREE;
+	req.emr_in_buf = payload;
+	req.emr_in_length = MC_CMD_MAE_MAC_ADDR_FREE_IN_LEN(1);
+	req.emr_out_buf = payload;
+	req.emr_out_length = MC_CMD_MAE_MAC_ADDR_FREE_OUT_LEN(1);
+
+	MCDI_IN_SET_DWORD(req, MAE_MAC_ADDR_FREE_IN_MAC_ID, mac_idp->id);
+
+	efx_mcdi_execute(enp, &req);
+
+	if (req.emr_rc != 0) {
+		rc = req.emr_rc;
+		goto fail3;
+	}
+
+	if (req.emr_out_length_used < MC_CMD_MAE_MAC_ADDR_FREE_OUT_LEN(1)) {
+		rc = EMSGSIZE;
+		goto fail4;
+	}
+
+	if (MCDI_OUT_DWORD(req, MAE_MAC_ADDR_FREE_OUT_FREED_MAC_ID) !=
+	    mac_idp->id) {
+		/* Firmware failed to remove the MAC address entry. */
+		rc = EAGAIN;
+		goto fail5;
+	}
+
+	return (0);
+
+fail5:
+	EFSYS_PROBE(fail5);
+fail4:
+	EFSYS_PROBE(fail4);
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_fill_in_dst_mac_id(
+	__in				efx_mae_actions_t *spec,
+	__in				const efx_mae_mac_id_t *mac_idp)
+{
+	efx_rc_t rc;
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_SET_DST_MAC)) == 0) {
+		/*
+		 * The caller has not intended to have this action originally,
+		 * hence, they cannot indicate the MAC address entry ID.
+		 */
+		rc = EINVAL;
+		goto fail1;
+	}
+
+	if (spec->ema_rsrc.emar_dst_mac_id.id != EFX_MAE_RSRC_ID_INVALID) {
+		/* An attempt to indicate the MAC address entry ID twice. */
+		rc = EINVAL;
+		goto fail2;
+	}
+
+	if (mac_idp->id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail3;
+	}
+
+	spec->ema_rsrc.emar_dst_mac_id.id = mac_idp->id;
+
+	return (0);
+
+fail3:
+	EFSYS_PROBE(fail3);
+fail2:
+	EFSYS_PROBE(fail2);
+fail1:
+	EFSYS_PROBE1(fail1, efx_rc_t, rc);
+	return (rc);
+}
+
+	__checkReturn			efx_rc_t
+efx_mae_action_set_fill_in_src_mac_id(
+	__in				efx_mae_actions_t *spec,
+	__in				const efx_mae_mac_id_t *mac_idp)
+{
+	efx_rc_t rc;
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_SET_SRC_MAC)) == 0) {
+		/*
+		 * The caller has not intended to have this action originally,
+		 * hence, they cannot indicate the MAC address entry ID.
+		 */
+		rc = EINVAL;
+		goto fail1;
+	}
+
+	if (spec->ema_rsrc.emar_src_mac_id.id != EFX_MAE_RSRC_ID_INVALID) {
+		/* An attempt to indicate the MAC address entry ID twice. */
+		rc = EINVAL;
+		goto fail2;
+	}
+
+	if (mac_idp->id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail3;
+	}
+
+	spec->ema_rsrc.emar_src_mac_id.id = mac_idp->id;
 
 	return (0);
 
@@ -2582,6 +2813,30 @@ efx_mae_action_set_alloc(
 		goto fail1;
 	}
 
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_SET_DST_MAC)) != 0 &&
+	    spec->ema_rsrc.emar_dst_mac_id.id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail2;
+	}
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_SET_SRC_MAC)) != 0 &&
+	    spec->ema_rsrc.emar_src_mac_id.id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail3;
+	}
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_ENCAP)) != 0 &&
+	    spec->ema_rsrc.emar_eh_id.id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail4;
+	}
+
+	if (spec->ema_n_count_actions == 1 &&
+	    spec->ema_rsrc.emar_counter_id.id == EFX_MAE_RSRC_ID_INVALID) {
+		rc = EINVAL;
+		goto fail5;
+	}
+
 	req.emr_cmd = MC_CMD_MAE_ACTION_SET_ALLOC;
 	req.emr_in_buf = payload;
 	req.emr_in_length = MC_CMD_MAE_ACTION_SET_ALLOC_IN_LEN;
@@ -2603,6 +2858,17 @@ efx_mae_action_set_alloc(
 
 	MCDI_IN_SET_DWORD_FIELD(req, MAE_ACTION_SET_ALLOC_IN_FLAGS,
 	    MAE_ACTION_SET_ALLOC_IN_VLAN_POP, spec->ema_n_vlan_tags_to_pop);
+
+	MCDI_IN_SET_DWORD(req, MAE_ACTION_SET_ALLOC_IN_DST_MAC_ID,
+	    spec->ema_rsrc.emar_dst_mac_id.id);
+
+	MCDI_IN_SET_DWORD(req, MAE_ACTION_SET_ALLOC_IN_SRC_MAC_ID,
+	    spec->ema_rsrc.emar_src_mac_id.id);
+
+	if ((spec->ema_actions & (1U << EFX_MAE_ACTION_DECR_IP_TTL)) != 0) {
+		MCDI_IN_SET_DWORD_FIELD(req, MAE_ACTION_SET_ALLOC_IN_FLAGS,
+		    MAE_ACTION_SET_ALLOC_IN_DO_DECR_IP_TTL, 1);
+	}
 
 	if (spec->ema_n_vlan_tags_to_push > 0) {
 		unsigned int outer_tag_idx;
@@ -2650,33 +2916,36 @@ efx_mae_action_set_alloc(
 	MCDI_IN_SET_DWORD(req,
 	    MAE_ACTION_SET_ALLOC_IN_DELIVER, spec->ema_deliver_mport.sel);
 
-	MCDI_IN_SET_DWORD(req, MAE_ACTION_SET_ALLOC_IN_SRC_MAC_ID,
-	    MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_MAC_ID_NULL);
-	MCDI_IN_SET_DWORD(req, MAE_ACTION_SET_ALLOC_IN_DST_MAC_ID,
-	    MC_CMD_MAE_MAC_ADDR_ALLOC_OUT_MAC_ID_NULL);
-
 	efx_mcdi_execute(enp, &req);
 
 	if (req.emr_rc != 0) {
 		rc = req.emr_rc;
-		goto fail2;
+		goto fail6;
 	}
 
 	if (req.emr_out_length_used < MC_CMD_MAE_ACTION_SET_ALLOC_OUT_LEN) {
 		rc = EMSGSIZE;
-		goto fail3;
+		goto fail7;
 	}
 
 	aset_id.id = MCDI_OUT_DWORD(req, MAE_ACTION_SET_ALLOC_OUT_AS_ID);
 	if (aset_id.id == EFX_MAE_RSRC_ID_INVALID) {
 		rc = ENOENT;
-		goto fail4;
+		goto fail8;
 	}
 
 	aset_idp->id = aset_id.id;
 
 	return (0);
 
+fail8:
+	EFSYS_PROBE(fail8);
+fail7:
+	EFSYS_PROBE(fail7);
+fail6:
+	EFSYS_PROBE(fail6);
+fail5:
+	EFSYS_PROBE(fail5);
 fail4:
 	EFSYS_PROBE(fail4);
 fail3:

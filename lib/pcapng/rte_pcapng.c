@@ -4,22 +4,24 @@
 
 #include <errno.h>
 #include <net/if.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/uio.h>
-#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <bus_driver.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_errno.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
 #include <rte_mbuf.h>
 #include <rte_pcapng.h>
+#include <rte_reciprocal.h>
 #include <rte_time.h>
 
 #include "pcapng_proto.h"
@@ -35,27 +37,63 @@ struct rte_pcapng {
 };
 
 /* For converting TSC cycles to PCAPNG ns format */
-struct pcapng_time {
+static struct pcapng_time {
 	uint64_t ns;
 	uint64_t cycles;
+	uint64_t tsc_hz;
+	struct rte_reciprocal_u64 tsc_hz_inverse;
 } pcapng_time;
 
-RTE_INIT(pcapng_init)
+static inline void
+pcapng_init(void)
 {
 	struct timespec ts;
 
 	pcapng_time.cycles = rte_get_tsc_cycles();
 	clock_gettime(CLOCK_REALTIME, &ts);
+	pcapng_time.cycles = (pcapng_time.cycles + rte_get_tsc_cycles()) / 2;
 	pcapng_time.ns = rte_timespec_to_ns(&ts);
+
+	pcapng_time.tsc_hz = rte_get_tsc_hz();
+	pcapng_time.tsc_hz_inverse = rte_reciprocal_value_u64(pcapng_time.tsc_hz);
 }
 
 /* PCAPNG timestamps are in nanoseconds */
 static uint64_t pcapng_tsc_to_ns(uint64_t cycles)
 {
-	uint64_t delta;
+	uint64_t delta, secs;
 
+	if (!pcapng_time.tsc_hz)
+		pcapng_init();
+
+	/* In essence the calculation is:
+	 *   delta = (cycles - pcapng_time.cycles) * NSEC_PRE_SEC / rte_get_tsc_hz()
+	 * but this overflows within 4 to 8 seconds depending on TSC frequency.
+	 * Instead, if delta >= pcapng_time.tsc_hz:
+	 *   Increase pcapng_time.ns and pcapng_time.cycles by the number of
+	 *   whole seconds in delta and reduce delta accordingly.
+	 * delta will therefore always lie in the interval [0, pcapng_time.tsc_hz),
+	 * which will not overflow when multiplied by NSEC_PER_SEC provided the
+	 * TSC frequency < approx 18.4GHz.
+	 *
+	 * Currently all TSCs operate below 5GHz.
+	 */
 	delta = cycles - pcapng_time.cycles;
-	return pcapng_time.ns + (delta * NSEC_PER_SEC) / rte_get_tsc_hz();
+	if (unlikely(delta >= pcapng_time.tsc_hz)) {
+		if (likely(delta < pcapng_time.tsc_hz * 2)) {
+			delta -= pcapng_time.tsc_hz;
+			pcapng_time.cycles += pcapng_time.tsc_hz;
+			pcapng_time.ns += NSEC_PER_SEC;
+		} else {
+			secs = rte_reciprocal_divide_u64(delta, &pcapng_time.tsc_hz_inverse);
+			delta -= secs * pcapng_time.tsc_hz;
+			pcapng_time.cycles += secs * pcapng_time.tsc_hz;
+			pcapng_time.ns += secs * NSEC_PER_SEC;
+		}
+	}
+
+	return pcapng_time.ns + rte_reciprocal_divide_u64(delta * NSEC_PER_SEC,
+							  &pcapng_time.tsc_hz_inverse);
 }
 
 /* length of option including padding */
@@ -177,8 +215,8 @@ pcapng_add_interface(rte_pcapng_t *self, uint16_t port)
 			 "%s-%s", dev->bus->name, dev->name);
 
 	/* DPDK reports in units of Mbps */
-	rte_eth_link_get(port, &link);
-	if (link.link_status == ETH_LINK_UP)
+	if (rte_eth_link_get(port, &link) == 0 &&
+	    link.link_status == RTE_ETH_LINK_UP)
 		speed = link.link_speed * PCAPNG_MBPS_SPEED;
 
 	if (rte_eth_macaddr_get(port, &macaddr) < 0)
@@ -417,9 +455,10 @@ rte_pcapng_copy(uint16_t port_id, uint32_t queue,
 	struct pcapng_enhance_packet_block *epb;
 	uint32_t orig_len, data_len, padding, flags;
 	struct pcapng_option *opt;
-	const uint16_t optlen = pcapng_optlen(sizeof(flags)) + pcapng_optlen(sizeof(queue));
+	uint16_t optlen;
 	struct rte_mbuf *mc;
 	uint64_t ns;
+	bool rss_hash;
 
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, NULL);
@@ -452,6 +491,10 @@ rte_pcapng_copy(uint16_t port_id, uint32_t queue,
 			goto fail;
 	}
 
+	/* record HASH on incoming packets */
+	rss_hash = (direction == RTE_PCAPNG_DIRECTION_IN &&
+		    (md->ol_flags & RTE_MBUF_F_RX_RSS_HASH));
+
 	/* pad the packet to 32 bit boundary */
 	data_len = rte_pktmbuf_data_len(mc);
 	padding = RTE_ALIGN(data_len, sizeof(uint32_t)) - data_len;
@@ -462,6 +505,11 @@ rte_pcapng_copy(uint16_t port_id, uint32_t queue,
 			goto fail;
 		memset(tail, 0, padding);
 	}
+
+	optlen = pcapng_optlen(sizeof(flags));
+	optlen += pcapng_optlen(sizeof(queue));
+	if (rss_hash)
+		optlen += pcapng_optlen(sizeof(uint8_t) + sizeof(uint32_t));
 
 	/* reserve trailing options and block length */
 	opt = (struct pcapng_option *)
@@ -485,6 +533,20 @@ rte_pcapng_copy(uint16_t port_id, uint32_t queue,
 
 	opt = pcapng_add_option(opt, PCAPNG_EPB_QUEUE,
 				&queue, sizeof(queue));
+
+	if (rss_hash) {
+		uint8_t hash_opt[5];
+
+		/* The algorithm could be something else if
+		 * using rte_flow_action_rss; but the current API does not
+		 * have a way for ethdev to report  this on a per-packet basis.
+		 */
+		hash_opt[0] = PCAPNG_HASH_TOEPLITZ;
+
+		memcpy(&hash_opt[1], &md->hash.rss, sizeof(uint32_t));
+		opt = pcapng_add_option(opt, PCAPNG_EPB_HASH,
+					&hash_opt, sizeof(hash_opt));
+	}
 
 	/* Note: END_OPT necessary here. Wireshark doesn't do it. */
 
@@ -515,33 +577,16 @@ fail:
 	return NULL;
 }
 
-/* Count how many segments are in this array of mbufs */
-static unsigned int
-mbuf_burst_segs(struct rte_mbuf *pkts[], unsigned int n)
-{
-	unsigned int i, iovcnt;
-
-	for (iovcnt = 0, i = 0; i < n; i++) {
-		const struct rte_mbuf *m = pkts[i];
-
-		__rte_mbuf_sanity_check(m, 1);
-
-		iovcnt += m->nb_segs;
-	}
-	return iovcnt;
-}
-
 /* Write pre-formatted packets to file. */
 ssize_t
 rte_pcapng_write_packets(rte_pcapng_t *self,
 			 struct rte_mbuf *pkts[], uint16_t nb_pkts)
 {
-	int iovcnt = mbuf_burst_segs(pkts, nb_pkts);
-	struct iovec iov[iovcnt];
-	unsigned int i, cnt;
-	ssize_t ret;
+	struct iovec iov[IOV_MAX];
+	unsigned int i, cnt = 0;
+	ssize_t ret, total = 0;
 
-	for (i = cnt = 0; i < nb_pkts; i++) {
+	for (i = 0; i < nb_pkts; i++) {
 		struct rte_mbuf *m = pkts[i];
 		struct pcapng_enhance_packet_block *epb;
 
@@ -551,6 +596,20 @@ rte_pcapng_write_packets(rte_pcapng_t *self,
 			     epb->block_length != rte_pktmbuf_data_len(m))) {
 			rte_errno = EINVAL;
 			return -1;
+		}
+
+		/*
+		 * Handle case of highly fragmented and large burst size
+		 * Note: this assumes that max segments per mbuf < IOV_MAX
+		 */
+		if (unlikely(cnt + m->nb_segs >= IOV_MAX)) {
+			ret = writev(self->outfd, iov, cnt);
+			if (unlikely(ret < 0)) {
+				rte_errno = errno;
+				return -1;
+			}
+			total += ret;
+			cnt = 0;
 		}
 
 		/*
@@ -565,10 +624,12 @@ rte_pcapng_write_packets(rte_pcapng_t *self,
 		} while ((m = m->next));
 	}
 
-	ret = writev(self->outfd, iov, iovcnt);
-	if (unlikely(ret < 0))
+	ret = writev(self->outfd, iov, cnt);
+	if (unlikely(ret < 0)) {
 		rte_errno = errno;
-	return ret;
+		return -1;
+	}
+	return total + ret;
 }
 
 /* Create new pcapng writer handle */

@@ -10,6 +10,7 @@
 #define	__PROCESS_H
 
 #include <compat.h>
+#include <rte_compat.h>
 #include <rte_ethdev.h>
 
 /* The process device underlies process-wide user/kernel interactions, such as
@@ -49,7 +50,7 @@ struct dpaa_portal_map {
 struct dpaa_ioctl_portal_map {
 	/* Input parameter, is a qman or bman portal required. */
 	enum dpaa_portal_type type;
-	/* Specifes a specific portal index to map or 0xffffffff
+	/* Specifies a specific portal index to map or 0xffffffff
 	 * for don't care.
 	 */
 	uint32_t index;

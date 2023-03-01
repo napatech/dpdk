@@ -9,13 +9,22 @@
 #include <rte_lcore.h>
 #include <rte_debug.h>
 #include <rte_memzone.h>
-#include <rte_atomic.h>
 #include <rte_timer.h>
 #include <rte_cycles.h>
 #include <rte_mempool.h>
 #include <rte_random.h>
 
 #include "test.h"
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+int
+test_timer_secondary(void)
+{
+	printf("timer_secondary not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+#else
+
 #include "process.h"
 
 #define NUM_TIMERS		(1 << 20) /* ~1M timers */
@@ -212,5 +221,7 @@ test_timer_secondary(void)
 
 	return TEST_FAILED;
 }
+
+#endif /* !RTE_EXEC_ENV_WINDOWS */
 
 REGISTER_TEST_COMMAND(timer_secondary_autotest, test_timer_secondary);

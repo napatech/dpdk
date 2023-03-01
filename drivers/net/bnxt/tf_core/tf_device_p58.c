@@ -45,6 +45,236 @@ const char *tf_resource_str_p58[CFA_RESOURCE_TYPE_P58_LAST + 1] = {
 	[CFA_RESOURCE_TYPE_P58_WC_FKB]             = "wc_fkb  ",
 	[CFA_RESOURCE_TYPE_P58_VEB_TCAM]           = "veb     ",
 	[CFA_RESOURCE_TYPE_P58_METADATA]           = "metadata",
+	[CFA_RESOURCE_TYPE_P58_METER_DROP_CNT]     = "meter_dc",
+};
+
+struct tf_rm_element_cfg tf_tbl_p58[TF_DIR_MAX][TF_TBL_TYPE_MAX] = {
+	[TF_DIR_RX][TF_TBL_TYPE_EM_FKB] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_EM_FKB,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_WC_FKB] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_WC_FKB,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_METER_PROF] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METER_PROF,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_METER_INST] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METER,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_METER_DROP_CNT] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METER_DROP_CNT,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_MIRROR_CONFIG] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_MIRROR,
+		0, 0
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_METADATA] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METADATA,
+		0, 0
+	},
+	/* Policy - ARs in bank 1 */
+	[TF_DIR_RX][TF_TBL_TYPE_FULL_ACT_RECORD] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_1,
+		.slices          = 4,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_COMPACT_ACT_RECORD] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_FULL_ACT_RECORD,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_1,
+		.slices          = 8,
+	},
+	/* Policy - Encaps in bank 2 */
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_8B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 8,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_16B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 4,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_32B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 2,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_ENCAP_64B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 1,
+	},
+	/* Policy - Modify in bank 2 with Encaps */
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_MODIFY_8B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 8,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_MODIFY_16B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 4,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_MODIFY_32B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 2,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_MODIFY_64B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 1,
+	},
+	/* Policy - SP in bank 0 */
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_SP_SMAC] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+		.slices          = 8,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_SP_SMAC_IPV4] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_SP_SMAC,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+		.slices          = 4,
+	},
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_SP_SMAC_IPV6] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_SP_SMAC,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+		.slices          = 2,
+	},
+	/* Policy - Stats in bank 3 */
+	[TF_DIR_RX][TF_TBL_TYPE_ACT_STATS_64] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_3,
+		.slices          = 8,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_EM_FKB] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_EM_FKB,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_WC_FKB] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_WC_FKB,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_METER_PROF] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METER_PROF,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_METER_INST] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METER,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_METER_DROP_CNT] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METER_DROP_CNT,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_MIRROR_CONFIG] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_MIRROR,
+		0, 0
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_METADATA] = {
+		TF_RM_ELEM_CFG_HCAPI_BA, CFA_RESOURCE_TYPE_P58_METADATA,
+		0, 0
+	},
+	/* Policy - ARs in bank 1 */
+	[TF_DIR_TX][TF_TBL_TYPE_FULL_ACT_RECORD] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_1,
+		.slices          = 4,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_COMPACT_ACT_RECORD] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_FULL_ACT_RECORD,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_1,
+		.slices          = 8,
+	},
+	/* Policy - Encaps in bank 2 */
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_8B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 8,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_16B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 4,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_32B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 2,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_ENCAP_64B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 1,
+	},
+	/* Policy - Modify in bank 2 with Encaps */
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_MODIFY_8B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 8,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_MODIFY_16B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 4,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_MODIFY_32B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 2,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_MODIFY_64B] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_ENCAP_8B,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+		.slices          = 1,
+	},
+	/* Policy - SP in bank 0 */
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_SP_SMAC] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+		.slices	         = 8,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_SP_SMAC_IPV4] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_SP_SMAC,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+		.slices	         = 4,
+	},
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_SP_SMAC_IPV6] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_CHILD,
+		.parent_subtype  = TF_TBL_TYPE_ACT_SP_SMAC,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+		.slices	         = 2,
+	},
+	/* Policy - Stats in bank 3 */
+	[TF_DIR_TX][TF_TBL_TYPE_ACT_STATS_64] = {
+		.cfg_type        = TF_RM_ELEM_CFG_HCAPI_BA_PARENT,
+		.hcapi_type      = CFA_RESOURCE_TYPE_P58_SRAM_BANK_3,
+		.slices          = 8,
+	},
 };
 
 /**
@@ -120,14 +350,22 @@ tf_dev_p58_get_resource_str(struct tf *tfp __rte_unused,
  *   - (-EINVAL) on failure.
  */
 static int
-tf_dev_p58_set_tcam_slice_info(struct tf *tfp __rte_unused,
+tf_dev_p58_set_tcam_slice_info(struct tf *tfp,
 			       enum tf_wc_num_slice num_slices_per_row)
 {
+	int rc;
+	struct tf_session *tfs = NULL;
+
+	/* Retrieve the session information */
+	rc = tf_session_get_session_internal(tfp, &tfs);
+	if (rc)
+		return rc;
+
 	switch (num_slices_per_row) {
 	case TF_WC_TCAM_1_SLICE_PER_ROW:
 	case TF_WC_TCAM_2_SLICE_PER_ROW:
 	case TF_WC_TCAM_4_SLICE_PER_ROW:
-		g_wc_num_slices_per_row = num_slices_per_row;
+		tfs->wc_num_slices_per_row = num_slices_per_row;
 	break;
 	default:
 		return -EINVAL;
@@ -157,14 +395,22 @@ tf_dev_p58_set_tcam_slice_info(struct tf *tfp __rte_unused,
  *   - (-EINVAL) on failure.
  */
 static int
-tf_dev_p58_get_tcam_slice_info(struct tf *tfp __rte_unused,
+tf_dev_p58_get_tcam_slice_info(struct tf *tfp,
 			       enum tf_tcam_tbl_type type,
 			       uint16_t key_sz,
 			       uint16_t *num_slices_per_row)
 {
+	int rc;
+	struct tf_session *tfs = NULL;
+
+	/* Retrieve the session information */
+	rc = tf_session_get_session_internal(tfp, &tfs);
+	if (rc)
+		return rc;
+
 #define CFA_P58_WC_TCAM_SLICE_SIZE     24
 	if (type == TF_TCAM_TBL_TYPE_WC_TCAM) {
-		*num_slices_per_row = g_wc_num_slices_per_row;
+		*num_slices_per_row = tfs->wc_num_slices_per_row;
 		if (key_sz > *num_slices_per_row * CFA_P58_WC_TCAM_SLICE_SIZE)
 			return -ENOTSUP;
 	} else { /* for other type of tcam */
@@ -337,6 +583,187 @@ static int tf_dev_p58_get_sram_tbl_info(struct tf *tfp __rte_unused,
 }
 
 /**
+ * Device specific function that maps the hcapi resource types
+ * to Truflow type.
+ *
+ * [in] hcapi_caps
+ *   CFA resource type bitmap
+ *
+ * [out] ident_caps
+ *   Pointer to identifier type bitmap
+ *
+ * [out] tcam_caps
+ *   Pointer to tcam type bitmap
+ *
+ * [out] tbl_caps
+ *   Pointer to table type bitmap
+ *
+ * [out] em_caps
+ *   Pointer to em type bitmap
+ *
+ * Returns
+ *   - (0) if successful.
+ *   - (-EINVAL) on failure.
+ */
+static int tf_dev_p58_map_hcapi_caps(uint64_t hcapi_caps,
+				     uint32_t *ident_caps,
+				     uint32_t *tcam_caps,
+				     uint32_t *tbl_caps,
+				     uint32_t *em_caps)
+{
+	uint32_t i;
+
+	*ident_caps = 0;
+	*tcam_caps = 0;
+	*tbl_caps = 0;
+	*em_caps = 0;
+
+	for (i = 0; i <= CFA_RESOURCE_TYPE_P58_LAST; i++) {
+		if (hcapi_caps & 1ULL << i) {
+			switch (tf_hcapi_res_map_p58[i].module_type) {
+			case TF_MODULE_TYPE_IDENTIFIER:
+				*ident_caps |= tf_hcapi_res_map_p58[i].type_caps;
+				break;
+			case TF_MODULE_TYPE_TABLE:
+				*tbl_caps |= tf_hcapi_res_map_p58[i].type_caps;
+				break;
+			case TF_MODULE_TYPE_TCAM:
+				*tcam_caps |= tf_hcapi_res_map_p58[i].type_caps;
+				break;
+			case TF_MODULE_TYPE_EM:
+				*em_caps |= tf_hcapi_res_map_p58[i].type_caps;
+				break;
+			default:
+				return -EINVAL;
+			}
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * Device specific function that retrieve the sram resource
+ *
+ * [in] query
+ *   Point to resources query result
+ *
+ * [out] sram_bank_caps
+ *   Pointer to SRAM bank capabilities
+ *
+ * [out] dynamic_sram_capable
+ *   Pointer to dynamic sram capable
+ *
+ * Returns
+ *   - (0) if successful.
+ *   - (-EINVAL) on failure.
+ */
+static int tf_dev_p58_get_sram_resources(void *q,
+					 uint32_t *sram_bank_caps,
+					 bool *dynamic_sram_capable)
+{
+	uint32_t i;
+	struct tf_rm_resc_req_entry *query = q;
+
+	for (i = 0; i < CFA_RESOURCE_TYPE_P58_LAST + 1; i++) {
+		switch (query[i].type) {
+		case CFA_RESOURCE_TYPE_P58_SRAM_BANK_0:
+			sram_bank_caps[0] = query[i].max;
+			break;
+		case CFA_RESOURCE_TYPE_P58_SRAM_BANK_1:
+			sram_bank_caps[1] = query[i].max;
+			break;
+		case CFA_RESOURCE_TYPE_P58_SRAM_BANK_2:
+			sram_bank_caps[2] = query[i].max;
+			break;
+		case CFA_RESOURCE_TYPE_P58_SRAM_BANK_3:
+			sram_bank_caps[3] = query[i].max;
+			break;
+		default:
+			break;
+		}
+	}
+
+	*dynamic_sram_capable = false;
+
+	return 0;
+}
+
+static int sram_bank_hcapi_type[] = {
+	CFA_RESOURCE_TYPE_P58_SRAM_BANK_0,
+	CFA_RESOURCE_TYPE_P58_SRAM_BANK_1,
+	CFA_RESOURCE_TYPE_P58_SRAM_BANK_2,
+	CFA_RESOURCE_TYPE_P58_SRAM_BANK_3
+};
+
+/**
+ * Device specific function that set the sram policy
+ *
+ * [in] dir
+ *   Receive or transmit direction
+ *
+ * [in] band_id
+ *   SRAM bank id
+ *
+ * Returns
+ *   - (0) if successful.
+ *   - (-EINVAL) on failure.
+ */
+static int tf_dev_p58_set_sram_policy(enum tf_dir dir,
+				      enum tf_sram_bank_id *bank_id)
+{
+	struct tf_rm_element_cfg *rm_cfg = tf_tbl_p58[dir];
+	uint8_t type;
+	uint8_t parent[TF_SRAM_BANK_ID_MAX] = { 0xFF, 0xFF, 0xFF, 0xFF };
+
+	for (type = TF_TBL_TYPE_FULL_ACT_RECORD;
+			type <= TF_TBL_TYPE_ACT_MODIFY_64B; type++) {
+		if (bank_id[type] >= TF_SRAM_BANK_ID_MAX)
+			return -EINVAL;
+
+		rm_cfg[type].hcapi_type = sram_bank_hcapi_type[bank_id[type]];
+		if (parent[bank_id[type]] == 0xFF) {
+			parent[bank_id[type]] = type;
+			rm_cfg[type].cfg_type = TF_RM_ELEM_CFG_HCAPI_BA_PARENT;
+			rm_cfg[type].parent_subtype = 0;
+			if (rm_cfg[type].slices == 0)
+				rm_cfg[type].slices = 1;
+		} else {
+			rm_cfg[type].cfg_type = TF_RM_ELEM_CFG_HCAPI_BA_CHILD;
+			rm_cfg[type].parent_subtype = parent[bank_id[type]];
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * Device specific function that get the sram policy
+ *
+ * [in] dir
+ *   Receive or transmit direction
+ *
+ * [out] band_id
+ *   pointer to SRAM bank id
+ *
+ * Returns
+ *   - (0) if successful.
+ *   - (-EINVAL) on failure.
+ */
+static int tf_dev_p58_get_sram_policy(enum tf_dir dir,
+				      enum tf_sram_bank_id *bank_id)
+{
+	struct tf_rm_element_cfg *rm_cfg = tf_tbl_p58[dir];
+	uint8_t type;
+
+	for (type = TF_TBL_TYPE_FULL_ACT_RECORD;
+			type < TF_TBL_TYPE_ACT_MODIFY_64B + 1; type++)
+		bank_id[type] = rm_cfg[type].hcapi_type - CFA_RESOURCE_TYPE_P58_SRAM_BANK_0;
+
+	return 0;
+}
+
+/**
  * Truflow P58 device specific functions
  */
 const struct tf_dev_ops tf_dev_ops_p58_init = {
@@ -386,6 +813,10 @@ const struct tf_dev_ops tf_dev_ops_p58_init = {
 	.tf_dev_get_global_cfg = NULL,
 	.tf_dev_get_mailbox = tf_dev_p58_get_mailbox,
 	.tf_dev_word_align = NULL,
+	.tf_dev_map_hcapi_caps = tf_dev_p58_map_hcapi_caps,
+	.tf_dev_get_sram_resources = tf_dev_p58_get_sram_resources,
+	.tf_dev_set_sram_policy = tf_dev_p58_set_sram_policy,
+	.tf_dev_get_sram_policy = tf_dev_p58_get_sram_policy,
 };
 
 /**
@@ -448,5 +879,9 @@ const struct tf_dev_ops tf_dev_ops_p58 = {
 	.tf_dev_get_global_cfg = tf_global_cfg_get,
 	.tf_dev_get_mailbox = tf_dev_p58_get_mailbox,
 	.tf_dev_word_align = tf_dev_p58_word_align,
-	.tf_dev_cfa_key_hash = hcapi_cfa_p58_key_hash
+	.tf_dev_cfa_key_hash = hcapi_cfa_p58_key_hash,
+	.tf_dev_map_hcapi_caps = tf_dev_p58_map_hcapi_caps,
+	.tf_dev_get_sram_resources = tf_dev_p58_get_sram_resources,
+	.tf_dev_set_sram_policy = tf_dev_p58_set_sram_policy,
+	.tf_dev_get_sram_policy = tf_dev_p58_get_sram_policy,
 };

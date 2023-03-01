@@ -18,7 +18,6 @@ extern "C" {
 #include <stdint.h>
 #include <stdio.h>
 
-#include <rte_memcpy.h>
 #include <rte_random.h>
 #include <rte_mbuf.h>
 #include <rte_byteorder.h>
@@ -35,9 +34,10 @@ extern "C" {
 	(RTE_ETHER_MAX_LEN - RTE_ETHER_HDR_LEN - \
 		RTE_ETHER_CRC_LEN) /**< Ethernet MTU. */
 
+#define RTE_VLAN_HLEN       4  /**< VLAN (IEEE 802.1Q) header length. */
+/** Maximum VLAN frame length (excluding QinQ), including CRC. */
 #define RTE_ETHER_MAX_VLAN_FRAME_LEN \
-	(RTE_ETHER_MAX_LEN + 4)
-	/**< Maximum VLAN frame length, including CRC. */
+	(RTE_ETHER_MAX_LEN + RTE_VLAN_HLEN)
 
 #define RTE_ETHER_MAX_JUMBO_FRAME_LEN \
 	0x3F00 /**< Maximum Jumbo frame length, including CRC. */

@@ -3,8 +3,9 @@
  * Copyright(c) 2021 Arm Limited
  */
 
+#include <stdlib.h>
+
 #include <rte_memcpy.h>
-#include <rte_memory.h>
 
 #include "power_cppc_cpufreq.h"
 #include "power_common.h"
@@ -621,7 +622,7 @@ power_cppc_enable_turbo(unsigned int lcore_id)
 		return -1;
 	}
 
-	/* TODO: must set to max once enbling Turbo? Considering add condition:
+	/* TODO: must set to max once enabling Turbo? Considering add condition:
 	 * if ((pi->turbo_available) && (pi->curr_idx <= 1))
 	 */
 	/* Max may have changed, so call to max function */

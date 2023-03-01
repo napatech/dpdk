@@ -2,7 +2,7 @@
  * Copyright(c) 2018 Intel Corporation.
  */
 
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_ethdev.h>
 #include <rte_pci.h>
 #include <rte_malloc.h>
@@ -29,11 +29,11 @@ i40e_vf_representor_dev_infos_get(struct rte_eth_dev *ethdev,
 	struct rte_eth_dev_info *dev_info)
 {
 	struct i40e_vf_representor *representor = ethdev->data->dev_private;
-	struct rte_eth_dev_data *pf_dev_data =
-		representor->adapter->pf.dev_data;
 
 	/* get dev info for the vdev */
 	dev_info->device = ethdev->device;
+
+	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	dev_info->max_rx_queues = ethdev->data->nb_rx_queues;
 	dev_info->max_tx_queues = ethdev->data->nb_tx_queues;
@@ -102,7 +102,7 @@ i40e_vf_representor_dev_infos_get(struct rte_eth_dev *ethdev,
 	};
 
 	dev_info->switch_info.name =
-		rte_eth_devices[pf_dev_data->port_id].device->name;
+		rte_eth_devices[ethdev->data->port_id].device->name;
 	dev_info->switch_info.domain_id = representor->switch_domain_id;
 	dev_info->switch_info.port_id = representor->vf_id;
 

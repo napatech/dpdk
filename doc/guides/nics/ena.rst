@@ -87,6 +87,24 @@ Configuration information
      effect only if the device also supports large LLQ headers. Otherwise, the
      default value will be used.
 
+   * **miss_txc_to** (default 5)
+
+     Number of seconds after which the Tx packet will be considered missing.
+     If the missing packets number will exceed dynamically calculated threshold,
+     the driver will trigger the device reset which should be handled by the
+     application. Checking for missing Tx completions happens in the driver's
+     timer service. Setting this parameter to 0 disables this feature. Maximum
+     allowed value is 60 seconds.
+
+   * **enable_llq** (default 1)
+
+     Determines whenever the driver should use the LLQ (if it's available) or
+     not.
+
+     **NOTE: On the 6th generation AWS instances disabling LLQ may lead to a
+     huge performance degradation. In general disabling LLQ is highly not
+     recommended!**
+
 **ENA Configuration Parameters**
 
    * **Number of Queues**
@@ -158,9 +176,8 @@ Prerequisites
    In DPDK ``igb_uio`` it must be enabled by loading module with
    ``wc_activate=1`` flag (example below). However, mainline's vfio-pci
    driver in kernel doesn't have WC support yet (planed to be added).
-   If vfio-pci used user should be either turn off ENAv2 (to avoid performance
-   impact) or recompile vfio-pci driver with patch provided in
-   `amzn-github <https://github.com/amzn/amzn-drivers/tree/master/userspace/dpdk/enav2-vfio-patch>`_.
+   If vfio-pci is used user should follow `AWS ENA PMD documentation
+   <https://github.com/amzn/amzn-drivers/tree/master/userspace/dpdk/README.md>`_.
 
 #. Insert ``vfio-pci`` or ``igb_uio`` kernel module using the command
    ``modprobe vfio-pci`` or ``modprobe uio; insmod igb_uio.ko wc_activate=1``

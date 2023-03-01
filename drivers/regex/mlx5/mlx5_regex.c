@@ -9,7 +9,7 @@
 #include <rte_regexdev.h>
 #include <rte_regexdev_core.h>
 #include <rte_regexdev_driver.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 
 #include <mlx5_common.h>
 #include <mlx5_common_mr.h>
@@ -19,7 +19,6 @@
 
 #include "mlx5_regex.h"
 #include "mlx5_regex_utils.h"
-#include "mlx5_rxp_csrs.h"
 
 #define MLX5_REGEX_DRIVER_NAME regex_mlx5
 
@@ -46,35 +45,18 @@ mlx5_regex_start(struct rte_regexdev *dev)
 int
 mlx5_regex_stop(struct rte_regexdev *dev __rte_unused)
 {
+	struct mlx5_regex_priv *priv = dev->data->dev_private;
+
+	mlx5_regex_clean_ctrl(dev);
+	rte_free(priv->qps);
+	priv->qps = NULL;
+
 	return 0;
 }
 
 int
 mlx5_regex_close(struct rte_regexdev *dev __rte_unused)
 {
-	return 0;
-}
-
-static int
-mlx5_regex_engines_status(struct ibv_context *ctx, int num_engines)
-{
-	uint32_t fpga_ident = 0;
-	int err;
-	int i;
-
-	for (i = 0; i < num_engines; i++) {
-		err = mlx5_devx_regex_register_read(ctx, i,
-						    MLX5_RXP_CSR_IDENTIFIER,
-						    &fpga_ident);
-		fpga_ident = (fpga_ident & (0x0000FFFF));
-		if (err || fpga_ident != MLX5_RXP_IDENTIFIER) {
-			DRV_LOG(ERR, "Failed setup RXP %d err %d database "
-				"memory 0x%x", i, err, fpga_ident);
-			if (!err)
-				err = EINVAL;
-			return err;
-		}
-	}
 	return 0;
 }
 
@@ -85,24 +67,19 @@ mlx5_regex_get_name(char *name, struct rte_device *dev)
 }
 
 static int
-mlx5_regex_dev_probe(struct mlx5_common_device *cdev)
+mlx5_regex_dev_probe(struct mlx5_common_device *cdev,
+		     struct mlx5_kvargs_ctrl *mkvlist __rte_unused)
 {
 	struct mlx5_regex_priv *priv = NULL;
 	struct mlx5_hca_attr *attr = &cdev->config.hca_attr;
 	char name[RTE_REGEXDEV_NAME_MAX_LEN];
 	int ret;
-	uint32_t val;
 
-	if ((!attr->regex && !attr->mmo_regex_sq_en && !attr->mmo_regex_qp_en)
+	if ((!attr->regexp_params && !attr->mmo_regex_sq_en && !attr->mmo_regex_qp_en)
 	    || attr->regexp_num_of_engines == 0) {
 		DRV_LOG(ERR, "Not enough capabilities to support RegEx, maybe "
 			"old FW/OFED version?");
 		rte_errno = ENOTSUP;
-		return -rte_errno;
-	}
-	if (mlx5_regex_engines_status(cdev->ctx, 2)) {
-		DRV_LOG(ERR, "RegEx engine error.");
-		rte_errno = ENOMEM;
 		return -rte_errno;
 	}
 	priv = rte_zmalloc("mlx5 regex device private", sizeof(*priv),
@@ -116,13 +93,7 @@ mlx5_regex_dev_probe(struct mlx5_common_device *cdev)
 	priv->mmo_regex_sq_cap = attr->mmo_regex_sq_en;
 	priv->cdev = cdev;
 	priv->nb_engines = 2; /* attr.regexp_num_of_engines */
-	ret = mlx5_devx_regex_register_read(priv->cdev->ctx, 0,
-					    MLX5_RXP_CSR_IDENTIFIER, &val);
-	if (ret) {
-		DRV_LOG(ERR, "CSR read failed!");
-		goto dev_error;
-	}
-	if (val == MLX5_RXP_BF2_IDENTIFIER)
+	if (attr->regexp_version == MLX5_RXP_BF2_IDENTIFIER)
 		priv->is_bf2 = 1;
 	/* Default RXP programming mode to Shared. */
 	priv->prog_mode = MLX5_RXP_SHARED_PROG_MODE;
@@ -133,17 +104,9 @@ mlx5_regex_dev_probe(struct mlx5_common_device *cdev)
 		rte_errno = rte_errno ? rte_errno : EINVAL;
 		goto dev_error;
 	}
-	/*
-	 * This PMD always claims the write memory barrier on UAR
-	 * registers writings, it is safe to allocate UAR with any
-	 * memory mapping type.
-	 */
-	priv->uar = mlx5_devx_alloc_uar(priv->cdev->ctx, -1);
-	if (!priv->uar) {
-		DRV_LOG(ERR, "can't allocate uar.");
-		rte_errno = ENOMEM;
+	ret = mlx5_devx_uar_prepare(cdev, &priv->uar);
+	if (ret)
 		goto error;
-	}
 	priv->regexdev->dev_ops = &mlx5_regexdev_ops;
 	priv->regexdev->enqueue = mlx5_regexdev_enqueue;
 #ifdef HAVE_MLX5_UMR_IMKEY
@@ -162,13 +125,10 @@ mlx5_regex_dev_probe(struct mlx5_common_device *cdev)
 	return 0;
 
 error:
-	if (priv->uar)
-		mlx5_glue->devx_free_uar(priv->uar);
 	if (priv->regexdev)
 		rte_regexdev_unregister(priv->regexdev);
 dev_error:
-	if (priv)
-		rte_free(priv);
+	rte_free(priv);
 	return -rte_errno;
 }
 
@@ -185,8 +145,7 @@ mlx5_regex_dev_remove(struct mlx5_common_device *cdev)
 		return 0;
 	priv = dev->data->dev_private;
 	if (priv) {
-		if (priv->uar)
-			mlx5_glue->devx_free_uar(priv->uar);
+		mlx5_devx_uar_release(&priv->uar);
 		if (priv->regexdev)
 			rte_regexdev_unregister(priv->regexdev);
 		rte_free(priv);

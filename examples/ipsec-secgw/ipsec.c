@@ -6,6 +6,7 @@
 #include <netinet/ip.h>
 
 #include <rte_branch_prediction.h>
+#include <rte_event_crypto_adapter.h>
 #include <rte_log.h>
 #include <rte_crypto.h>
 #include <rte_security.h>
@@ -52,40 +53,79 @@ set_ipsec_conf(struct ipsec_sa *sa, struct rte_security_ipsec_xform *ipsec)
 	ipsec->replay_win_sz = app_sa_prm.window_size;
 	ipsec->options.esn = app_sa_prm.enable_esn;
 	ipsec->options.udp_encap = sa->udp_encap;
+	if (IS_HW_REASSEMBLY_EN(sa->flags))
+		ipsec->options.ip_reassembly_en = 1;
 }
 
 int
-create_lookaside_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa,
-		struct rte_ipsec_session *ips)
+create_lookaside_session(struct ipsec_ctx *ipsec_ctx_lcore[],
+	struct socket_ctx *skt_ctx, const struct eventmode_conf *em_conf,
+	struct ipsec_sa *sa, struct rte_ipsec_session *ips)
 {
+	uint16_t cdev_id = RTE_CRYPTO_MAX_DEVS;
+	enum rte_crypto_op_sess_type sess_type;
 	struct rte_cryptodev_info cdev_info;
+	enum rte_crypto_op_type op_type;
 	unsigned long cdev_id_qp = 0;
-	int32_t ret = 0;
+	struct ipsec_ctx *ipsec_ctx;
 	struct cdev_key key = { 0 };
+	void *sess = NULL;
+	uint32_t lcore_id;
+	int32_t ret = 0;
 
-	key.lcore_id = (uint8_t)rte_lcore_id();
+	RTE_LCORE_FOREACH(lcore_id) {
+		ipsec_ctx = ipsec_ctx_lcore[lcore_id];
 
-	key.cipher_algo = (uint8_t)sa->cipher_algo;
-	key.auth_algo = (uint8_t)sa->auth_algo;
-	key.aead_algo = (uint8_t)sa->aead_algo;
+		/* Core is not bound to any cryptodev, skip it */
+		if (ipsec_ctx->cdev_map == NULL)
+			continue;
 
-	ret = rte_hash_lookup_data(ipsec_ctx->cdev_map, &key,
-			(void **)&cdev_id_qp);
-	if (ret < 0) {
-		RTE_LOG(ERR, IPSEC,
-				"No cryptodev: core %u, cipher_algo %u, "
-				"auth_algo %u, aead_algo %u\n",
-				key.lcore_id,
-				key.cipher_algo,
-				key.auth_algo,
-				key.aead_algo);
-		return -1;
+		/* Looking for cryptodev, which can handle this SA */
+		key.lcore_id = (uint8_t)lcore_id;
+		key.cipher_algo = (uint8_t)sa->cipher_algo;
+		key.auth_algo = (uint8_t)sa->auth_algo;
+		key.aead_algo = (uint8_t)sa->aead_algo;
+
+		ret = rte_hash_lookup_data(ipsec_ctx->cdev_map, &key,
+				(void **)&cdev_id_qp);
+		if (ret == -ENOENT)
+			continue;
+		if (ret < 0) {
+			RTE_LOG(ERR, IPSEC,
+					"No cryptodev: core %u, cipher_algo %u, "
+					"auth_algo %u, aead_algo %u\n",
+					key.lcore_id,
+					key.cipher_algo,
+					key.auth_algo,
+					key.aead_algo);
+			return ret;
+		}
+
+		/* Verify that all cores are using same cryptodev for current
+		 * algorithm combination, required by SA.
+		 * Current cryptodev mapping process will map SA to the first
+		 * cryptodev that matches requirements, so it's a double check,
+		 * not an additional restriction.
+		 */
+		if (cdev_id == RTE_CRYPTO_MAX_DEVS)
+			cdev_id = ipsec_ctx->tbl[cdev_id_qp].id;
+		else if (cdev_id != ipsec_ctx->tbl[cdev_id_qp].id) {
+			RTE_LOG(ERR, IPSEC,
+					"SA mapping to multiple cryptodevs is "
+					"not supported!");
+			return -EINVAL;
+		}
+
+		/* Store per core queue pair information */
+		sa->cqp[lcore_id] = &ipsec_ctx->tbl[cdev_id_qp];
+	}
+	if (cdev_id == RTE_CRYPTO_MAX_DEVS) {
+		RTE_LOG(WARNING, IPSEC, "No cores found to handle SA\n");
+		return 0;
 	}
 
-	RTE_LOG_DP(DEBUG, IPSEC, "Create session for SA spi %u on cryptodev "
-			"%u qp %u\n", sa->spi,
-			ipsec_ctx->tbl[cdev_id_qp].id,
-			ipsec_ctx->tbl[cdev_id_qp].qp);
+	RTE_LOG(DEBUG, IPSEC, "Create session for SA spi %u on cryptodev "
+			"%u\n", sa->spi, cdev_id);
 
 	if (ips->type != RTE_SECURITY_ACTION_TYPE_NONE &&
 		ips->type != RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO) {
@@ -111,19 +151,23 @@ create_lookaside_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa,
 		if (ips->type == RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL) {
 			struct rte_security_ctx *ctx = (struct rte_security_ctx *)
 							rte_cryptodev_get_sec_ctx(
-							ipsec_ctx->tbl[cdev_id_qp].id);
+							cdev_id);
 
 			/* Set IPsec parameters in conf */
 			set_ipsec_conf(sa, &(sess_conf.ipsec));
 
 			ips->security.ses = rte_security_session_create(ctx,
-					&sess_conf, ipsec_ctx->session_pool,
-					ipsec_ctx->session_priv_pool);
+					&sess_conf, skt_ctx->session_pool);
 			if (ips->security.ses == NULL) {
 				RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
 				return -1;
 			}
+			ips->security.ctx = ctx;
+
+			sess = ips->security.ses;
+			op_type = RTE_CRYPTO_OP_TYPE_SYMMETRIC;
+			sess_type = RTE_CRYPTO_OP_SECURITY_SESSION;
 		} else {
 			RTE_LOG(ERR, IPSEC, "Inline not supported\n");
 			return -1;
@@ -131,27 +175,41 @@ create_lookaside_session(struct ipsec_ctx *ipsec_ctx, struct ipsec_sa *sa,
 	} else {
 		if (ips->type == RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO) {
 			struct rte_cryptodev_info info;
-			uint16_t cdev_id;
 
-			cdev_id = ipsec_ctx->tbl[cdev_id_qp].id;
 			rte_cryptodev_info_get(cdev_id, &info);
 			if (!(info.feature_flags &
 				RTE_CRYPTODEV_FF_SYM_CPU_CRYPTO))
 				return -ENOTSUP;
 
-			ips->crypto.dev_id = cdev_id;
 		}
-		ips->crypto.ses = rte_cryptodev_sym_session_create(
-				ipsec_ctx->session_pool);
-		rte_cryptodev_sym_session_init(ipsec_ctx->tbl[cdev_id_qp].id,
-				ips->crypto.ses, sa->xforms,
-				ipsec_ctx->session_priv_pool);
+		ips->crypto.dev_id = cdev_id;
+		ips->crypto.ses = rte_cryptodev_sym_session_create(cdev_id,
+				sa->xforms, skt_ctx->session_pool);
 
-		rte_cryptodev_info_get(ipsec_ctx->tbl[cdev_id_qp].id,
-				&cdev_info);
+		rte_cryptodev_info_get(cdev_id, &cdev_info);
 	}
 
-	sa->cdev_id_qp = cdev_id_qp;
+	/* Setup meta data required by event crypto adapter */
+	if (em_conf->enable_event_crypto_adapter && sess != NULL) {
+		union rte_event_crypto_metadata m_data;
+		const struct eventdev_params *eventdev_conf;
+
+		eventdev_conf = &(em_conf->eventdev_config[0]);
+		memset(&m_data, 0, sizeof(m_data));
+
+		/* Fill in response information */
+		m_data.response_info.sched_type = em_conf->ext_params.sched_type;
+		m_data.response_info.op = RTE_EVENT_OP_NEW;
+		m_data.response_info.queue_id = eventdev_conf->ev_cpt_queue_id;
+
+		/* Fill in request information */
+		m_data.request_info.cdev_id = cdev_id;
+		m_data.request_info.queue_pair_id = 0;
+
+		/* Attach meta info to session */
+		rte_cryptodev_session_event_mdata_set(cdev_id, sess, op_type,
+				sess_type, &m_data, sizeof(m_data));
+	}
 
 	return 0;
 }
@@ -171,15 +229,67 @@ create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
 			.options = { 0 },
 			.replay_win_sz = 0,
 			.direction = sa->direction,
-			.proto = RTE_SECURITY_IPSEC_SA_PROTO_ESP,
-			.mode = (sa->flags == IP4_TUNNEL ||
-					sa->flags == IP6_TUNNEL) ?
-					RTE_SECURITY_IPSEC_SA_MODE_TUNNEL :
-					RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT,
+			.proto = RTE_SECURITY_IPSEC_SA_PROTO_ESP
 		} },
 		.crypto_xform = sa->xforms,
 		.userdata = NULL,
 	};
+
+	if (IS_TRANSPORT(sa->flags)) {
+		sess_conf.ipsec.mode = RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT;
+		if (IS_IP4(sa->flags)) {
+			sess_conf.ipsec.tunnel.type =
+				RTE_SECURITY_IPSEC_TUNNEL_IPV4;
+
+			sess_conf.ipsec.tunnel.ipv4.src_ip.s_addr =
+				sa->src.ip.ip4;
+			sess_conf.ipsec.tunnel.ipv4.dst_ip.s_addr =
+				sa->dst.ip.ip4;
+		} else if (IS_IP6(sa->flags)) {
+			sess_conf.ipsec.tunnel.type =
+				RTE_SECURITY_IPSEC_TUNNEL_IPV6;
+
+			memcpy(sess_conf.ipsec.tunnel.ipv6.src_addr.s6_addr,
+				sa->src.ip.ip6.ip6_b, 16);
+			memcpy(sess_conf.ipsec.tunnel.ipv6.dst_addr.s6_addr,
+				sa->dst.ip.ip6.ip6_b, 16);
+		}
+	} else if (IS_TUNNEL(sa->flags)) {
+		sess_conf.ipsec.mode = RTE_SECURITY_IPSEC_SA_MODE_TUNNEL;
+
+		if (IS_IP4(sa->flags)) {
+			sess_conf.ipsec.tunnel.type =
+				RTE_SECURITY_IPSEC_TUNNEL_IPV4;
+
+			sess_conf.ipsec.tunnel.ipv4.src_ip.s_addr =
+				sa->src.ip.ip4;
+			sess_conf.ipsec.tunnel.ipv4.dst_ip.s_addr =
+				sa->dst.ip.ip4;
+		} else if (IS_IP6(sa->flags)) {
+			sess_conf.ipsec.tunnel.type =
+				RTE_SECURITY_IPSEC_TUNNEL_IPV6;
+
+			memcpy(sess_conf.ipsec.tunnel.ipv6.src_addr.s6_addr,
+				sa->src.ip.ip6.ip6_b, 16);
+			memcpy(sess_conf.ipsec.tunnel.ipv6.dst_addr.s6_addr,
+				sa->dst.ip.ip6.ip6_b, 16);
+		} else {
+			RTE_LOG(ERR, IPSEC, "invalid tunnel type\n");
+			return -1;
+		}
+	}
+
+	if (sa->udp_encap) {
+		sess_conf.ipsec.options.udp_encap = 1;
+		sess_conf.ipsec.udp.sport = htons(sa->udp.sport);
+		sess_conf.ipsec.udp.dport = htons(sa->udp.dport);
+	}
+
+	if (sa->esn > 0) {
+		sess_conf.ipsec.options.esn = 1;
+		sess_conf.ipsec.esn.value = sa->esn;
+	}
+
 
 	RTE_LOG_DP(DEBUG, IPSEC, "Create session for SA spi %u on port %u\n",
 		sa->spi, sa->portid);
@@ -199,8 +309,7 @@ create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
 		}
 
 		ips->security.ses = rte_security_session_create(sec_ctx,
-				&sess_conf, skt_ctx->session_pool,
-				skt_ctx->session_priv_pool);
+				&sess_conf, skt_ctx->session_pool);
 		if (ips->security.ses == NULL) {
 			RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -249,12 +358,31 @@ create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
 			sa->ipv4_spec.hdr.src_addr = sa->src.ip.ip4;
 		}
 
-		sa->pattern[2].type = RTE_FLOW_ITEM_TYPE_ESP;
-		sa->pattern[2].spec = &sa->esp_spec;
-		sa->pattern[2].mask = &rte_flow_item_esp_mask;
 		sa->esp_spec.hdr.spi = rte_cpu_to_be_32(sa->spi);
 
-		sa->pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+		if (sa->udp_encap) {
+
+			sa->udp_spec.hdr.dst_port =
+					rte_cpu_to_be_16(sa->udp.dport);
+			sa->udp_spec.hdr.src_port =
+					rte_cpu_to_be_16(sa->udp.sport);
+
+			sa->pattern[2].mask = &rte_flow_item_udp_mask;
+			sa->pattern[2].type = RTE_FLOW_ITEM_TYPE_UDP;
+			sa->pattern[2].spec = &sa->udp_spec;
+
+			sa->pattern[3].type = RTE_FLOW_ITEM_TYPE_ESP;
+			sa->pattern[3].spec = &sa->esp_spec;
+			sa->pattern[3].mask = &rte_flow_item_esp_mask;
+
+			sa->pattern[4].type = RTE_FLOW_ITEM_TYPE_END;
+		} else {
+			sa->pattern[2].type = RTE_FLOW_ITEM_TYPE_ESP;
+			sa->pattern[2].spec = &sa->esp_spec;
+			sa->pattern[2].mask = &rte_flow_item_esp_mask;
+
+			sa->pattern[3].type = RTE_FLOW_ITEM_TYPE_END;
+		}
 
 		sa->action[0].type = RTE_FLOW_ACTION_TYPE_SECURITY;
 		sa->action[0].conf = ips->security.ses;
@@ -266,10 +394,10 @@ create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
 		sa->attr.ingress = (sa->direction ==
 				RTE_SECURITY_IPSEC_SA_DIR_INGRESS);
 		if (sa->attr.ingress) {
-			uint8_t rss_key[40];
+			uint8_t rss_key[64];
 			struct rte_eth_rss_conf rss_conf = {
 				.rss_key = rss_key,
-				.rss_key_len = 40,
+				.rss_key_len = sizeof(rss_key),
 			};
 			struct rte_eth_dev_info dev_info;
 			uint16_t queue[RTE_MAX_QUEUES_PER_PORT];
@@ -380,8 +508,7 @@ flow_create_failure:
 		sess_conf.userdata = (void *) sa;
 
 		ips->security.ses = rte_security_session_create(sec_ctx,
-					&sess_conf, skt_ctx->session_pool,
-					skt_ctx->session_priv_pool);
+					&sess_conf, skt_ctx->session_pool);
 		if (ips->security.ses == NULL) {
 			RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -425,7 +552,7 @@ int
 create_ipsec_esp_flow(struct ipsec_sa *sa)
 {
 	int ret = 0;
-	struct rte_flow_error err;
+	struct rte_flow_error err = {};
 	if (sa->direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS) {
 		RTE_LOG(ERR, IPSEC,
 			"No Flow director rule for Egress traffic\n");
@@ -550,8 +677,7 @@ ipsec_enqueue(ipsec_xform_fn xform_func, struct ipsec_ctx *ipsec_ctx,
 
 			rte_prefetch0(&priv->sym_cop);
 
-			if ((unlikely(ips->security.ses == NULL)) &&
-				create_lookaside_session(ipsec_ctx, sa, ips)) {
+			if (unlikely(ips->security.ses == NULL)) {
 				free_pkts(&pkts[i], 1);
 				continue;
 			}
@@ -585,8 +711,7 @@ ipsec_enqueue(ipsec_xform_fn xform_func, struct ipsec_ctx *ipsec_ctx,
 
 			rte_prefetch0(&priv->sym_cop);
 
-			if ((unlikely(ips->crypto.ses == NULL)) &&
-				create_lookaside_session(ipsec_ctx, sa, ips)) {
+			if (unlikely(ips->crypto.ses == NULL)) {
 				free_pkts(&pkts[i], 1);
 				continue;
 			}
@@ -633,8 +758,7 @@ ipsec_enqueue(ipsec_xform_fn xform_func, struct ipsec_ctx *ipsec_ctx,
 			continue;
 		}
 
-		RTE_ASSERT(sa->cdev_id_qp < ipsec_ctx->nb_qps);
-		enqueue_cop(&ipsec_ctx->tbl[sa->cdev_id_qp], &priv->cop);
+		enqueue_cop(sa->cqp[ipsec_ctx->lcore_id], &priv->cop);
 	}
 }
 

@@ -364,7 +364,10 @@ roc_nix_lso_fmt_get(struct roc_nix *roc_nix,
 }
 
 int
-roc_nix_switch_hdr_set(struct roc_nix *roc_nix, uint64_t switch_header_type)
+roc_nix_switch_hdr_set(struct roc_nix *roc_nix, uint64_t switch_header_type,
+		       uint8_t pre_l2_size_offset,
+		       uint8_t pre_l2_size_offset_mask,
+		       uint8_t pre_l2_size_shift_dir)
 {
 	struct mbox *mbox = get_mbox(roc_nix);
 	struct npc_set_pkind *req;
@@ -380,6 +383,7 @@ roc_nix_switch_hdr_set(struct roc_nix *roc_nix, uint64_t switch_header_type)
 	    switch_header_type != ROC_PRIV_FLAGS_LEN_90B &&
 	    switch_header_type != ROC_PRIV_FLAGS_EXDSA &&
 	    switch_header_type != ROC_PRIV_FLAGS_VLAN_EXDSA &&
+	    switch_header_type != ROC_PRIV_FLAGS_PRE_L2 &&
 	    switch_header_type != ROC_PRIV_FLAGS_CUSTOM) {
 		plt_err("switch header type is not supported");
 		return NIX_ERR_PARAM;
@@ -411,6 +415,12 @@ roc_nix_switch_hdr_set(struct roc_nix *roc_nix, uint64_t switch_header_type)
 	} else if (switch_header_type == ROC_PRIV_FLAGS_VLAN_EXDSA) {
 		req->mode = ROC_PRIV_FLAGS_CUSTOM;
 		req->pkind = NPC_RX_VLAN_EXDSA_PKIND;
+	} else if (switch_header_type == ROC_PRIV_FLAGS_PRE_L2) {
+		req->mode = ROC_PRIV_FLAGS_CUSTOM;
+		req->pkind = NPC_RX_CUSTOM_PRE_L2_PKIND;
+		req->var_len_off = pre_l2_size_offset;
+		req->var_len_off_mask = pre_l2_size_offset_mask;
+		req->shift_dir = pre_l2_size_shift_dir;
 	}
 
 	req->dir = PKIND_RX;
@@ -448,5 +458,44 @@ roc_nix_eeprom_info_get(struct roc_nix *roc_nix,
 
 	info->sff_id = rsp->fwdata.sfp_eeprom.sff_id;
 	mbox_memcpy(info->buf, rsp->fwdata.sfp_eeprom.buf, SFP_EEPROM_SIZE);
+	return 0;
+}
+
+int
+roc_nix_rx_drop_re_set(struct roc_nix *roc_nix, bool ena)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct mbox *mbox = get_mbox(roc_nix);
+	struct nix_rx_cfg *req;
+	int rc = -EIO;
+
+	/* No-op if no change */
+	if (ena == !!(nix->rx_cfg & ROC_NIX_LF_RX_CFG_DROP_RE))
+		return 0;
+
+	req = mbox_alloc_msg_nix_set_rx_cfg(mbox);
+	if (req == NULL)
+		return rc;
+
+	if (ena)
+		req->len_verify |= NIX_RX_DROP_RE;
+	/* Keep other flags intact */
+	if (nix->rx_cfg & ROC_NIX_LF_RX_CFG_LEN_OL3)
+		req->len_verify |= NIX_RX_OL3_VERIFY;
+
+	if (nix->rx_cfg & ROC_NIX_LF_RX_CFG_LEN_OL4)
+		req->len_verify |= NIX_RX_OL4_VERIFY;
+
+	if (nix->rx_cfg & ROC_NIX_LF_RX_CFG_CSUM_OL4)
+		req->csum_verify |= NIX_RX_CSUM_OL4_VERIFY;
+
+	rc = mbox_process(mbox);
+	if (rc)
+		return rc;
+
+	if (ena)
+		nix->rx_cfg |= ROC_NIX_LF_RX_CFG_DROP_RE;
+	else
+		nix->rx_cfg &= ~ROC_NIX_LF_RX_CFG_DROP_RE;
 	return 0;
 }

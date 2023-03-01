@@ -10,6 +10,7 @@ Programmer's Guide
 
     intro
     overview
+    source_org
     env_abstraction_layer
     service_cores
     trace_lib
@@ -28,6 +29,7 @@ Programmer's Guide
     compressdev
     regexdev
     dmadev
+    gpudev
     rte_security
     rawdev
     link_bonding_poll_mode_drv_lib
@@ -38,6 +40,8 @@ Programmer's Guide
     member_lib
     lpm_lib
     lpm6_lib
+    fib_lib
+    rib_lib
     flow_classify_lib
     packet_distrib_lib
     reorder_lib
@@ -64,7 +68,6 @@ Programmer's Guide
     bpf_lib
     ipsec_lib
     graph_lib
-    source_org
     build-sdk-meson
     meson_ut
     build_app
@@ -72,4 +75,5 @@ Programmer's Guide
     writing_efficient_code
     lto
     profile_app
+    asan
     glossary

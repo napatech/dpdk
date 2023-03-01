@@ -173,7 +173,8 @@ typedef struct efx_rx_ops_s {
 #if EFSYS_OPT_RX_SCALE
 	efx_rc_t	(*erxo_scale_context_alloc)(efx_nic_t *,
 						    efx_rx_scale_context_type_t,
-						    uint32_t, uint32_t *);
+						    uint32_t, uint32_t,
+						    uint32_t *);
 	efx_rc_t	(*erxo_scale_context_free)(efx_nic_t *, uint32_t);
 	efx_rc_t	(*erxo_scale_mode_set)(efx_nic_t *, uint32_t,
 					       efx_rx_hash_alg_t,
@@ -428,6 +429,25 @@ typedef struct efx_nic_ops_s {
 #define	EFX_RXQ_LIMIT_TARGET 512
 #endif
 
+typedef struct efx_nic_dma_region_s {
+	efsys_dma_addr_t	endr_nic_base;
+	efsys_dma_addr_t	endr_trgt_base;
+	unsigned int		endr_window_log2;
+	unsigned int		endr_align_log2;
+	boolean_t		endr_inuse;
+} efx_nic_dma_region_t;
+
+typedef struct efx_nic_dma_region_info_s {
+	unsigned int		endri_count;
+	efx_nic_dma_region_t	*endri_regions;
+} efx_nic_dma_region_info_t;
+
+typedef struct efx_nic_dma_s {
+	union {
+		/* No configuration in the case flat mapping type */
+		efx_nic_dma_region_info_t	endu_region_info;
+	} end_u;
+} efx_nic_dma_t;
 
 #if EFSYS_OPT_FILTER
 
@@ -859,6 +879,7 @@ struct efx_nic_s {
 	const efx_rx_ops_t	*en_erxop;
 	efx_fw_variant_t	efv;
 	char			en_drv_version[EFX_DRV_VER_MAX];
+	efx_nic_dma_t		en_dma;
 #if EFSYS_OPT_FILTER
 	efx_filter_t		en_filter;
 	const efx_filter_ops_t	*en_efop;
@@ -1536,6 +1557,12 @@ efx_mcdi_intf_from_pcie(
 	__out			efx_pcie_interface_t *efx_intf);
 
 LIBEFX_INTERNAL
+extern	__checkReturn		efx_rc_t
+efx_mcdi_intf_to_pcie(
+	__in			efx_pcie_interface_t efx_intf,
+	__out			uint32_t *pcie_intf);
+
+LIBEFX_INTERNAL
 extern	__checkReturn	efx_rc_t
 efx_mcdi_init_evq(
 	__in		efx_nic_t *enp,
@@ -1740,6 +1767,9 @@ typedef enum efx_mae_action_e {
 	/* These actions are strictly ordered. */
 	EFX_MAE_ACTION_DECAP,
 	EFX_MAE_ACTION_VLAN_POP,
+	EFX_MAE_ACTION_SET_DST_MAC,
+	EFX_MAE_ACTION_SET_SRC_MAC,
+	EFX_MAE_ACTION_DECR_IP_TTL,
 	EFX_MAE_ACTION_VLAN_PUSH,
 	EFX_MAE_ACTION_COUNT,
 	EFX_MAE_ACTION_ENCAP,
@@ -1771,6 +1801,8 @@ typedef struct efx_mae_action_vlan_push_s {
 } efx_mae_action_vlan_push_t;
 
 typedef struct efx_mae_actions_rsrc_s {
+	efx_mae_mac_id_t		emar_dst_mac_id;
+	efx_mae_mac_id_t		emar_src_mac_id;
 	efx_mae_eh_id_t			emar_eh_id;
 	efx_counter_t			emar_counter_id;
 } efx_mae_actions_rsrc_t;
@@ -1793,6 +1825,13 @@ struct efx_mae_actions_s {
 	 * to make sure that resource IDs are not compared.
 	 */
 	efx_mae_actions_rsrc_t		ema_rsrc;
+
+	/*
+	 * A copy of encp->enc_mae_aset_v2_supported.
+	 * It is set by efx_mae_action_set_spec_init().
+	 * This value is ignored on spec comparisons.
+	 */
+	boolean_t			ema_v2_is_supported;
 };
 
 #endif /* EFSYS_OPT_MAE */

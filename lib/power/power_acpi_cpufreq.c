@@ -3,17 +3,10 @@
  */
 
 #include <stdio.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <signal.h>
-#include <limits.h>
 
 #include <rte_memcpy.h>
-#include <rte_memory.h>
 #include <rte_string_fns.h>
 
 #include "power_acpi_cpufreq.h"
@@ -159,7 +152,7 @@ power_get_available_freqs(struct acpi_power_info *pi)
 		goto out;
 	}
 
-	/* Store the available frequncies into power context */
+	/* Store the available frequencies into power context */
 	for (i = 0, pi->nb_freqs = 0; i < count; i++) {
 		POWER_DEBUG_TRACE("Lcore %u frequency[%d]: %s\n", pi->lcore_id,
 				i, freqs[i]);

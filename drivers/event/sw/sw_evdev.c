@@ -3,9 +3,10 @@
  */
 
 #include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_ring.h>
 #include <rte_errno.h>
@@ -166,8 +167,7 @@ sw_port_setup(struct rte_eventdev *dev, uint8_t port_id,
 	snprintf(buf, sizeof(buf), "sw%d_p%u_%s", dev->data->dev_id,
 			port_id, "rx_worker_ring");
 	struct rte_event_ring *existing_ring = rte_event_ring_lookup(buf);
-	if (existing_ring)
-		rte_event_ring_free(existing_ring);
+	rte_event_ring_free(existing_ring);
 
 	p->rx_worker_ring = rte_event_ring_create(buf, MAX_SW_PROD_Q_DEPTH,
 			dev->data->socket_id,
@@ -186,8 +186,7 @@ sw_port_setup(struct rte_eventdev *dev, uint8_t port_id,
 	snprintf(buf, sizeof(buf), "sw%d_p%u, %s", dev->data->dev_id,
 			port_id, "cq_worker_ring");
 	existing_ring = rte_event_ring_lookup(buf);
-	if (existing_ring)
-		rte_event_ring_free(existing_ring);
+	rte_event_ring_free(existing_ring);
 
 	p->cq_worker_ring = rte_event_ring_create(buf, conf->dequeue_depth,
 			dev->data->socket_id,
@@ -526,8 +525,7 @@ sw_dev_configure(const struct rte_eventdev *dev)
 	 * IQ chunk references were cleaned out of the QIDs in sw_stop(), and
 	 * will be reinitialized in sw_start().
 	 */
-	if (sw->chunks)
-		rte_free(sw->chunks);
+	rte_free(sw->chunks);
 
 	sw->chunks = rte_malloc_socket(NULL,
 				       sizeof(struct sw_queue_chunk) *
@@ -567,7 +565,7 @@ sw_timer_adapter_caps_get(const struct rte_eventdev *dev, uint64_t flags,
 {
 	RTE_SET_USED(dev);
 	RTE_SET_USED(flags);
-	*caps = 0;
+	*caps = RTE_EVENT_TIMER_ADAPTER_SW_CAP;
 
 	/* Use default SW ops */
 	*ops = NULL;
@@ -609,7 +607,8 @@ sw_info_get(struct rte_eventdev *dev, struct rte_event_dev_info *info)
 				RTE_EVENT_DEV_CAP_RUNTIME_PORT_LINK |
 				RTE_EVENT_DEV_CAP_MULTIPLE_QUEUE_PORT |
 				RTE_EVENT_DEV_CAP_NONSEQ_MODE |
-				RTE_EVENT_DEV_CAP_CARRY_FLOW_ID),
+				RTE_EVENT_DEV_CAP_CARRY_FLOW_ID |
+				RTE_EVENT_DEV_CAP_MAINTENANCE_FREE),
 	};
 
 	*info = evdev_sw_info;
@@ -624,8 +623,8 @@ sw_dump(struct rte_eventdev *dev, FILE *f)
 			"Ordered", "Atomic", "Parallel", "Directed"
 	};
 	uint32_t i;
-	fprintf(f, "EventDev %s: ports %d, qids %d\n", "todo-fix-name",
-			sw->port_count, sw->qid_count);
+	fprintf(f, "EventDev %s: ports %d, qids %d\n",
+		dev->data->name, sw->port_count, sw->qid_count);
 
 	fprintf(f, "\trx   %"PRIu64"\n\tdrop %"PRIu64"\n\ttx   %"PRIu64"\n",
 		sw->stats.rx_pkts, sw->stats.rx_dropped, sw->stats.tx_pkts);
@@ -711,7 +710,6 @@ sw_dump(struct rte_eventdev *dev, FILE *f)
 			continue;
 		}
 		int affinities_per_port[SW_PORTS_MAX] = {0};
-		uint32_t inflights = 0;
 
 		fprintf(f, "  Queue %d (%s)\n", i, q_type_strings[qid->type]);
 		fprintf(f, "\trx   %"PRIu64"\tdrop %"PRIu64"\ttx   %"PRIu64"\n",
@@ -732,7 +730,6 @@ sw_dump(struct rte_eventdev *dev, FILE *f)
 		for (flow = 0; flow < RTE_DIM(qid->fids); flow++)
 			if (qid->fids[flow].cq != -1) {
 				affinities_per_port[qid->fids[flow].cq]++;
-				inflights += qid->fids[flow].pcount;
 			}
 
 		uint32_t port;
@@ -937,8 +934,7 @@ set_refill_once(const char *key __rte_unused, const char *value, void *opaque)
 static int32_t sw_sched_service_func(void *args)
 {
 	struct rte_eventdev *dev = args;
-	sw_event_schedule(dev);
-	return 0;
+	return sw_event_schedule(dev);
 }
 
 static int

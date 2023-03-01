@@ -32,7 +32,7 @@
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
 
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_errno.h>
 #include <ethdev_driver.h>
 #include <rte_ether.h>
@@ -752,7 +752,7 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
  *   Pointer to Ethernet device structure.
  *
  * @return
- *   alwasy 0 on success
+ *   always 0 on success
  */
 int
 mlx4_stats_reset(struct rte_eth_dev *dev)

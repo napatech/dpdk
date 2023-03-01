@@ -15,6 +15,7 @@
  */
 
 #include <stdio.h>
+#include <rte_compat.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
 
@@ -92,6 +93,7 @@ extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ipv6_mask;
 extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ipv6_flow_mask;
 extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_tcp_mask;
 extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ip_offset_mask;
+extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ipsec_crypto_said_mask;
 
 /**
  * The mbuf dynamic field pointer for flexible descriptor's extraction metadata.

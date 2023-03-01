@@ -11,7 +11,7 @@
 #include <rte_regexdev.h>
 #include <rte_regexdev_core.h>
 #include <rte_regexdev_driver.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 
 #include <mlx5_common.h>
 #include <mlx5_glue.h>
@@ -22,7 +22,6 @@
 
 #include "mlx5_regex.h"
 #include "mlx5_regex_utils.h"
-#include "mlx5_rxp_csrs.h"
 #include "mlx5_rxp.h"
 
 #define MLX5_REGEX_NUM_WQE_PER_PAGE (4096/64)
@@ -78,7 +77,7 @@ static int
 regex_ctrl_create_cq(struct mlx5_regex_priv *priv, struct mlx5_regex_cq *cq)
 {
 	struct mlx5_devx_cq_attr attr = {
-		.uar_page_id = priv->uar->page_id,
+		.uar_page_id = mlx5_os_get_devx_uar_page_id(priv->uar.obj),
 	};
 	int ret;
 
@@ -137,7 +136,7 @@ regex_ctrl_create_hw_qp(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
 	struct mlx5_devx_qp_attr attr = {
 		.cqn = qp->cq.cq_obj.cq->id,
-		.uar_index = priv->uar->page_id,
+		.uar_index = mlx5_os_get_devx_uar_page_id(priv->uar.obj),
 		.pd = priv->cdev->pdn,
 		.ts_format = mlx5_ts_format_conv
 				     (priv->cdev->config.hca_attr.qp_ts_format),
@@ -150,13 +149,13 @@ regex_ctrl_create_hw_qp(struct mlx5_regex_priv *priv, struct mlx5_regex_qp *qp,
 	qp_obj->qpn = q_ind;
 	qp_obj->ci = 0;
 	qp_obj->pi = 0;
-	attr.rq_size = 0;
-	attr.sq_size = RTE_BIT32(MLX5_REGEX_WQE_LOG_NUM(priv->has_umr,
+	attr.num_of_receive_wqes = 0;
+	attr.num_of_send_wqbbs = RTE_BIT32(MLX5_REGEX_WQE_LOG_NUM(priv->has_umr,
 			log_nb_desc));
 	attr.mmo = priv->mmo_regex_qp_cap;
 	ret = mlx5_devx_qp_create(priv->cdev->ctx, &qp_obj->qp_obj,
-			MLX5_REGEX_WQE_LOG_NUM(priv->has_umr, log_nb_desc),
-			&attr, SOCKET_ID_ANY);
+			attr.num_of_send_wqbbs * MLX5_WQE_SIZE, &attr,
+			SOCKET_ID_ANY);
 	if (ret) {
 		DRV_LOG(ERR, "Can't create QP object.");
 		rte_errno = ENOMEM;
@@ -205,6 +204,12 @@ mlx5_regex_qp_setup(struct rte_regexdev *dev, uint16_t qp_ind,
 	uint16_t log_desc;
 
 	qp = &priv->qps[qp_ind];
+	if (qp->jobs) {
+		DRV_LOG(ERR, "Attempting to setup QP a second time.");
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+
 	qp->flags = cfg->qp_conf_flags;
 	log_desc = rte_log2_u32(cfg->nb_desc);
 	/*
@@ -265,4 +270,27 @@ err_btree:
 err_cq:
 	rte_free(qp->qps);
 	return ret;
+}
+
+void
+mlx5_regex_clean_ctrl(struct rte_regexdev *dev)
+{
+	struct mlx5_regex_priv *priv = dev->data->dev_private;
+	struct mlx5_regex_qp *qp;
+	int qp_ind;
+	int i;
+
+	if (!priv->qps)
+		return;
+	for (qp_ind = 0; qp_ind < priv->nb_queues; qp_ind++) {
+		qp = &priv->qps[qp_ind];
+		/* Check if mlx5_regex_qp_setup() was called for this QP */
+		if (!qp->jobs)
+			continue;
+		mlx5_regexdev_teardown_fastpath(priv, qp_ind);
+		mlx5_mr_btree_free(&qp->mr_ctrl.cache_bh);
+		for (i = 0; i < qp->nb_obj; i++)
+			regex_ctrl_destroy_hw_qp(qp, i);
+		regex_ctrl_destroy_cq(&qp->cq);
+	}
 }

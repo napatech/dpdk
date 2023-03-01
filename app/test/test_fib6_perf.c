@@ -10,9 +10,21 @@
 #include <rte_cycles.h>
 #include <rte_random.h>
 #include <rte_memory.h>
-#include <rte_fib6.h>
 
 #include "test.h"
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+static int
+test_fib6_perf(void)
+{
+	printf("fib6_perf not supported on Windows, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+#else
+
+#include <rte_fib6.h>
+
 #include "test_lpm6_data.h"
 
 #define TEST_FIB_ASSERT(cond) do {				\
@@ -78,6 +90,7 @@ test_fib6_perf(void)
 	conf.type = RTE_FIB6_TRIE;
 	conf.default_nh = 0;
 	conf.max_routes = 1000000;
+	conf.rib_ext_sz = 0;
 	conf.trie.nh_sz = RTE_FIB6_TRIE_4B;
 	conf.trie.num_tbl8 = RTE_MIN(get_max_nh(conf.trie.nh_sz), 1000000U);
 
@@ -153,5 +166,7 @@ test_fib6_perf(void)
 
 	return 0;
 }
+
+#endif /*ifdef RTE_EXEC_ENV_WINDOWS*/
 
 REGISTER_TEST_COMMAND(fib6_perf_autotest, test_fib6_perf);

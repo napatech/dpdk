@@ -7,11 +7,11 @@
  * for Solarflare) and Solarflare Communications, Inc.
  */
 
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_errno.h>
 #include <rte_string_fns.h>
 #include <rte_ether.h>
@@ -32,6 +32,7 @@
 #include "sfc_repr.h"
 #include "sfc_sw_stats.h"
 #include "sfc_switch.h"
+#include "sfc_nic_dma.h"
 
 #define SFC_XSTAT_ID_INVALID_VAL  UINT64_MAX
 #define SFC_XSTAT_ID_INVALID_NAME '\0'
@@ -93,7 +94,6 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
 	struct sfc_rss *rss = &sas->rss;
 	struct sfc_mae *mae = &sa->mae;
-	uint64_t txq_offloads_def = 0;
 
 	sfc_log_init(sa, "entry");
 
@@ -145,11 +145,6 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->tx_offload_capa = sfc_tx_get_dev_offload_caps(sa) |
 				    dev_info->tx_queue_offload_capa;
 
-	if (dev_info->tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
-		txq_offloads_def |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
-
-	dev_info->default_txconf.offloads |= txq_offloads_def;
-
 	if (rss->context_type != EFX_RX_SCALE_UNAVAILABLE) {
 		uint64_t rte_hf = 0;
 		unsigned int i;
@@ -186,6 +181,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
 			     RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
+	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	if (mae->status == SFC_MAE_STATUS_SUPPORTED ||
 	    mae->status == SFC_MAE_STATUS_ADMIN) {
@@ -374,6 +370,7 @@ sfc_dev_close(struct rte_eth_dev *dev)
 
 	sfc_eth_dev_clear_ops(dev);
 
+	sfc_nic_dma_detach(sa);
 	sfc_detach(sa);
 	sfc_unprobe(sa);
 
@@ -1671,14 +1668,12 @@ sfc_dev_rss_hash_update(struct rte_eth_dev *dev,
 	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
 	struct sfc_rss *rss = &sfc_sa2shared(sa)->rss;
 	unsigned int efx_hash_types;
-	uint32_t contexts[] = {EFX_RSS_CONTEXT_DEFAULT, rss->dummy_rss_context};
 	unsigned int n_contexts;
 	unsigned int mode_i = 0;
 	unsigned int key_i = 0;
+	uint32_t contexts[2];
 	unsigned int i = 0;
 	int rc = 0;
-
-	n_contexts = rss->dummy_rss_context == EFX_RSS_CONTEXT_DEFAULT ? 1 : 2;
 
 	if (sfc_sa2shared(sa)->isolated)
 		return -ENOTSUP;
@@ -1705,6 +1700,10 @@ sfc_dev_rss_hash_update(struct rte_eth_dev *dev,
 	rc = sfc_rx_hf_rte_to_efx(sa, rss_conf->rss_hf, &efx_hash_types);
 	if (rc != 0)
 		goto fail_rx_hf_rte_to_efx;
+
+	contexts[0] = EFX_RSS_CONTEXT_DEFAULT;
+	contexts[1] = rss->dummy_ctx.nic_handle;
+	n_contexts = (rss->dummy_ctx.nic_handle_refcnt == 0) ? 1 : 2;
 
 	for (mode_i = 0; mode_i < n_contexts; mode_i++) {
 		rc = efx_rx_scale_mode_set(sa->nic, contexts[mode_i],
@@ -2323,7 +2322,7 @@ sfc_rx_metadata_negotiate(struct rte_eth_dev *dev, uint64_t *features)
 	if ((sa->priv.dp_rx->features & SFC_DP_RX_FEAT_FLOW_MARK) != 0)
 		supported |= RTE_ETH_RX_METADATA_USER_MARK;
 
-	if (sfc_flow_tunnel_is_supported(sa))
+	if (sfc_ft_is_supported(sa))
 		supported |= RTE_ETH_RX_METADATA_TUNNEL_ID;
 
 	sa->negotiated_rx_metadata = supported & *features;
@@ -2839,11 +2838,22 @@ sfc_eth_dev_init(struct rte_eth_dev *dev, void *init_params)
 	from = (const struct rte_ether_addr *)(encp->enc_mac_addr);
 	rte_ether_addr_copy(from, &dev->data->mac_addrs[0]);
 
+	/*
+	 * Setup the NIC DMA mapping handler. All internal mempools
+	 * MUST be created on attach before this point, and the
+	 * adapter MUST NOT create mempools with the adapter lock
+	 * held after this point.
+	 */
+	rc = sfc_nic_dma_attach(sa);
+	if (rc != 0)
+		goto fail_nic_dma_attach;
+
 	sfc_adapter_unlock(sa);
 
 	sfc_log_init(sa, "done");
 	return 0;
 
+fail_nic_dma_attach:
 fail_switchdev_no_mae:
 	sfc_detach(sa);
 
@@ -2891,6 +2901,7 @@ static const struct rte_pci_id pci_id_sfc_efx_map[] = {
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD2) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD2_VF) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_XILINX, EFX_PCI_DEVID_RIVERHEAD) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_XILINX, EFX_PCI_DEVID_RIVERHEAD_VF) },
 	{ .vendor_id = 0 /* sentinel */ }
 };
 

@@ -76,6 +76,17 @@ enum tf_wc_num_slice {
 };
 
 /**
+ * Bank identifier
+ */
+enum tf_sram_bank_id {
+	TF_SRAM_BANK_ID_0,		/**< SRAM Bank 0 id */
+	TF_SRAM_BANK_ID_1,		/**< SRAM Bank 1 id */
+	TF_SRAM_BANK_ID_2,		/**< SRAM Bank 2 id */
+	TF_SRAM_BANK_ID_3,		/**< SRAM Bank 3 id */
+	TF_SRAM_BANK_ID_MAX		/**< SRAM Bank index limit */
+};
+
+/**
  * EEM record AR helper
  *
  * Helper to handle the Action Record Pointer in the EEM Record Entry.
@@ -2362,5 +2373,196 @@ struct tf_get_if_tbl_entry_parms {
  */
 int tf_get_if_tbl_entry(struct tf *tfp,
 			struct tf_get_if_tbl_entry_parms *parms);
+
+/**
+ * tf_get_version parameters definition.
+ */
+struct tf_get_version_parms {
+	/**
+	 * [in] device type
+	 *
+	 * Device type for the session.
+	 */
+	enum tf_device_type device_type;
+
+	/**
+	 * [in] bp
+	 * The pointer to the parent bp struct. This is only used for HWRM
+	 * message passing within the portability layer. The type is struct
+	 * bnxt.
+	 */
+	void *bp;
+
+	/* [out] major
+	 *
+	 * Version Major number.
+	 */
+	uint8_t	major;
+
+	/* [out] minor
+	 *
+	 * Version Minor number.
+	 */
+	uint8_t	minor;
+
+	/* [out] update
+	 *
+	 * Version Update number.
+	 */
+	uint8_t	update;
+
+	/**
+	 * [out] dev_ident_caps
+	 *
+	 * fw available identifier resource list
+	 */
+	uint32_t dev_ident_caps;
+
+	/**
+	 * [out] dev_tbl_caps
+	 *
+	 * fw available table resource list
+	 */
+	uint32_t dev_tbl_caps;
+
+	/**
+	 * [out] dev_tcam_caps
+	 *
+	 * fw available tcam resource list
+	 */
+	uint32_t dev_tcam_caps;
+
+	/**
+	 * [out] dev_em_caps
+	 *
+	 * fw available em resource list
+	 */
+	uint32_t dev_em_caps;
+};
+
+/**
+ * Get tf fw version
+ *
+ * Used to retrieve Truflow fw version information.
+ *
+ * Returns success or failure code.
+ */
+int tf_get_version(struct tf *tfp,
+		   struct tf_get_version_parms *parms);
+
+/**
+ * tf_query_sram_resources parameter definition
+ */
+struct tf_query_sram_resources_parms {
+	/**
+	 * [in] Device type
+	 *
+	 * Device type for the session.
+	 */
+	enum tf_device_type device_type;
+
+	/**
+	 * [in] bp
+	 * The pointer to the parent bp struct. This is only used for HWRM
+	 * message passing within the portability layer. The type is struct
+	 * bnxt.
+	 */
+	void *bp;
+
+	/**
+	 * [in] Receive or transmit direction
+	 */
+	enum tf_dir dir;
+
+	/**
+	 * [out] Bank resource count in 8 bytes entry
+	 */
+
+	uint32_t bank_resc_count[TF_SRAM_BANK_ID_MAX];
+
+	/**
+	 * [out] Dynamic SRAM Enable
+	 */
+	bool dynamic_sram_capable;
+
+	/**
+	 * [out] SRAM profile
+	 */
+	uint8_t sram_profile;
+};
+
+/**
+ * Get SRAM resources information
+ *
+ * Used to retrieve sram bank partition information
+ *
+ * Returns success or failure code.
+ */
+int tf_query_sram_resources(struct tf *tfp,
+			    struct tf_query_sram_resources_parms *parms);
+
+/**
+ * tf_set_sram_policy parameter definition
+ */
+struct tf_set_sram_policy_parms {
+	/**
+	 * [in] Device type
+	 *
+	 * Device type for the session.
+	 */
+	enum tf_device_type device_type;
+
+	/**
+	 * [in] Receive or transmit direction
+	 */
+	enum tf_dir dir;
+
+	/**
+	 * [in] Array of Bank id for each truflow tbl type
+	 */
+	enum tf_sram_bank_id bank_id[TF_TBL_TYPE_ACT_MODIFY_64B + 1];
+};
+
+/**
+ * Set SRAM policy
+ *
+ * Used to assign SRAM bank index to all truflow table type.
+ *
+ * Returns success or failure code.
+ */
+int tf_set_sram_policy(struct tf *tfp,
+		       struct tf_set_sram_policy_parms *parms);
+
+/**
+ * tf_get_sram_policy parameter definition
+ */
+struct tf_get_sram_policy_parms {
+	/**
+	 * [in] Device type
+	 *
+	 * Device type for the session.
+	 */
+	enum tf_device_type device_type;
+
+	/**
+	 * [in] Receive or transmit direction
+	 */
+	enum tf_dir dir;
+
+	/**
+	 * [out] Array of Bank id for each truflow tbl type
+	 */
+	enum tf_sram_bank_id bank_id[TF_TBL_TYPE_ACT_MODIFY_64B + 1];
+};
+
+/**
+ * Get SRAM policy
+ *
+ * Used to get the assigned bank of table types.
+ *
+ * Returns success or failure code.
+ */
+int tf_get_sram_policy(struct tf *tfp,
+		       struct tf_get_sram_policy_parms *parms);
 
 #endif /* _TF_CORE_H_ */

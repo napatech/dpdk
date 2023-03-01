@@ -59,7 +59,7 @@ struct rwc_perf {
 	uint32_t w_ks_r_hit_nsp[2][NUM_TEST];
 	uint32_t w_ks_r_hit_sp[2][NUM_TEST];
 	uint32_t w_ks_r_miss[2][NUM_TEST];
-	uint32_t multi_rw[NUM_TEST - 1][2][NUM_TEST];
+	uint32_t multi_rw[NUM_TEST][2][NUM_TEST];
 	uint32_t w_ks_r_hit_extbkt[2][NUM_TEST];
 	uint32_t writer_add_del[NUM_TEST];
 };
@@ -1102,7 +1102,6 @@ test_hash_multi_add_lookup(struct rwc_perf *rwc_perf_results, int rwc_lf,
 					rte_eal_remote_launch(test_rwc_reader,
 						(void *)(uintptr_t)read_type,
 						enabled_core_ids[i]);
-				write_type = WRITE_KEY_SHIFT;
 				pos_core = 0;
 
 				/* Launch writers */

@@ -20,10 +20,11 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <rte_compat.h>
 #include <rte_byteorder.h>
-#include <rte_config.h>
 #include <rte_ip.h>
 #include <rte_common.h>
+#include <rte_thash_gfni.h>
 
 #if defined(RTE_ARCH_X86) || defined(__ARM_NEON)
 #include <rte_vect.h>
@@ -219,6 +220,40 @@ rte_softrss_be(uint32_t *input_tuple, uint32_t input_len,
 	return ret;
 }
 
+/**
+ * Indicates if GFNI implementations of the Toeplitz hash are supported.
+ *
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * @return
+ *  1 if GFNI is supported
+ *  0 otherwise
+ */
+__rte_experimental
+int
+rte_thash_gfni_supported(void);
+
+/**
+ * Converts Toeplitz hash key (RSS key) into matrixes required
+ * for GFNI implementation
+ *
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * @param matrixes
+ *  pointer to the memory where matrices will be written.
+ *  Note: the size of this memory must be equal to size * 8
+ * @param rss_key
+ *  pointer to the Toeplitz hash key
+ * @param size
+ *  Size of the rss_key in bytes.
+ */
+__rte_experimental
+void
+rte_thash_complete_matrix(uint64_t *matrixes, const uint8_t *rss_key,
+	int size);
+
 /** @internal Logarithm of minimum size of the RSS ReTa */
 #define	RTE_THASH_RETA_SZ_MIN	2U
 /** @internal Logarithm of maximum size of the RSS ReTa */
@@ -295,8 +330,6 @@ rte_thash_find_existing(const char *name);
  *
  * @param ctx
  *  Thash context
- * @return
- *  None
  */
 __rte_experimental
 void
@@ -382,6 +415,25 @@ rte_thash_get_complement(struct rte_thash_subtuple_helper *h,
 __rte_experimental
 const uint8_t *
 rte_thash_get_key(struct rte_thash_ctx *ctx);
+
+/**
+ * Get a pointer to the toeplitz hash matrices contained in the context.
+ * These matrices could be used with fast toeplitz hash implementation if
+ * CPU supports GFNI.
+ * Matrices changes after each addition of a helper.
+ *
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * @param ctx
+ *  Thash context
+ * @return
+ *  A pointer to the toeplitz hash key matrices on success
+ *  NULL if GFNI is not supported.
+ */
+__rte_experimental
+const uint64_t *
+rte_thash_get_gfni_matrices(struct rte_thash_ctx *ctx);
 
 /**
  * Function prototype for the rte_thash_adjust_tuple

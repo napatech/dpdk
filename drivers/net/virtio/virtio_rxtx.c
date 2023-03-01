@@ -793,7 +793,8 @@ virtio_dev_rx_queue_setup_finish(struct rte_eth_dev *dev, uint16_t queue_idx)
 			vq_update_avail_idx(vq);
 	}
 
-	PMD_INIT_LOG(DEBUG, "Allocated %d bufs", nbufs);
+	PMD_INIT_LOG(DEBUG, "Allocated %d bufs (port=%u queue=%u)", nbufs,
+		     dev->data->port_id, queue_idx);
 
 	VIRTQUEUE_DUMP(vq);
 
@@ -814,7 +815,7 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 			unsigned int socket_id __rte_unused,
 			const struct rte_eth_txconf *tx_conf)
 {
-	uint8_t vq_idx = 2 * queue_idx + VTNET_SQ_TQ_QUEUE_IDX;
+	uint16_t vq_idx = 2 * queue_idx + VTNET_SQ_TQ_QUEUE_IDX;
 	struct virtio_hw *hw = dev->data->dev_private;
 	struct virtqueue *vq = hw->vqs[vq_idx];
 	struct virtnet_tx *txvq;
@@ -858,7 +859,7 @@ int
 virtio_dev_tx_queue_setup_finish(struct rte_eth_dev *dev,
 				uint16_t queue_idx)
 {
-	uint8_t vq_idx = 2 * queue_idx + VTNET_SQ_TQ_QUEUE_IDX;
+	uint16_t vq_idx = 2 * queue_idx + VTNET_SQ_TQ_QUEUE_IDX;
 	struct virtio_hw *hw = dev->data->dev_private;
 	struct virtqueue *vq = hw->vqs[vq_idx];
 
@@ -962,7 +963,7 @@ virtio_rx_offload(struct rte_mbuf *m, struct virtio_net_hdr *hdr)
 			return -EINVAL;
 		}
 
-		/* Update mss lengthes in mbuf */
+		/* Update mss lengths in mbuf */
 		m->tso_segsz = hdr->gso_size;
 		switch (hdr->gso_type & ~VIRTIO_NET_HDR_GSO_ECN) {
 			case VIRTIO_NET_HDR_GSO_TCPV4:

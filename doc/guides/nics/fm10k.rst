@@ -63,8 +63,6 @@ vPMD. They are:
 
 *   Flow director
 
-*   Header split
-
 *   RX checksum offload
 
 Other features are supported using optional MACRO configuration. They include:
@@ -81,10 +79,6 @@ will be checked:
 *   ``RTE_ETH_RX_OFFLOAD_VLAN_EXTEND``
 
 *   ``RTE_ETH_RX_OFFLOAD_CHECKSUM``
-
-*   ``RTE_ETH_RX_OFFLOAD_HEADER_SPLIT``
-
-*   ``fdir_conf->mode``
 
 
 RX Burst Size
@@ -114,9 +108,9 @@ Switch manager
 ~~~~~~~~~~~~~~
 
 The Intel FM10000 family of NICs integrate a hardware switch and multiple host
-interfaces. The FM10000 PMD driver only manages host interfaces. For the
+interfaces. The FM10000 PMD only manages host interfaces. For the
 switch component another switch driver has to be loaded prior to the
-FM10000 PMD driver. The switch driver can be acquired from Intel support.
+FM10000 PMD. The switch driver can be acquired from Intel support.
 Only Testpoint is validated with DPDK, the latest version that has been
 validated with DPDK is 4.1.6.
 

@@ -2,6 +2,8 @@
  * Copyright(c) 2017 Cavium, Inc
  */
 
+#include <stdlib.h>
+
 #include <rte_atomic.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
@@ -17,7 +19,7 @@
 #include <rte_lcore.h>
 #include <rte_per_lcore.h>
 #include <rte_random.h>
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_test.h>
 
 #include "ssovf_evdev.h"
@@ -151,7 +153,7 @@ _eventdev_setup(int mode)
 	struct rte_event_dev_info info;
 	const char *pool_name = "evdev_octeontx_test_pool";
 
-	/* Create and destrory pool for each test case to make it standalone */
+	/* Create and destroy pool for each test case to make it standalone */
 	eventdev_test_mempool = rte_pktmbuf_pool_create(pool_name,
 					MAX_EVENTS,
 					0 /*MBUF_CACHE_SIZE*/,

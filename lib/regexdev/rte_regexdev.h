@@ -198,12 +198,10 @@
 extern "C" {
 #endif
 
+#include <rte_compat.h>
 #include <rte_common.h>
-#include <rte_config.h>
 #include <rte_dev.h>
-#include <rte_errno.h>
 #include <rte_mbuf.h>
-#include <rte_memory.h>
 
 #define RTE_REGEXDEV_NAME_MAX_LEN RTE_DEV_NAME_MAX_LEN
 
@@ -228,6 +226,9 @@ extern int rte_regexdev_logtype;
 } while (0)
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
  * Check if dev_id is ready.
  *
  * @param dev_id
@@ -237,6 +238,7 @@ extern int rte_regexdev_logtype;
  *   - 0 if device state is not in ready state.
  *   - 1 if device state is ready state.
  */
+__rte_experimental
 int rte_regexdev_is_valid_dev(uint16_t dev_id);
 
 /**
@@ -298,14 +300,14 @@ rte_regexdev_get_dev_id(const char *name);
  * backtracking positions remembered by any tokens inside the group.
  * Example RegEx is `a(?>bc|b)c` if the given patterns are `abc` and `abcc` then
  * `a(bc|b)c` matches both where as `a(?>bc|b)c` matches only abcc because
- * atomic groups don't allow backtracing back to `b`.
+ * atomic groups don't allow backtracking back to `b`.
  *
  * @see struct rte_regexdev_info::regexdev_capa
  */
 
 #define RTE_REGEXDEV_SUPP_PCRE_BACKTRACKING_CTRL_F (1ULL << 3)
 /**< RegEx device support PCRE backtracking control verbs.
- * Some examples of backtracing verbs are (*COMMIT), (*ACCEPT), (*FAIL),
+ * Some examples of backtracking verbs are (*COMMIT), (*ACCEPT), (*FAIL),
  * (*SKIP), (*PRUNE).
  *
  * @see struct rte_regexdev_info::regexdev_capa
@@ -611,6 +613,8 @@ struct rte_regexdev_info {
 	/**< Maximum payload size for a pattern match request or scan.
 	 * @see RTE_REGEXDEV_CFG_CROSS_BUFFER_SCAN_F
 	 */
+	uint16_t max_segs;
+	/**< Maximum number of mbuf segments that can be chained together. */
 	uint32_t max_rules_per_group;
 	/**< Maximum rules supported per group by this device. */
 	uint16_t max_groups;
@@ -1015,7 +1019,7 @@ rte_regexdev_rule_db_update(uint8_t dev_id,
  * @b EXPERIMENTAL: this API may change without prior notice.
  *
  * Compile local rule set and burn the complied result to the
- * RegEx deive.
+ * RegEx device.
  *
  * @param dev_id
  *   RegEx device identifier.
@@ -1472,7 +1476,8 @@ rte_regexdev_enqueue_burst(uint8_t dev_id, uint16_t qp_id,
 	struct rte_regexdev *dev = &rte_regex_devices[dev_id];
 #ifdef RTE_LIBRTE_REGEXDEV_DEBUG
 	RTE_REGEXDEV_VALID_DEV_ID_OR_ERR_RET(dev_id, -EINVAL);
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->enqueue, -ENOTSUP);
+	if (*dev->enqueue == NULL)
+		return -ENOTSUP;
 	if (qp_id >= dev->data->dev_conf.nb_queue_pairs) {
 		RTE_REGEXDEV_LOG(ERR, "Invalid queue %d\n", qp_id);
 		return -EINVAL;
@@ -1531,7 +1536,8 @@ rte_regexdev_dequeue_burst(uint8_t dev_id, uint16_t qp_id,
 	struct rte_regexdev *dev = &rte_regex_devices[dev_id];
 #ifdef RTE_LIBRTE_REGEXDEV_DEBUG
 	RTE_REGEXDEV_VALID_DEV_ID_OR_ERR_RET(dev_id, -EINVAL);
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dequeue, -ENOTSUP);
+	if (*dev->dequeue == NULL)
+		return -ENOTSUP;
 	if (qp_id >= dev->data->dev_conf.nb_queue_pairs) {
 		RTE_REGEXDEV_LOG(ERR, "Invalid queue %d\n", qp_id);
 		return -EINVAL;

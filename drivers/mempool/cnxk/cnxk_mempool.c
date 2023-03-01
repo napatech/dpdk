@@ -3,7 +3,7 @@
  */
 
 #include <rte_atomic.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_common.h>
 #include <rte_devargs.h>
 #include <rte_eal.h>
@@ -31,25 +31,25 @@ npa_aura_size_to_u32(uint8_t val)
 }
 
 static int
-parse_max_pools(const char *key, const char *value, void *extra_args)
+parse_max_pools_handler(const char *key, const char *value, void *extra_args)
 {
 	RTE_SET_USED(key);
 	uint32_t val;
 
-	val = atoi(value);
+	val = rte_align32pow2(atoi(value));
 	if (val < npa_aura_size_to_u32(NPA_AURA_SZ_128))
 		val = 128;
 	if (val > npa_aura_size_to_u32(NPA_AURA_SZ_1M))
 		val = BIT_ULL(20);
 
-	*(uint8_t *)extra_args = rte_log2_u32(val) - 6;
+	*(uint32_t *)extra_args = val;
 	return 0;
 }
 
-static inline uint8_t
-parse_aura_size(struct rte_devargs *devargs)
+static inline uint32_t
+parse_max_pools(struct rte_devargs *devargs)
 {
-	uint8_t aura_sz = NPA_AURA_SZ_128;
+	uint32_t max_pools = npa_aura_size_to_u32(NPA_AURA_SZ_128);
 	struct rte_kvargs *kvlist;
 
 	if (devargs == NULL)
@@ -58,11 +58,18 @@ parse_aura_size(struct rte_devargs *devargs)
 	if (kvlist == NULL)
 		goto exit;
 
-	rte_kvargs_process(kvlist, CNXK_NPA_MAX_POOLS_PARAM, &parse_max_pools,
-			   &aura_sz);
+	rte_kvargs_process(kvlist, CNXK_NPA_MAX_POOLS_PARAM,
+			   &parse_max_pools_handler, &max_pools);
 	rte_kvargs_free(kvlist);
 exit:
-	return aura_sz;
+	return max_pools;
+}
+
+static int
+cnxk_mempool_plt_parse_devargs(struct rte_pci_device *pci_dev)
+{
+	roc_idev_npa_maxpools_set(parse_max_pools(pci_dev->device.devargs));
+	return 0;
 }
 
 static inline char *
@@ -92,7 +99,6 @@ npa_init(struct rte_pci_device *pci_dev)
 	dev = mz->addr;
 	dev->pci_dev = pci_dev;
 
-	roc_idev_npa_maxpools_set(parse_aura_size(pci_dev->device.devargs));
 	rc = roc_npa_dev_init(dev);
 	if (rc)
 		goto mz_free;
@@ -155,48 +161,26 @@ npa_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 }
 
 static const struct rte_pci_id npa_pci_map[] = {
-	{
-		.class_id = RTE_CLASS_ANY_ID,
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.device_id = PCI_DEVID_CNXK_RVU_NPA_PF,
-		.subsystem_vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.subsystem_device_id = PCI_SUBSYSTEM_DEVID_CN10KA,
-	},
-	{
-		.class_id = RTE_CLASS_ANY_ID,
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.device_id = PCI_DEVID_CNXK_RVU_NPA_PF,
-		.subsystem_vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.subsystem_device_id = PCI_SUBSYSTEM_DEVID_CN10KAS,
-	},
-	{
-		.class_id = RTE_CLASS_ANY_ID,
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.device_id = PCI_DEVID_CNXK_RVU_NPA_PF,
-		.subsystem_vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.subsystem_device_id = PCI_SUBSYSTEM_DEVID_CNF10KA,
-	},
-	{
-		.class_id = RTE_CLASS_ANY_ID,
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.device_id = PCI_DEVID_CNXK_RVU_NPA_VF,
-		.subsystem_vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.subsystem_device_id = PCI_SUBSYSTEM_DEVID_CN10KA,
-	},
-	{
-		.class_id = RTE_CLASS_ANY_ID,
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.device_id = PCI_DEVID_CNXK_RVU_NPA_VF,
-		.subsystem_vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.subsystem_device_id = PCI_SUBSYSTEM_DEVID_CN10KAS,
-	},
-	{
-		.class_id = RTE_CLASS_ANY_ID,
-		.vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.device_id = PCI_DEVID_CNXK_RVU_NPA_VF,
-		.subsystem_vendor_id = PCI_VENDOR_ID_CAVIUM,
-		.subsystem_device_id = PCI_SUBSYSTEM_DEVID_CNF10KA,
-	},
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KA, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KAS, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KB, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CNF10KB, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KA, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KB, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KC, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KD, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KE, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CNF9KA, PCI_DEVID_CNXK_RVU_NPA_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KA, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KAS, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KB, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CNF10KB, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KA, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KB, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KC, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KD, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN9KE, PCI_DEVID_CNXK_RVU_NPA_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CNF9KA, PCI_DEVID_CNXK_RVU_NPA_VF),
 	{
 		.vendor_id = 0,
 	},
@@ -214,3 +198,8 @@ RTE_PMD_REGISTER_PCI_TABLE(mempool_cnxk, npa_pci_map);
 RTE_PMD_REGISTER_KMOD_DEP(mempool_cnxk, "vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(mempool_cnxk,
 			      CNXK_NPA_MAX_POOLS_PARAM "=<128-1048576>");
+
+RTE_INIT(cnxk_mempool_parse_devargs)
+{
+	roc_npa_lf_init_cb_register(cnxk_mempool_plt_parse_devargs);
+}

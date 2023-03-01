@@ -11,6 +11,7 @@ application through the eventdev API.
     :maxdepth: 2
     :numbered:
 
+    overview
     cnxk
     dlb2
     dpaa
@@ -18,5 +19,4 @@ application through the eventdev API.
     dsw
     sw
     octeontx
-    octeontx2
     opdl

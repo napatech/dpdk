@@ -4,9 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <inttypes.h>
 #include <errno.h>
-#include <stdarg.h>
 #include <sys/queue.h>
 
 #include <rte_string_fns.h>
@@ -21,11 +21,9 @@
 #include <rte_jhash.h>
 #include <rte_hash_crc.h>
 #include <rte_tailq.h>
-#include <rte_vect.h>
 
 #include "rte_efd.h"
 #if defined(RTE_ARCH_X86)
-#include "rte_efd_x86.h"
 #elif defined(RTE_ARCH_ARM64)
 #include "rte_efd_arm64.h"
 #endif
@@ -1165,7 +1163,7 @@ rte_efd_update(struct rte_efd_table * const table, const unsigned int socket_id,
 {
 	uint32_t chunk_id = 0, group_id = 0, bin_id = 0;
 	uint8_t new_bin_choice = 0;
-	struct efd_online_group_entry entry;
+	struct efd_online_group_entry entry = {{0}};
 
 	int status = efd_compute_update(table, socket_id, key, value,
 			&chunk_id, &group_id, &bin_id,

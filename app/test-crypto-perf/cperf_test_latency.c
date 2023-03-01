@@ -24,7 +24,7 @@ struct cperf_latency_ctx {
 
 	struct rte_mempool *pool;
 
-	struct rte_cryptodev_sym_session *sess;
+	void *sess;
 
 	cperf_populate_ops_t populate_ops;
 
@@ -44,13 +44,10 @@ static void
 cperf_latency_test_free(struct cperf_latency_ctx *ctx)
 {
 	if (ctx) {
-		if (ctx->sess) {
-			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
-			rte_cryptodev_sym_session_free(ctx->sess);
-		}
+		if (ctx->sess)
+			rte_cryptodev_sym_session_free(ctx->dev_id, ctx->sess);
 
-		if (ctx->pool)
-			rte_mempool_free(ctx->pool);
+		rte_mempool_free(ctx->pool);
 
 		rte_free(ctx->res);
 		rte_free(ctx);
@@ -59,7 +56,6 @@ cperf_latency_test_free(struct cperf_latency_ctx *ctx)
 
 void *
 cperf_latency_test_constructor(struct rte_mempool *sess_mp,
-		struct rte_mempool *sess_priv_mp,
 		uint8_t dev_id, uint16_t qp_id,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
@@ -84,7 +80,7 @@ cperf_latency_test_constructor(struct rte_mempool *sess_mp,
 		sizeof(struct rte_crypto_sym_op) +
 		sizeof(struct cperf_op_result *);
 
-	ctx->sess = op_fns->sess_create(sess_mp, sess_priv_mp, dev_id, options,
+	ctx->sess = op_fns->sess_create(sess_mp, dev_id, options,
 			test_vector, iv_offset);
 	if (ctx->sess == NULL)
 		goto err;
@@ -126,7 +122,7 @@ cperf_latency_test_runner(void *arg)
 	uint8_t burst_size_idx = 0;
 	uint32_t imix_idx = 0;
 
-	static rte_atomic16_t display_once = RTE_ATOMIC16_INIT(0);
+	static uint16_t display_once;
 
 	if (ctx == NULL)
 		return 0;
@@ -200,7 +196,13 @@ cperf_latency_test_runner(void *arg)
 					ctx->dst_buf_offset,
 					burst_size, ctx->sess, ctx->options,
 					ctx->test_vector, iv_offset,
-					&imix_idx, NULL);
+					&imix_idx, &tsc_start);
+
+			/* Populate the mbuf with the test vector */
+			for (i = 0; i < burst_size; i++)
+				cperf_mbuf_set(ops[i]->sym->m_src,
+						ctx->options,
+						ctx->test_vector);
 
 			tsc_start = rte_rdtsc_precise();
 
@@ -307,8 +309,10 @@ cperf_latency_test_runner(void *arg)
 		time_max = tunit*(double)(tsc_max) / tsc_hz;
 		time_min = tunit*(double)(tsc_min) / tsc_hz;
 
+		uint16_t exp = 0;
 		if (ctx->options->csv) {
-			if (rte_atomic16_test_and_set(&display_once))
+			if (__atomic_compare_exchange_n(&display_once, &exp, 1, 0,
+					__ATOMIC_RELAXED, __ATOMIC_RELAXED))
 				printf("\n# lcore, Buffer Size, Burst Size, Pakt Seq #, "
 						"cycles, time (us)");
 

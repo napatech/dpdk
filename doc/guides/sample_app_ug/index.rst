@@ -20,9 +20,8 @@ Sample Applications User Guides
     ip_frag
     ipv4_multicast
     ip_reassembly
-    kernel_nic_interface
     keep_alive
-    ioat
+    dma
     l2_forward_crypto
     l2_forward_job_stats
     l2_forward_real_virtual
@@ -31,7 +30,6 @@ Sample Applications User Guides
     l3_forward
     l3_forward_graph
     l3_forward_power_man
-    l3_forward_access_ctrl
     link_status_intr
     server_node_efd
     service_cores
@@ -53,7 +51,6 @@ Sample Applications User Guides
     dist_app
     vm_power_management
     ptpclient
-    performance_thread
     fips_validation
     ipsec_secgw
     bbdev_app

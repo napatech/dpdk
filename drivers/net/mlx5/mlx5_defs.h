@@ -43,14 +43,17 @@
 #define MLX5_PMD_SOFT_COUNTERS 1
 #endif
 
+/* Maximum number of DCS created per port. */
+#define MLX5_HWS_CNT_DCS_NUM 4
+
 /* Alarm timeout. */
 #define MLX5_ALARM_TIMEOUT_US 100000
 
 /* Maximum number of extended statistics counters. */
-#define MLX5_MAX_XSTATS 32
+#define MLX5_MAX_XSTATS 64
 
 /* Maximum Packet headers size (L2+L3+L4) for TSO. */
-#define MLX5_MAX_TSO_HEADER (128u + 34u)
+#define MLX5_MAX_TSO_HEADER 192U
 
 /* Inline data size required by NICs. */
 #define MLX5_INLINE_HSIZE_NONE 0
@@ -90,7 +93,7 @@
 
 /* Supported RSS */
 #define MLX5_RSS_HF_MASK (~(RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP | RTE_ETH_RSS_TCP | \
-			    MLX5_RSS_SRC_DST_ONLY))
+			    MLX5_RSS_SRC_DST_ONLY | RTE_ETH_RSS_ESP))
 
 /* Timeout in seconds to get a valid link status. */
 #define MLX5_LINK_STATUS_TIMEOUT 10
@@ -112,19 +115,11 @@
 #define MLX5_UAR_PAGE_NUM_MAX 64
 #define MLX5_UAR_PAGE_NUM_MASK ((MLX5_UAR_PAGE_NUM_MAX) - 1)
 
-/* Fields of memory mapping type in offset parameter of mmap() */
-#define MLX5_UAR_MMAP_CMD_SHIFT 8
-#define MLX5_UAR_MMAP_CMD_MASK 0xff
-
-#ifndef HAVE_MLX5DV_MMAP_GET_NC_PAGES_CMD
-#define MLX5_MMAP_GET_NC_PAGES_CMD 3
-#endif
-
 /* Log 2 of the default number of strides per WQE for Multi-Packet RQ. */
-#define MLX5_MPRQ_STRIDE_NUM_N 6U
+#define MLX5_MPRQ_DEFAULT_LOG_STRIDE_NUM 6U
 
 /* Log 2 of the default size of a stride per WQE for Multi-Packet RQ. */
-#define MLX5_MPRQ_STRIDE_SIZE_N 11U
+#define MLX5_MPRQ_DEFAULT_LOG_STRIDE_SIZE 11U
 
 /* Two-byte shift is disabled for Multi-Packet RQ. */
 #define MLX5_MPRQ_TWO_BYTE_SHIFT 0
@@ -147,6 +142,8 @@
 #define MLX5_XMETA_MODE_META32 2
 /* Provide info on patrial hw miss. Implies MLX5_XMETA_MODE_META16 */
 #define MLX5_XMETA_MODE_MISS_INFO 3
+/* Only valid in HWS, 32bits extended META without MARK support in FDB. */
+#define MLX5_XMETA_MODE_META32_HWS 4
 
 /* Tx accurate scheduling on timestamps parameters. */
 #define MLX5_TXPP_WAIT_INIT_TS 1000ul /* How long to wait timestamp. */
@@ -183,6 +180,9 @@
 /* Maximum number of indirect actions supported by rte_flow */
 #define MLX5_MAX_INDIRECT_ACTIONS 3
 
+/* Maximum number of external Rx queues supported by rte_flow */
+#define MLX5_MAX_EXT_RX_QUEUES (UINT16_MAX - MLX5_EXTERNAL_RX_QUEUE_ID_MIN + 1)
+
 /*
  * Linux definition of static_assert is found in /usr/include/assert.h.
  * Windows does not require a redefinition.
@@ -190,5 +190,7 @@
 #if !defined(HAVE_STATIC_ASSERT) && !defined(RTE_EXEC_ENV_WINDOWS)
 #define static_assert _Static_assert
 #endif
+
+#define MLX5_CNT_SVC_CYCLE_TIME_DEFAULT 500
 
 #endif /* RTE_PMD_MLX5_DEFS_H_ */

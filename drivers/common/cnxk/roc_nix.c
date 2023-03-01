@@ -109,12 +109,29 @@ roc_nix_lf_inl_ipsec_cfg(struct roc_nix *roc_nix, struct roc_nix_ipsec_cfg *cfg,
 }
 
 int
+roc_nix_cpt_ctx_cache_sync(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct mbox *mbox = (&nix->dev)->mbox;
+	struct msg_req *req;
+
+	req = mbox_alloc_msg_cpt_ctx_cache_sync(mbox);
+	if (req == NULL)
+		return -ENOSPC;
+
+	return mbox_process(mbox);
+}
+
+int
 roc_nix_max_pkt_len(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 
-	if (roc_nix_is_sdp(roc_nix))
+	if (roc_nix_is_sdp(roc_nix)) {
+		if (roc_errata_nix_sdp_send_has_mtu_size_16k())
+			return NIX_SDP_16K_HW_FRS;
 		return NIX_SDP_MAX_HW_FRS;
+	}
 
 	if (roc_model_is_cn9k())
 		return NIX_CN9K_MAX_HW_FRS;
@@ -140,7 +157,10 @@ roc_nix_lf_alloc(struct roc_nix *roc_nix, uint32_t nb_rxq, uint32_t nb_txq,
 		return rc;
 	req->rq_cnt = nb_rxq;
 	req->sq_cnt = nb_txq;
-	req->cq_cnt = nb_rxq;
+	if (roc_nix->tx_compl_ena)
+		req->cq_cnt = nb_rxq + nb_txq;
+	else
+		req->cq_cnt = nb_rxq;
 	/* XQESZ can be W64 or W16 */
 	req->xqe_sz = NIX_XQESZ_W16;
 	req->rss_sz = nix->reta_sz;
@@ -159,6 +179,7 @@ roc_nix_lf_alloc(struct roc_nix *roc_nix, uint32_t nb_rxq, uint32_t nb_txq,
 	if (rc)
 		goto fail;
 
+	nix->rx_cfg = rx_cfg;
 	nix->sqb_size = rsp->sqb_size;
 	nix->tx_chan_base = rsp->tx_chan_base;
 	nix->rx_chan_base = rsp->rx_chan_base;
@@ -282,8 +303,15 @@ roc_nix_get_hw_info(struct roc_nix *roc_nix)
 
 	mbox_alloc_msg_nix_get_hw_info(mbox);
 	rc = mbox_process_msg(mbox, (void *)&hw_info);
-	if (rc == 0)
+	if (rc == 0) {
 		nix->vwqe_interval = hw_info->vwqe_delay;
+		if (nix->lbk_link)
+			roc_nix->dwrr_mtu = hw_info->lbk_dwrr_mtu;
+		else if (nix->sdp_link)
+			roc_nix->dwrr_mtu = hw_info->sdp_dwrr_mtu;
+		else
+			roc_nix->dwrr_mtu = hw_info->rpm_dwrr_mtu;
+	}
 
 	return rc;
 }
@@ -399,6 +427,15 @@ skip_dev_init:
 	nix->pci_dev = pci_dev;
 	nix->reta_sz = reta_sz;
 	nix->mtu = ROC_NIX_DEFAULT_HW_FRS;
+
+	/* Always start with full FC for LBK */
+	if (nix->lbk_link) {
+		nix->rx_pause = 1;
+		nix->tx_pause = 1;
+	} else if (!roc_nix_is_vf_or_sdp(roc_nix)) {
+		/* Get the current state of flow control */
+		roc_nix_fc_mode_get(roc_nix);
+	}
 
 	/* Register error and ras interrupts */
 	rc = nix_register_irqs(nix);

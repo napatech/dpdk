@@ -27,8 +27,6 @@
  */
 #define I40E_GL_RXERR1_H(_i)	(0x00318004 + ((_i) * 8))
 
-#define I40E_VLAN_TAG_SIZE        4
-
 #define I40E_AQ_LEN               32
 #define I40E_AQ_BUF_SZ            4096
 /* Number of queues per TC should be one of 1, 2, 4, 8, 16, 32, 64 */
@@ -292,7 +290,7 @@ struct rte_flow {
  * Considering QinQ packet, the VLAN tag needs to be counted twice.
  */
 #define I40E_ETH_OVERHEAD \
-	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + I40E_VLAN_TAG_SIZE * 2)
+	(RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + RTE_VLAN_HLEN * 2)
 #define I40E_ETH_MAX_LEN (RTE_ETHER_MTU + I40E_ETH_OVERHEAD)
 
 #define I40E_RXTX_BYTES_H_16_BIT(bytes) ((bytes) & ~I40E_48_BIT_MASK)
@@ -899,7 +897,7 @@ struct i40e_tunnel_filter {
 	TAILQ_ENTRY(i40e_tunnel_filter) rules;
 	struct i40e_tunnel_filter_input input;
 	uint8_t is_to_vf; /* 0 - to PF, 1 - to VF */
-	uint16_t vf_id;   /* VF id, avaiblable when is_to_vf is 1. */
+	uint16_t vf_id;   /* VF id, available when is_to_vf is 1. */
 	uint16_t queue; /* Queue assigned to when match */
 };
 
@@ -968,7 +966,7 @@ struct i40e_tunnel_filter_conf {
 	uint32_t tenant_id;     /**< Tenant ID to match. VNI, GRE key... */
 	uint16_t queue_id;      /**< Queue assigned to if match. */
 	uint8_t is_to_vf;       /**< 0 - to PF, 1 - to VF */
-	uint16_t vf_id;         /**< VF id, avaiblable when is_to_vf is 1. */
+	uint16_t vf_id;         /**< VF id, available when is_to_vf is 1. */
 };
 
 TAILQ_HEAD(i40e_flow_list, rte_flow);
@@ -1102,7 +1100,7 @@ struct i40e_vf_msg_cfg {
 	/*
 	 * If message statistics from a VF exceed the maximal limitation,
 	 * the PF will ignore any new message from that VF for
-	 * 'ignor_second' time.
+	 * 'ignore_second' time.
 	 */
 	uint32_t ignore_second;
 };
@@ -1190,6 +1188,9 @@ struct i40e_pf {
 	/* Switch Domain Id */
 	uint16_t switch_domain_id;
 
+	/* When firmware > 8.3, the enable flag for outer VLAN processing */
+	bool fw8_3gt;
+
 	struct i40e_vf_msg_cfg vf_msg_cfg;
 	uint64_t prev_rx_bytes;
 	uint64_t prev_tx_bytes;
@@ -1259,7 +1260,7 @@ struct i40e_adapter {
 };
 
 /**
- * Strucute to store private data for each VF representor instance
+ * Structure to store private data for each VF representor instance
  */
 struct i40e_vf_representor {
 	uint16_t switch_domain_id;
@@ -1267,7 +1268,7 @@ struct i40e_vf_representor {
 	uint16_t vf_id;
 	/**< Virtual Function ID */
 	struct i40e_adapter *adapter;
-	/**< Private data store of assocaiated physical function */
+	/**< Private data store of associated physical function */
 	struct i40e_eth_stats stats_offset;
 	/**< Zero-point of VF statistics*/
 };

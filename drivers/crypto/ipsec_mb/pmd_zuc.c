@@ -166,7 +166,7 @@ process_zuc_hash_op(struct ipsec_mb_qp *qp, struct rte_crypto_op **ops,
 
 		hash_keys[i] = sess->pKey_hash;
 		if (sess->auth_op == RTE_CRYPTO_AUTH_OP_VERIFY)
-			dst[i] = (uint32_t *)qp_data->temp_digest;
+			dst[i] = (uint32_t *)qp_data->temp_digest[i];
 		else
 			dst[i] = (uint32_t *)ops[i]->sym->auth.digest.data;
 
@@ -198,7 +198,7 @@ process_ops(struct rte_crypto_op **ops, enum ipsec_mb_operation op_type,
 		struct ipsec_mb_qp *qp, uint8_t num_ops)
 {
 	unsigned int i;
-	unsigned int processed_ops;
+	unsigned int processed_ops = 0;
 
 	switch (op_type) {
 	case IPSEC_MB_OP_ENCRYPT_ONLY:
@@ -212,18 +212,21 @@ process_ops(struct rte_crypto_op **ops, enum ipsec_mb_operation op_type,
 				num_ops);
 		break;
 	case IPSEC_MB_OP_ENCRYPT_THEN_HASH_GEN:
+	case IPSEC_MB_OP_DECRYPT_THEN_HASH_VERIFY:
 		processed_ops = process_zuc_cipher_op(qp, ops, sessions,
 				num_ops);
 		process_zuc_hash_op(qp, ops, sessions, processed_ops);
 		break;
 	case IPSEC_MB_OP_HASH_VERIFY_THEN_DECRYPT:
+	case IPSEC_MB_OP_HASH_GEN_THEN_ENCRYPT:
 		processed_ops = process_zuc_hash_op(qp, ops, sessions,
 				num_ops);
 		process_zuc_cipher_op(qp, ops, sessions, processed_ops);
 		break;
 	default:
 		/* Operation not supported. */
-		processed_ops = 0;
+		for (i = 0; i < num_ops; i++)
+			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
 	}
 
 	for (i = 0; i < num_ops; i++) {
@@ -236,10 +239,6 @@ process_ops(struct rte_crypto_op **ops, enum ipsec_mb_operation op_type,
 		/* Free session if a session-less crypto op. */
 		if (ops[i]->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 			memset(sessions[i], 0, sizeof(struct zuc_session));
-			memset(ops[i]->sym->session, 0,
-			rte_cryptodev_sym_get_existing_header_session_size(
-					ops[i]->sym->session));
-			rte_mempool_put(qp->sess_mp_priv, sessions[i]);
 			rte_mempool_put(qp->sess_mp, ops[i]->sym->session);
 			ops[i]->sym->session = NULL;
 		}
@@ -256,6 +255,7 @@ zuc_pmd_dequeue_burst(void *queue_pair,
 
 	struct zuc_session *curr_sess;
 	struct zuc_session *sessions[ZUC_MAX_BURST];
+	struct rte_crypto_op *int_c_ops[ZUC_MAX_BURST];
 	enum ipsec_mb_operation prev_zuc_op = IPSEC_MB_OP_NOT_SUPPORTED;
 	enum ipsec_mb_operation curr_zuc_op;
 	struct ipsec_mb_qp *qp = queue_pair;
@@ -287,11 +287,11 @@ zuc_pmd_dequeue_burst(void *queue_pair,
 		 */
 		if (burst_size == 0) {
 			prev_zuc_op = curr_zuc_op;
-			c_ops[0] = curr_c_op;
+			int_c_ops[0] = curr_c_op;
 			sessions[0] = curr_sess;
 			burst_size++;
 		} else if (curr_zuc_op == prev_zuc_op) {
-			c_ops[burst_size] = curr_c_op;
+			int_c_ops[burst_size] = curr_c_op;
 			sessions[burst_size] = curr_sess;
 			burst_size++;
 			/*
@@ -299,7 +299,7 @@ zuc_pmd_dequeue_burst(void *queue_pair,
 			 * process them, and start a new batch.
 			 */
 			if (burst_size == ZUC_MAX_BURST) {
-				processed_ops = process_ops(c_ops, curr_zuc_op,
+				processed_ops = process_ops(int_c_ops, curr_zuc_op,
 						sessions, qp, burst_size);
 				if (processed_ops < burst_size) {
 					burst_size = 0;
@@ -313,7 +313,7 @@ zuc_pmd_dequeue_burst(void *queue_pair,
 			 * Different operation type, process the ops
 			 * of the previous type.
 			 */
-			processed_ops = process_ops(c_ops, prev_zuc_op,
+			processed_ops = process_ops(int_c_ops, prev_zuc_op,
 					sessions, qp, burst_size);
 			if (processed_ops < burst_size) {
 				burst_size = 0;
@@ -323,7 +323,7 @@ zuc_pmd_dequeue_burst(void *queue_pair,
 			burst_size = 0;
 			prev_zuc_op = curr_zuc_op;
 
-			c_ops[0] = curr_c_op;
+			int_c_ops[0] = curr_c_op;
 			sessions[0] = curr_sess;
 			burst_size++;
 		}
@@ -331,7 +331,7 @@ zuc_pmd_dequeue_burst(void *queue_pair,
 
 	if (burst_size != 0) {
 		/* Process the crypto ops of the last operation type. */
-		processed_ops = process_ops(c_ops, prev_zuc_op,
+		processed_ops = process_ops(int_c_ops, prev_zuc_op,
 				sessions, qp, burst_size);
 	}
 

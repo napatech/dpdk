@@ -10,7 +10,6 @@
 #include <rte_malloc.h>
 #include <rte_errno.h>
 #include <rte_cycles.h>
-#include <rte_compat.h>
 
 #include "eth_bond_private.h"
 
@@ -243,7 +242,7 @@ record_default(struct port *port)
 {
 	/* Record default parameters for partner. Partner admin parameters
 	 * are not implemented so set them to arbitrary default (last known) and
-	 * mark actor that parner is in defaulted state. */
+	 * mark actor that partner is in defaulted state. */
 	port->partner_state = STATE_LACP_ACTIVE;
 	ACTOR_STATE_SET(port, DEFAULTED);
 }
@@ -300,7 +299,7 @@ rx_machine(struct bond_dev_private *internals, uint16_t slave_id,
 		MODE4_DEBUG("LACP -> CURRENT\n");
 		BOND_PRINT_LACP(lacp);
 		/* Update selected flag. If partner parameters are defaulted assume they
-		 * are match. If not defaulted  compare LACP actor with ports parner
+		 * are match. If not defaulted  compare LACP actor with ports partner
 		 * params. */
 		if (!ACTOR_STATE(port, DEFAULTED) &&
 			(ACTOR_STATE(port, AGGREGATION) != PARTNER_STATE(port, AGGREGATION)
@@ -399,16 +398,16 @@ periodic_machine(struct bond_dev_private *internals, uint16_t slave_id)
 		PARTNER_STATE(port, LACP_ACTIVE);
 
 	uint8_t is_partner_fast, was_partner_fast;
-	/* No periodic is on BEGIN, LACP DISABLE or when both sides are pasive */
+	/* No periodic is on BEGIN, LACP DISABLE or when both sides are passive */
 	if (SM_FLAG(port, BEGIN) || !SM_FLAG(port, LACP_ENABLED) || !active) {
 		timer_cancel(&port->periodic_timer);
 		timer_force_expired(&port->tx_machine_timer);
 		SM_FLAG_CLR(port, PARTNER_SHORT_TIMEOUT);
 
 		MODE4_DEBUG("-> NO_PERIODIC ( %s%s%s)\n",
-			SM_FLAG(port, BEGIN) ? "begind " : "",
+			SM_FLAG(port, BEGIN) ? "begin " : "",
 			SM_FLAG(port, LACP_ENABLED) ? "" : "LACP disabled ",
-			active ? "LACP active " : "LACP pasive ");
+			active ? "LACP active " : "LACP passive ");
 		return;
 	}
 
@@ -495,10 +494,10 @@ mux_machine(struct bond_dev_private *internals, uint16_t slave_id)
 	if ((ACTOR_STATE(port, DISTRIBUTING) || ACTOR_STATE(port, COLLECTING)) &&
 		!PARTNER_STATE(port, SYNCHRONIZATION)) {
 		/* If in COLLECTING or DISTRIBUTING state and partner becomes out of
-		 * sync transit to ATACHED state.  */
+		 * sync transit to ATTACHED state.  */
 		ACTOR_STATE_CLR(port, DISTRIBUTING);
 		ACTOR_STATE_CLR(port, COLLECTING);
-		/* Clear actor sync to activate transit ATACHED in condition bellow */
+		/* Clear actor sync to activate transit ATTACHED in condition bellow */
 		ACTOR_STATE_CLR(port, SYNCHRONIZATION);
 		MODE4_DEBUG("Out of sync -> ATTACHED\n");
 	}
@@ -636,9 +635,12 @@ tx_machine(struct bond_dev_private *internals, uint16_t slave_id)
 			return;
 		}
 	} else {
-		uint16_t pkts_sent = rte_eth_tx_burst(slave_id,
+		uint16_t pkts_sent = rte_eth_tx_prepare(slave_id,
 				internals->mode4.dedicated_queues.tx_qid,
 				&lacp_pkt, 1);
+		pkts_sent = rte_eth_tx_burst(slave_id,
+				internals->mode4.dedicated_queues.tx_qid,
+				&lacp_pkt, pkts_sent);
 		if (pkts_sent != 1) {
 			rte_pktmbuf_free(lacp_pkt);
 			set_warning_flags(port, WRN_TX_QUEUE_FULL);
@@ -696,7 +698,7 @@ selection_logic(struct bond_dev_private *internals, uint16_t slave_id)
 	/* Search for aggregator suitable for this port */
 	for (i = 0; i < slaves_count; ++i) {
 		agg = &bond_mode_8023ad_ports[slaves[i]];
-		/* Skip ports that are not aggreagators */
+		/* Skip ports that are not aggregators */
 		if (agg->aggregator_port_id != slaves[i])
 			continue;
 
@@ -921,7 +923,7 @@ bond_mode_8023ad_periodic_cb(void *arg)
 
 			SM_FLAG_SET(port, BEGIN);
 
-			/* LACP is disabled on half duples or link is down */
+			/* LACP is disabled on half duplex or link is down */
 			if (SM_FLAG(port, LACP_ENABLED)) {
 				/* If port was enabled set it to BEGIN state */
 				SM_FLAG_CLR(port, LACP_ENABLED);
@@ -1069,7 +1071,7 @@ bond_mode_8023ad_activate_slave(struct rte_eth_dev *bond_dev,
 	port->partner_state = STATE_LACP_ACTIVE | STATE_AGGREGATION;
 	port->sm_flags = SM_FLAGS_BEGIN;
 
-	/* use this port as agregator */
+	/* use this port as aggregator */
 	port->aggregator_port_id = slave_id;
 
 	if (bond_mode_8023ad_register_lacp_mac(slave_id) < 0) {
@@ -1371,9 +1373,12 @@ bond_mode_8023ad_handle_slow_pkt(struct bond_dev_private *internals,
 			}
 		} else {
 			/* Send packet directly to the slow queue */
-			uint16_t tx_count = rte_eth_tx_burst(slave_id,
+			uint16_t tx_count = rte_eth_tx_prepare(slave_id,
 					internals->mode4.dedicated_queues.tx_qid,
 					&pkt, 1);
+			tx_count = rte_eth_tx_burst(slave_id,
+					internals->mode4.dedicated_queues.tx_qid,
+					&pkt, tx_count);
 			if (tx_count != 1) {
 				/* reset timer */
 				port->rx_marker_timer = 0;

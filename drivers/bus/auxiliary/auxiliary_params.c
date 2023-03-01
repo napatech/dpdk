@@ -4,13 +4,12 @@
 
 #include <string.h>
 
-#include <rte_bus.h>
-#include <rte_dev.h>
+#include <bus_driver.h>
+#include <dev_driver.h>
 #include <rte_errno.h>
 #include <rte_kvargs.h>
 
 #include "private.h"
-#include "rte_bus_auxiliary.h"
 
 enum auxiliary_params {
 	RTE_AUXILIARY_PARAM_NAME,
@@ -18,6 +17,7 @@ enum auxiliary_params {
 
 static const char * const auxiliary_params_keys[] = {
 	[RTE_AUXILIARY_PARAM_NAME] = "name",
+	NULL,
 };
 
 static int
@@ -26,8 +26,15 @@ auxiliary_dev_match(const struct rte_device *dev,
 {
 	const struct rte_kvargs *kvlist = _kvlist;
 	const char *key = auxiliary_params_keys[RTE_AUXILIARY_PARAM_NAME];
+	const char *name;
 
-	if (rte_kvargs_get_with_value(kvlist, key, dev->name) == NULL)
+	/* no kvlist arg, all devices match */
+	if (kvlist == NULL)
+		return 0;
+
+	/* if key is present in kvlist and does not match, filter device */
+	name = rte_kvargs_get(kvlist, key);
+	if (name != NULL && strcmp(name, dev->name))
 		return -1;
 
 	return 0;

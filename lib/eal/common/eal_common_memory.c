@@ -2,16 +2,12 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
-#include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
-#include <unistd.h>
 #include <inttypes.h>
-#include <sys/queue.h>
 
 #include <rte_fbarray.h>
 #include <rte_memory.h>
@@ -143,9 +139,19 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 		return NULL;
 	} else if (requested_addr != NULL && addr_is_hint &&
 			aligned_addr != requested_addr) {
-		RTE_LOG(WARNING, EAL, "WARNING! Base virtual address hint (%p != %p) not respected!\n",
-			requested_addr, aligned_addr);
-		RTE_LOG(WARNING, EAL, "   This may cause issues with mapping memory into secondary processes\n");
+		/*
+		 * demote this warning to debug if we did not explicitly request
+		 * a base virtual address.
+		 */
+		if (internal_conf->base_virtaddr != 0) {
+			RTE_LOG(WARNING, EAL, "WARNING! Base virtual address hint (%p != %p) not respected!\n",
+				requested_addr, aligned_addr);
+			RTE_LOG(WARNING, EAL, "   This may cause issues with mapping memory into secondary processes\n");
+		} else {
+			RTE_LOG(DEBUG, EAL, "WARNING! Base virtual address hint (%p != %p) not respected!\n",
+				requested_addr, aligned_addr);
+			RTE_LOG(DEBUG, EAL, "   This may cause issues with mapping memory into secondary processes\n");
+		}
 	} else if (next_baseaddr != NULL) {
 		next_baseaddr = RTE_PTR_ADD(aligned_addr, *size);
 	}

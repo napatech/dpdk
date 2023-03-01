@@ -135,8 +135,35 @@ struct ngbe_tx_ctx_desc {
 	rte_le32_t dw3; /* w.mss_l4len_idx    */
 };
 
+/* @ngbe_tx_ctx_desc.dw0 */
+#define NGBE_TXD_IPLEN(v)         LS(v, 0, 0x1FF) /* ip/fcoe header end */
+#define NGBE_TXD_MACLEN(v)        LS(v, 9, 0x7F) /* desc mac len */
+#define NGBE_TXD_VLAN(v)          LS(v, 16, 0xFFFF) /* vlan tag */
+
+/* @ngbe_tx_ctx_desc.dw1 */
+/*** bit 0-31, when NGBE_TXD_DTYP_FCOE=0 ***/
+#define NGBE_TXD_IPSEC_SAIDX(v)   LS(v, 0, 0x3FF) /* ipsec SA index */
+#define NGBE_TXD_ETYPE(v)         LS(v, 11, 0x1) /* tunnel type */
+#define NGBE_TXD_ETYPE_UDP        LS(0, 11, 0x1)
+#define NGBE_TXD_ETYPE_GRE        LS(1, 11, 0x1)
+#define NGBE_TXD_EIPLEN(v)        LS(v, 12, 0x7F) /* tunnel ip header */
+#define NGBE_TXD_DTYP_FCOE        MS(16, 0x1) /* FCoE/IP descriptor */
+#define NGBE_TXD_ETUNLEN(v)       LS(v, 21, 0xFF) /* tunnel header */
+#define NGBE_TXD_DECTTL(v)        LS(v, 29, 0xF) /* decrease ip TTL */
+
+/* @ngbe_tx_ctx_desc.dw2 */
+#define NGBE_TXD_IPSEC_ESPLEN(v)  LS(v, 1, 0x1FF) /* ipsec ESP length */
+#define NGBE_TXD_SNAP             MS(10, 0x1) /* SNAP indication */
+#define NGBE_TXD_TPID_SEL(v)      LS(v, 11, 0x7) /* vlan tag index */
+#define NGBE_TXD_IPSEC_ESP        MS(14, 0x1) /* ipsec type: esp=1 ah=0 */
+#define NGBE_TXD_IPSEC_ESPENC     MS(15, 0x1) /* ESP encrypt */
+#define NGBE_TXD_CTXT             MS(20, 0x1) /* context descriptor */
+#define NGBE_TXD_PTID(v)          LS(v, 24, 0xFF) /* packet type */
 /* @ngbe_tx_ctx_desc.dw3 */
 #define NGBE_TXD_DD               MS(0, 0x1) /* descriptor done */
+#define NGBE_TXD_IDX(v)           LS(v, 4, 0x1) /* ctxt desc index */
+#define NGBE_TXD_L4LEN(v)         LS(v, 8, 0xFF) /* l4 header length */
+#define NGBE_TXD_MSS(v)           LS(v, 16, 0xFFFF) /* l4 MSS */
 
 /**
  * Transmit Data Descriptor (NGBE_TXD_TYP=DATA)
@@ -239,8 +266,12 @@ struct ngbe_rx_queue {
 	uint16_t        queue_id; /**< RX queue index */
 	uint16_t        reg_idx;  /**< RX queue register index */
 	uint16_t        port_id;  /**< Device port identifier */
+	uint8_t         crc_len;  /**< 0 if CRC stripped, 4 otherwise. */
 	uint8_t         drop_en;  /**< If not 0, set SRRCTL.Drop_En */
 	uint8_t         rx_deferred_start; /**< not in global dev start */
+	/** flags to set in mbuf when a vlan is detected */
+	uint64_t        vlan_flags;
+	uint64_t	offloads; /**< Rx offloads with RTE_ETH_RX_OFFLOAD_* */
 	/** need to alloc dummy mbuf, for wraparound when scanning hw ring */
 	struct rte_mbuf fake_mbuf;
 	/** hold packets to return to application */
@@ -256,11 +287,34 @@ enum ngbe_ctx_num {
 	NGBE_CTX_NUM  = 2, /**< CTX NUMBER  */
 };
 
+/** Offload features */
+union ngbe_tx_offload {
+	uint64_t data[2];
+	struct {
+		uint64_t ptid:8; /**< Packet Type Identifier. */
+		uint64_t l2_len:7; /**< L2 (MAC) Header Length. */
+		uint64_t l3_len:9; /**< L3 (IP) Header Length. */
+		uint64_t l4_len:8; /**< L4 (TCP/UDP) Header Length. */
+		uint64_t tso_segsz:16; /**< TCP TSO segment size */
+		uint64_t vlan_tci:16;
+		/**< VLAN Tag Control Identifier (CPU order). */
+
+		/* fields for TX offloading of tunnels */
+		uint64_t outer_tun_len:8; /**< Outer TUN (Tunnel) Hdr Length. */
+		uint64_t outer_l2_len:8; /**< Outer L2 (MAC) Hdr Length. */
+		uint64_t outer_l3_len:16; /**< Outer L3 (IP) Hdr Length. */
+	};
+};
+
 /**
  * Structure to check if new context need be built
  */
 struct ngbe_ctx_info {
 	uint64_t flags;           /**< ol_flags for context build. */
+	/**< tx offload: vlan, tso, l2-l3-l4 lengths. */
+	union ngbe_tx_offload tx_offload;
+	/** compare mask for tx offload. */
+	union ngbe_tx_offload tx_offload_mask;
 };
 
 /**
@@ -292,6 +346,7 @@ struct ngbe_tx_queue {
 	uint8_t              pthresh;       /**< Prefetch threshold register */
 	uint8_t              hthresh;       /**< Host threshold register */
 	uint8_t              wthresh;       /**< Write-back threshold reg */
+	uint64_t             offloads;      /**< Tx offload flags */
 	uint32_t             ctx_curr;      /**< Hardware context states */
 	/** Hardware context0 history */
 	struct ngbe_ctx_info ctx_cache[NGBE_CTX_NUM];
@@ -305,5 +360,18 @@ struct ngbe_txq_ops {
 	void (*free_swring)(struct ngbe_tx_queue *txq);
 	void (*reset)(struct ngbe_tx_queue *txq);
 };
+
+/* Takes an ethdev and a queue and sets up the tx function to be used based on
+ * the queue parameters. Used in tx_queue_setup by primary process and then
+ * in dev_init by secondary process when attaching to an existing ethdev.
+ */
+void ngbe_set_tx_function(struct rte_eth_dev *dev, struct ngbe_tx_queue *txq);
+
+void ngbe_set_rx_function(struct rte_eth_dev *dev);
+int ngbe_dev_tx_done_cleanup(void *tx_queue, uint32_t free_cnt);
+
+uint64_t ngbe_get_tx_port_offloads(struct rte_eth_dev *dev);
+uint64_t ngbe_get_rx_queue_offloads(struct rte_eth_dev *dev);
+uint64_t ngbe_get_rx_port_offloads(struct rte_eth_dev *dev);
 
 #endif /* _NGBE_RXTX_H_ */

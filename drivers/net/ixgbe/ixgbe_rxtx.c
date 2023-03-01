@@ -1954,7 +1954,7 @@ ixgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	 * register.
 	 * Update the RDT with the value of the last processed RX descriptor
 	 * minus 1, to guarantee that the RDT register is never equal to the
-	 * RDH register, which creates a "full" ring situtation from the
+	 * RDH register, which creates a "full" ring situation from the
 	 * hardware point of view...
 	 */
 	nb_hold = (uint16_t) (nb_hold + rxq->nb_rx_hold);
@@ -2303,7 +2303,7 @@ next_desc:
 	 * register.
 	 * Update the RDT with the value of the last processed RX descriptor
 	 * minus 1, to guarantee that the RDT register is never equal to the
-	 * RDH register, which creates a "full" ring situtation from the
+	 * RDH register, which creates a "full" ring situation from the
 	 * hardware point of view...
 	 */
 	if (!bulk_alloc && nb_hold > rxq->rx_free_thresh) {
@@ -2666,7 +2666,7 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	 */
 	tx_free_thresh = (uint16_t)((tx_conf->tx_free_thresh) ?
 			tx_conf->tx_free_thresh : DEFAULT_TX_FREE_THRESH);
-	/* force tx_rs_thresh to adapt an aggresive tx_free_thresh */
+	/* force tx_rs_thresh to adapt an aggressive tx_free_thresh */
 	tx_rs_thresh = (DEFAULT_TX_RS_THRESH + tx_free_thresh > nb_desc) ?
 			nb_desc - tx_free_thresh : DEFAULT_TX_RS_THRESH;
 	if (tx_conf->tx_rs_thresh > 0)
@@ -2983,8 +2983,7 @@ ixgbe_reset_rx_queue(struct ixgbe_adapter *adapter, struct ixgbe_rx_queue *rxq)
 	rxq->rx_tail = 0;
 	rxq->nb_rx_hold = 0;
 
-	if (rxq->pkt_first_seg != NULL)
-		rte_pktmbuf_free(rxq->pkt_first_seg);
+	rte_pktmbuf_free(rxq->pkt_first_seg);
 
 	rxq->pkt_first_seg = NULL;
 	rxq->pkt_last_seg = NULL;
@@ -4831,7 +4830,7 @@ ixgbe_set_rx_function(struct rte_eth_dev *dev)
 				     dev->data->port_id);
 			dev->rx_pkt_burst = ixgbe_recv_pkts_lro_bulk_alloc;
 		} else {
-			PMD_INIT_LOG(DEBUG, "Using Regualr (non-vector, "
+			PMD_INIT_LOG(DEBUG, "Using Regular (non-vector, "
 					    "single allocation) "
 					    "Scattered Rx callback "
 					    "(port=%d).",
@@ -5153,7 +5152,7 @@ ixgbe_dev_rx_init(struct rte_eth_dev *dev)
 				       IXGBE_SRRCTL_BSIZEPKT_SHIFT);
 
 		/* It adds dual VLAN length for supporting dual VLAN */
-		if (frame_size + 2 * IXGBE_VLAN_TAG_SIZE > buf_size)
+		if (frame_size + 2 * RTE_VLAN_HLEN > buf_size)
 			dev->data->scattered_rx = 1;
 		if (rxq->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
 			rx_conf->offloads |= RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
@@ -5170,7 +5169,7 @@ ixgbe_dev_rx_init(struct rte_eth_dev *dev)
 	/*
 	 * Setup the Checksum Register.
 	 * Disable Full-Packet Checksum which is mutually exclusive with RSS.
-	 * Enable IP/L4 checkum computation by hardware if requested to do so.
+	 * Enable IP/L4 checksum computation by hardware if requested to do so.
 	 */
 	rxcsum = IXGBE_READ_REG(hw, IXGBE_RXCSUM);
 	rxcsum |= IXGBE_RXCSUM_PCSD;
@@ -5729,7 +5728,7 @@ ixgbevf_dev_rx_init(struct rte_eth_dev *dev)
 
 		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_SCATTER ||
 		    /* It adds dual VLAN length for supporting dual VLAN */
-		    (frame_size + 2 * IXGBE_VLAN_TAG_SIZE) > buf_size) {
+		    (frame_size + 2 * RTE_VLAN_HLEN) > buf_size) {
 			if (!dev->data->scattered_rx)
 				PMD_INIT_LOG(DEBUG, "forcing scatter mode");
 			dev->data->scattered_rx = 1;
@@ -5958,8 +5957,11 @@ ixgbe_config_rss_filter(struct rte_eth_dev *dev,
 	return 0;
 }
 
-/* Stubs needed for linkage when RTE_ARCH_PPC_64 is set */
-#if defined(RTE_ARCH_PPC_64)
+/* Stubs needed for linkage when RTE_ARCH_PPC_64, RTE_ARCH_RISCV or
+ * RTE_ARCH_LOONGARCH is set.
+ */
+#if defined(RTE_ARCH_PPC_64) || defined(RTE_ARCH_RISCV) || \
+	defined(RTE_ARCH_LOONGARCH)
 int
 ixgbe_rx_vec_dev_conf_condition_check(struct rte_eth_dev __rte_unused *dev)
 {

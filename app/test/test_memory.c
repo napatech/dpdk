@@ -25,6 +25,11 @@
  * - Try to read all memory; it should not segfault.
  */
 
+/*
+ * ASan complains about accessing unallocated memory.
+ * See: https://bugs.dpdk.org/show_bug.cgi?id=880
+ */
+__rte_no_asan
 static int
 check_mem(const struct rte_memseg_list *msl __rte_unused,
 		const struct rte_memseg *ms, void *arg __rte_unused)
@@ -63,7 +68,7 @@ check_seg_fds(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
 	/* we're able to get memseg fd - try getting its offset */
 	ret = rte_memseg_get_fd_offset_thread_unsafe(ms, &offset);
 	if (ret < 0) {
-		if (errno == ENOTSUP)
+		if (rte_errno == ENOTSUP)
 			return 1;
 		return -1;
 	}
