@@ -1789,42 +1789,42 @@ int SetIPV6Filter(char *ntpl_buf,
     }
   }
 
-  if (spec && NON_ZERO16(spec->hdr.src_addr)) {
-    if (last && NON_ZERO16(last->hdr.src_addr)) {
-      if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr, NULL, (const void *)&last->hdr.src_addr, internals, error) != 0) {
+  if (spec && NON_ZERO16(spec->hdr.src_addr.a)) {
+    if (last && NON_ZERO16(last->hdr.src_addr.a)) {
+      if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr.a, NULL, (const void *)&last->hdr.src_addr.a, internals, error) != 0) {
         return -1;
       }
       *typeMask |= IPV6_SRC_ADDR;
     }
-    else if (mask && CHECKIPV6(mask->hdr.src_addr)) {
-      if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr, (const void *)&mask->hdr.src_addr, NULL, internals, error) != 0) {
+    else if (mask && CHECKIPV6(mask->hdr.src_addr.a)) {
+      if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr.a, (const void *)&mask->hdr.src_addr.a, NULL, internals, error) != 0) {
         return -1;
       }
       *typeMask |= IPV6_SRC_ADDR;
     }
     else {
-      if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr, NULL, NULL, internals, error) != 0) {
+      if (SetFilter(128, 0, 8, tnl, LAYER3, (const void *)&spec->hdr.src_addr.a, NULL, NULL, internals, error) != 0) {
         return -1;
       }
       *typeMask |= IPV6_SRC_ADDR;
     }
   }
 
-  if (spec && NON_ZERO16(spec->hdr.dst_addr)) {
-    if (last && NON_ZERO16(last->hdr.dst_addr)) {
-      if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr, NULL, (const void *)&last->hdr.dst_addr, internals, error) != 0) {
+  if (spec && NON_ZERO16(spec->hdr.dst_addr.a)) {
+    if (last && NON_ZERO16(last->hdr.dst_addr.a)) {
+      if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr.a, NULL, (const void *)&last->hdr.dst_addr.a, internals, error) != 0) {
         return -1;
       }
       *typeMask |= IPV6_DST_ADDR;
     }
-    else if (mask && CHECKIPV6(mask->hdr.dst_addr)) {
-      if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr, (const void *)&mask->hdr.dst_addr, NULL, internals, error) != 0) {
+    else if (mask && CHECKIPV6(mask->hdr.dst_addr.a)) {
+      if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr.a, (const void *)&mask->hdr.dst_addr.a, NULL, internals, error) != 0) {
         return -1;
       }
       *typeMask |= IPV6_DST_ADDR;
     }
     else {
-      if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr, NULL, NULL, internals, error) != 0) {
+      if (SetFilter(128, 0, 24, tnl, LAYER3, (const void *)&spec->hdr.dst_addr.a, NULL, NULL, internals, error) != 0) {
         return -1;
       }
       *typeMask |= IPV6_DST_ADDR;
