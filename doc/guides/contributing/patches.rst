@@ -25,8 +25,6 @@ The DPDK development process has the following features:
 * Patches are reviewed publicly on the mailing list.
 * Successfully reviewed patches are merged to the repository.
 * Patches should be sent to the target repository or sub-tree, see below.
-* All sub-repositories are merged into main repository for ``-rc1`` and ``-rc2`` versions of the release.
-* After the ``-rc2`` release all patches should target the main repository.
 
 The mailing list for DPDK development is `dev@dpdk.org <https://mails.dpdk.org/archives/dev/>`_.
 Contributors will need to `register for the mailing list <https://mails.dpdk.org/listinfo/dev>`_ in order to submit patches.
@@ -34,10 +32,6 @@ It is also worth registering for the DPDK `Patchwork <https://patches.dpdk.org/p
 
 If you are using the GitHub service, pushing to a branch will trigger GitHub
 Actions to automatically build your changes and run unit tests and ABI checks.
-
-Additionally, a Travis configuration is available in DPDK but Travis free usage
-is limited to a few builds.
-You can link your repository to the ``travis-ci.com`` build service.
 
 The development process requires some familiarity with the ``git`` version control system.
 Refer to the `Pro Git Book <http://www.git-scm.com/book/>`_ for further information.
@@ -275,9 +269,10 @@ Here are some guidelines for the body of a commit message:
      Update the docs, fixing description of some parameter.
 
      Fixes: abcdefgh1234 ("doc: add some parameter")
-     Cc: author@example.com
 
      Signed-off-by: Alex Smith <alex.smith@example.com>
+     ---
+     Cc: author@example.com
 
 * When fixing an error or warning it is useful to add the error message and instructions on how to reproduce it.
 
@@ -304,9 +299,10 @@ in the body of the commit message. For example::
 
      Coverity issue: 12345
      Fixes: abcdefgh1234 ("doc: add some parameter")
-     Cc: author@example.com
 
      Signed-off-by: Alex Smith <alex.smith@example.com>
+     ---
+     Cc: author@example.com
 
 
 `Bugzilla <https://bugs.dpdk.org>`_
@@ -323,9 +319,10 @@ For example::
 
     Bugzilla ID: 12345
     Fixes: abcdefgh1234 ("doc: add some parameter")
-    Cc: author@example.com
 
     Signed-off-by: Alex Smith <alex.smith@example.com>
+    ---
+    Cc: author@example.com
 
 Patch for Stable Releases
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -502,6 +499,10 @@ The script usage is::
 For both of the above scripts, the -n option is used to specify a number of commits from HEAD,
 and the -r option allows the user specify a ``git log`` range.
 
+Additionally, when contributing to the DTS tool, patches should also be checked using
+the ``dts-check-format.sh`` script in the ``devtools`` directory of the DPDK repo.
+To run the script, extra :ref:`Python dependencies <dts_deps>` are needed.
+
 .. _contrib_check_compilation:
 
 Checking Compilation
@@ -564,10 +565,6 @@ The appropriate maintainer can be found in the ``MAINTAINERS`` file::
 Script ``get-maintainer.sh`` can be used to select maintainers automatically::
 
   git send-email --to-cmd ./devtools/get-maintainer.sh --cc dev@dpdk.org 000*.patch
-
-New additions can be sent without a maintainer::
-
-   git send-email --to dev@dpdk.org 000*.patch
 
 You can test the emails by sending it to yourself or with the ``--dry-run`` option.
 

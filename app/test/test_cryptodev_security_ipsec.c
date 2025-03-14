@@ -21,12 +21,6 @@
 #define IPVERSION 4
 #endif
 
-struct crypto_param_comb alg_list[RTE_DIM(aead_list) +
-				  (RTE_DIM(cipher_list) *
-				   RTE_DIM(auth_list))];
-
-struct crypto_param_comb ah_alg_list[2 * (RTE_DIM(auth_list) - 1)];
-
 static bool
 is_valid_ipv4_pkt(const struct rte_ipv4_hdr *pkt)
 {
@@ -59,46 +53,6 @@ is_valid_ipv6_pkt(const struct rte_ipv6_hdr *pkt)
 		return false;
 
 	return true;
-}
-
-void
-test_ipsec_alg_list_populate(void)
-{
-	unsigned long i, j, index = 0;
-
-	for (i = 0; i < RTE_DIM(aead_list); i++) {
-		alg_list[index].param1 = &aead_list[i];
-		alg_list[index].param2 = NULL;
-		index++;
-	}
-
-	for (i = 0; i < RTE_DIM(cipher_list); i++) {
-		for (j = 0; j < RTE_DIM(auth_list); j++) {
-			alg_list[index].param1 = &cipher_list[i];
-			alg_list[index].param2 = &auth_list[j];
-			index++;
-		}
-	}
-}
-
-void
-test_ipsec_ah_alg_list_populate(void)
-{
-	unsigned long i, index = 0;
-
-	for (i = 1; i < RTE_DIM(auth_list); i++) {
-		ah_alg_list[index].param1 = &auth_list[i];
-		ah_alg_list[index].param2 = NULL;
-		index++;
-	}
-
-	for (i = 1; i < RTE_DIM(auth_list); i++) {
-		/* NULL cipher */
-		ah_alg_list[index].param1 = &cipher_list[0];
-
-		ah_alg_list[index].param2 = &auth_list[i];
-		index++;
-	}
 }
 
 int
@@ -213,85 +167,15 @@ test_ipsec_sec_caps_verify(struct rte_security_ipsec_xform *ipsec_xform,
 		}
 	}
 
+	if (ipsec_xform->options.ingress_oop == 1 &&
+	    sec_cap->ipsec.options.ingress_oop == 0) {
+		if (!silent)
+			RTE_LOG(INFO, USER1,
+				"Inline Ingress OOP processing is not supported\n");
+		return -ENOTSUP;
+	}
+
 	return 0;
-}
-
-int
-test_ipsec_crypto_caps_aead_verify(
-		const struct rte_security_capability *sec_cap,
-		struct rte_crypto_sym_xform *aead)
-{
-	const struct rte_cryptodev_symmetric_capability *sym_cap;
-	const struct rte_cryptodev_capabilities *crypto_cap;
-	int j = 0;
-
-	while ((crypto_cap = &sec_cap->crypto_capabilities[j++])->op !=
-			RTE_CRYPTO_OP_TYPE_UNDEFINED) {
-		if (crypto_cap->op == RTE_CRYPTO_OP_TYPE_SYMMETRIC &&
-				crypto_cap->sym.xform_type == aead->type &&
-				crypto_cap->sym.aead.algo == aead->aead.algo) {
-			sym_cap = &crypto_cap->sym;
-			if (rte_cryptodev_sym_capability_check_aead(sym_cap,
-					aead->aead.key.length,
-					aead->aead.digest_length,
-					aead->aead.aad_length,
-					aead->aead.iv.length) == 0)
-				return 0;
-		}
-	}
-
-	return -ENOTSUP;
-}
-
-int
-test_ipsec_crypto_caps_cipher_verify(
-		const struct rte_security_capability *sec_cap,
-		struct rte_crypto_sym_xform *cipher)
-{
-	const struct rte_cryptodev_symmetric_capability *sym_cap;
-	const struct rte_cryptodev_capabilities *cap;
-	int j = 0;
-
-	while ((cap = &sec_cap->crypto_capabilities[j++])->op !=
-			RTE_CRYPTO_OP_TYPE_UNDEFINED) {
-		if (cap->op == RTE_CRYPTO_OP_TYPE_SYMMETRIC &&
-				cap->sym.xform_type == cipher->type &&
-				cap->sym.cipher.algo == cipher->cipher.algo) {
-			sym_cap = &cap->sym;
-			if (rte_cryptodev_sym_capability_check_cipher(sym_cap,
-					cipher->cipher.key.length,
-					cipher->cipher.iv.length) == 0)
-				return 0;
-		}
-	}
-
-	return -ENOTSUP;
-}
-
-int
-test_ipsec_crypto_caps_auth_verify(
-		const struct rte_security_capability *sec_cap,
-		struct rte_crypto_sym_xform *auth)
-{
-	const struct rte_cryptodev_symmetric_capability *sym_cap;
-	const struct rte_cryptodev_capabilities *cap;
-	int j = 0;
-
-	while ((cap = &sec_cap->crypto_capabilities[j++])->op !=
-			RTE_CRYPTO_OP_TYPE_UNDEFINED) {
-		if (cap->op == RTE_CRYPTO_OP_TYPE_SYMMETRIC &&
-				cap->sym.xform_type == auth->type &&
-				cap->sym.auth.algo == auth->auth.algo) {
-			sym_cap = &cap->sym;
-			if (rte_cryptodev_sym_capability_check_auth(sym_cap,
-					auth->auth.key.length,
-					auth->auth.digest_length,
-					auth->auth.iv.length) == 0)
-				return 0;
-		}
-	}
-
-	return -ENOTSUP;
 }
 
 void
@@ -517,8 +401,7 @@ test_ipsec_td_prepare(const struct crypto_param *param1,
 			td->ipsec_xform.options.iv_gen_disable = 0;
 
 		if (flags->sa_expiry_pkts_soft)
-			td->ipsec_xform.life.packets_soft_limit =
-					IPSEC_TEST_PACKETS_MAX - 1;
+			td->ipsec_xform.life.packets_soft_limit = TEST_SEC_PKTS_MAX - 1;
 
 		if (flags->ip_csum) {
 			td->ipsec_xform.options.ip_csum_enable = 1;
@@ -596,8 +479,7 @@ test_ipsec_td_update(struct ipsec_test_data td_inb[],
 		}
 
 		if (flags->sa_expiry_pkts_hard)
-			td_inb[i].ipsec_xform.life.packets_hard_limit =
-					IPSEC_TEST_PACKETS_MAX - 1;
+			td_inb[i].ipsec_xform.life.packets_hard_limit = TEST_SEC_PKTS_MAX - 1;
 
 		if (flags->udp_encap)
 			td_inb[i].ipsec_xform.options.udp_encap = 1;
@@ -619,32 +501,6 @@ test_ipsec_td_update(struct ipsec_test_data td_inb[],
 	}
 }
 
-void
-test_ipsec_display_alg(const struct crypto_param *param1,
-		       const struct crypto_param *param2)
-{
-	if (param1->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
-		printf("\t%s [%d]",
-		       rte_crypto_aead_algorithm_strings[param1->alg.aead],
-		       param1->key_length * 8);
-	} else if (param1->type == RTE_CRYPTO_SYM_XFORM_AUTH) {
-		printf("\t%s",
-		       rte_crypto_auth_algorithm_strings[param1->alg.auth]);
-		if (param1->alg.auth != RTE_CRYPTO_AUTH_NULL)
-			printf(" [%dB ICV]", param1->digest_length);
-	} else {
-		printf("\t%s",
-		       rte_crypto_cipher_algorithm_strings[param1->alg.cipher]);
-		if (param1->alg.cipher != RTE_CRYPTO_CIPHER_NULL)
-			printf(" [%d]", param1->key_length * 8);
-		printf(" %s",
-		       rte_crypto_auth_algorithm_strings[param2->alg.auth]);
-		if (param2->alg.auth != RTE_CRYPTO_AUTH_NULL)
-			printf(" [%dB ICV]", param2->digest_length);
-	}
-	printf("\n");
-}
-
 static int
 test_ipsec_tunnel_hdr_len_get(const struct ipsec_test_data *td)
 {
@@ -664,12 +520,12 @@ test_ipsec_tunnel_hdr_len_get(const struct ipsec_test_data *td)
 }
 
 static int
-test_ipsec_iv_verify_push(struct rte_mbuf *m, const struct ipsec_test_data *td)
+test_ipsec_iv_verify_push(const uint8_t *output_text, const struct ipsec_test_data *td)
 {
-	static uint8_t iv_queue[IV_LEN_MAX * IPSEC_TEST_PACKETS_MAX];
-	uint8_t *iv_tmp, *output_text = rte_pktmbuf_mtod(m, uint8_t *);
+	static uint8_t iv_queue[IV_LEN_MAX * TEST_SEC_PKTS_MAX];
 	int i, iv_pos, iv_len;
 	static int index;
+	uint8_t *iv_tmp;
 
 	if (td->aead)
 		iv_len = td->xform.aead.aead.iv.length - td->salt.len;
@@ -697,19 +553,19 @@ test_ipsec_iv_verify_push(struct rte_mbuf *m, const struct ipsec_test_data *td)
 	memcpy(iv_tmp, output_text, iv_len);
 	index++;
 
-	if (index == IPSEC_TEST_PACKETS_MAX)
+	if (index == TEST_SEC_PKTS_MAX)
 		index = 0;
 
 	return TEST_SUCCESS;
 }
 
 static int
-test_ipsec_l3_csum_verify(struct rte_mbuf *m)
+test_ipsec_l3_csum_verify(uint8_t *output_text)
 {
 	uint16_t actual_cksum, expected_cksum;
 	struct rte_ipv4_hdr *ip;
 
-	ip = rte_pktmbuf_mtod(m, struct rte_ipv4_hdr *);
+	ip = (struct rte_ipv4_hdr *)output_text;
 
 	if (!is_ipv4((void *)ip))
 		return TEST_SKIPPED;
@@ -727,26 +583,16 @@ test_ipsec_l3_csum_verify(struct rte_mbuf *m)
 }
 
 static int
-test_ipsec_l4_csum_verify(struct rte_mbuf *m)
+test_ipsec_l4_csum_verify(uint8_t *output_text)
 {
 	uint16_t actual_cksum = 0, expected_cksum = 0;
-	uint32_t len = rte_pktmbuf_pkt_len(m);
-	uint8_t data_arr[IPSEC_TEXT_MAX_LEN];
 	struct rte_ipv4_hdr *ipv4;
 	struct rte_ipv6_hdr *ipv6;
-	uint8_t *data = data_arr;
 	struct rte_tcp_hdr *tcp;
 	struct rte_udp_hdr *udp;
-	const uint8_t *ptr;
 	void *ip, *l4;
 
-	ptr = rte_pktmbuf_read(m, 0, len, data_arr);
-	if (!ptr)
-		return -EINVAL;
-	else if (ptr != data_arr)
-		data = rte_pktmbuf_mtod_offset(m, uint8_t *, 0);
-
-	ip = (struct rte_ipv4_hdr *)data;
+	ip = output_text;
 
 	if (is_ipv4(ip)) {
 		ipv4 = ip;
@@ -823,14 +669,11 @@ test_ipsec_ttl_or_hop_decrement_verify(void *received, void *expected)
 }
 
 static int
-test_ipsec_td_verify(struct rte_mbuf *m, const struct ipsec_test_data *td,
-		     bool silent, const struct ipsec_test_flags *flags)
+test_ipsec_td_verify(uint8_t *output_text, uint32_t len, uint32_t ol_flags,
+		const struct ipsec_test_data *td, bool silent, const struct ipsec_test_flags *flags)
 {
-	uint32_t skip, len = rte_pktmbuf_pkt_len(m);
 	uint8_t td_output_text[IPSEC_TEXT_MAX_LEN];
-	uint8_t data_arr[IPSEC_TEXT_MAX_LEN];
-	uint8_t *output_text = data_arr;
-	const uint8_t *ptr;
+	uint32_t skip;
 	int ret;
 
 	/* For tests with status as error for test success, skip verification */
@@ -840,12 +683,6 @@ test_ipsec_td_verify(struct rte_mbuf *m, const struct ipsec_test_data *td,
 	     flags->tunnel_hdr_verify ||
 	     td->ar_packet))
 		return TEST_SUCCESS;
-
-	ptr = rte_pktmbuf_read(m, 0, len, data_arr);
-	if (!ptr)
-		return -EINVAL;
-	else if (ptr != data_arr)
-		output_text = rte_pktmbuf_mtod_offset(m, uint8_t *, 0);
 
 	if (td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS &&
 	   flags->udp_encap) {
@@ -870,15 +707,10 @@ test_ipsec_td_verify(struct rte_mbuf *m, const struct ipsec_test_data *td,
 		}
 	}
 
-	skip = test_ipsec_tunnel_hdr_len_get(td);
-
-	len -= skip;
-	output_text += skip;
-
 	if ((td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_INGRESS) &&
 				flags->ip_csum) {
-		if (m->ol_flags & RTE_MBUF_F_RX_IP_CKSUM_GOOD)
-			ret = test_ipsec_l3_csum_verify(m);
+		if (ol_flags & RTE_MBUF_F_RX_IP_CKSUM_GOOD)
+			ret = test_ipsec_l3_csum_verify(output_text);
 		else
 			ret = TEST_FAILED;
 
@@ -890,8 +722,8 @@ test_ipsec_td_verify(struct rte_mbuf *m, const struct ipsec_test_data *td,
 
 	if ((td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_INGRESS) &&
 				flags->l4_csum) {
-		if (m->ol_flags & RTE_MBUF_F_RX_L4_CKSUM_GOOD)
-			ret = test_ipsec_l4_csum_verify(m);
+		if (ol_flags & RTE_MBUF_F_RX_L4_CKSUM_GOOD)
+			ret = test_ipsec_l4_csum_verify(output_text);
 		else
 			ret = TEST_FAILED;
 
@@ -900,6 +732,11 @@ test_ipsec_td_verify(struct rte_mbuf *m, const struct ipsec_test_data *td,
 
 		return ret;
 	}
+
+	skip = test_ipsec_tunnel_hdr_len_get(td);
+
+	len -= skip;
+	output_text += skip;
 
 	memcpy(td_output_text, td->output_text.data + skip, len);
 
@@ -932,25 +769,13 @@ test_ipsec_td_verify(struct rte_mbuf *m, const struct ipsec_test_data *td,
 }
 
 static int
-test_ipsec_res_d_prepare(struct rte_mbuf *m, const struct ipsec_test_data *td,
-		   struct ipsec_test_data *res_d)
+test_ipsec_res_d_prepare(const uint8_t *output_text, uint32_t len,
+		const struct ipsec_test_data *td, struct ipsec_test_data *res_d)
 {
-	uint8_t *output_text = rte_pktmbuf_mtod(m, uint8_t *);
-	uint32_t len = rte_pktmbuf_pkt_len(m);
-	struct rte_mbuf *next = m;
-	uint32_t off = 0;
-
 	memcpy(res_d, td, sizeof(*res_d));
 
-	while (next && off < len) {
-		output_text = rte_pktmbuf_mtod(next, uint8_t *);
-		if (off + next->data_len > sizeof(res_d->input_text.data))
-			break;
-		memcpy(&res_d->input_text.data[off], output_text, next->data_len);
-		off += next->data_len;
-		next = next->next;
-	}
-	res_d->input_text.len = off;
+	memcpy(&res_d->input_text.data, output_text, len);
+	res_d->input_text.len = len;
 
 	res_d->ipsec_xform.direction = RTE_SECURITY_IPSEC_SA_DIR_INGRESS;
 	if (res_d->aead) {
@@ -1069,19 +894,41 @@ test_ipsec_iph6_hdr_validate(const struct rte_ipv6_hdr *iph6,
 }
 
 int
-test_ipsec_post_process(struct rte_mbuf *m, const struct ipsec_test_data *td,
+test_ipsec_post_process(const struct rte_mbuf *m, const struct ipsec_test_data *td,
 			struct ipsec_test_data *res_d, bool silent,
 			const struct ipsec_test_flags *flags)
 {
-	uint8_t *output_text = rte_pktmbuf_mtod(m, uint8_t *);
+	uint32_t len = rte_pktmbuf_pkt_len(m), data_len;
+	uint8_t output_text[IPSEC_TEXT_MAX_LEN];
+	const struct rte_mbuf *seg;
+	const uint8_t *output;
 	int ret;
+
+	memset(output_text, 0, IPSEC_TEXT_MAX_LEN);
+	/* Actual data in packet might be less in error cases,
+	 * hence take minimum of pkt_len and sum of data_len.
+	 * This is done to run through negative test cases.
+	 */
+	data_len = 0;
+	seg = m;
+	while (seg) {
+		data_len += seg->data_len;
+		seg = seg->next;
+	}
+	len = RTE_MIN(len, data_len);
+	TEST_ASSERT(len <= IPSEC_TEXT_MAX_LEN, "Invalid packet length: %u", len);
+	/* Copy mbuf payload to continuous buffer */
+	output = rte_pktmbuf_read(m, 0, len, output_text);
+	if (output != output_text)
+		/* Single segment mbuf, copy manually */
+		memcpy(output_text, output, len);
 
 	if (td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS) {
 		const struct rte_ipv4_hdr *iph4;
 		const struct rte_ipv6_hdr *iph6;
 
 		if (flags->iv_gen) {
-			ret = test_ipsec_iv_verify_push(m, td);
+			ret = test_ipsec_iv_verify_push(output_text, td);
 			if (ret != TEST_SUCCESS)
 				return ret;
 		}
@@ -1181,9 +1028,9 @@ test_ipsec_post_process(struct rte_mbuf *m, const struct ipsec_test_data *td,
 	 */
 
 	if (res_d == NULL)
-		return test_ipsec_td_verify(m, td, silent, flags);
+		return test_ipsec_td_verify(output_text, len, m->ol_flags, td, silent, flags);
 	else
-		return test_ipsec_res_d_prepare(m, td, res_d);
+		return test_ipsec_res_d_prepare(output_text, len, td, res_d);
 }
 
 int
@@ -1207,7 +1054,7 @@ test_ipsec_status_check(const struct ipsec_test_data *td,
 
 	if (dir == RTE_SECURITY_IPSEC_SA_DIR_INGRESS &&
 	    flags->sa_expiry_pkts_hard &&
-	    pkt_num == IPSEC_TEST_PACKETS_MAX) {
+	    pkt_num == TEST_SEC_PKTS_MAX) {
 		if (op->status != RTE_CRYPTO_OP_STATUS_ERROR) {
 			printf("SA hard expiry (pkts) test failed\n");
 			return TEST_FAILED;
@@ -1239,7 +1086,7 @@ test_ipsec_status_check(const struct ipsec_test_data *td,
 		}
 	}
 
-	if (flags->sa_expiry_pkts_soft && pkt_num == IPSEC_TEST_PACKETS_MAX) {
+	if (flags->sa_expiry_pkts_soft && pkt_num == TEST_SEC_PKTS_MAX) {
 		if (!(op->aux_flags &
 		      RTE_CRYPTO_OP_AUX_FLAGS_IPSEC_SOFT_EXPIRY)) {
 			printf("SA soft expiry (pkts) test failed\n");
@@ -1251,15 +1098,18 @@ test_ipsec_status_check(const struct ipsec_test_data *td,
 }
 
 int
-test_ipsec_stats_verify(struct rte_security_ctx *ctx,
+test_ipsec_stats_verify(void *ctx,
 			void *sess,
 			const struct ipsec_test_flags *flags,
 			enum rte_security_ipsec_sa_direction dir)
 {
 	struct rte_security_stats stats = {0};
-	int ret = TEST_SUCCESS;
+	int retries = 0, ret = TEST_SUCCESS;
 
 	if (flags->stats_success) {
+stats_get:
+		ret = TEST_SUCCESS;
+
 		if (rte_security_session_stats_get(ctx, sess, &stats) < 0)
 			return TEST_FAILED;
 
@@ -1271,6 +1121,12 @@ test_ipsec_stats_verify(struct rte_security_ctx *ctx,
 			if (stats.ipsec.ipackets != 1 ||
 			    stats.ipsec.ierrors != 0)
 				ret = TEST_FAILED;
+		}
+
+		if (ret == TEST_FAILED && retries < TEST_STATS_RETRIES) {
+			retries++;
+			rte_delay_ms(1);
+			goto stats_get;
 		}
 	}
 

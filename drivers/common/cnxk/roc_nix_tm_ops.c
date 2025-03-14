@@ -8,6 +8,7 @@
 int
 roc_nix_tm_sq_aura_fc(struct roc_nix_sq *sq, bool enable)
 {
+	struct npa_cn20k_aq_enq_req *req_cn20k;
 	struct npa_aq_enq_req *req;
 	struct npa_aq_enq_rsp *rsp;
 	uint64_t aura_handle;
@@ -22,12 +23,17 @@ roc_nix_tm_sq_aura_fc(struct roc_nix_sq *sq, bool enable)
 	if (!lf)
 		return NPA_ERR_DEVICE_NOT_BOUNDED;
 
-	mbox = lf->mbox;
+	mbox = mbox_get(lf->mbox);
 	/* Set/clear sqb aura fc_ena */
 	aura_handle = sq->aura_handle;
-	req = mbox_alloc_msg_npa_aq_enq(mbox);
+	if (roc_model_is_cn20k()) {
+		req_cn20k = mbox_alloc_msg_npa_cn20k_aq_enq(mbox);
+		req = (struct npa_aq_enq_req *)req_cn20k;
+	} else {
+		req = mbox_alloc_msg_npa_aq_enq(mbox);
+	}
 	if (req == NULL)
-		return rc;
+		goto exit;
 
 	req->aura_id = roc_npa_aura_handle_to_aura(aura_handle);
 	req->ctype = NPA_AQ_CTYPE_AURA;
@@ -48,29 +54,40 @@ roc_nix_tm_sq_aura_fc(struct roc_nix_sq *sq, bool enable)
 
 	rc = mbox_process(mbox);
 	if (rc)
-		return rc;
+		goto exit;
 
 	/* Read back npa aura ctx */
-	req = mbox_alloc_msg_npa_aq_enq(mbox);
-	if (req == NULL)
-		return -ENOSPC;
+	if (enable) {
+		if (roc_model_is_cn20k()) {
+			req_cn20k = mbox_alloc_msg_npa_cn20k_aq_enq(mbox);
+			req = (struct npa_aq_enq_req *)req_cn20k;
+		} else {
+			req = mbox_alloc_msg_npa_aq_enq(mbox);
+		}
+		if (req == NULL) {
+			rc = -ENOSPC;
+			goto exit;
+		}
 
-	req->aura_id = roc_npa_aura_handle_to_aura(aura_handle);
-	req->ctype = NPA_AQ_CTYPE_AURA;
-	req->op = NPA_AQ_INSTOP_READ;
+		req->aura_id = roc_npa_aura_handle_to_aura(aura_handle);
+		req->ctype = NPA_AQ_CTYPE_AURA;
+		req->op = NPA_AQ_INSTOP_READ;
 
-	rc = mbox_process_msg(mbox, (void *)&rsp);
-	if (rc)
-		return rc;
+		rc = mbox_process_msg(mbox, (void *)&rsp);
+		if (rc)
+			goto exit;
 
-	/* Init when enabled as there might be no triggers */
-	if (enable)
+		/* Init when enabled as there might be no triggers */
 		*(volatile uint64_t *)sq->fc = rsp->aura.count;
-	else
+	} else {
 		*(volatile uint64_t *)sq->fc = sq->aura_sqb_bufs;
+	}
 	/* Sync write barrier */
 	plt_wmb();
-	return 0;
+	rc = 0;
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 int
@@ -443,12 +460,14 @@ roc_nix_tm_hierarchy_disable(struct roc_nix *roc_nix)
 		/* Though it enables both RX MCAM Entries and CGX Link
 		 * we assume all the rx queues are stopped way back.
 		 */
-		mbox_alloc_msg_nix_lf_start_rx(mbox);
+		mbox_alloc_msg_nix_lf_start_rx(mbox_get(mbox));
 		rc = mbox_process(mbox);
 		if (rc) {
+			mbox_put(mbox);
 			plt_err("cgx start failed, rc=%d", rc);
 			return rc;
 		}
+		mbox_put(mbox);
 	}
 
 	/* XON all SMQ's */
@@ -474,7 +493,7 @@ roc_nix_tm_hierarchy_disable(struct roc_nix *roc_nix)
 		if (!sq)
 			continue;
 
-		rc = nix_tm_bp_config_set(roc_nix, sq->qid, 0, false, false);
+		rc = nix_tm_bp_config_set(roc_nix, sq->qid, 0, false);
 		if (rc && rc != -ENOENT) {
 			plt_err("Failed to disable backpressure, rc=%d", rc);
 			goto cleanup;
@@ -487,7 +506,7 @@ roc_nix_tm_hierarchy_disable(struct roc_nix *roc_nix)
 		if (!sq)
 			continue;
 
-		rc = roc_nix_tm_sq_aura_fc(sq, false);
+		rc = roc_nix_sq_ena_dis(sq, false);
 		if (rc) {
 			plt_err("Failed to disable sqb aura fc, rc=%d", rc);
 			goto cleanup;
@@ -496,7 +515,7 @@ roc_nix_tm_hierarchy_disable(struct roc_nix *roc_nix)
 		/* Wait for sq entries to be flushed */
 		rc = roc_nix_tm_sq_flush_spin(sq);
 		if (rc) {
-			plt_err("Failed to drain sq, rc=%d\n", rc);
+			plt_err("Failed to drain sq, rc=%d", rc);
 			goto cleanup;
 		}
 	}
@@ -543,10 +562,72 @@ roc_nix_tm_hierarchy_disable(struct roc_nix *roc_nix)
 cleanup:
 	/* Restore cgx state */
 	if (!roc_nix->io_enabled) {
-		mbox_alloc_msg_nix_lf_stop_rx(mbox);
+		mbox_alloc_msg_nix_lf_stop_rx(mbox_get(mbox));
 		rc |= mbox_process(mbox);
+		mbox_put(mbox);
 	}
 	return rc;
+}
+
+int
+roc_nix_tm_hierarchy_xmit_enable(struct roc_nix *roc_nix, enum roc_nix_tm_tree tree)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct nix_tm_node_list *list;
+	struct nix_tm_node *node;
+	struct roc_nix_sq *sq;
+	uint16_t sq_id;
+	int rc;
+
+	if (tree >= ROC_NIX_TM_TREE_MAX)
+		return NIX_ERR_PARAM;
+
+	list = nix_tm_node_list(nix, tree);
+
+	/* Update SQ Sched Data while SQ is idle */
+	TAILQ_FOREACH(node, list, node) {
+		if (!nix_tm_is_leaf(nix, node->lvl))
+			continue;
+
+		rc = nix_tm_sq_sched_conf(nix, node, false);
+		if (rc) {
+			plt_err("SQ %u sched update failed, rc=%d", node->id,
+				rc);
+			return rc;
+		}
+	}
+
+	/* Finally XON all SMQ's */
+	TAILQ_FOREACH(node, list, node) {
+		if (node->hw_lvl != NIX_TXSCH_LVL_SMQ)
+			continue;
+
+		rc = nix_tm_smq_xoff(nix, node, false);
+		if (rc) {
+			plt_err("Failed to enable smq %u, rc=%d", node->hw_id,
+				rc);
+			return rc;
+		}
+	}
+
+	/* Enable xmit as all the topology is ready */
+	TAILQ_FOREACH(node, list, node) {
+		if (!nix_tm_is_leaf(nix, node->lvl))
+			continue;
+
+		sq_id = node->id;
+		sq = nix->sqs[sq_id];
+
+		rc = roc_nix_sq_ena_dis(sq, true);
+		if (rc) {
+			plt_err("TM sw xon failed on SQ %u, rc=%d", node->id,
+				rc);
+			return rc;
+		}
+		node->flags |= NIX_TM_NODE_ENABLED;
+	}
+
+	return 0;
 }
 
 int
@@ -556,9 +637,7 @@ roc_nix_tm_hierarchy_enable(struct roc_nix *roc_nix, enum roc_nix_tm_tree tree,
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 	struct nix_tm_node_list *list;
 	struct nix_tm_node *node;
-	struct roc_nix_sq *sq;
 	uint32_t tree_mask;
-	uint16_t sq_id;
 	int rc;
 
 	if (tree >= ROC_NIX_TM_TREE_MAX)
@@ -613,55 +692,12 @@ roc_nix_tm_hierarchy_enable(struct roc_nix *roc_nix, enum roc_nix_tm_tree tree,
 			node->flags |= NIX_TM_NODE_ENABLED;
 	}
 
-	if (!xmit_enable)
-		goto skip_sq_update;
+	if (xmit_enable)
+		rc = roc_nix_tm_hierarchy_xmit_enable(roc_nix, tree);
 
-	/* Update SQ Sched Data while SQ is idle */
-	TAILQ_FOREACH(node, list, node) {
-		if (!nix_tm_is_leaf(nix, node->lvl))
-			continue;
-
-		rc = nix_tm_sq_sched_conf(nix, node, false);
-		if (rc) {
-			plt_err("SQ %u sched update failed, rc=%d", node->id,
-				rc);
-			return rc;
-		}
-	}
-
-	/* Finally XON all SMQ's */
-	TAILQ_FOREACH(node, list, node) {
-		if (node->hw_lvl != NIX_TXSCH_LVL_SMQ)
-			continue;
-
-		rc = nix_tm_smq_xoff(nix, node, false);
-		if (rc) {
-			plt_err("Failed to enable smq %u, rc=%d", node->hw_id,
-				rc);
-			return rc;
-		}
-	}
-
-	/* Enable xmit as all the topology is ready */
-	TAILQ_FOREACH(node, list, node) {
-		if (!nix_tm_is_leaf(nix, node->lvl))
-			continue;
-
-		sq_id = node->id;
-		sq = nix->sqs[sq_id];
-
-		rc = roc_nix_tm_sq_aura_fc(sq, true);
-		if (rc) {
-			plt_err("TM sw xon failed on SQ %u, rc=%d", node->id,
-				rc);
-			return rc;
-		}
-		node->flags |= NIX_TM_NODE_ENABLED;
-	}
-
-skip_sq_update:
-	nix->tm_flags |= NIX_TM_HIERARCHY_ENA;
-	return 0;
+	if (!rc)
+		nix->tm_flags |= NIX_TM_HIERARCHY_ENA;
+	return rc;
 }
 
 int
@@ -687,12 +723,13 @@ roc_nix_tm_node_suspend_resume(struct roc_nix *roc_nix, uint32_t node_id,
 		return 0;
 
 	/* send mbox for state change */
-	req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 
 	req->lvl = node->hw_lvl;
 	req->num_regs =
 		nix_tm_sw_xoff_prep(node, suspend, req->reg, req->regval);
 	rc = mbox_process(mbox);
+	mbox_put(mbox);
 	if (!rc)
 		node->flags = flags;
 	return rc;
@@ -715,30 +752,40 @@ roc_nix_tm_prealloc_res(struct roc_nix *roc_nix, uint8_t lvl,
 
 	/* Preallocate contiguous */
 	if (nix->contig_rsvd[hw_lvl] < contig) {
-		req = mbox_alloc_msg_nix_txsch_alloc(mbox);
-		if (req == NULL)
+		req = mbox_alloc_msg_nix_txsch_alloc(mbox_get(mbox));
+		if (req == NULL) {
+			mbox_put(mbox);
 			return rc;
+		}
 		req->schq_contig[hw_lvl] = contig - nix->contig_rsvd[hw_lvl];
 
 		rc = mbox_process_msg(mbox, (void *)&rsp);
-		if (rc)
+		if (rc) {
+			mbox_put(mbox);
 			return rc;
+		}
 
 		nix_tm_copy_rsp_to_nix(nix, rsp);
+		mbox_put(mbox);
 	}
 
 	/* Preallocate contiguous */
 	if (nix->discontig_rsvd[hw_lvl] < discontig) {
-		req = mbox_alloc_msg_nix_txsch_alloc(mbox);
-		if (req == NULL)
+		req = mbox_alloc_msg_nix_txsch_alloc(mbox_get(mbox));
+		if (req == NULL) {
+			mbox_put(mbox);
 			return -ENOSPC;
+		}
 		req->schq[hw_lvl] = discontig - nix->discontig_rsvd[hw_lvl];
 
 		rc = mbox_process_msg(mbox, (void *)&rsp);
-		if (rc)
+		if (rc) {
+			mbox_put(mbox);
 			return rc;
+		}
 
 		nix_tm_copy_rsp_to_nix(nix, rsp);
+		mbox_put(mbox);
 	}
 
 	/* Save thresholds */
@@ -802,17 +849,20 @@ roc_nix_tm_node_shaper_update(struct roc_nix *roc_nix, uint32_t node_id,
 	node->flags &= ~NIX_TM_NODE_ENABLED;
 
 	/* Flush the specific node with SW_XOFF */
-	req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 	req->lvl = node->hw_lvl;
 	k = nix_tm_sw_xoff_prep(node, true, req->reg, req->regval);
 	req->num_regs = k;
 
 	rc = mbox_process(mbox);
-	if (rc)
+	if (rc) {
+		mbox_put(mbox);
 		return rc;
+	}
+	mbox_put(mbox);
 
 	/* Update the PIR/CIR and clear SW XOFF */
-	req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 	req->lvl = node->hw_lvl;
 
 	k = nix_tm_shaper_reg_prep(node, profile, req->reg, req->regval);
@@ -821,6 +871,7 @@ roc_nix_tm_node_shaper_update(struct roc_nix *roc_nix, uint32_t node_id,
 
 	req->num_regs = k;
 	rc = mbox_process(mbox);
+	mbox_put(mbox);
 	if (!rc)
 		node->flags |= NIX_TM_NODE_ENABLED;
 	return rc;
@@ -875,16 +926,17 @@ roc_nix_tm_node_parent_update(struct roc_nix *roc_nix, uint32_t node_id,
 			return NIX_ERR_TM_SQ_UPDATE_FAIL;
 	} else {
 		/* XOFF Parent node */
-		req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+		req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 		req->lvl = node->parent->hw_lvl;
 		req->num_regs = nix_tm_sw_xoff_prep(node->parent, true,
 						    req->reg, req->regval);
 		rc = mbox_process(mbox);
+		mbox_put(mbox);
 		if (rc)
 			return rc;
 
 		/* XOFF this node and all other siblings */
-		req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+		req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 		req->lvl = node->hw_lvl;
 
 		k = 0;
@@ -895,10 +947,11 @@ roc_nix_tm_node_parent_update(struct roc_nix *roc_nix, uint32_t node_id,
 			if (k >= MAX_REGS_PER_MBOX_MSG) {
 				req->num_regs = k;
 				rc = mbox_process(mbox);
+				mbox_put(mbox);
 				if (rc)
 					return rc;
 				k = 0;
-				req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+				req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 				req->lvl = node->hw_lvl;
 			}
 		}
@@ -906,20 +959,22 @@ roc_nix_tm_node_parent_update(struct roc_nix *roc_nix, uint32_t node_id,
 		if (k) {
 			req->num_regs = k;
 			rc = mbox_process(mbox);
+			mbox_put(mbox);
 			if (rc)
 				return rc;
 			/* Update new weight for current node */
-			req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+			req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 		}
 
 		req->lvl = node->hw_lvl;
 		req->num_regs = nix_tm_sched_reg_prep(nix, node, req->reg, req->regval);
 		rc = mbox_process(mbox);
+		mbox_put(mbox);
 		if (rc)
 			return rc;
 
 		/* XON this node and all other siblings */
-		req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+		req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 		req->lvl = node->hw_lvl;
 
 		k = 0;
@@ -930,10 +985,11 @@ roc_nix_tm_node_parent_update(struct roc_nix *roc_nix, uint32_t node_id,
 			if (k >= MAX_REGS_PER_MBOX_MSG) {
 				req->num_regs = k;
 				rc = mbox_process(mbox);
+				mbox_put(mbox);
 				if (rc)
 					return rc;
 				k = 0;
-				req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+				req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 				req->lvl = node->hw_lvl;
 			}
 		}
@@ -941,15 +997,17 @@ roc_nix_tm_node_parent_update(struct roc_nix *roc_nix, uint32_t node_id,
 		if (k) {
 			req->num_regs = k;
 			rc = mbox_process(mbox);
+			mbox_put(mbox);
 			if (rc)
 				return rc;
 			/* XON Parent node */
-			req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+			req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 		}
 
 		req->lvl = node->parent->hw_lvl;
 		req->num_regs = nix_tm_sw_xoff_prep(node->parent, false, req->reg, req->regval);
 		rc = mbox_process(mbox);
+		mbox_put(mbox);
 		if (rc)
 			return rc;
 	}
@@ -987,6 +1045,104 @@ roc_nix_tm_init(struct roc_nix *roc_nix)
 }
 
 int
+roc_nix_tm_pfc_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct nix_tm_shaper_profile profile;
+	struct mbox *mbox = (&nix->dev)->mbox;
+	struct nix_tm_node *node, *parent;
+	struct roc_nix_link_info link_info;
+
+	volatile uint64_t *reg, *regval;
+	struct nix_txschq_config *req;
+	uint64_t tl2_rate = 0;
+	uint16_t flags;
+	uint8_t k = 0;
+	int rc;
+
+	if ((nix->tm_tree != ROC_NIX_TM_PFC) || !(nix->tm_flags & NIX_TM_HIERARCHY_ENA))
+		return NIX_ERR_TM_INVALID_TREE;
+
+	node = nix_tm_node_search(nix, qid, nix->tm_tree);
+
+	/* check if we found a valid leaf node */
+	if (!node || !nix_tm_is_leaf(nix, node->lvl) || !node->parent ||
+	    node->parent->hw_id == NIX_TM_HW_ID_INVALID) {
+		return NIX_ERR_TM_INVALID_NODE;
+	}
+
+	/* Get the link Speed */
+	if (roc_nix_mac_link_info_get(roc_nix, &link_info))
+		return -EINVAL;
+
+	if (link_info.status)
+		tl2_rate = link_info.speed * (uint64_t)1E6;
+
+	/* Configure TL3 of leaf node with requested rate */
+	parent = node->parent;	 /* SMQ/MDQ */
+	parent = parent->parent; /* TL4 */
+	parent = parent->parent; /* TL3 */
+	flags = parent->flags;
+
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
+	req->lvl = parent->hw_lvl;
+	reg = req->reg;
+	regval = req->regval;
+
+	if (rate == 0) {
+		k += nix_tm_sw_xoff_prep(parent, true, &reg[k], &regval[k]);
+		flags &= ~NIX_TM_NODE_ENABLED;
+		goto exit;
+	}
+
+	if (!(flags & NIX_TM_NODE_ENABLED)) {
+		k += nix_tm_sw_xoff_prep(parent, false, &reg[k], &regval[k]);
+		flags |= NIX_TM_NODE_ENABLED;
+	}
+
+	/* Use only PIR for rate limit */
+	memset(&profile, 0, sizeof(profile));
+	profile.peak.rate = rate;
+	/* Minimum burst of ~4us Bytes of Tx */
+	profile.peak.size =
+		PLT_MAX((uint64_t)roc_nix_max_pkt_len(roc_nix), (4ul * rate) / ((uint64_t)1E6 * 8));
+	if (!nix->tm_rate_min || nix->tm_rate_min > rate)
+		nix->tm_rate_min = rate;
+
+	k += nix_tm_shaper_reg_prep(parent, &profile, &reg[k], &regval[k]);
+exit:
+	req->num_regs = k;
+	rc = mbox_process(mbox);
+	mbox_put(mbox);
+	if (rc)
+		return rc;
+
+	parent->flags = flags;
+
+	/* If link is up then configure TL2 with link speed */
+	if (tl2_rate && (flags & NIX_TM_NODE_ENABLED)) {
+		k = 0;
+		parent = parent->parent;
+		req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
+		req->lvl = parent->hw_lvl;
+		reg = req->reg;
+		regval = req->regval;
+
+		/* Use only PIR for rate limit */
+		memset(&profile, 0, sizeof(profile));
+		profile.peak.rate = tl2_rate;
+		/* Minimum burst of ~4us Bytes of Tx */
+		profile.peak.size = PLT_MAX((uint64_t)roc_nix_max_pkt_len(roc_nix),
+					    (4ul * tl2_rate) / ((uint64_t)1E6 * 8));
+		k += nix_tm_shaper_reg_prep(parent, &profile, &reg[k], &regval[k]);
+		req->num_regs = k;
+		rc = mbox_process(mbox);
+		mbox_put(mbox);
+	}
+	return rc;
+}
+
+int
 roc_nix_tm_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
@@ -1001,20 +1157,22 @@ roc_nix_tm_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate)
 	int rc;
 
 	if ((nix->tm_tree == ROC_NIX_TM_USER) ||
-	    !(nix->tm_flags & NIX_TM_HIERARCHY_ENA))
+	    !(nix->tm_flags & NIX_TM_HIERARCHY_ENA)) {
 		return NIX_ERR_TM_INVALID_TREE;
+	}
 
 	node = nix_tm_node_search(nix, qid, nix->tm_tree);
 
 	/* check if we found a valid leaf node */
 	if (!node || !nix_tm_is_leaf(nix, node->lvl) || !node->parent ||
-	    node->parent->hw_id == NIX_TM_HW_ID_INVALID)
+	    node->parent->hw_id == NIX_TM_HW_ID_INVALID) {
 		return NIX_ERR_TM_INVALID_NODE;
+	}
 
 	parent = node->parent;
 	flags = parent->flags;
 
-	req = mbox_alloc_msg_nix_txschq_cfg(mbox);
+	req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
 	req->lvl = NIX_TXSCH_LVL_MDQ;
 	reg = req->reg;
 	regval = req->regval;
@@ -1043,6 +1201,7 @@ roc_nix_tm_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate)
 exit:
 	req->num_regs = k;
 	rc = mbox_process(mbox);
+	mbox_put(mbox);
 	if (rc)
 		return rc;
 
@@ -1068,14 +1227,17 @@ roc_nix_tm_fini(struct roc_nix *roc_nix)
 		plt_err("Failed to freeup existing nodes or rsrcs, rc=%d", rc);
 
 	/* Free all other hw resources */
-	req = mbox_alloc_msg_nix_txsch_free(mbox);
-	if (req == NULL)
+	req = mbox_alloc_msg_nix_txsch_free(mbox_get(mbox));
+	if (req == NULL) {
+		mbox_put(mbox);
 		return;
+	}
 
 	req->flags = TXSCHQ_FREE_ALL;
 	rc = mbox_process(mbox);
 	if (rc)
 		plt_err("Failed to freeup all res, rc=%d", rc);
+	mbox_put(mbox);
 
 	for (hw_lvl = 0; hw_lvl < NIX_TXSCH_LVL_CNT; hw_lvl++) {
 		plt_bitmap_reset(nix->schq_bmp[hw_lvl]);
@@ -1094,7 +1256,7 @@ int
 roc_nix_tm_rsrc_count(struct roc_nix *roc_nix, uint16_t schq[ROC_TM_LVL_MAX])
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
 	struct free_rsrcs_rsp *rsp;
 	uint8_t hw_lvl;
 	int rc, i;
@@ -1103,7 +1265,7 @@ roc_nix_tm_rsrc_count(struct roc_nix *roc_nix, uint16_t schq[ROC_TM_LVL_MAX])
 	mbox_alloc_msg_free_rsrc_cnt(mbox);
 	rc = mbox_process_msg(mbox, (void *)&rsp);
 	if (rc)
-		return rc;
+		goto exit;
 
 	for (i = 0; i < ROC_TM_LVL_MAX; i++) {
 		hw_lvl = nix_tm_lvl2nix(nix, i);
@@ -1114,7 +1276,10 @@ roc_nix_tm_rsrc_count(struct roc_nix *roc_nix, uint16_t schq[ROC_TM_LVL_MAX])
 						rsp->schq[hw_lvl]);
 	}
 
-	return 0;
+	rc = 0;
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 void
@@ -1129,15 +1294,19 @@ roc_nix_tm_rsrc_max(bool pf, uint16_t schq[ROC_TM_LVL_MAX])
 
 		switch (hw_lvl) {
 		case NIX_TXSCH_LVL_SMQ:
-			max = (roc_model_is_cn9k() ?
-					     NIX_CN9K_TXSCH_LVL_SMQ_MAX :
-					     NIX_TXSCH_LVL_SMQ_MAX);
+			max = (roc_model_is_cn9k() ? NIX_CN9K_TXSCH_LVL_SMQ_MAX :
+				(roc_model_is_cn10k() ? NIX_CN10K_TXSCH_LVL_SMQ_MAX :
+				 NIX_TXSCH_LVL_SMQ_MAX));
 			break;
 		case NIX_TXSCH_LVL_TL4:
-			max = NIX_TXSCH_LVL_TL4_MAX;
+			max = (roc_model_is_cn9k() ? NIX_CN9K_TXSCH_LVL_TL4_MAX :
+				(roc_model_is_cn10k() ? NIX_CN10K_TXSCH_LVL_TL4_MAX :
+							NIX_TXSCH_LVL_TL4_MAX));
 			break;
 		case NIX_TXSCH_LVL_TL3:
-			max = NIX_TXSCH_LVL_TL3_MAX;
+			max = (roc_model_is_cn9k() ? NIX_CN9K_TXSCH_LVL_TL3_MAX :
+				(roc_model_is_cn10k() ? NIX_CN10K_TXSCH_LVL_TL3_MAX :
+							NIX_TXSCH_LVL_TL3_MAX));
 			break;
 		case NIX_TXSCH_LVL_TL2:
 			max = pf ? NIX_TXSCH_LVL_TL2_MAX : 1;
@@ -1161,4 +1330,74 @@ roc_nix_tm_root_has_sp(struct roc_nix *roc_nix)
 	if (nix->tm_flags & NIX_TM_TL1_NO_SP)
 		return false;
 	return true;
+}
+
+static inline struct nix *
+pf_func_to_nix_get(uint16_t pf_func)
+{
+	struct roc_nix *roc_nix_tmp = NULL;
+	struct roc_nix_list *nix_list;
+
+	nix_list = roc_idev_nix_list_get();
+	if (nix_list == NULL)
+		return NULL;
+
+	/* Find the NIX of given pf_func */
+	TAILQ_FOREACH(roc_nix_tmp, nix_list, next) {
+		struct nix *nix = roc_nix_to_nix_priv(roc_nix_tmp);
+
+		if (nix->dev.pf_func == pf_func)
+			return nix;
+	}
+
+	return NULL;
+}
+
+int
+roc_nix_tm_egress_link_cfg_set(struct roc_nix *roc_nix, uint64_t dst_pf_func, bool enable)
+{
+	struct nix *src_nix = roc_nix_to_nix_priv(roc_nix), *dst_nix;
+	struct mbox *mbox = (&src_nix->dev)->mbox;
+	struct nix_txschq_config *req = NULL;
+	struct nix_tm_node_list *list;
+	struct nix_tm_node *node;
+	int rc = 0, k;
+
+	dst_nix = pf_func_to_nix_get(dst_pf_func);
+	if (!dst_nix)
+		return -EINVAL;
+
+	if (dst_nix == src_nix)
+		return 0;
+
+	list = nix_tm_node_list(src_nix, src_nix->tm_tree);
+	TAILQ_FOREACH(node, list, node) {
+		if (node->hw_lvl != src_nix->tm_link_cfg_lvl)
+			continue;
+
+		if (!(node->flags & NIX_TM_NODE_HWRES))
+			continue;
+
+		/* Allocating TL3 request */
+		req = mbox_alloc_msg_nix_txschq_cfg(mbox_get(mbox));
+		req->lvl = src_nix->tm_link_cfg_lvl;
+		k = 0;
+
+		/* Enable PFC/pause on the identified TL3 */
+		req->reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(node->hw_id, dst_nix->tx_link);
+		if (enable)
+			req->regval[k] |= BIT_ULL(12);
+		else
+			req->regval[k] &= ~(BIT_ULL(12));
+		req->regval_mask[k] = ~(BIT_ULL(12));
+		k++;
+
+		req->num_regs = k;
+		rc = mbox_process(mbox);
+		mbox_put(mbox);
+		if (rc)
+			goto err;
+	}
+err:
+	return rc;
 }

@@ -91,16 +91,16 @@ struct mlx5_mr_share_cache {
 } __rte_packed;
 
 /* Multi-Packet RQ buffer header. */
-struct mlx5_mprq_buf {
+struct __rte_cache_aligned mlx5_mprq_buf {
 	struct rte_mempool *mp;
-	uint16_t refcnt; /* Atomically accessed refcnt. */
+	RTE_ATOMIC(uint16_t) refcnt; /* Atomically accessed refcnt. */
 	struct rte_mbuf_ext_shared_info shinfos[];
 	/*
 	 * Shared information per stride.
 	 * More memory will be allocated for the first stride head-room and for
 	 * the strides data.
 	 */
-} __rte_cache_aligned;
+};
 
 __rte_internal
 void mlx5_mprq_buf_free_cb(void *addr, void *opaque);
@@ -240,6 +240,10 @@ mlx5_mr_create(struct mlx5_common_device *cdev,
 	       struct mlx5_mr_share_cache *share_cache,
 	       struct mr_cache_entry *entry, uintptr_t addr);
 
+__rte_internal
+uint32_t
+mlx5_mr_addr2mr_bh(struct mlx5_mr_ctrl *mr_ctrl, uintptr_t addr);
+
 /* mlx5_common_verbs.c */
 
 __rte_internal
@@ -250,6 +254,7 @@ __rte_internal
 void
 mlx5_common_verbs_dereg_mr(struct mlx5_pmd_mr *pmd_mr);
 
+__rte_internal
 void
 mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb, mlx5_dereg_mr_t *dereg_mr_cb);
 

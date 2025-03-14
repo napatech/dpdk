@@ -12,8 +12,9 @@
  */
 
 #include <errno.h>
+#include <stdalign.h>
 #include <stdint.h>
-#include <rte_compat.h>
+
 #include <rte_branch_prediction.h>
 #include <rte_byteorder.h>
 #include <rte_common.h>
@@ -118,8 +119,8 @@ struct rte_lpm_config {
 /** @internal LPM structure. */
 struct rte_lpm {
 	/* LPM Tables. */
-	struct rte_lpm_tbl_entry tbl24[RTE_LPM_TBL24_NUM_ENTRIES]
-			__rte_cache_aligned; /**< LPM tbl24 table. */
+	alignas(RTE_CACHE_LINE_SIZE) struct rte_lpm_tbl_entry tbl24[RTE_LPM_TBL24_NUM_ENTRIES];
+			/**< LPM tbl24 table. */
 	struct rte_lpm_tbl_entry *tbl8; /**< LPM tbl8 table. */
 };
 
@@ -186,9 +187,6 @@ void
 rte_lpm_free(struct rte_lpm *lpm);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Associate RCU QSBR variable with an LPM object.
  *
  * @param lpm
@@ -203,7 +201,6 @@ rte_lpm_free(struct rte_lpm *lpm);
  *   - EEXIST - already added QSBR
  *   - ENOMEM - memory allocation failure
  */
-__rte_experimental
 int rte_lpm_rcu_qsbr_add(struct rte_lpm *lpm, struct rte_lpm_rcu_config *cfg);
 
 /**
@@ -340,7 +337,6 @@ rte_lpm_lookup_bulk_func(const struct rte_lpm *lpm, const uint32_t *ips,
 		uint32_t *next_hops, const unsigned n)
 {
 	unsigned i;
-	unsigned tbl24_indexes[n];
 	const uint32_t *ptbl;
 
 	/* DEBUG: Check user input arguments. */
@@ -348,12 +344,10 @@ rte_lpm_lookup_bulk_func(const struct rte_lpm *lpm, const uint32_t *ips,
 			(next_hops == NULL)), -EINVAL);
 
 	for (i = 0; i < n; i++) {
-		tbl24_indexes[i] = ips[i] >> 8;
-	}
+		unsigned int tbl24_index = ips[i] >> 8;
 
-	for (i = 0; i < n; i++) {
 		/* Simply copy tbl24 entry to output */
-		ptbl = (const uint32_t *)&lpm->tbl24[tbl24_indexes[i]];
+		ptbl = (const uint32_t *)&lpm->tbl24[tbl24_index];
 		next_hops[i] = *ptbl;
 
 		/* Overwrite output with tbl8 entry if needed */
@@ -397,22 +391,24 @@ static inline void
 rte_lpm_lookupx4(const struct rte_lpm *lpm, xmm_t ip, uint32_t hop[4],
 	uint32_t defv);
 
+#ifdef __cplusplus
+}
+#endif
+
 #if defined(RTE_ARCH_ARM)
 #ifdef RTE_HAS_SVE_ACLE
 #include "rte_lpm_sve.h"
-#else
-#include "rte_lpm_neon.h"
+#undef rte_lpm_lookup_bulk
+#define rte_lpm_lookup_bulk(lpm, ips, next_hops, n) \
+		__rte_lpm_lookup_vec(lpm, ips, next_hops, n)
 #endif
+#include "rte_lpm_neon.h"
 #elif defined(RTE_ARCH_PPC_64)
 #include "rte_lpm_altivec.h"
 #elif defined(RTE_ARCH_X86)
 #include "rte_lpm_sse.h"
 #else
 #include "rte_lpm_scalar.h"
-#endif
-
-#ifdef __cplusplus
-}
 #endif
 
 #endif /* _RTE_LPM_H_ */

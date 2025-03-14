@@ -7,8 +7,9 @@ L3 Forwarding with Power Management Sample Application
 Introduction
 ------------
 
-The L3 Forwarding with Power Management application is an example of power-aware packet processing using the DPDK.
-The application is based on existing L3 Forwarding sample application,
+The L3 forwarding with Power Management application is an example
+of power-aware packet processing using the DPDK.
+The application is based on the existing L3 forwarding sample application,
 with the power management algorithms to control the P-states and
 C-states of the Intel processor via a power management library.
 
@@ -68,6 +69,10 @@ In this application, we introduce a heuristic algorithm that allows packet proce
 if there is no Rx packet received on recent polls.
 In this way, CPUIdle automatically forces the corresponding cores to enter deeper C-states
 instead of always running to the C0 state waiting for packets.
+But user can set the CPU resume latency to control C-state selection.
+Setting the CPU resume latency to 0
+can limit the CPU just to enter C0-state to improve performance,
+which may increase power consumption of platform.
 
 .. note::
 
@@ -77,7 +82,7 @@ instead of always running to the C0 state waiting for packets.
 Compiling the Application
 -------------------------
 
-To compile the sample application see :doc:`compiling`.
+To compile the sample application, see :doc:`compiling`.
 
 The application is located in the ``l3fwd-power`` sub-directory.
 
@@ -105,11 +110,11 @@ where,
 
 *   --config (port,queue,lcore)[,(port,queue,lcore)]: determines which queues from which ports are mapped to which cores.
 
+*   --cpu-resume-latency LATENCY: set CPU resume latency to control C-state selection, 0 : just allow to enter C0-state.
+
 *   --max-pkt-len: optional, maximum packet length in decimal (64-9600)
 
 *   --no-numa: optional, disables numa awareness
-
-*   --empty-poll: Traffic Aware power management. See below for details
 
 *   --telemetry:  Telemetry mode.
 
@@ -129,7 +134,7 @@ The L3fwd-power example reuses the L3fwd command line options.
 Explanation
 -----------
 
-The following sections provide some explanation of the sample application code.
+The following sections provide explanation of the sample application code.
 As mentioned in the overview section,
 the initialization and run-time paths are identical to those of the L3 forwarding application.
 The following sections describe aspects that are specific to the L3 Forwarding with Power Management sample application.
@@ -238,78 +243,10 @@ If a thread polls multiple Rx queues and different queue returns different sleep
 the algorithm controls the sleep time in a conservative manner by sleeping for the least possible time
 in order to avoid a potential performance impact.
 
-Empty Poll Mode
--------------------------
-Additionally, there is a traffic aware mode of operation called "Empty
-Poll" where the number of empty polls can be monitored to keep track
-of how busy the application is. Empty poll mode can be enabled by the
-command line option --empty-poll.
-
-See :doc:`Power Management<../prog_guide/power_man>` chapter in the DPDK Programmer's Guide for empty poll mode details.
-
-.. code-block:: console
-
-    ./<build_dir>/examples/dpdk-l3fwd-power -l xxx -n 4 -a 0000:xx:00.0 -a 0000:xx:00.1 \
-    	-- -p 0x3 -P --config="(0,0,xx),(1,0,xx)" --empty-poll="0,0,0" -l 14 -m 9 -h 1
-
-Where,
-
---empty-poll: Enable the empty poll mode instead of original algorithm
-
---empty-poll="training_flag, med_threshold, high_threshold"
-
-* ``training_flag`` : optional, enable/disable training mode. Default value is 0. If the training_flag is set as 1(true), then the application will start in training mode and print out the trained threshold values. If the training_flag is set as 0(false), the application will start in normal mode, and will use either the default thresholds or those supplied on the command line. The trained threshold values are specific to the user’s system, may give a better power profile when compared to the default threshold values.
-
-* ``med_threshold`` : optional, sets the empty poll threshold of a modestly busy system state. If this is not supplied, the application will apply the default value of 350000.
-
-* ``high_threshold`` : optional, sets the empty poll threshold of a busy system state. If this is not supplied, the application will apply the default value of 580000.
-
-* -l : optional, set up the LOW power state frequency index
-
-* -m : optional, set up the MED power state frequency index
-
-* -h : optional, set up the HIGH power state frequency index
-
-Empty Poll Mode Example Usage
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-To initially obtain the ideal thresholds for the system, the training
-mode should be run first. This is achieved by running the l3fwd-power
-app with the training flag set to “1”, and the other parameters set to
-0.
-
-.. code-block:: console
-
-        ./<build_dir>/examples/dpdk-l3fwd-power -l 1-3 -- -p 0x0f --config="(0,0,2),(0,1,3)" --empty-poll "1,0,0" –P
-
-This will run the training algorithm for x seconds on each core (cores 2
-and 3), and then print out the recommended threshold values for those
-cores. The thresholds should be very similar for each core.
-
-.. code-block:: console
-
-        POWER: Bring up the Timer
-        POWER: set the power freq to MED
-        POWER: Low threshold is 230277
-        POWER: MED threshold is 335071
-        POWER: HIGH threshold is 523769
-        POWER: Training is Complete for 2
-        POWER: set the power freq to MED
-        POWER: Low threshold is 236814
-        POWER: MED threshold is 344567
-        POWER: HIGH threshold is 538580
-        POWER: Training is Complete for 3
-
-Once the values have been measured for a particular system, the app can
-then be started without the training mode so traffic can start immediately.
-
-.. code-block:: console
-
-        ./<build_dir>/examples/dpdk-l3fwd-power -l 1-3 -- -p 0x0f --config="(0,0,2),(0,1,3)" --empty-poll "0,340000,540000" –P
-
 Telemetry Mode
 --------------
 
-The telemetry mode support for ``l3fwd-power`` is a standalone mode, in this mode
+The telemetry mode support for ``l3fwd-power`` is a standalone mode. In this mode,
 ``l3fwd-power`` does simple l3fwding along with calculating empty polls, full polls,
 and busy percentage for each forwarding core. The aggregation of these
 values of all cores is reported as application level telemetry to metric
@@ -331,7 +268,7 @@ The new stats ``empty_poll`` , ``full_poll`` and ``busy_percent`` can be viewed 
 PMD power management Mode
 -------------------------
 
-The PMD power management  mode support for ``l3fwd-power`` is a standalone mode.
+The PMD power management mode support for ``l3fwd-power`` is a standalone mode.
 In this mode, ``l3fwd-power`` does simple l3fwding
 along with enabling the power saving scheme on specific port/queue/lcore.
 Main purpose for this mode is to demonstrate
@@ -349,6 +286,9 @@ instead of using explicit power management,
 will use automatic PMD power management.
 This mode is limited to one queue per core,
 and has three available power management schemes:
+
+``baseline``
+  This mode will not enable any power saving features.
 
 ``monitor``
   This will use ``rte_power_monitor()`` function to enter

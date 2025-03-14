@@ -5,15 +5,15 @@
 #ifndef _RTE_IO_X86_H_
 #define _RTE_IO_X86_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <rte_compat.h>
 #include "rte_cpuflags.h"
 
 #define RTE_NATIVE_WRITE32_WC
 #include "generic/rte_io.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * @internal
@@ -24,7 +24,7 @@ __rte_x86_movdiri(uint32_t value, volatile void *addr)
 {
 	asm volatile(
 		/* MOVDIRI */
-		".byte 0x40, 0x0f, 0x38, 0xf9, 0x02"
+		".byte 0x0f, 0x38, 0xf9, 0x02"
 		:
 		: "a" (value), "d" (addr));
 }

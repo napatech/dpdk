@@ -27,6 +27,7 @@ Features
 - Scattered and gather for TX and RX
 - IEEE 1588
 - FW version
+- Interrupt mode for RX
 
 
 Prerequisites
@@ -38,8 +39,8 @@ Prerequisites
 - Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
 
 
-Pre-Installation Configuration
-------------------------------
+Configuration
+-------------
 
 Dynamic Logging Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

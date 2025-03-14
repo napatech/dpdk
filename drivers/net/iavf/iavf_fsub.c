@@ -254,7 +254,7 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 			if (eth_spec && eth_mask) {
 				input = &outer_input_set;
 
-				if (!rte_is_zero_ether_addr(&eth_mask->dst)) {
+				if (!rte_is_zero_ether_addr(&eth_mask->hdr.dst_addr)) {
 					*input |= IAVF_INSET_DMAC;
 					input_set_byte += 6;
 				} else {
@@ -262,12 +262,12 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					input_set_byte += 6;
 				}
 
-				if (!rte_is_zero_ether_addr(&eth_mask->src)) {
+				if (!rte_is_zero_ether_addr(&eth_mask->hdr.src_addr)) {
 					*input |= IAVF_INSET_SMAC;
 					input_set_byte += 6;
 				}
 
-				if (eth_mask->type) {
+				if (eth_mask->hdr.ether_type) {
 					*input |= IAVF_INSET_ETHERTYPE;
 					input_set_byte += 2;
 				}
@@ -354,23 +354,23 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 				}
 
 				for (j = 0; j < IAVF_IPV6_ADDR_LENGTH; j++) {
-					if (ipv6_mask->hdr.src_addr[j]) {
+					if (ipv6_mask->hdr.src_addr.a[j]) {
 						*input |= IAVF_INSET_IPV6_SRC;
 						break;
 					}
 				}
 				for (j = 0; j < IAVF_IPV6_ADDR_LENGTH; j++) {
-					if (ipv6_mask->hdr.dst_addr[j]) {
+					if (ipv6_mask->hdr.dst_addr.a[j]) {
 						*input |= IAVF_INSET_IPV6_DST;
 						break;
 					}
 				}
 
 				for (j = 0; j < IAVF_IPV6_ADDR_LENGTH; j++) {
-					if (ipv6_mask->hdr.src_addr[j])
+					if (ipv6_mask->hdr.src_addr.a[j])
 						input_set_byte++;
 
-					if (ipv6_mask->hdr.dst_addr[j])
+					if (ipv6_mask->hdr.dst_addr.a[j])
 						input_set_byte++;
 				}
 
@@ -487,10 +487,10 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 
 				*input |= IAVF_INSET_VLAN_OUTER;
 
-				if (vlan_mask->tci)
+				if (vlan_mask->hdr.vlan_tci)
 					input_set_byte += 2;
 
-				if (vlan_mask->inner_type) {
+				if (vlan_mask->hdr.eth_proto) {
 					rte_flow_error_set(error, EINVAL,
 						RTE_FLOW_ERROR_TYPE_ITEM,
 						item,

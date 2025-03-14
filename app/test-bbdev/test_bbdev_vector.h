@@ -19,7 +19,6 @@ enum {
 	TEST_BBDEV_VF_C = (1ULL << 7),
 	TEST_BBDEV_VF_CAB = (1ULL << 8),
 	TEST_BBDEV_VF_RV_INDEX = (1ULL << 9),
-	TEST_BBDEV_VF_ITER_MAX = (1ULL << 10),
 	TEST_BBDEV_VF_ITER_MIN = (1ULL << 11),
 	TEST_BBDEV_VF_EXPECTED_ITER_COUNT = (1ULL << 12),
 	TEST_BBDEV_VF_EXT_SCALE = (1ULL << 13),
@@ -35,6 +34,7 @@ enum {
 	TEST_BBDEV_VF_CODE_BLOCK_MODE = (1ULL << 23),
 	TEST_BBDEV_VF_OP_FLAGS = (1ULL << 24),
 	TEST_BBDEV_VF_EXPECTED_STATUS = (1ULL << 25),
+	TEST_BBDEV_VF_K0 = (1ULL << 26),
 };
 
 enum op_data_type {
@@ -66,9 +66,12 @@ struct test_bbdev_vector {
 		struct rte_bbdev_op_ldpc_dec ldpc_dec;
 		struct rte_bbdev_op_ldpc_enc ldpc_enc;
 		struct rte_bbdev_op_fft fft;
+		struct rte_bbdev_op_mldts mldts;
 	};
 	/* Additional storage for op data entries */
 	struct op_data_entries entries[DATA_NUM_TYPES];
+	/* Vector FFT window width assumption. */
+	uint16_t fft_window_width_vec;
 };
 
 /* fills test vector parameters based on test file */

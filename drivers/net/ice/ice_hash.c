@@ -572,7 +572,7 @@ static struct ice_flow_engine ice_hash_engine = {
 };
 
 /* Register parser for os package. */
-static struct ice_flow_parser ice_hash_parser = {
+struct ice_flow_parser ice_hash_parser = {
 	.engine = &ice_hash_engine,
 	.array = ice_hash_pattern_list,
 	.array_len = RTE_DIM(ice_hash_pattern_list),
@@ -587,16 +587,9 @@ RTE_INIT(ice_hash_engine_init)
 }
 
 static int
-ice_hash_init(struct ice_adapter *ad)
+ice_hash_init(struct ice_adapter *ad __rte_unused)
 {
-	struct ice_flow_parser *parser = NULL;
-
-	if (ad->hw.dcf_enabled)
-		return 0;
-
-	parser = &ice_hash_parser;
-
-	return ice_register_parser(parser, ad);
+	return 0;
 }
 
 static int
@@ -653,22 +646,25 @@ ice_hash_parse_raw_pattern(struct ice_adapter *ad,
 	const struct rte_flow_item_raw *raw_spec, *raw_mask;
 	struct ice_parser_profile prof;
 	struct ice_parser_result rslt;
+	uint16_t spec_len, pkt_len;
 	uint8_t *pkt_buf, *msk_buf;
-	uint8_t spec_len, pkt_len;
 	uint8_t tmp_val = 0;
 	uint8_t tmp_c = 0;
-	int i, j;
+	int i, j, ret = 0;
 
 	if (ad->psr == NULL)
-		return -rte_errno;
+		return -ENOTSUP;
 
 	raw_spec = item->spec;
 	raw_mask = item->mask;
 
-	spec_len = strlen((char *)(uintptr_t)raw_spec->pattern);
-	if (strlen((char *)(uintptr_t)raw_mask->pattern) !=
-		spec_len)
-		return -rte_errno;
+	spec_len = strnlen((char *)(uintptr_t)raw_spec->pattern,
+		raw_spec->length + 1);
+	if (spec_len != raw_spec->length)
+		return -EINVAL;
+	if (strnlen((char *)(uintptr_t)raw_mask->pattern, raw_spec->length + 1) !=
+			spec_len)
+		return -EINVAL;
 
 	pkt_len = spec_len / 2;
 
@@ -677,8 +673,10 @@ ice_hash_parse_raw_pattern(struct ice_adapter *ad,
 		return -ENOMEM;
 
 	msk_buf = rte_zmalloc(NULL, pkt_len, 0);
-	if (!msk_buf)
+	if (!msk_buf) {
+		rte_free(pkt_buf);
 		return -ENOMEM;
+	}
 
 	/* convert string to int array */
 	for (i = 0, j = 0; i < spec_len; i += 2, j++) {
@@ -715,18 +713,22 @@ ice_hash_parse_raw_pattern(struct ice_adapter *ad,
 			msk_buf[j] = tmp_val * 16 + tmp_c - '0';
 	}
 
-	if (ice_parser_run(ad->psr, pkt_buf, pkt_len, &rslt))
-		return -rte_errno;
+	ret = ice_parser_run(ad->psr, pkt_buf, pkt_len, &rslt);
+	if (ret)
+		goto free_mem;
 
-	if (ice_parser_profile_init(&rslt, pkt_buf, msk_buf,
-		pkt_len, ICE_BLK_RSS, true, &prof))
-		return -rte_errno;
+	ret = ice_parser_profile_init(&rslt, pkt_buf, msk_buf,
+			pkt_len, ICE_BLK_RSS, true, &prof);
+	if (ret)
+		goto free_mem;
 
 	rte_memcpy(&meta->raw.prof, &prof, sizeof(prof));
 
+free_mem:
 	rte_free(pkt_buf);
 	rte_free(msk_buf);
-	return 0;
+
+	return ret;
 }
 
 static void
@@ -1033,7 +1035,7 @@ ice_any_invalid_rss_type(enum rte_eth_hash_function rss_func,
 
 	/* check invalid combination */
 	for (i = 0; i < RTE_DIM(invalid_rss_comb); i++) {
-		if (__builtin_popcountll(rss_type & invalid_rss_comb[i]) > 1)
+		if (rte_popcount64(rss_type & invalid_rss_comb[i]) > 1)
 			return true;
 	}
 
@@ -1243,13 +1245,13 @@ ice_hash_add_raw_cfg(struct ice_adapter *ad,
 					   ice_get_hw_vsi_num(hw, vsi_handle),
 					   id);
 		if (ret) {
-			PMD_DRV_LOG(ERR, "remove RSS flow failed\n");
+			PMD_DRV_LOG(ERR, "remove RSS flow failed");
 			return ret;
 		}
 
 		ret = ice_rem_prof(hw, ICE_BLK_RSS, id);
 		if (ret) {
-			PMD_DRV_LOG(ERR, "remove RSS profile failed\n");
+			PMD_DRV_LOG(ERR, "remove RSS profile failed");
 			return ret;
 		}
 	}
@@ -1257,7 +1259,7 @@ ice_hash_add_raw_cfg(struct ice_adapter *ad,
 	/* add new profile */
 	ret = ice_flow_set_hw_prof(hw, vsi_handle, 0, prof, ICE_BLK_RSS);
 	if (ret) {
-		PMD_DRV_LOG(ERR, "HW profile add failed\n");
+		PMD_DRV_LOG(ERR, "HW profile add failed");
 		return ret;
 	}
 
@@ -1379,7 +1381,7 @@ ice_hash_rem_raw_cfg(struct ice_adapter *ad,
 	return 0;
 
 err:
-	PMD_DRV_LOG(ERR, "HW profile remove failed\n");
+	PMD_DRV_LOG(ERR, "HW profile remove failed");
 	return ret;
 }
 
@@ -1442,12 +1444,8 @@ error:
 }
 
 static void
-ice_hash_uninit(struct ice_adapter *ad)
+ice_hash_uninit(struct ice_adapter *ad __rte_unused)
 {
-	if (ad->hw.dcf_enabled)
-		return;
-
-	ice_unregister_parser(&ice_hash_parser, ad);
 }
 
 static void

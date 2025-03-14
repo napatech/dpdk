@@ -4,11 +4,15 @@
  */
 
 #include <errno.h>
+#include <wchar.h>
 
+#include <rte_eal.h>
 #include <rte_common.h>
 #include <rte_errno.h>
+#include <rte_stdatomic.h>
 #include <rte_thread.h>
 
+#include "eal_private.h"
 #include "eal_windows.h"
 
 struct eal_tls_key {
@@ -17,6 +21,7 @@ struct eal_tls_key {
 
 struct thread_routine_ctx {
 	rte_thread_func thread_func;
+	RTE_ATOMIC(bool) thread_init_failed;
 	void *routine_args;
 };
 
@@ -63,7 +68,7 @@ static int
 thread_log_last_error(const char *message)
 {
 	DWORD error = GetLastError();
-	RTE_LOG(DEBUG, EAL, "GetLastError()=%lu: %s\n", error, message);
+	EAL_LOG(DEBUG, "GetLastError()=%lu: %s", error, message);
 
 	return thread_translate_win32_error(error);
 }
@@ -86,7 +91,7 @@ thread_map_priority_to_os_value(enum rte_thread_priority eal_pri, int *os_pri,
 		*os_pri = THREAD_PRIORITY_TIME_CRITICAL;
 		break;
 	default:
-		RTE_LOG(DEBUG, EAL, "The requested priority value is invalid.\n");
+		EAL_LOG(DEBUG, "The requested priority value is invalid.");
 		return EINVAL;
 	}
 
@@ -105,7 +110,7 @@ thread_map_os_priority_to_eal_value(int os_pri, DWORD pri_class,
 		}
 		break;
 	case HIGH_PRIORITY_CLASS:
-		RTE_LOG(WARNING, EAL, "The OS priority class is high not real-time.\n");
+		EAL_LOG(WARNING, "The OS priority class is high not real-time.");
 		/* FALLTHROUGH */
 	case REALTIME_PRIORITY_CLASS:
 		if (os_pri == THREAD_PRIORITY_TIME_CRITICAL) {
@@ -114,7 +119,7 @@ thread_map_os_priority_to_eal_value(int os_pri, DWORD pri_class,
 		}
 		break;
 	default:
-		RTE_LOG(DEBUG, EAL, "The OS priority value does not map to an EAL-defined priority.\n");
+		EAL_LOG(DEBUG, "The OS priority value does not map to an EAL-defined priority.");
 		return EINVAL;
 	}
 
@@ -144,7 +149,7 @@ convert_cpuset_to_affinity(const rte_cpuset_t *cpuset,
 		if (affinity->Group == (USHORT)-1) {
 			affinity->Group = cpu_affinity->Group;
 		} else if (affinity->Group != cpu_affinity->Group) {
-			RTE_LOG(DEBUG, EAL, "All processors must belong to the same processor group\n");
+			EAL_LOG(DEBUG, "All processors must belong to the same processor group");
 			ret = ENOTSUP;
 			goto cleanup;
 		}
@@ -165,8 +170,13 @@ static DWORD
 thread_func_wrapper(void *arg)
 {
 	struct thread_routine_ctx ctx = *(struct thread_routine_ctx *)arg;
+	const bool thread_exit = rte_atomic_load_explicit(
+		&ctx.thread_init_failed, rte_memory_order_acquire);
 
 	free(arg);
+
+	if (thread_exit)
+		return 0;
 
 	return (DWORD)ctx.thread_func(ctx.routine_args);
 }
@@ -181,15 +191,17 @@ rte_thread_create(rte_thread_t *thread_id,
 	HANDLE thread_handle = NULL;
 	GROUP_AFFINITY thread_affinity;
 	struct thread_routine_ctx *ctx;
+	bool thread_exit = false;
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
-		RTE_LOG(DEBUG, EAL, "Insufficient memory for thread context allocations\n");
+		EAL_LOG(DEBUG, "Insufficient memory for thread context allocations");
 		ret = ENOMEM;
 		goto cleanup;
 	}
 	ctx->routine_args = args;
 	ctx->thread_func = thread_func;
+	ctx->thread_init_failed = false;
 
 	thread_handle = CreateThread(NULL, 0, thread_func_wrapper, ctx,
 		CREATE_SUSPENDED, &tid);
@@ -206,23 +218,29 @@ rte_thread_create(rte_thread_t *thread_id,
 							&thread_affinity
 							);
 			if (ret != 0) {
-				RTE_LOG(DEBUG, EAL, "Unable to convert cpuset to thread affinity\n");
-				goto cleanup;
+				EAL_LOG(DEBUG, "Unable to convert cpuset to thread affinity");
+				thread_exit = true;
+				goto resume_thread;
 			}
 
 			if (!SetThreadGroupAffinity(thread_handle,
 						    &thread_affinity, NULL)) {
 				ret = thread_log_last_error("SetThreadGroupAffinity()");
-				goto cleanup;
+				thread_exit = true;
+				goto resume_thread;
 			}
 		}
 		ret = rte_thread_set_priority(*thread_id,
 				thread_attr->priority);
 		if (ret != 0) {
-			RTE_LOG(DEBUG, EAL, "Unable to set thread priority\n");
-			goto cleanup;
+			EAL_LOG(DEBUG, "Unable to set thread priority");
+			thread_exit = true;
+			goto resume_thread;
 		}
 	}
+
+resume_thread:
+	rte_atomic_store_explicit(&ctx->thread_init_failed, thread_exit, rte_memory_order_release);
 
 	if (ResumeThread(thread_handle) == (DWORD)-1) {
 		ret = thread_log_last_error("ResumeThread()");
@@ -303,6 +321,47 @@ rte_thread_self(void)
 	thread_id.opaque_id = GetCurrentThreadId();
 
 	return thread_id;
+}
+
+void
+rte_thread_set_name(rte_thread_t thread_id, const char *thread_name)
+{
+	int ret = 0;
+	wchar_t wname[RTE_THREAD_NAME_SIZE];
+	mbstate_t state = {0};
+	size_t rv;
+	HANDLE thread_handle;
+
+	thread_handle = OpenThread(THREAD_ALL_ACCESS, FALSE,
+		thread_id.opaque_id);
+	if (thread_handle == NULL) {
+		ret = thread_log_last_error("OpenThread()");
+		goto cleanup;
+	}
+
+	memset(wname, 0, sizeof(wname));
+	rv = mbsrtowcs(wname, &thread_name, RTE_DIM(wname) - 1, &state);
+	if (rv == (size_t)-1) {
+		ret = EILSEQ;
+		goto cleanup;
+	}
+
+#ifndef RTE_TOOLCHAIN_GCC
+	if (FAILED(SetThreadDescription(thread_handle, wname))) {
+		ret = EINVAL;
+		goto cleanup;
+	}
+#else
+	ret = ENOTSUP;
+	goto cleanup;
+#endif
+
+cleanup:
+	if (thread_handle != NULL)
+		CloseHandle(thread_handle);
+
+	if (ret != 0)
+		EAL_LOG(DEBUG, "Failed to set thread name");
 }
 
 int
@@ -388,7 +447,7 @@ rte_thread_key_create(rte_thread_key *key,
 {
 	*key = malloc(sizeof(**key));
 	if ((*key) == NULL) {
-		RTE_LOG(DEBUG, EAL, "Cannot allocate TLS key.\n");
+		EAL_LOG(DEBUG, "Cannot allocate TLS key.");
 		rte_errno = ENOMEM;
 		return -1;
 	}
@@ -406,7 +465,7 @@ int
 rte_thread_key_delete(rte_thread_key key)
 {
 	if (!key) {
-		RTE_LOG(DEBUG, EAL, "Invalid TLS key.\n");
+		EAL_LOG(DEBUG, "Invalid TLS key.");
 		rte_errno = EINVAL;
 		return -1;
 	}
@@ -426,7 +485,7 @@ rte_thread_value_set(rte_thread_key key, const void *value)
 	char *p;
 
 	if (!key) {
-		RTE_LOG(DEBUG, EAL, "Invalid TLS key.\n");
+		EAL_LOG(DEBUG, "Invalid TLS key.");
 		rte_errno = EINVAL;
 		return -1;
 	}
@@ -446,7 +505,7 @@ rte_thread_value_get(rte_thread_key key)
 	void *output;
 
 	if (!key) {
-		RTE_LOG(DEBUG, EAL, "Invalid TLS key.\n");
+		EAL_LOG(DEBUG, "Invalid TLS key.");
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -474,7 +533,7 @@ rte_thread_set_affinity_by_id(rte_thread_t thread_id,
 
 	ret = convert_cpuset_to_affinity(cpuset, &thread_affinity);
 	if (ret != 0) {
-		RTE_LOG(DEBUG, EAL, "Unable to convert cpuset to thread affinity\n");
+		EAL_LOG(DEBUG, "Unable to convert cpuset to thread affinity");
 		goto cleanup;
 	}
 

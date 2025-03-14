@@ -489,6 +489,7 @@ sfc_mae_clear_switch_port(uint16_t switch_domain_id,
 			  uint16_t switch_port_id)
 {
 	struct sfc_mae_switch_domain *domain;
+	struct sfc_mae_switch_port *port;
 
 	rte_spinlock_lock(&sfc_mae_switch.lock);
 
@@ -502,6 +503,17 @@ sfc_mae_clear_switch_port(uint16_t switch_domain_id,
 	    domain->mae_admin_port->id == switch_port_id) {
 		domain->mae_admin_port->data.indep.mae_admin = B_FALSE;
 		domain->mae_admin_port = NULL;
+	}
+
+	TAILQ_FOREACH(port, &domain->ports, switch_domain_ports) {
+		if (port->id == switch_port_id) {
+			/*
+			 * Invalidate the field to prevent wrong
+			 * look-ups from flow rule handling path.
+			 */
+			port->ethdev_port_id = RTE_MAX_ETHPORTS;
+			break;
+		}
 	}
 
 	rte_spinlock_unlock(&sfc_mae_switch.lock);
@@ -539,6 +551,7 @@ sfc_mae_find_switch_port_by_ethdev(uint16_t switch_domain_id,
 int
 sfc_mae_switch_get_ethdev_mport(uint16_t switch_domain_id,
 				uint16_t ethdev_port_id,
+				unsigned int allowed_mae_switch_port_types,
 				efx_mport_sel_t *mport_sel)
 {
 	struct sfc_mae_switch_port *port;
@@ -550,11 +563,7 @@ sfc_mae_switch_get_ethdev_mport(uint16_t switch_domain_id,
 	if (rc != 0)
 		goto unlock;
 
-	if (port->type != SFC_MAE_SWITCH_PORT_INDEPENDENT) {
-		/*
-		 * The ethdev is a "VF representor". It does not own
-		 * a dedicated m-port suitable for use in flow rules.
-		 */
+	if (((1U << port->type) & allowed_mae_switch_port_types) == 0) {
 		rc = ENOTSUP;
 		goto unlock;
 	}

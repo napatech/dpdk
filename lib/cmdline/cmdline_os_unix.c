@@ -28,18 +28,6 @@ terminal_restore(const struct cmdline *cl)
 	tcsetattr(fileno(stdin), TCSANOW, &cl->oldterm);
 }
 
-int
-cmdline_poll_char(struct cmdline *cl)
-{
-	struct pollfd pfd;
-
-	pfd.fd = cl->s_in;
-	pfd.events = POLLIN;
-	pfd.revents = 0;
-
-	return poll(&pfd, 1, 0);
-}
-
 ssize_t
 cmdline_read_char(struct cmdline *cl, char *c)
 {
@@ -50,4 +38,10 @@ int
 cmdline_vdprintf(int fd, const char *format, va_list op)
 {
 	return vdprintf(fd, format, op);
+}
+
+/* This function is not needed on Linux, instead use sigaction() */
+void
+cmdline_cancel(__rte_unused struct cmdline *cl)
+{
 }

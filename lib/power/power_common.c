@@ -9,8 +9,11 @@
 
 #include <rte_log.h>
 #include <rte_string_fns.h>
+#include <rte_lcore.h>
 
 #include "power_common.h"
+
+RTE_LOG_REGISTER_DEFAULT(rte_power_logtype, INFO);
 
 #define POWER_SYSFILE_SCALING_DRIVER   \
 		"/sys/devices/system/cpu/cpu%u/cpufreq/scaling_driver"
@@ -161,14 +164,14 @@ power_set_governor(unsigned int lcore_id, const char *new_governor,
 	open_core_sysfs_file(&f_governor, "rw+", POWER_SYSFILE_GOVERNOR,
 			lcore_id);
 	if (f_governor == NULL) {
-		RTE_LOG(ERR, POWER, "failed to open %s\n",
+		POWER_LOG(ERR, "failed to open %s",
 				POWER_SYSFILE_GOVERNOR);
 		goto out;
 	}
 
 	ret = read_core_sysfs_s(f_governor, buf, sizeof(buf));
 	if (ret < 0) {
-		RTE_LOG(ERR, POWER, "Failed to read %s\n",
+		POWER_LOG(ERR, "Failed to read %s",
 				POWER_SYSFILE_GOVERNOR);
 		goto out;
 	}
@@ -180,25 +183,47 @@ power_set_governor(unsigned int lcore_id, const char *new_governor,
 	/* Check if current governor is already what we want */
 	if (strcmp(buf, new_governor) == 0) {
 		ret = 0;
-		POWER_DEBUG_TRACE("Power management governor of lcore %u is "
-				"already %s\n", lcore_id, new_governor);
+		POWER_DEBUG_LOG("Power management governor of lcore %u is "
+				"already %s", lcore_id, new_governor);
 		goto out;
 	}
 
 	/* Write the new governor */
 	ret = write_core_sysfs_s(f_governor, new_governor);
 	if (ret < 0) {
-		RTE_LOG(ERR, POWER, "Failed to write %s\n",
+		POWER_LOG(ERR, "Failed to write %s",
 				POWER_SYSFILE_GOVERNOR);
 		goto out;
 	}
 
 	ret = 0;
-	RTE_LOG(INFO, POWER, "Power management governor of lcore %u has been "
-			"set to '%s' successfully\n", lcore_id, new_governor);
+	POWER_LOG(INFO, "Power management governor of lcore %u has been "
+			"set to '%s' successfully", lcore_id, new_governor);
 out:
 	if (f_governor != NULL)
 		fclose(f_governor);
 
 	return ret;
+}
+
+int power_get_lcore_mapped_cpu_id(uint32_t lcore_id, uint32_t *cpu_id)
+{
+	rte_cpuset_t lcore_cpus;
+	uint32_t cpu;
+
+	lcore_cpus = rte_lcore_cpuset(lcore_id);
+	if (CPU_COUNT(&lcore_cpus) != 1) {
+		POWER_LOG(ERR,
+			"Power library does not support lcore %u mapping to %u CPUs",
+			lcore_id, CPU_COUNT(&lcore_cpus));
+		return -1;
+	}
+
+	for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+		if (CPU_ISSET(cpu, &lcore_cpus))
+			break;
+	}
+	*cpu_id = cpu;
+
+	return 0;
 }

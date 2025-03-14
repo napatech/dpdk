@@ -6,11 +6,11 @@ dep_turbo = dependency('flexran_sdk_turbo', required: false)
 dep_dec5g = dependency('flexran_sdk_ldpc_decoder_5gnr', required: false)
 
 if dep_turbo.found()
-    ext_deps += cc.find_library('libstdc++', required: true)
-    ext_deps += cc.find_library('libirc', required: true)
-    ext_deps += cc.find_library('libimf', required: true)
-    ext_deps += cc.find_library('libipps', required: true)
-    ext_deps += cc.find_library('libsvml', required: true)
+    ext_deps += cc.find_library('stdc++', required: true)
+    ext_deps += cc.find_library('irc', required: true)
+    ext_deps += cc.find_library('imf', required: true)
+    ext_deps += cc.find_library('ipps', required: true)
+    ext_deps += cc.find_library('svml', required: true)
     ext_deps += dep_turbo
     ext_deps += dependency('flexran_sdk_crc', required: true)
     ext_deps += dependency('flexran_sdk_rate_matching', required: true)
@@ -26,5 +26,5 @@ if dep_dec5g.found()
     cflags += ['-DRTE_BBDEV_SDK_AVX512']
 endif
 
-deps += ['bbdev', 'bus_vdev', 'ring']
+deps += ['bus_vdev', 'ring']
 sources = files('bbdev_turbo_software.c')

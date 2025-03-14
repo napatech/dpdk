@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017 Intel Corporation
 
-if is_windows
+if is_ms_compiler
     build = false
-    reason = 'not supported on Windows'
+    reason = 'not supported building with Visual Studio Toolset'
     subdir_done()
 endif
 
@@ -20,3 +20,4 @@ indirect_headers += files(
 )
 deps += ['hash']
 deps += ['rcu']
+deps += ['net']

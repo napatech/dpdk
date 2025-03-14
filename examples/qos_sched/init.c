@@ -79,6 +79,7 @@ app_init_port(uint16_t portid, struct rte_mempool *mp)
 	if (app_inited_port_mask & (1u << portid))
 		return 0;
 
+	memset(&rx_conf, 0, sizeof(struct rte_eth_rxconf));
 	rx_conf.rx_thresh.pthresh = rx_thresh.pthresh;
 	rx_conf.rx_thresh.hthresh = rx_thresh.hthresh;
 	rx_conf.rx_thresh.wthresh = rx_thresh.wthresh;
@@ -86,6 +87,7 @@ app_init_port(uint16_t portid, struct rte_mempool *mp)
 	rx_conf.rx_drop_en = 0;
 	rx_conf.rx_deferred_start = 0;
 
+	memset(&tx_conf, 0, sizeof(struct rte_eth_txconf));
 	tx_conf.tx_thresh.pthresh = tx_thresh.pthresh;
 	tx_conf.tx_thresh.hthresh = tx_thresh.hthresh;
 	tx_conf.tx_thresh.wthresh = tx_thresh.wthresh;
@@ -231,6 +233,7 @@ app_init_sched_port(uint32_t portid, uint32_t socketid)
 	struct rte_eth_link link;
 	struct rte_sched_port *port = NULL;
 	uint32_t pipe, subport;
+	uint32_t pipe_count;
 	int err;
 
 	err = rte_eth_link_get(portid, &link);
@@ -261,6 +264,7 @@ app_init_sched_port(uint32_t portid, uint32_t socketid)
 		uint32_t n_pipes_per_subport =
 			subport_params[subport].n_pipes_per_subport_enabled;
 
+		pipe_count = 0;
 		for (pipe = 0; pipe < n_pipes_per_subport; pipe++) {
 			if (app_pipe_to_profile[subport][pipe] != -1) {
 				err = rte_sched_pipe_config(port, subport, pipe,
@@ -270,8 +274,13 @@ app_init_sched_port(uint32_t portid, uint32_t socketid)
 							"for profile %d, err=%d\n", pipe,
 							app_pipe_to_profile[subport][pipe], err);
 				}
+				pipe_count++;
 			}
 		}
+
+		if (pipe_count == 0)
+			rte_exit(EXIT_FAILURE, "Error: invalid config, no pipes enabled for sched subport %u\n",
+					subport);
 	}
 
 	return port;
@@ -314,6 +323,7 @@ int app_init(void)
 	uint32_t i;
 	char ring_name[MAX_NAME_LEN];
 	char pool_name[MAX_NAME_LEN];
+	int ret;
 
 	if (rte_eth_dev_count_avail() == 0)
 		rte_exit(EXIT_FAILURE, "No Ethernet port - bye\n");
@@ -326,6 +336,8 @@ int app_init(void)
 	for(i = 0; i < nb_pfc; i++) {
 		uint32_t socket = rte_lcore_to_socket_id(qos_conf[i].rx_core);
 		struct rte_ring *ring;
+		struct rte_eth_link link;
+		int retry_count = 100, retry_delay = 100; /* try every 100ms for 10 sec */
 
 		snprintf(ring_name, MAX_NAME_LEN, "ring-%u-%u", i, qos_conf[i].rx_core);
 		ring = rte_ring_lookup(ring_name);
@@ -355,6 +367,23 @@ int app_init(void)
 
 		app_init_port(qos_conf[i].rx_port, qos_conf[i].mbuf_pool);
 		app_init_port(qos_conf[i].tx_port, qos_conf[i].mbuf_pool);
+
+		memset(&link, 0, sizeof(link));
+		ret = rte_eth_link_get(qos_conf[i].tx_port, &link);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_link_get: err=%d, port=%u: %s\n",
+				 ret, qos_conf[i].tx_port, rte_strerror(-ret));
+		if (link.link_status == 0)
+			printf("Waiting for link on port %u\n", qos_conf[i].tx_port);
+
+		while (link.link_status == 0 && retry_count--) {
+			rte_delay_ms(retry_delay);
+			ret = rte_eth_link_get(qos_conf[i].tx_port, &link);
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_link_get: err=%d, port=%u: %s\n",
+				 ret, qos_conf[i].tx_port, rte_strerror(-ret));
+		}
 
 		qos_conf[i].sched_port = app_init_sched_port(qos_conf[i].tx_port, socket);
 	}

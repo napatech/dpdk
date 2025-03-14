@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2017-2020 Intel Corporation
+# Copyright(c) 2017-2024 Intel Corporation
 
 sources = [
         'ixgbe_82598.c',
@@ -9,8 +9,10 @@ sources = [
         'ixgbe_dcb_82598.c',
         'ixgbe_dcb_82599.c',
         'ixgbe_dcb.c',
+        'ixgbe_e610.c',
         'ixgbe_hv_vf.c',
         'ixgbe_mbx.c',
+        'ixgbe_osdep.c',
         'ixgbe_phy.c',
         'ixgbe_vf.c',
         'ixgbe_x540.c',

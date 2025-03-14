@@ -120,7 +120,7 @@ ixgbe_crypto_add_sa(struct ixgbe_crypto_session *ic_session)
 		/* Fail if no match and no free entries*/
 		if (ip_index < 0) {
 			PMD_DRV_LOG(ERR,
-				    "No free entry left in the Rx IP table\n");
+				    "No free entry left in the Rx IP table");
 			return -1;
 		}
 
@@ -134,7 +134,7 @@ ixgbe_crypto_add_sa(struct ixgbe_crypto_session *ic_session)
 		/* Fail if no free entries*/
 		if (sa_index < 0) {
 			PMD_DRV_LOG(ERR,
-				    "No free entry left in the Rx SA table\n");
+				    "No free entry left in the Rx SA table");
 			return -1;
 		}
 
@@ -232,7 +232,7 @@ ixgbe_crypto_add_sa(struct ixgbe_crypto_session *ic_session)
 		/* Fail if no free entries*/
 		if (sa_index < 0) {
 			PMD_DRV_LOG(ERR,
-				    "No free entry left in the Tx SA table\n");
+				    "No free entry left in the Tx SA table");
 			return -1;
 		}
 
@@ -291,7 +291,7 @@ ixgbe_crypto_remove_sa(struct rte_eth_dev *dev,
 		/* Fail if no match*/
 		if (ip_index < 0) {
 			PMD_DRV_LOG(ERR,
-				    "Entry not found in the Rx IP table\n");
+				    "Entry not found in the Rx IP table");
 			return -1;
 		}
 
@@ -306,11 +306,11 @@ ixgbe_crypto_remove_sa(struct rte_eth_dev *dev,
 		/* Fail if no match*/
 		if (sa_index < 0) {
 			PMD_DRV_LOG(ERR,
-				    "Entry not found in the Rx SA table\n");
+				    "Entry not found in the Rx SA table");
 			return -1;
 		}
 
-		/* Disable and clear Rx SPI and key table table entries*/
+		/* Disable and clear Rx SPI and key table entries*/
 		reg_val = IPSRXIDX_WRITE | IPSRXIDX_TABLE_SPI | (sa_index << 3);
 		IXGBE_WRITE_REG(hw, IXGBE_IPSRXSPI, 0);
 		IXGBE_WRITE_REG(hw, IXGBE_IPSRXIPIDX, 0);
@@ -349,7 +349,7 @@ ixgbe_crypto_remove_sa(struct rte_eth_dev *dev,
 		/* Fail if no match entries*/
 		if (sa_index < 0) {
 			PMD_DRV_LOG(ERR,
-				    "Entry not found in the Tx SA table\n");
+				    "Entry not found in the Tx SA table");
 			return -1;
 		}
 		reg_val = IPSRXIDX_WRITE | (sa_index << 3);
@@ -379,7 +379,7 @@ ixgbe_crypto_create_session(void *device,
 	if (conf->crypto_xform->type != RTE_CRYPTO_SYM_XFORM_AEAD ||
 			conf->crypto_xform->aead.algo !=
 					RTE_CRYPTO_AEAD_AES_GCM) {
-		PMD_DRV_LOG(ERR, "Unsupported crypto transformation mode\n");
+		PMD_DRV_LOG(ERR, "Unsupported crypto transformation mode");
 		return -ENOTSUP;
 	}
 	aead_xform = &conf->crypto_xform->aead;
@@ -388,14 +388,14 @@ ixgbe_crypto_create_session(void *device,
 		if (dev_conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_SECURITY) {
 			ic_session->op = IXGBE_OP_AUTHENTICATED_DECRYPTION;
 		} else {
-			PMD_DRV_LOG(ERR, "IPsec decryption not enabled\n");
+			PMD_DRV_LOG(ERR, "IPsec decryption not enabled");
 			return -ENOTSUP;
 		}
 	} else {
 		if (dev_conf->txmode.offloads & RTE_ETH_TX_OFFLOAD_SECURITY) {
 			ic_session->op = IXGBE_OP_AUTHENTICATED_ENCRYPTION;
 		} else {
-			PMD_DRV_LOG(ERR, "IPsec encryption not enabled\n");
+			PMD_DRV_LOG(ERR, "IPsec encryption not enabled");
 			return -ENOTSUP;
 		}
 	}
@@ -409,7 +409,7 @@ ixgbe_crypto_create_session(void *device,
 
 	if (ic_session->op == IXGBE_OP_AUTHENTICATED_ENCRYPTION) {
 		if (ixgbe_crypto_add_sa(ic_session)) {
-			PMD_DRV_LOG(ERR, "Failed to add SA\n");
+			PMD_DRV_LOG(ERR, "Failed to add SA");
 			return -EPERM;
 		}
 	}
@@ -431,12 +431,12 @@ ixgbe_crypto_remove_session(void *device,
 	struct ixgbe_crypto_session *ic_session = SECURITY_GET_SESS_PRIV(session);
 
 	if (eth_dev != ic_session->dev) {
-		PMD_DRV_LOG(ERR, "Session not bound to this device\n");
+		PMD_DRV_LOG(ERR, "Session not bound to this device");
 		return -ENODEV;
 	}
 
 	if (ixgbe_crypto_remove_sa(eth_dev, ic_session)) {
-		PMD_DRV_LOG(ERR, "Failed to remove session\n");
+		PMD_DRV_LOG(ERR, "Failed to remove session");
 		return -EFAULT;
 	}
 
@@ -681,9 +681,9 @@ ixgbe_crypto_add_ingress_sa_from_flow(const void *sess,
 			ic_session->src_ip.type = IPv6;
 			ic_session->dst_ip.type = IPv6;
 			rte_memcpy(ic_session->src_ip.ipv6,
-				   ipv6->hdr.src_addr, 16);
+				   &ipv6->hdr.src_addr, 16);
 			rte_memcpy(ic_session->dst_ip.ipv6,
-				   ipv6->hdr.dst_addr, 16);
+				   &ipv6->hdr.dst_addr, 16);
 		} else {
 			const struct rte_flow_item_ipv4 *ipv4 = ip_spec;
 			ic_session->src_ip.type = IPv4;

@@ -1363,6 +1363,28 @@ static void txgbe_i2c_stop(struct txgbe_hw *hw)
 	wr32(hw, TXGBE_I2CENA, 0);
 }
 
+/**
+ *  txgbe_check_overtemp - Checks if an overtemp occurred.
+ *  @hw: pointer to hardware structure
+ *
+ *  Checks if the temp alarm status was triggered due to overtemp
+ **/
+s32 txgbe_check_overtemp(struct txgbe_hw *hw)
+{
+	s32 status = 0;
+	u32 ts_state;
+
+	/* Check that the temp alarm status was triggered */
+	ts_state = rd32(hw, TXGBE_TS_ALARM_ST);
+
+	if (ts_state & TXGBE_TS_ALARM_ST_DALARM)
+		status = TXGBE_ERR_UNDERTEMP;
+	else if (ts_state & TXGBE_TS_ALARM_ST_ALARM)
+		status = TXGBE_ERR_OVERTEMP;
+
+	return status;
+}
+
 static void
 txgbe_set_sgmii_an37_ability(struct txgbe_hw *hw)
 {
@@ -1380,7 +1402,9 @@ txgbe_set_sgmii_an37_ability(struct txgbe_hw *hw)
 		wr32_epcs(hw, SR_MII_MMD_AN_CTL, 0x0105);
 	wr32_epcs(hw, SR_MII_MMD_DIGI_CTL, 0x0200);
 	value = rd32_epcs(hw, SR_MII_MMD_CTL);
-	value = (value & ~0x1200) | (0x1 << 12) | (0x1 << 9);
+	value = (value & ~0x1200) | (0x1 << 9);
+	if (hw->autoneg)
+		value |= SR_MII_MMD_CTL_AN_EN;
 	wr32_epcs(hw, SR_MII_MMD_CTL, value);
 }
 
@@ -1519,8 +1543,9 @@ txgbe_set_link_to_kx4(struct txgbe_hw *hw, bool autoneg)
 		goto out;
 	}
 
-	wr32m(hw, TXGBE_MACTXCFG, TXGBE_MACTXCFG_TXE,
-			~TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACTXCFG, TXGBE_MACTXCFG_TXE, ~TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACRXCFG, TXGBE_MACRXCFG_ENA, ~TXGBE_MACRXCFG_ENA);
+	hw->mac.disable_sec_tx_path(hw);
 
 	/* 2. Disable xpcs AN-73 */
 	if (!autoneg)
@@ -1693,9 +1718,10 @@ txgbe_set_link_to_kx4(struct txgbe_hw *hw, bool autoneg)
 		wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL1, value);
 	} else if (hw->fw_version <= TXGBE_FW_N_TXEQ) {
 		value = (0x1804 & ~0x3F3F);
+		value |= 40 << 8;
 		wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL0, value);
 
-		value = (0x50 & ~0x7F) | 40 | (1 << 6);
+		value = (0x50 & ~0x7F) | (1 << 6);
 		wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL1, value);
 	}
 out:
@@ -1733,8 +1759,9 @@ txgbe_set_link_to_kx(struct txgbe_hw *hw,
 		goto out;
 	}
 
-	wr32m(hw, TXGBE_MACTXCFG, TXGBE_MACTXCFG_TXE,
-				~TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACTXCFG, TXGBE_MACTXCFG_TXE, ~TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACRXCFG, TXGBE_MACRXCFG_ENA, ~TXGBE_MACRXCFG_ENA);
+	hw->mac.disable_sec_tx_path(hw);
 
 	/* 2. Disable xpcs AN-73 */
 	if (!autoneg)
@@ -1907,10 +1934,10 @@ txgbe_set_link_to_kx(struct txgbe_hw *hw,
 		value |= hw->phy.ffe_post | (1 << 6);
 		wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL1, value);
 	} else if (hw->fw_version <= TXGBE_FW_N_TXEQ) {
-		value = (0x1804 & ~0x3F3F) | (24 << 8) | 4;
+		value = (0x1804 & ~0x3F3F) | (40 << 8);
 		wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL0, value);
 
-		value = (0x50 & ~0x7F) | 16 | (1 << 6);
+		value = (0x50 & ~0x7F) | (1 << 6);
 		wr32_epcs(hw, TXGBE_PHY_TX_EQ_CTL1, value);
 	}
 out:
@@ -1940,8 +1967,9 @@ txgbe_set_link_to_sfi(struct txgbe_hw *hw,
 		goto out;
 	}
 
-	wr32m(hw, TXGBE_MACTXCFG, TXGBE_MACTXCFG_TXE,
-			~TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACTXCFG, TXGBE_MACTXCFG_TXE, ~TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACRXCFG, TXGBE_MACRXCFG_ENA, ~TXGBE_MACRXCFG_ENA);
+	hw->mac.disable_sec_tx_path(hw);
 
 	/* 2. Disable xpcs AN-73 */
 	wr32_epcs(hw, SR_AN_CTRL, 0x0);
@@ -2292,6 +2320,8 @@ void txgbe_autoc_write(struct txgbe_hw *hw, u64 autoc)
 			txgbe_set_sgmii_an37_ability(hw);
 	}
 
+	hw->mac.enable_sec_tx_path(hw);
+
 	if (speed == TXGBE_LINK_SPEED_10GB_FULL)
 		mactxcfg = TXGBE_MACTXCFG_SPEED_10G;
 	else if (speed == TXGBE_LINK_SPEED_1GB_FULL)
@@ -2301,6 +2331,7 @@ void txgbe_autoc_write(struct txgbe_hw *hw, u64 autoc)
 	wr32m(hw, TXGBE_MACTXCFG,
 		TXGBE_MACTXCFG_SPEED_MASK | TXGBE_MACTXCFG_TXE,
 		mactxcfg | TXGBE_MACTXCFG_TXE);
+	wr32m(hw, TXGBE_MACRXCFG, TXGBE_MACRXCFG_ENA, TXGBE_MACRXCFG_ENA);
 }
 
 void txgbe_bp_down_event(struct txgbe_hw *hw)

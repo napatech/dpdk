@@ -82,6 +82,7 @@ struct virtio_user_backend_ops {
 	int (*get_config)(struct virtio_user_dev *dev, uint8_t *data, uint32_t off, uint32_t len);
 	int (*set_config)(struct virtio_user_dev *dev, const uint8_t *data, uint32_t off,
 			uint32_t len);
+	int (*cvq_enable)(struct virtio_user_dev *dev, int enable);
 	int (*enable_qp)(struct virtio_user_dev *dev, uint16_t pair_idx, int enable);
 	int (*dma_map)(struct virtio_user_dev *dev, void *addr, uint64_t iova, size_t len);
 	int (*dma_unmap)(struct virtio_user_dev *dev, void *addr, uint64_t iova, size_t len);
@@ -89,6 +90,8 @@ struct virtio_user_backend_ops {
 	int (*server_disconnect)(struct virtio_user_dev *dev);
 	int (*server_reconnect)(struct virtio_user_dev *dev);
 	int (*get_intr_fd)(struct virtio_user_dev *dev);
+	int (*map_notification_area)(struct virtio_user_dev *dev);
+	int (*unmap_notification_area)(struct virtio_user_dev *dev);
 };
 
 extern struct virtio_user_backend_ops virtio_ops_user;

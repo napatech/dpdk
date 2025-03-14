@@ -83,7 +83,7 @@ resize_and_map(int fd, const char *path, void *addr, size_t len)
 	void *map_addr;
 
 	if (eal_file_truncate(fd, len)) {
-		RTE_LOG(ERR, EAL, "Cannot truncate %s\n", path);
+		EAL_LOG(ERR, "Cannot truncate %s", path);
 		return -1;
 	}
 
@@ -173,7 +173,7 @@ find_next_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 
 		/* combine current ignore mask with last index ignore mask */
 		if (msk_idx == last)
-			ignore_msk |= last_msk;
+			ignore_msk &= last_msk;
 
 		/* if we have an ignore mask, ignore once */
 		if (ignore_msk) {
@@ -189,7 +189,7 @@ find_next_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 				tmp_msk &= tmp_msk >> 1ULL;
 			/* we found what we were looking for */
 			if (tmp_msk != 0) {
-				run_start = __builtin_ctzll(tmp_msk);
+				run_start = rte_ctz64(tmp_msk);
 				return MASK_GET_IDX(msk_idx, run_start);
 			}
 		}
@@ -203,7 +203,7 @@ find_next_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 		if (~cur_msk == 0)
 			clz = sizeof(cur_msk) * 8;
 		else
-			clz = __builtin_clzll(~cur_msk);
+			clz = rte_clz64(~cur_msk);
 
 		/* if there aren't any runs at the end either, just continue */
 		if (clz == 0)
@@ -216,6 +216,8 @@ find_next_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 		for (lookahead_idx = msk_idx + 1; lookahead_idx < msk->n_masks;
 				lookahead_idx++) {
 			unsigned int s_idx, need;
+			uint64_t first_bit = 1;
+
 			lookahead_msk = msk->data[lookahead_idx];
 
 			/* if we're looking for free space, invert the mask */
@@ -225,18 +227,24 @@ find_next_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 			/* figure out how many consecutive bits we need here */
 			need = RTE_MIN(left, MASK_ALIGN);
 
-			for (s_idx = 0; s_idx < need - 1; s_idx++)
+			/* count number of shifts we performed */
+			for (s_idx = 0; s_idx < need - 1; s_idx++) {
 				lookahead_msk &= lookahead_msk >> 1ULL;
+				/* did we lose the run yet? */
+				if ((lookahead_msk & first_bit) == 0)
+					break;
+			}
 
 			/* if first bit is not set, we've lost the run */
-			if ((lookahead_msk & 1) == 0) {
+			if ((lookahead_msk & first_bit) == 0) {
 				/*
 				 * we've scanned this far, so we know there are
 				 * no runs in the space we've lookahead-scanned
 				 * as well, so skip that on next iteration.
 				 */
-				ignore_msk = ~((1ULL << need) - 1);
-				msk_idx = lookahead_idx;
+				ignore_msk = ~((1ULL << (s_idx + 1)) - 1);
+				/* outer loop will increment msk_idx so add 1 */
+				msk_idx = lookahead_idx - 1;
 				break;
 			}
 
@@ -308,7 +316,7 @@ find_next(const struct rte_fbarray *arr, unsigned int start, bool used)
 		 * find first set bit - that will correspond to whatever it is
 		 * that we're looking for.
 		 */
-		found = __builtin_ctzll(cur);
+		found = rte_ctz64(cur);
 		return MASK_GET_IDX(idx, found);
 	}
 	/* we didn't find anything */
@@ -366,7 +374,7 @@ find_contig(const struct rte_fbarray *arr, unsigned int start, bool used)
 		/*
 		 * see if current run ends before mask end.
 		 */
-		run_len = __builtin_ctzll(cur);
+		run_len = rte_ctz64(cur);
 
 		/* add however many zeroes we've had in the last run and quit */
 		if (run_len < need_len) {
@@ -454,7 +462,7 @@ find_prev_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 				 * would have been.
 				 */
 				run_start = MASK_ALIGN -
-						__builtin_clzll(tmp_msk) - n;
+						rte_clz64(tmp_msk) - n;
 				return MASK_GET_IDX(msk_idx, run_start);
 			}
 		}
@@ -468,7 +476,7 @@ find_prev_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 		if (~cur_msk == 0)
 			ctz = sizeof(cur_msk) * 8;
 		else
-			ctz = __builtin_ctzll(~cur_msk);
+			ctz = rte_ctz64(~cur_msk);
 
 		/* if there aren't any runs at the start either, just
 		 * continue
@@ -500,8 +508,13 @@ find_prev_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 			/* figure out how many consecutive bits we need here */
 			need = RTE_MIN(left, MASK_ALIGN);
 
-			for (s_idx = 0; s_idx < need - 1; s_idx++)
+			/* count number of shifts we performed */
+			for (s_idx = 0; s_idx < need - 1; s_idx++) {
 				lookbehind_msk &= lookbehind_msk << 1ULL;
+				/* did we lose the run yet? */
+				if ((lookbehind_msk & last_bit) == 0)
+					break;
+			}
 
 			/* if last bit is not set, we've lost the run */
 			if ((lookbehind_msk & last_bit) == 0) {
@@ -510,8 +523,9 @@ find_prev_n(const struct rte_fbarray *arr, unsigned int start, unsigned int n,
 				 * no runs in the space we've lookbehind-scanned
 				 * as well, so skip that on next iteration.
 				 */
-				ignore_msk = UINT64_MAX << need;
-				msk_idx = lookbehind_idx;
+				ignore_msk = ~(UINT64_MAX << (MASK_ALIGN - s_idx - 1));
+				/* outer loop will decrement msk_idx so add 1 */
+				msk_idx = lookbehind_idx + 1;
 				break;
 			}
 
@@ -584,7 +598,7 @@ find_prev(const struct rte_fbarray *arr, unsigned int start, bool used)
 		 * the value we get is counted from end of mask, so calculate
 		 * position from start of mask.
 		 */
-		found = MASK_ALIGN - __builtin_clzll(cur) - 1;
+		found = MASK_ALIGN - rte_clz64(cur) - 1;
 
 		return MASK_GET_IDX(idx, found);
 	} while (idx-- != 0); /* decrement after check  to include zero*/
@@ -635,7 +649,7 @@ find_rev_contig(const struct rte_fbarray *arr, unsigned int start, bool used)
 		/*
 		 * see where run ends, starting from the end.
 		 */
-		run_len = __builtin_clzll(cur);
+		run_len = rte_clz64(cur);
 
 		/* add however many zeroes we've had in the last run and quit */
 		if (run_len < need_len) {
@@ -755,7 +769,7 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 		void *new_data = rte_mem_map(data, mmap_len,
 			RTE_PROT_READ | RTE_PROT_WRITE, flags, fd, 0);
 		if (new_data == NULL) {
-			RTE_LOG(DEBUG, EAL, "%s(): couldn't remap anonymous memory: %s\n",
+			EAL_LOG(DEBUG, "%s(): couldn't remap anonymous memory: %s",
 					__func__, rte_strerror(rte_errno));
 			goto fail;
 		}
@@ -770,12 +784,12 @@ rte_fbarray_init(struct rte_fbarray *arr, const char *name, unsigned int len,
 		 */
 		fd = eal_file_open(path, EAL_OPEN_CREATE | EAL_OPEN_READWRITE);
 		if (fd < 0) {
-			RTE_LOG(DEBUG, EAL, "%s(): couldn't open %s: %s\n",
+			EAL_LOG(DEBUG, "%s(): couldn't open %s: %s",
 				__func__, path, rte_strerror(rte_errno));
 			goto fail;
 		} else if (eal_file_lock(
 				fd, EAL_FLOCK_EXCLUSIVE, EAL_FLOCK_RETURN)) {
-			RTE_LOG(DEBUG, EAL, "%s(): couldn't lock %s: %s\n",
+			EAL_LOG(DEBUG, "%s(): couldn't lock %s: %s",
 				__func__, path, rte_strerror(rte_errno));
 			rte_errno = EBUSY;
 			goto fail;
@@ -1017,7 +1031,7 @@ rte_fbarray_destroy(struct rte_fbarray *arr)
 		 */
 		fd = tmp->fd;
 		if (eal_file_lock(fd, EAL_FLOCK_EXCLUSIVE, EAL_FLOCK_RETURN)) {
-			RTE_LOG(DEBUG, EAL, "Cannot destroy fbarray - another process is using it\n");
+			EAL_LOG(DEBUG, "Cannot destroy fbarray - another process is using it");
 			rte_errno = EBUSY;
 			ret = -1;
 			goto out;
@@ -1026,7 +1040,7 @@ rte_fbarray_destroy(struct rte_fbarray *arr)
 		/* we're OK to destroy the file */
 		eal_get_fbarray_path(path, sizeof(path), arr->name);
 		if (unlink(path)) {
-			RTE_LOG(DEBUG, EAL, "Cannot unlink fbarray: %s\n",
+			EAL_LOG(DEBUG, "Cannot unlink fbarray: %s",
 				strerror(errno));
 			rte_errno = errno;
 			/*
@@ -1482,7 +1496,7 @@ rte_fbarray_dump_metadata(struct rte_fbarray *arr, FILE *f)
 
 	if (fully_validate(arr->name, arr->elt_sz, arr->len)) {
 		fprintf(f, "Invalid file-backed array\n");
-		goto out;
+		return;
 	}
 
 	/* prevent array from changing under us */
@@ -1496,6 +1510,5 @@ rte_fbarray_dump_metadata(struct rte_fbarray *arr, FILE *f)
 
 	for (i = 0; i < msk->n_masks; i++)
 		fprintf(f, "msk idx %i: 0x%016" PRIx64 "\n", i, msk->data[i]);
-out:
 	rte_rwlock_read_unlock(&arr->rwlock);
 }

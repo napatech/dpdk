@@ -72,7 +72,7 @@ ice_rx_reassemble_packets(struct ice_rx_queue *rxq, struct rte_mbuf **rx_bufs,
 	/* save the partial packet for next time */
 	rxq->pkt_first_seg = start;
 	rxq->pkt_last_seg = end;
-	rte_memcpy(rx_bufs, pkts, pkt_idx * (sizeof(*pkts)));
+	memcpy(rx_bufs, pkts, pkt_idx * (sizeof(*pkts)));
 	return pkt_idx;
 }
 
@@ -251,6 +251,10 @@ ice_rxq_vec_setup_default(struct ice_rx_queue *rxq)
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |		\
 		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |	\
 		RTE_ETH_TX_OFFLOAD_TCP_TSO |	\
+		RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |    \
+		RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |    \
+		RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |    \
+		RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |    \
 		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM)
 
 #define ICE_TX_VECTOR_OFFLOAD (				\

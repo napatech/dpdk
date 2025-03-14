@@ -51,6 +51,7 @@ rxq_handle_pending_error(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 			 uint16_t pkts_n)
 {
 	uint16_t n = 0;
+	uint16_t skip_cnt;
 	unsigned int i;
 #ifdef MLX5_PMD_SOFT_COUNTERS
 	uint32_t err_bytes = 0;
@@ -74,7 +75,7 @@ rxq_handle_pending_error(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	rxq->stats.ipackets -= (pkts_n - n);
 	rxq->stats.ibytes -= err_bytes;
 #endif
-	mlx5_rx_err_handle(rxq, 1);
+	mlx5_rx_err_handle(rxq, 1, pkts_n, &skip_cnt);
 	return n;
 }
 
@@ -253,8 +254,6 @@ rxq_copy_mprq_mbuf_v(struct mlx5_rxq_data *rxq,
 	}
 	rxq->rq_pi += i;
 	rxq->cq_ci += i;
-	rte_io_wmb();
-	*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
 	if (rq_ci != rxq->rq_ci) {
 		rxq->rq_ci = rq_ci;
 		rte_io_wmb();
@@ -291,13 +290,14 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	const uint16_t q_mask = q_n - 1;
 	const uint16_t e_n = 1 << rxq->elts_n;
 	const uint16_t e_mask = e_n - 1;
-	volatile struct mlx5_cqe *cq;
+	volatile struct mlx5_cqe *cq, *next;
 	struct rte_mbuf **elts;
 	uint64_t comp_idx = MLX5_VPMD_DESCS_PER_LOOP;
 	uint16_t nocmp_n = 0;
 	uint16_t rcvd_pkt = 0;
 	unsigned int cq_idx = rxq->cq_ci & q_mask;
 	unsigned int elts_idx;
+	int ret;
 
 	MLX5_ASSERT(rxq->sges_n == 0);
 	MLX5_ASSERT(rxq->cqe_n == rxq->elts_n);
@@ -331,6 +331,15 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	}
 	/* At this point, there shouldn't be any remaining packets. */
 	MLX5_ASSERT(rxq->decompressed == 0);
+	/* Go directly to unzipping in case the first CQE is compressed. */
+	if (rxq->cqe_comp_layout) {
+		ret = check_cqe_iteration(cq, rxq->cqe_n, rxq->cq_ci);
+		if (ret == MLX5_CQE_STATUS_SW_OWN &&
+		    (MLX5_CQE_FORMAT(cq->op_own) == MLX5_COMPRESSED)) {
+			comp_idx = 0;
+			goto decompress;
+		}
+	}
 	/* Process all the CQEs */
 	nocmp_n = rxq_cq_process_v(rxq, cq, elts, pkts, pkts_n, err, &comp_idx);
 	/* If no new CQE seen, return without updating cq_db. */
@@ -343,11 +352,25 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	rxq->cq_ci += nocmp_n;
 	rxq->rq_pi += nocmp_n;
 	rcvd_pkt += nocmp_n;
+	/* Copy title packet for future compressed sessions. */
+	if (rxq->cqe_comp_layout) {
+		ret = check_cqe_iteration(cq, rxq->cqe_n, rxq->cq_ci);
+		if (ret == MLX5_CQE_STATUS_SW_OWN &&
+		    (MLX5_CQE_FORMAT(cq->op_own) != MLX5_COMPRESSED)) {
+			next = &(*rxq->cqes)[rxq->cq_ci & q_mask];
+			ret = check_cqe_iteration(next,	rxq->cqe_n, rxq->cq_ci);
+			if (MLX5_CQE_FORMAT(next->op_own) == MLX5_COMPRESSED ||
+			    ret != MLX5_CQE_STATUS_SW_OWN)
+				rte_memcpy(&rxq->title_pkt, elts[nocmp_n - 1],
+					   sizeof(struct rte_mbuf));
+		}
+	}
+decompress:
 	/* Decompress the last CQE if compressed. */
 	if (comp_idx < MLX5_VPMD_DESCS_PER_LOOP) {
 		MLX5_ASSERT(comp_idx == (nocmp_n % MLX5_VPMD_DESCS_PER_LOOP));
 		rxq->decompressed = rxq_cq_decompress_v(rxq, &cq[nocmp_n],
-							&elts[nocmp_n]);
+							&elts[nocmp_n], true);
 		rxq->cq_ci += rxq->decompressed;
 		/* Return more packets if needed. */
 		if (nocmp_n < pkts_n) {
@@ -361,8 +384,6 @@ rxq_burst_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 			rxq->decompressed -= n;
 		}
 	}
-	rte_io_wmb();
-	*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
 	*no_cq = !rcvd_pkt;
 	return rcvd_pkt;
 }
@@ -390,6 +411,7 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	bool no_cq = false;
 
 	do {
+		err = 0;
 		nb_rx = rxq_burst_v(rxq, pkts + tn, pkts_n - tn,
 				    &err, &no_cq);
 		if (unlikely(err | rxq->err_state))
@@ -397,6 +419,8 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		tn += nb_rx;
 		if (unlikely(no_cq))
 			break;
+		rte_io_wmb();
+		*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
 	} while (tn != pkts_n);
 	return tn;
 }
@@ -431,7 +455,7 @@ rxq_burst_mprq_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	const uint32_t strd_n = RTE_BIT32(rxq->log_strd_num);
 	const uint32_t elts_n = wqe_n * strd_n;
 	const uint32_t elts_mask = elts_n - 1;
-	volatile struct mlx5_cqe *cq;
+	volatile struct mlx5_cqe *cq, *next;
 	struct rte_mbuf **elts;
 	uint64_t comp_idx = MLX5_VPMD_DESCS_PER_LOOP;
 	uint16_t nocmp_n = 0;
@@ -439,6 +463,7 @@ rxq_burst_mprq_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	uint16_t cp_pkt = 0;
 	unsigned int cq_idx = rxq->cq_ci & q_mask;
 	unsigned int elts_idx;
+	int ret;
 
 	MLX5_ASSERT(rxq->sges_n == 0);
 	cq = &(*rxq->cqes)[cq_idx];
@@ -471,6 +496,15 @@ rxq_burst_mprq_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	}
 	/* At this point, there shouldn't be any remaining packets. */
 	MLX5_ASSERT(rxq->decompressed == 0);
+	/* Go directly to unzipping in case the first CQE is compressed. */
+	if (rxq->cqe_comp_layout) {
+		ret = check_cqe_iteration(cq, rxq->cqe_n, rxq->cq_ci);
+		if (ret == MLX5_CQE_STATUS_SW_OWN &&
+		    (MLX5_CQE_FORMAT(cq->op_own) == MLX5_COMPRESSED)) {
+			comp_idx = 0;
+			goto decompress;
+		}
+	}
 	/* Process all the CQEs */
 	nocmp_n = rxq_cq_process_v(rxq, cq, elts, pkts, pkts_n, err, &comp_idx);
 	/* If no new CQE seen, return without updating cq_db. */
@@ -482,11 +516,25 @@ rxq_burst_mprq_v(struct mlx5_rxq_data *rxq, struct rte_mbuf **pkts,
 	MLX5_ASSERT(nocmp_n <= pkts_n);
 	cp_pkt = rxq_copy_mprq_mbuf_v(rxq, pkts, nocmp_n);
 	rcvd_pkt += cp_pkt;
+	/* Copy title packet for future compressed sessions. */
+	if (rxq->cqe_comp_layout) {
+		ret = check_cqe_iteration(cq, rxq->cqe_n, rxq->cq_ci);
+		if (ret == MLX5_CQE_STATUS_SW_OWN &&
+		    (MLX5_CQE_FORMAT(cq->op_own) != MLX5_COMPRESSED)) {
+			next = &(*rxq->cqes)[rxq->cq_ci & q_mask];
+			ret = check_cqe_iteration(next,	rxq->cqe_n, rxq->cq_ci);
+			if (MLX5_CQE_FORMAT(next->op_own) == MLX5_COMPRESSED ||
+			    ret != MLX5_CQE_STATUS_SW_OWN)
+				rte_memcpy(&rxq->title_pkt, elts[nocmp_n - 1],
+					   sizeof(struct rte_mbuf));
+		}
+	}
+decompress:
 	/* Decompress the last CQE if compressed. */
 	if (comp_idx < MLX5_VPMD_DESCS_PER_LOOP) {
 		MLX5_ASSERT(comp_idx == (nocmp_n % MLX5_VPMD_DESCS_PER_LOOP));
 		rxq->decompressed = rxq_cq_decompress_v(rxq, &cq[nocmp_n],
-							&elts[nocmp_n]);
+							&elts[nocmp_n], false);
 		/* Return more packets if needed. */
 		if (nocmp_n < pkts_n) {
 			uint16_t n = rxq->decompressed;
@@ -524,6 +572,7 @@ mlx5_rx_burst_mprq_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	bool no_cq = false;
 
 	do {
+		err = 0;
 		nb_rx = rxq_burst_mprq_v(rxq, pkts + tn, pkts_n - tn,
 					 &err, &no_cq);
 		if (unlikely(err | rxq->err_state))
@@ -531,6 +580,8 @@ mlx5_rx_burst_mprq_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		tn += nb_rx;
 		if (unlikely(no_cq))
 			break;
+		rte_io_wmb();
+		*rxq->cq_db = rte_cpu_to_be_32(rxq->cq_ci);
 	} while (tn != pkts_n);
 	return tn;
 }

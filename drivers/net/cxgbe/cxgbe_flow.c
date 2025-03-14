@@ -188,22 +188,22 @@ ch_rte_parsetype_eth(const void *dmask, const struct rte_flow_item *item,
 		return 0;
 
 	/* we don't support SRC_MAC filtering*/
-	if (!rte_is_zero_ether_addr(&spec->src) ||
-	    (umask && !rte_is_zero_ether_addr(&umask->src)))
+	if (!rte_is_zero_ether_addr(&spec->hdr.src_addr) ||
+	    (umask && !rte_is_zero_ether_addr(&umask->hdr.src_addr)))
 		return rte_flow_error_set(e, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM,
 					  item,
 					  "src mac filtering not supported");
 
-	if (!rte_is_zero_ether_addr(&spec->dst) ||
-	    (umask && !rte_is_zero_ether_addr(&umask->dst))) {
+	if (!rte_is_zero_ether_addr(&spec->hdr.dst_addr) ||
+	    (umask && !rte_is_zero_ether_addr(&umask->hdr.dst_addr))) {
 		CXGBE_FILL_FS(0, 0x1ff, macidx);
-		CXGBE_FILL_FS_MEMCPY(spec->dst.addr_bytes, mask->dst.addr_bytes,
+		CXGBE_FILL_FS_MEMCPY(spec->hdr.dst_addr.addr_bytes, mask->hdr.dst_addr.addr_bytes,
 				     dmac);
 	}
 
-	if (spec->type || (umask && umask->type))
-		CXGBE_FILL_FS(be16_to_cpu(spec->type),
-			      be16_to_cpu(mask->type), ethtype);
+	if (spec->hdr.ether_type || (umask && umask->hdr.ether_type))
+		CXGBE_FILL_FS(be16_to_cpu(spec->hdr.ether_type),
+			      be16_to_cpu(mask->hdr.ether_type), ethtype);
 
 	return 0;
 }
@@ -239,26 +239,26 @@ ch_rte_parsetype_vlan(const void *dmask, const struct rte_flow_item *item,
 	if (fs->val.ethtype == RTE_ETHER_TYPE_QINQ) {
 		CXGBE_FILL_FS(1, 1, ovlan_vld);
 		if (spec) {
-			if (spec->tci || (umask && umask->tci))
-				CXGBE_FILL_FS(be16_to_cpu(spec->tci),
-					      be16_to_cpu(mask->tci), ovlan);
+			if (spec->hdr.vlan_tci || (umask && umask->hdr.vlan_tci))
+				CXGBE_FILL_FS(be16_to_cpu(spec->hdr.vlan_tci),
+					      be16_to_cpu(mask->hdr.vlan_tci), ovlan);
 			fs->mask.ethtype = 0;
 			fs->val.ethtype = 0;
 		}
 	} else {
 		CXGBE_FILL_FS(1, 1, ivlan_vld);
 		if (spec) {
-			if (spec->tci || (umask && umask->tci))
-				CXGBE_FILL_FS(be16_to_cpu(spec->tci),
-					      be16_to_cpu(mask->tci), ivlan);
+			if (spec->hdr.vlan_tci || (umask && umask->hdr.vlan_tci))
+				CXGBE_FILL_FS(be16_to_cpu(spec->hdr.vlan_tci),
+					      be16_to_cpu(mask->hdr.vlan_tci), ivlan);
 			fs->mask.ethtype = 0;
 			fs->val.ethtype = 0;
 		}
 	}
 
-	if (spec && (spec->inner_type || (umask && umask->inner_type)))
-		CXGBE_FILL_FS(be16_to_cpu(spec->inner_type),
-			      be16_to_cpu(mask->inner_type), ethtype);
+	if (spec && (spec->hdr.eth_proto || (umask && umask->hdr.eth_proto)))
+		CXGBE_FILL_FS(be16_to_cpu(spec->hdr.eth_proto),
+			      be16_to_cpu(mask->hdr.eth_proto), ethtype);
 
 	return 0;
 }
@@ -411,15 +411,15 @@ ch_rte_parsetype_ipv6(const void *dmask, const struct rte_flow_item *item,
 			      RTE_IPV6_HDR_TC_SHIFT,
 			      tos);
 
-	if (memcmp(val->hdr.dst_addr, z, sizeof(val->hdr.dst_addr)) ||
+	if (memcmp(&val->hdr.dst_addr, z, sizeof(val->hdr.dst_addr)) ||
 	    (umask &&
-	     memcmp(umask->hdr.dst_addr, z, sizeof(umask->hdr.dst_addr))))
+	     memcmp(&umask->hdr.dst_addr, z, sizeof(umask->hdr.dst_addr))))
 		CXGBE_FILL_FS_MEMCPY(val->hdr.dst_addr, mask->hdr.dst_addr,
 				     lip);
 
-	if (memcmp(val->hdr.src_addr, z, sizeof(val->hdr.src_addr)) ||
+	if (memcmp(&val->hdr.src_addr, z, sizeof(val->hdr.src_addr)) ||
 	    (umask &&
-	     memcmp(umask->hdr.src_addr, z, sizeof(umask->hdr.src_addr))))
+	     memcmp(&umask->hdr.src_addr, z, sizeof(umask->hdr.src_addr))))
 		CXGBE_FILL_FS_MEMCPY(val->hdr.src_addr, mask->hdr.src_addr,
 				     fip);
 
@@ -680,7 +680,7 @@ ch_rte_parse_atype_switch(const struct rte_flow_action *a,
 						  "found.");
 
 		ipv6 = (const struct rte_flow_action_set_ipv6 *)a->conf;
-		memcpy(fs->nat_fip, ipv6->ipv6_addr, sizeof(ipv6->ipv6_addr));
+		memcpy(fs->nat_fip, &ipv6->ipv6_addr, sizeof(ipv6->ipv6_addr));
 		*nmode |= 1 << 0;
 		break;
 	case RTE_FLOW_ACTION_TYPE_SET_IPV6_DST:
@@ -693,7 +693,7 @@ ch_rte_parse_atype_switch(const struct rte_flow_action *a,
 						  "found.");
 
 		ipv6 = (const struct rte_flow_action_set_ipv6 *)a->conf;
-		memcpy(fs->nat_lip, ipv6->ipv6_addr, sizeof(ipv6->ipv6_addr));
+		memcpy(fs->nat_lip, &ipv6->ipv6_addr, sizeof(ipv6->ipv6_addr));
 		*nmode |= 1 << 1;
 		break;
 	case RTE_FLOW_ACTION_TYPE_SET_TP_SRC:
@@ -889,17 +889,17 @@ static struct chrte_fparse parseitem[] = {
 	[RTE_FLOW_ITEM_TYPE_ETH] = {
 		.fptr  = ch_rte_parsetype_eth,
 		.dmask = &(const struct rte_flow_item_eth){
-			.dst.addr_bytes = "\xff\xff\xff\xff\xff\xff",
-			.src.addr_bytes = "\x00\x00\x00\x00\x00\x00",
-			.type = 0xffff,
+			.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
+			.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.ether_type = 0xffff,
 		}
 	},
 
 	[RTE_FLOW_ITEM_TYPE_VLAN] = {
 		.fptr = ch_rte_parsetype_vlan,
 		.dmask = &(const struct rte_flow_item_vlan){
-			.tci = 0xffff,
-			.inner_type = 0xffff,
+			.hdr.vlan_tci = 0xffff,
+			.hdr.eth_proto = 0xffff,
 		}
 	},
 
@@ -918,12 +918,8 @@ static struct chrte_fparse parseitem[] = {
 		.fptr  = ch_rte_parsetype_ipv6,
 		.dmask = &(const struct rte_flow_item_ipv6) {
 			.hdr = {
-				.src_addr =
-					"\xff\xff\xff\xff\xff\xff\xff\xff"
-					"\xff\xff\xff\xff\xff\xff\xff\xff",
-				.dst_addr =
-					"\xff\xff\xff\xff\xff\xff\xff\xff"
-					"\xff\xff\xff\xff\xff\xff\xff\xff",
+				.src_addr = RTE_IPV6_MASK_FULL,
+				.dst_addr = RTE_IPV6_MASK_FULL,
 				.vtc_flow = RTE_BE32(0xff000000),
 			},
 		},

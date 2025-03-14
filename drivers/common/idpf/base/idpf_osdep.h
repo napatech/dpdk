@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2024 Intel Corporation
  */
 
 #ifndef _IDPF_OSDEP_H_
@@ -23,6 +23,9 @@
 #include <rte_log.h>
 #include <rte_random.h>
 #include <rte_io.h>
+#include <rte_compat.h>
+
+#include "../idpf_common_logs.h"
 
 #define INLINE inline
 #define STATIC static
@@ -44,6 +47,15 @@ typedef struct idpf_lock idpf_lock;
 #define lower_32_bits(n)	((u32)(n))
 #define low_16_bits(x)		((x) & 0xFFFF)
 #define high_16_bits(x)		(((x) & 0xFFFF0000) >> 16)
+
+#define IDPF_M(m, s)		((m) << (s))
+
+#define BITS_PER_LONG (8 * sizeof(long))
+#define BITS_PER_LONG_LONG (8 * sizeof(long long))
+#define GENMASK(h, l) \
+	(((~0UL) - (1UL << (l)) + 1) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
+#define GENMASK_ULL(h, l) \
+	(((~0ULL) << (l)) & (~0ULL >> (BITS_PER_LONG_LONG - 1 - (h))))
 
 #ifndef ETH_ADDR_LEN
 #define ETH_ADDR_LEN		6
@@ -98,16 +110,14 @@ typedef struct idpf_lock idpf_lock;
 #define FIELD_SIZEOF(t, f) (sizeof(((t *)0)->(f)))
 #define MAKEMASK(m, s) ((m) << (s))
 
-extern int idpf_common_logger;
-
-#define DEBUGOUT(S)		rte_log(RTE_LOG_DEBUG, idpf_common_logger, S)
-#define DEBUGOUT2(S, A...)	rte_log(RTE_LOG_DEBUG, idpf_common_logger, S, ##A)
+#define DEBUGOUT(S, ...)	RTE_LOG(DEBUG, IDPF_COMMON, S, ## __VA_ARGS__)
+#define DEBUGOUT2(S, ...)	DEBUGOUT(S, ## __VA_ARGS__)
 #define DEBUGFUNC(F)		DEBUGOUT(F "\n")
 
 #define idpf_debug(h, m, s, ...)					\
 	do {								\
 		if (((m) & (h)->debug_mask))				\
-			PMD_DRV_LOG_RAW(DEBUG, "idpf %02x.%x " s,       \
+			DEBUGOUT("idpf %02x.%x " s "\n",		\
 					(h)->bus.device, (h)->bus.func,	\
 					##__VA_ARGS__);			\
 	} while (0)
@@ -210,28 +220,10 @@ struct idpf_lock {
 	rte_spinlock_t spinlock;
 };
 
-static inline void
-idpf_init_lock(struct idpf_lock *sp)
-{
-	rte_spinlock_init(&sp->spinlock);
-}
-
-static inline void
-idpf_acquire_lock(struct idpf_lock *sp)
-{
-	rte_spinlock_lock(&sp->spinlock);
-}
-
-static inline void
-idpf_release_lock(struct idpf_lock *sp)
-{
-	rte_spinlock_unlock(&sp->spinlock);
-}
-
-static inline void
-idpf_destroy_lock(__rte_unused struct idpf_lock *sp)
-{
-}
+#define idpf_init_lock(sp) rte_spinlock_init(&(sp)->spinlock)
+#define idpf_acquire_lock(sp) rte_spinlock_lock(&(sp)->spinlock)
+#define idpf_release_lock(sp) rte_spinlock_unlock(&(sp)->spinlock)
+#define idpf_destroy_lock(sp) RTE_SET_USED(sp)
 
 struct idpf_hw;
 
@@ -349,10 +341,16 @@ idpf_hweight32(u32 num)
 #define LIST_ENTRY_TYPE(type)	   LIST_ENTRY(type)
 #endif
 
+#ifndef LIST_FOREACH_SAFE
+#define LIST_FOREACH_SAFE(var, head, field, tvar)			\
+	for ((var) = LIST_FIRST((head));				\
+	    (var) && ((tvar) = LIST_NEXT((var), field), 1);		\
+	    (var) = (tvar))
+#endif
+
 #ifndef LIST_FOR_EACH_ENTRY_SAFE
 #define LIST_FOR_EACH_ENTRY_SAFE(pos, temp, head, entry_type, list)	\
-	LIST_FOREACH(pos, head, list)
-
+	LIST_FOREACH_SAFE(pos, head, list, temp)
 #endif
 
 #ifndef LIST_FOR_EACH_ENTRY
@@ -360,5 +358,75 @@ idpf_hweight32(u32 num)
 	LIST_FOREACH(pos, head, list)
 
 #endif
+
+enum idpf_mac_type {
+	IDPF_MAC_UNKNOWN = 0,
+	IDPF_MAC_PF,
+	IDPF_MAC_VF,
+	IDPF_MAC_GENERIC
+};
+
+#define ETH_ALEN 6
+
+struct idpf_mac_info {
+	enum idpf_mac_type type;
+	u8 addr[ETH_ALEN];
+	u8 perm_addr[ETH_ALEN];
+};
+
+#define IDPF_AQ_LINK_UP 0x1
+
+/* PCI bus types */
+enum idpf_bus_type {
+	idpf_bus_type_unknown = 0,
+	idpf_bus_type_pci,
+	idpf_bus_type_pcix,
+	idpf_bus_type_pci_express,
+	idpf_bus_type_reserved
+};
+
+/* PCI bus speeds */
+enum idpf_bus_speed {
+	idpf_bus_speed_unknown	= 0,
+	idpf_bus_speed_33	= 33,
+	idpf_bus_speed_66	= 66,
+	idpf_bus_speed_100	= 100,
+	idpf_bus_speed_120	= 120,
+	idpf_bus_speed_133	= 133,
+	idpf_bus_speed_2500	= 2500,
+	idpf_bus_speed_5000	= 5000,
+	idpf_bus_speed_8000	= 8000,
+	idpf_bus_speed_reserved
+};
+
+/* PCI bus widths */
+enum idpf_bus_width {
+	idpf_bus_width_unknown	= 0,
+	idpf_bus_width_pcie_x1	= 1,
+	idpf_bus_width_pcie_x2	= 2,
+	idpf_bus_width_pcie_x4	= 4,
+	idpf_bus_width_pcie_x8	= 8,
+	idpf_bus_width_32	= 32,
+	idpf_bus_width_64	= 64,
+	idpf_bus_width_reserved
+};
+
+/* Bus parameters */
+struct idpf_bus_info {
+	enum idpf_bus_speed speed;
+	enum idpf_bus_width width;
+	enum idpf_bus_type type;
+
+	u16 func;
+	u16 device;
+	u16 lan_id;
+	u16 bus_id;
+};
+
+/* Function specific capabilities */
+struct idpf_hw_func_caps {
+	u32 num_alloc_vfs;
+	u32 vf_base_id;
+};
 
 #endif /* _IDPF_OSDEP_H_ */

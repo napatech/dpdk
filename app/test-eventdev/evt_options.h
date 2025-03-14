@@ -35,10 +35,15 @@
 #define EVT_DEQ_TMO_NSEC         ("deq_tmo_nsec")
 #define EVT_PROD_ETHDEV          ("prod_type_ethdev")
 #define EVT_PROD_CRYPTODEV	 ("prod_type_cryptodev")
+#define EVT_PROD_DMADEV          ("prod_type_dmadev")
 #define EVT_PROD_TIMERDEV        ("prod_type_timerdev")
 #define EVT_PROD_TIMERDEV_BURST  ("prod_type_timerdev_burst")
+#define EVT_DMA_ADPTR_MODE       ("dma_adptr_mode")
 #define EVT_CRYPTO_ADPTR_MODE	 ("crypto_adptr_mode")
 #define EVT_CRYPTO_OP_TYPE	 ("crypto_op_type")
+#define EVT_CRYPTO_CIPHER_ALG	 ("crypto_cipher_alg")
+#define EVT_CRYPTO_CIPHER_KEY	 ("crypto_cipher_key")
+#define EVT_CRYPTO_CIPHER_IV_SZ  ("crypto_cipher_iv_sz")
 #define EVT_NB_TIMERS            ("nb_timers")
 #define EVT_NB_TIMER_ADPTRS      ("nb_timer_adptrs")
 #define EVT_TIMER_TICK_NSEC      ("timer_tick_nsec")
@@ -54,6 +59,7 @@
 #define EVT_PER_PORT_POOL	 ("per_port_pool")
 #define EVT_TX_FIRST		 ("tx_first")
 #define EVT_TX_PKT_SZ		 ("tx_pkt_sz")
+#define EVT_PRESCHEDULE          ("preschedule")
 #define EVT_HELP                 ("help")
 
 void evt_options_default(struct evt_options *opt);
@@ -257,6 +263,8 @@ evt_prod_id_to_name(enum evt_prod_type prod_type)
 		return "Event timer adapter";
 	case EVT_PROD_TYPE_EVENT_CRYPTO_ADPTR:
 		return "Event crypto adapter";
+	case EVT_PROD_TYPE_EVENT_DMA_ADPTR:
+		return "Event dma adapter";
 	}
 
 	return "";
@@ -305,7 +313,22 @@ evt_dump_producer_type(struct evt_options *opt)
 			 (opt->crypto_op_type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) ?
 			 "SYMMETRIC" : "ASYMMETRIC");
 		evt_dump("nb_cryptodev", "%u", rte_cryptodev_count());
+		if (opt->crypto_op_type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) {
+			evt_dump("cipher algo", "%s",
+				 rte_cryptodev_get_cipher_algo_string(opt->crypto_cipher_alg));
+			evt_dump("cipher key sz", "%u",
+				 opt->crypto_cipher_key_sz);
+			evt_dump("cipher iv sz", "%u", opt->crypto_cipher_iv_sz);
+		}
 		break;
+	case EVT_PROD_TYPE_EVENT_DMA_ADPTR:
+		snprintf(name, EVT_PROD_MAX_NAME_LEN,
+			 "Event dma adapter producers");
+		evt_dump("dma adapter mode", "%s",
+			 opt->dma_adptr_mode ? "OP_FORWARD" : "OP_NEW");
+		evt_dump("nb_dmadev", "%u", rte_dma_count_avail());
+		break;
+
 	}
 	evt_dump("prod_type", "%s", name);
 }

@@ -14,13 +14,13 @@
  *
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <rte_compat.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * Response sent back to i40e driver from user app after callback
@@ -1133,6 +1133,23 @@ rte_pmd_i40e_set_gre_key_len(uint16_t port, uint8_t len);
 __rte_experimental
 int
 rte_pmd_i40e_set_switch_dev(uint16_t port_id, struct rte_eth_dev *switch_dev);
+
+/**
+ * Enable/Disable source prune on all the PF.
+ *
+ * @param port
+ *    The port identifier of the Ethernet device.
+ * @param on
+ *    1 - Enable source prune.
+ *    0 - Disable source prune.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENODEV) if *port* invalid.
+ *   - (-EINVAL) if bad parameter.
+ */
+__rte_experimental
+int rte_pmd_i40e_set_pf_src_prune(uint16_t port,
+				 uint8_t on);
 
 #ifdef __cplusplus
 }

@@ -41,8 +41,8 @@ struct iavf_event_element {
 };
 
 struct iavf_event_handler {
-	uint32_t ndev;
-	pthread_t tid;
+	RTE_ATOMIC(uint32_t) ndev;
+	rte_thread_t tid;
 	int fd[2];
 	pthread_mutex_t lock;
 	TAILQ_HEAD(event_list, iavf_event_element) pending;
@@ -59,7 +59,7 @@ static struct iavf_event_handler event_handler = {
 	(var) = (tvar))
 #endif
 
-static void *
+static uint32_t
 iavf_dev_event_handle(void *param __rte_unused)
 {
 	struct iavf_event_handler *handler = &event_handler;
@@ -79,15 +79,24 @@ iavf_dev_event_handle(void *param __rte_unused)
 		struct iavf_event_element *pos, *save_next;
 		TAILQ_FOREACH_SAFE(pos, &pending, next, save_next) {
 			TAILQ_REMOVE(&pending, pos, next);
+
+			struct iavf_adapter *adapter = pos->dev->data->dev_private;
+			if (pos->event == RTE_ETH_EVENT_INTR_RESET &&
+			    adapter->devargs.auto_reset) {
+				iavf_handle_hw_reset(pos->dev);
+				rte_free(pos);
+				continue;
+			}
+
 			rte_eth_dev_callback_process(pos->dev, pos->event, pos->param);
 			rte_free(pos);
 		}
 	}
 
-	return NULL;
+	return 0;
 }
 
-static void
+void
 iavf_dev_event_post(struct rte_eth_dev *dev,
 		enum rte_eth_event_type event,
 		void *param, size_t param_alloc_size)
@@ -120,7 +129,7 @@ iavf_dev_event_handler_init(void)
 {
 	struct iavf_event_handler *handler = &event_handler;
 
-	if (__atomic_add_fetch(&handler->ndev, 1, __ATOMIC_RELAXED) != 1)
+	if (rte_atomic_fetch_add_explicit(&handler->ndev, 1, rte_memory_order_relaxed) + 1 != 1)
 		return 0;
 #if defined(RTE_EXEC_ENV_IS_WINDOWS) && RTE_EXEC_ENV_IS_WINDOWS != 0
 	int err = _pipe(handler->fd, MAX_EVENT_PENDING, O_BINARY);
@@ -128,16 +137,16 @@ iavf_dev_event_handler_init(void)
 	int err = pipe(handler->fd);
 #endif
 	if (err != 0) {
-		__atomic_sub_fetch(&handler->ndev, 1, __ATOMIC_RELAXED);
+		rte_atomic_fetch_sub_explicit(&handler->ndev, 1, rte_memory_order_relaxed);
 		return -1;
 	}
 
 	TAILQ_INIT(&handler->pending);
 	pthread_mutex_init(&handler->lock, NULL);
 
-	if (rte_ctrl_thread_create(&handler->tid, "iavf-event-thread",
-				NULL, iavf_dev_event_handle, NULL)) {
-		__atomic_sub_fetch(&handler->ndev, 1, __ATOMIC_RELAXED);
+	if (rte_thread_create_internal_control(&handler->tid, "iavf-event",
+				iavf_dev_event_handle, NULL)) {
+		rte_atomic_fetch_sub_explicit(&handler->ndev, 1, rte_memory_order_relaxed);
 		return -1;
 	}
 
@@ -149,17 +158,17 @@ iavf_dev_event_handler_fini(void)
 {
 	struct iavf_event_handler *handler = &event_handler;
 
-	if (__atomic_sub_fetch(&handler->ndev, 1, __ATOMIC_RELAXED) != 0)
+	if (rte_atomic_fetch_sub_explicit(&handler->ndev, 1, rte_memory_order_relaxed) - 1 != 0)
 		return;
 
-	int unused = pthread_cancel(handler->tid);
+	int unused = pthread_cancel((pthread_t)handler->tid.opaque_id);
 	RTE_SET_USED(unused);
 	close(handler->fd[0]);
 	close(handler->fd[1]);
 	handler->fd[0] = -1;
 	handler->fd[1] = -1;
 
-	pthread_join(handler->tid, NULL);
+	rte_thread_join(handler->tid, NULL);
 	pthread_mutex_destroy(&handler->lock);
 
 	struct iavf_event_element *pos, *save_next;
@@ -246,8 +255,8 @@ iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 		case VIRTCHNL_EVENT_LINK_CHANGE:
 			vf->link_up =
 				vpe->event_data.link_event.link_status;
-			if (vf->vf_res->vf_cap_flags &
-				VIRTCHNL_VF_CAP_ADV_LINK_SPEED) {
+			if (vf->vf_res != NULL &&
+			    vf->vf_res->vf_cap_flags & VIRTCHNL_VF_CAP_ADV_LINK_SPEED) {
 				vf->link_speed =
 				    vpe->event_data.link_event_adv.link_speed;
 			} else {
@@ -256,11 +265,26 @@ iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 				vf->link_speed = iavf_convert_link_speed(speed);
 			}
 			iavf_dev_link_update(vf->eth_dev, 0);
+			iavf_dev_event_post(vf->eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL, 0);
+			if (vf->link_up && !vf->vf_reset) {
+				iavf_dev_watchdog_disable(adapter);
+			} else {
+				if (!vf->link_up)
+					iavf_dev_watchdog_enable(adapter);
+			}
+			if (adapter->devargs.no_poll_on_link_down) {
+				iavf_set_no_poll(adapter, true);
+				if (adapter->no_poll)
+					PMD_DRV_LOG(DEBUG, "VF no poll turned on");
+				else
+					PMD_DRV_LOG(DEBUG, "VF no poll turned off");
+			}
 			PMD_DRV_LOG(INFO, "Link status update:%s",
 					vf->link_up ? "up" : "down");
 			break;
 		case VIRTCHNL_EVENT_RESET_IMPENDING:
 			vf->vf_reset = true;
+			iavf_set_no_poll(adapter, false);
 			PMD_DRV_LOG(INFO, "VF is resetting");
 			break;
 		case VIRTCHNL_EVENT_PF_DRIVER_CLOSE:
@@ -317,6 +341,7 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args,
 
 	switch (args->ops) {
 	case VIRTCHNL_OP_RESET_VF:
+	case VIRTCHNL_OP_REQUEST_QUEUES:
 		/*no need to wait for response */
 		_clear_cmd(vf);
 		break;
@@ -340,61 +365,74 @@ iavf_execute_vf_cmd(struct iavf_adapter *adapter, struct iavf_cmd_info *args,
 		}
 		_clear_cmd(vf);
 		break;
-	case VIRTCHNL_OP_REQUEST_QUEUES:
-		/*
-		 * ignore async reply, only wait for system message,
-		 * vf_reset = true if get VIRTCHNL_EVENT_RESET_IMPENDING,
-		 * if not, means request queues failed.
-		 */
-		do {
-			result = iavf_read_msg_from_pf(adapter, args->out_size,
-						   args->out_buffer);
-			if (result == IAVF_MSG_SYS && vf->vf_reset) {
-				break;
-			} else if (result == IAVF_MSG_CMD ||
-				result == IAVF_MSG_ERR) {
-				err = -1;
-				break;
-			}
-			iavf_msec_delay(ASQ_DELAY_MS);
-			/* If don't read msg or read sys event, continue */
-		} while (i++ < MAX_TRY_TIMES);
-		if (i >= MAX_TRY_TIMES ||
-			vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
-			err = -1;
-			PMD_DRV_LOG(ERR, "No response or return failure (%d)"
-				    " for cmd %d", vf->cmd_retval, args->ops);
-		}
-		_clear_cmd(vf);
-		break;
 	default:
-		/* For other virtchnl ops in running time,
-		 * wait for the cmd done flag.
-		 */
-		do {
-			if (vf->pend_cmd == VIRTCHNL_OP_UNKNOWN)
-				break;
-			iavf_msec_delay(ASQ_DELAY_MS);
-			/* If don't read msg or read sys event, continue */
-		} while (i++ < MAX_TRY_TIMES);
-
-		if (i >= MAX_TRY_TIMES) {
-			PMD_DRV_LOG(ERR, "No response for cmd %d", args->ops);
+		if (rte_thread_is_intr()) {
+			/* For virtchnl ops were executed in eal_intr_thread,
+			 * need to poll the response.
+			 */
+			do {
+				result = iavf_read_msg_from_pf(adapter, args->out_size,
+							args->out_buffer);
+				if (result == IAVF_MSG_CMD)
+					break;
+				iavf_msec_delay(ASQ_DELAY_MS);
+			} while (i++ < MAX_TRY_TIMES);
+			if (i >= MAX_TRY_TIMES ||
+				vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
+				err = -1;
+				PMD_DRV_LOG(ERR, "No response or return failure (%d)"
+						" for cmd %d", vf->cmd_retval, args->ops);
+			}
 			_clear_cmd(vf);
-			err = -EIO;
-		} else if (vf->cmd_retval ==
-			   VIRTCHNL_STATUS_ERR_NOT_SUPPORTED) {
-			PMD_DRV_LOG(ERR, "Cmd %d not supported", args->ops);
-			err = -ENOTSUP;
-		} else if (vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
-			PMD_DRV_LOG(ERR, "Return failure %d for cmd %d",
-				    vf->cmd_retval, args->ops);
-			err = -EINVAL;
+		} else {
+			/* For other virtchnl ops in running time,
+			 * wait for the cmd done flag.
+			 */
+			do {
+				if (vf->pend_cmd == VIRTCHNL_OP_UNKNOWN)
+					break;
+				iavf_msec_delay(ASQ_DELAY_MS);
+				/* If don't read msg or read sys event, continue */
+			} while (i++ < MAX_TRY_TIMES);
+
+			if (i >= MAX_TRY_TIMES) {
+				PMD_DRV_LOG(ERR, "No response for cmd %d", args->ops);
+				_clear_cmd(vf);
+				err = -EIO;
+			} else if (vf->cmd_retval ==
+				VIRTCHNL_STATUS_ERR_NOT_SUPPORTED) {
+				PMD_DRV_LOG(ERR, "Cmd %d not supported", args->ops);
+				err = -ENOTSUP;
+			} else if (vf->cmd_retval != VIRTCHNL_STATUS_SUCCESS) {
+				PMD_DRV_LOG(ERR, "Return failure %d for cmd %d",
+						vf->cmd_retval, args->ops);
+				err = -EINVAL;
+			}
 		}
 		break;
 	}
 
 	return err;
+}
+
+static int
+iavf_execute_vf_cmd_safe(struct iavf_adapter *adapter,
+	struct iavf_cmd_info *args, int async)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	int ret;
+	int is_intr_thread = rte_thread_is_intr();
+
+	if (is_intr_thread) {
+		if (!rte_spinlock_trylock(&vf->aq_lock))
+			return -EIO;
+	} else {
+		rte_spinlock_lock(&vf->aq_lock);
+	}
+	ret = iavf_execute_vf_cmd(adapter, args, async);
+	rte_spinlock_unlock(&vf->aq_lock);
+
+	return ret;
 }
 
 static void
@@ -419,9 +457,13 @@ iavf_handle_pf_event_msg(struct rte_eth_dev *dev, uint8_t *msg,
 	switch (pf_msg->event) {
 	case VIRTCHNL_EVENT_RESET_IMPENDING:
 		PMD_DRV_LOG(DEBUG, "VIRTCHNL_EVENT_RESET_IMPENDING event");
-		vf->vf_reset = true;
-		iavf_dev_event_post(dev, RTE_ETH_EVENT_INTR_RESET,
-					      NULL, 0);
+		vf->link_up = false;
+		if (!vf->vf_reset) {
+			vf->vf_reset = true;
+			iavf_set_no_poll(adapter, false);
+			iavf_dev_event_post(dev, RTE_ETH_EVENT_INTR_RESET,
+				NULL, 0);
+		}
 		break;
 	case VIRTCHNL_EVENT_LINK_CHANGE:
 		PMD_DRV_LOG(DEBUG, "VIRTCHNL_EVENT_LINK_CHANGE event");
@@ -435,6 +477,19 @@ iavf_handle_pf_event_msg(struct rte_eth_dev *dev, uint8_t *msg,
 			vf->link_speed = iavf_convert_link_speed(speed);
 		}
 		iavf_dev_link_update(dev, 0);
+		if (vf->link_up && !vf->vf_reset) {
+			iavf_dev_watchdog_disable(adapter);
+		} else {
+			if (!vf->link_up)
+				iavf_dev_watchdog_enable(adapter);
+		}
+		if (adapter->devargs.no_poll_on_link_down) {
+			iavf_set_no_poll(adapter, true);
+			if (adapter->no_poll)
+				PMD_DRV_LOG(DEBUG, "VF no poll turned on");
+			else
+				PMD_DRV_LOG(DEBUG, "VF no poll turned off");
+		}
 		iavf_dev_event_post(dev, RTE_ETH_EVENT_INTR_LSC, NULL, 0);
 		break;
 	case VIRTCHNL_EVENT_PF_DRIVER_CLOSE:
@@ -519,8 +574,8 @@ iavf_handle_virtchnl_msg(struct rte_eth_dev *dev)
 				/* read message and it's expected one */
 				if (msg_opc == vf->pend_cmd) {
 					uint32_t cmd_count =
-					__atomic_sub_fetch(&vf->pend_cmd_count,
-							1, __ATOMIC_RELAXED);
+					rte_atomic_fetch_sub_explicit(&vf->pend_cmd_count,
+							1, rte_memory_order_relaxed) - 1;
 					if (cmd_count == 0)
 						_notify_cmd(vf, msg_ret);
 				} else {
@@ -554,7 +609,7 @@ iavf_enable_vlan_strip(struct iavf_adapter *adapter)
 	args.in_args_size = 0;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	ret = iavf_execute_vf_cmd(adapter, &args, 0);
+	ret = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (ret)
 		PMD_DRV_LOG(ERR, "Failed to execute command of"
 			    " OP_ENABLE_VLAN_STRIPPING");
@@ -575,7 +630,7 @@ iavf_disable_vlan_strip(struct iavf_adapter *adapter)
 	args.in_args_size = 0;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	ret = iavf_execute_vf_cmd(adapter, &args, 0);
+	ret = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (ret)
 		PMD_DRV_LOG(ERR, "Failed to execute command of"
 			    " OP_DISABLE_VLAN_STRIPPING");
@@ -604,7 +659,7 @@ iavf_check_api_version(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_INIT_LOG(ERR, "Fail to execute command of OP_VERSION");
 		return err;
@@ -655,6 +710,7 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 		VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF |
 		VIRTCHNL_VF_OFFLOAD_FSUB_PF |
 		VIRTCHNL_VF_OFFLOAD_REQ_QUEUES |
+		VIRTCHNL_VF_OFFLOAD_USO |
 		VIRTCHNL_VF_OFFLOAD_CRC |
 		VIRTCHNL_VF_OFFLOAD_VLAN_V2 |
 		VIRTCHNL_VF_LARGE_NUM_QPAIRS |
@@ -665,7 +721,7 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 	args.in_args = (uint8_t *)&caps;
 	args.in_args_size = sizeof(caps);
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 
 	if (err) {
 		PMD_DRV_LOG(ERR,
@@ -710,7 +766,7 @@ iavf_get_supported_rxdid(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	ret = iavf_execute_vf_cmd(adapter, &args, 0);
+	ret = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (ret) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_GET_SUPPORTED_RXDIDS");
@@ -754,7 +810,7 @@ iavf_config_vlan_strip_v2(struct iavf_adapter *adapter, bool enable)
 	args.in_args_size = sizeof(vlan_strip);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	ret = iavf_execute_vf_cmd(adapter, &args, 0);
+	ret = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (ret)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    enable ? "VIRTCHNL_OP_ENABLE_VLAN_STRIPPING_V2" :
@@ -794,7 +850,7 @@ iavf_config_vlan_insert_v2(struct iavf_adapter *adapter, bool enable)
 	args.in_args_size = sizeof(vlan_insert);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	ret = iavf_execute_vf_cmd(adapter, &args, 0);
+	ret = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (ret)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    enable ? "VIRTCHNL_OP_ENABLE_VLAN_INSERTION_V2" :
@@ -837,7 +893,7 @@ iavf_add_del_vlan_v2(struct iavf_adapter *adapter, uint16_t vlanid, bool add)
 	args.in_args_size = sizeof(vlan_filter);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    add ? "OP_ADD_VLAN_V2" :  "OP_DEL_VLAN_V2");
@@ -858,7 +914,7 @@ iavf_get_vlan_offload_caps_v2(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	ret = iavf_execute_vf_cmd(adapter, &args, 0);
+	ret = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (ret) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of VIRTCHNL_OP_GET_OFFLOAD_VLAN_V2_CAPS");
@@ -889,7 +945,7 @@ iavf_enable_queues(struct iavf_adapter *adapter)
 	args.in_args_size = sizeof(queue_select);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_ENABLE_QUEUES");
@@ -917,7 +973,7 @@ iavf_disable_queues(struct iavf_adapter *adapter)
 	args.in_args_size = sizeof(queue_select);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_DISABLE_QUEUES");
@@ -953,7 +1009,7 @@ iavf_switch_queue(struct iavf_adapter *adapter, uint16_t qid,
 	args.in_args_size = sizeof(queue_select);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "Failed to execute command of %s",
 			    on ? "OP_ENABLE_QUEUES" : "OP_DISABLE_QUEUES");
@@ -995,7 +1051,7 @@ iavf_enable_queues_lv(struct iavf_adapter *adapter)
 	args.in_args_size = len;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_ENABLE_QUEUES_V2");
@@ -1039,7 +1095,7 @@ iavf_disable_queues_lv(struct iavf_adapter *adapter)
 	args.in_args_size = len;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_DISABLE_QUEUES_V2");
@@ -1085,7 +1141,7 @@ iavf_switch_queue_lv(struct iavf_adapter *adapter, uint16_t qid,
 	args.in_args_size = len;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "Failed to execute command of %s",
 			    on ? "OP_ENABLE_QUEUES_V2" : "OP_DISABLE_QUEUES_V2");
@@ -1117,7 +1173,7 @@ iavf_configure_rss_lut(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_CONFIG_RSS_LUT");
@@ -1149,7 +1205,7 @@ iavf_configure_rss_key(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_CONFIG_RSS_KEY");
@@ -1247,7 +1303,7 @@ iavf_configure_queues(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "Failed to execute command of"
 			    " VIRTCHNL_OP_CONFIG_VSI_QUEUES");
@@ -1288,7 +1344,7 @@ iavf_config_irq_map(struct iavf_adapter *adapter)
 	args.in_args_size = len;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command OP_CONFIG_IRQ_MAP");
 
@@ -1329,7 +1385,7 @@ iavf_config_irq_map_lv(struct iavf_adapter *adapter, uint16_t num,
 	args.in_args_size = len;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command OP_MAP_QUEUE_VECTOR");
 
@@ -1389,7 +1445,7 @@ iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add)
 		args.in_args_size = len;
 		args.out_buffer = vf->aq_resp;
 		args.out_size = IAVF_AQ_BUF_SZ;
-		err = iavf_execute_vf_cmd(adapter, &args, 0);
+		err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 		if (err)
 			PMD_DRV_LOG(ERR, "fail to execute command %s",
 				    add ? "OP_ADD_ETHER_ADDRESS" :
@@ -1419,7 +1475,7 @@ iavf_query_stats(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command OP_GET_STATS");
 		*pstats = NULL;
@@ -1457,7 +1513,7 @@ iavf_config_promisc(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 
 	if (err) {
 		PMD_DRV_LOG(ERR,
@@ -1500,7 +1556,7 @@ iavf_add_del_eth_addr(struct iavf_adapter *adapter, struct rte_ether_addr *addr,
 	args.in_args_size = sizeof(cmd_buffer);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    add ? "OP_ADD_ETH_ADDR" :  "OP_DEL_ETH_ADDR");
@@ -1527,7 +1583,7 @@ iavf_add_del_vlan(struct iavf_adapter *adapter, uint16_t vlanid, bool add)
 	args.in_args_size = sizeof(cmd_buffer);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    add ? "OP_ADD_VLAN" :  "OP_DEL_VLAN");
@@ -1554,7 +1610,7 @@ iavf_fdir_add(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command OP_ADD_FDIR_FILTER");
 		return err;
@@ -1614,7 +1670,7 @@ iavf_fdir_del(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command OP_DEL_FDIR_FILTER");
 		return err;
@@ -1661,7 +1717,7 @@ iavf_fdir_check(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to check flow director rule");
 		return err;
@@ -1704,7 +1760,7 @@ iavf_flow_sub(struct iavf_adapter *adapter, struct iavf_fsub_conf *filter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to execute command of "
 				 "OP_FLOW_SUBSCRIBE");
@@ -1755,7 +1811,7 @@ iavf_flow_unsub(struct iavf_adapter *adapter, struct iavf_fsub_conf *filter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to execute command of "
 				 "OP_FLOW_UNSUBSCRIBE");
@@ -1798,7 +1854,7 @@ iavf_flow_sub_check(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to check flow subscription rule");
 		return err;
@@ -1838,7 +1894,7 @@ iavf_add_del_rss_cfg(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of %s",
@@ -1861,7 +1917,7 @@ iavf_get_hena_caps(struct iavf_adapter *adapter, uint64_t *caps)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_GET_RSS_HENA_CAPS");
@@ -1887,7 +1943,7 @@ iavf_set_hena(struct iavf_adapter *adapter, uint64_t hena)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_SET_RSS_HENA");
@@ -1908,7 +1964,7 @@ iavf_get_qos_cap(struct iavf_adapter *adapter)
 	args.in_args_size = 0;
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 
 	if (err) {
 		PMD_DRV_LOG(ERR,
@@ -1941,7 +1997,7 @@ int iavf_set_q_tc_map(struct rte_eth_dev *dev,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "Failed to execute command of"
 			    " VIRTCHNL_OP_CONFIG_TC_MAP");
@@ -1964,7 +2020,7 @@ int iavf_set_q_bw(struct rte_eth_dev *dev,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err)
 		PMD_DRV_LOG(ERR, "Failed to execute command of"
 			    " VIRTCHNL_OP_CONFIG_QUEUE_BW");
@@ -2009,7 +2065,7 @@ iavf_add_del_mc_addr_list(struct iavf_adapter *adapter,
 		i * sizeof(struct virtchnl_ether_addr);
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
@@ -2026,11 +2082,11 @@ iavf_request_queues(struct rte_eth_dev *dev, uint16_t num)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf =  IAVF_DEV_PRIVATE_TO_VF(adapter);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct virtchnl_vf_res_request vfres;
 	struct iavf_cmd_info args;
 	uint16_t num_queue_pairs;
 	int err;
+	int i = 0;
 
 	if (!(vf->vf_res->vf_cap_flags &
 		VIRTCHNL_VF_OFFLOAD_REQ_QUEUES)) {
@@ -2051,15 +2107,10 @@ iavf_request_queues(struct rte_eth_dev *dev, uint16_t num)
 	args.out_size = IAVF_AQ_BUF_SZ;
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
-		/* disable interrupt to avoid the admin queue message to be read
-		 * before iavf_read_msg_from_pf.
-		 */
-		rte_intr_disable(pci_dev->intr_handle);
-		err = iavf_execute_vf_cmd(adapter, &args, 0);
-		rte_intr_enable(pci_dev->intr_handle);
+		err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	} else {
 		rte_eal_alarm_cancel(iavf_dev_alarm_handler, dev);
-		err = iavf_execute_vf_cmd(adapter, &args, 0);
+		err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 		rte_eal_alarm_set(IAVF_ALARM_INTERVAL,
 				  iavf_dev_alarm_handler, dev);
 	}
@@ -2067,6 +2118,13 @@ iavf_request_queues(struct rte_eth_dev *dev, uint16_t num)
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command OP_REQUEST_QUEUES");
 		return err;
+	}
+
+	/* wait for interrupt notification vf is resetting */
+	while (i++ < MAX_TRY_TIMES) {
+		if (vf->vf_reset)
+			break;
+		iavf_msec_delay(ASQ_DELAY_MS);
 	}
 
 	/* request queues succeeded, vf is resetting */
@@ -2098,7 +2156,7 @@ iavf_get_max_rss_queue_region(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to execute command of VIRTCHNL_OP_GET_MAX_RSS_QREGION");
 		return err;
@@ -2129,7 +2187,7 @@ iavf_ipsec_crypto_request(struct iavf_adapter *adapter,
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 1);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 1);
 	if (err) {
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 				"OP_INLINE_IPSEC_CRYPTO");
@@ -2163,7 +2221,7 @@ iavf_set_vf_quanta_size(struct iavf_adapter *adapter, u16 start_queue_id, u16 nu
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to execute command VIRTCHNL_OP_CONFIG_QUANTA");
 		return err;
@@ -2189,7 +2247,7 @@ iavf_get_ptp_cap(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of OP_1588_PTP_GET_CAPS");
@@ -2217,7 +2275,7 @@ iavf_get_phc_time(struct iavf_rx_queue *rxq)
 	args.out_size = IAVF_AQ_BUF_SZ;
 
 	rte_spinlock_lock(&vf->phc_time_aq_lock);
-	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	err = iavf_execute_vf_cmd_safe(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of VIRTCHNL_OP_1588_PTP_GET_TIME");

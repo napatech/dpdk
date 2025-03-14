@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2024 Intel Corporation
  */
 
 #ifndef _IDPF_TYPE_H_
 #define _IDPF_TYPE_H_
 
-#include "idpf_controlq.h"
+#include "idpf_osdep.h"
 
 #define UNREFERENCED_XPARAMETER
 #define UNREFERENCED_1PARAMETER(_p)
@@ -13,8 +13,6 @@
 #define UNREFERENCED_3PARAMETER(_p, _q, _r)
 #define UNREFERENCED_4PARAMETER(_p, _q, _r, _s)
 #define UNREFERENCED_5PARAMETER(_p, _q, _r, _s, _t)
-
-#define MAKEMASK(m, s)	((m) << (s))
 
 struct idpf_eth_stats {
 	u64 rx_bytes;			/* gorc */

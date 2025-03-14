@@ -56,7 +56,7 @@ union axgbe_rx_desc {
 	} write;
 };
 
-struct axgbe_rx_queue {
+struct __rte_cache_aligned axgbe_rx_queue {
 	/* membuf pool for rx buffers */
 	struct rte_mempool *mb_pool;
 	/* H/w Rx buffer size configured in DMA */
@@ -100,8 +100,8 @@ struct axgbe_rx_queue {
 	uint64_t rx_mbuf_alloc_failed;
 	/* Number of mbufs allocated from pool*/
 	uint64_t mbuf_alloc;
-
-} __rte_cache_aligned;
+	uint64_t offloads; /**< Rx offloads with RTE_ETH_RX_OFFLOAD_**/
+};
 
 /*Tx descriptor format */
 struct axgbe_tx_desc {
@@ -110,7 +110,7 @@ struct axgbe_tx_desc {
 	uint32_t desc3;
 };
 
-struct axgbe_tx_queue {
+struct __rte_cache_aligned axgbe_tx_queue {
 	/* Port private data reference */
 	struct axgbe_port *pdata;
 	/* Number of Tx descriptors in queue*/
@@ -149,8 +149,8 @@ struct axgbe_tx_queue {
 	uint64_t pkts;
 	uint64_t bytes;
 	uint64_t errors;
-
-} __rte_cache_aligned;
+	uint64_t offloads; /**< Tx offload flags of RTE_ETH_TX_OFFLOAD_* */
+};
 
 /*Queue related APIs */
 
@@ -158,6 +158,11 @@ struct axgbe_tx_queue {
  * RX/TX function prototypes
  */
 
+/* Used in dev_start by primary process and then
+ * in dev_init by secondary process when attaching to an existing ethdev.
+ */
+void axgbe_set_tx_function(struct rte_eth_dev *dev);
+void axgbe_set_rx_function(struct rte_eth_dev *dev);
 
 void axgbe_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t queue_idx);
 int  axgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,

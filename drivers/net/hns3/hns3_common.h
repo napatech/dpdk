@@ -27,6 +27,10 @@ enum {
 
 #define HNS3_DEVARG_MBX_TIME_LIMIT_MS	"mbx_time_limit_ms"
 
+#define HNS3_DEVARG_FDIR_VLAN_MATCH_MODE	"fdir_vlan_match_mode"
+#define HNS3_DEVARG_FDIR_TUPLE_CONFIG	"fdir_tuple_config"
+#define HNS3_DEVARG_FDIR_INDEX_CONFIG	"fdir_index_config"
+
 #define MSEC_PER_SEC              1000L
 #define USEC_PER_MSEC             1000L
 
@@ -60,5 +64,7 @@ void hns3_unmap_rx_interrupt(struct rte_eth_dev *dev);
 int hns3_restore_rx_interrupt(struct hns3_hw *hw);
 
 int hns3_get_pci_revision_id(struct hns3_hw *hw, uint8_t *revision_id);
+void hns3_set_default_dev_specifications(struct hns3_hw *hw);
+int hns3_query_dev_specifications(struct hns3_hw *hw);
 
 #endif /* HNS3_COMMON_H */

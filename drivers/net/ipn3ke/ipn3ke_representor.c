@@ -27,7 +27,7 @@
 #include "ipn3ke_ethdev.h"
 
 static int ipn3ke_rpst_scan_num;
-static pthread_t ipn3ke_rpst_scan_thread;
+static rte_thread_t ipn3ke_rpst_scan_thread;
 
 /** Double linked list of representor port. */
 TAILQ_HEAD(ipn3ke_rpst_list, ipn3ke_rpst);
@@ -120,6 +120,7 @@ ipn3ke_rpst_dev_start(struct rte_eth_dev *dev)
 	uint64_t base_mac;
 	uint32_t val;
 	char attr_name[IPN3KE_RAWDEV_ATTR_LEN_MAX];
+	uint16_t i;
 
 	rawdev = hw->rawdev;
 
@@ -190,6 +191,11 @@ ipn3ke_rpst_dev_start(struct rte_eth_dev *dev)
 
 	ipn3ke_rpst_link_update(dev, 0);
 
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+
 	return 0;
 }
 
@@ -198,6 +204,7 @@ ipn3ke_rpst_dev_stop(struct rte_eth_dev *dev)
 {
 	struct ipn3ke_hw *hw = IPN3KE_DEV_PRIVATE_TO_HW(dev);
 	struct ipn3ke_rpst *rpst = IPN3KE_DEV_PRIVATE_TO_RPST(dev);
+	uint16_t i;
 
 	if (hw->retimer.mac_type == IFPGA_RAWDEV_RETIMER_MAC_TYPE_10GE_XFI) {
 		/* Disable the TX path */
@@ -206,6 +213,11 @@ ipn3ke_rpst_dev_stop(struct rte_eth_dev *dev)
 		/* Disable the RX path */
 		ipn3ke_xmac_rx_disable(hw, rpst->port_id, 0);
 	}
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	return 0;
 }
@@ -2389,8 +2401,8 @@ ipn3ke_update_link(struct rte_rawdev *rawdev,
 	else
 		link->link_status = 0;
 
-	IPN3KE_AFU_PMD_DEBUG("port is %d\n", port);
-	IPN3KE_AFU_PMD_DEBUG("link->link_status is %d\n", link->link_status);
+	IPN3KE_AFU_PMD_DEBUG("port is %d", port);
+	IPN3KE_AFU_PMD_DEBUG("link->link_status is %d", link->link_status);
 
 	rawdev->dev_ops->attr_get(rawdev,
 				"LineSideLinkSpeed",
@@ -2467,14 +2479,14 @@ ipn3ke_rpst_link_update(struct rte_eth_dev *ethdev,
 
 	if (!rpst->ori_linfo.link_status &&
 		link.link_status) {
-		IPN3KE_AFU_PMD_DEBUG("Update Rpst %d Up\n", rpst->port_id);
+		IPN3KE_AFU_PMD_DEBUG("Update Rpst %d Up", rpst->port_id);
 		rpst->ori_linfo.link_status = link.link_status;
 		rpst->ori_linfo.link_speed = link.link_speed;
 
 		rte_eth_linkstatus_set(ethdev, &link);
 
 		if (rpst->i40e_pf_eth) {
-			IPN3KE_AFU_PMD_DEBUG("Update FVL PF %d Up\n",
+			IPN3KE_AFU_PMD_DEBUG("Update FVL PF %d Up",
 				rpst->i40e_pf_eth_port_id);
 			rte_eth_dev_set_link_up(rpst->i40e_pf_eth_port_id);
 			pf = rpst->i40e_pf_eth;
@@ -2482,7 +2494,7 @@ ipn3ke_rpst_link_update(struct rte_eth_dev *ethdev,
 		}
 	} else if (rpst->ori_linfo.link_status &&
 				!link.link_status) {
-		IPN3KE_AFU_PMD_DEBUG("Update Rpst %d Down\n",
+		IPN3KE_AFU_PMD_DEBUG("Update Rpst %d Down",
 			rpst->port_id);
 		rpst->ori_linfo.link_status = link.link_status;
 		rpst->ori_linfo.link_speed = link.link_speed;
@@ -2490,7 +2502,7 @@ ipn3ke_rpst_link_update(struct rte_eth_dev *ethdev,
 		rte_eth_linkstatus_set(ethdev, &link);
 
 		if (rpst->i40e_pf_eth) {
-			IPN3KE_AFU_PMD_DEBUG("Update FVL PF %d Down\n",
+			IPN3KE_AFU_PMD_DEBUG("Update FVL PF %d Down",
 				rpst->i40e_pf_eth_port_id);
 			rte_eth_dev_set_link_down(rpst->i40e_pf_eth_port_id);
 			pf = rpst->i40e_pf_eth;
@@ -2525,14 +2537,14 @@ ipn3ke_rpst_link_check(struct ipn3ke_rpst *rpst)
 
 	if (!rpst->ori_linfo.link_status &&
 				link.link_status) {
-		IPN3KE_AFU_PMD_DEBUG("Check Rpst %d Up\n", rpst->port_id);
+		IPN3KE_AFU_PMD_DEBUG("Check Rpst %d Up", rpst->port_id);
 		rpst->ori_linfo.link_status = link.link_status;
 		rpst->ori_linfo.link_speed = link.link_speed;
 
 		rte_eth_linkstatus_set(rpst->ethdev, &link);
 
 		if (rpst->i40e_pf_eth) {
-			IPN3KE_AFU_PMD_DEBUG("Check FVL PF %d Up\n",
+			IPN3KE_AFU_PMD_DEBUG("Check FVL PF %d Up",
 				rpst->i40e_pf_eth_port_id);
 			rte_eth_dev_set_link_up(rpst->i40e_pf_eth_port_id);
 			pf = rpst->i40e_pf_eth;
@@ -2540,14 +2552,14 @@ ipn3ke_rpst_link_check(struct ipn3ke_rpst *rpst)
 		}
 	} else if (rpst->ori_linfo.link_status &&
 		!link.link_status) {
-		IPN3KE_AFU_PMD_DEBUG("Check Rpst %d Down\n", rpst->port_id);
+		IPN3KE_AFU_PMD_DEBUG("Check Rpst %d Down", rpst->port_id);
 		rpst->ori_linfo.link_status = link.link_status;
 		rpst->ori_linfo.link_speed = link.link_speed;
 
 		rte_eth_linkstatus_set(rpst->ethdev, &link);
 
 		if (rpst->i40e_pf_eth) {
-			IPN3KE_AFU_PMD_DEBUG("Check FVL PF %d Down\n",
+			IPN3KE_AFU_PMD_DEBUG("Check FVL PF %d Down",
 				rpst->i40e_pf_eth_port_id);
 			rte_eth_dev_set_link_down(rpst->i40e_pf_eth_port_id);
 			pf = rpst->i40e_pf_eth;
@@ -2558,7 +2570,7 @@ ipn3ke_rpst_link_check(struct ipn3ke_rpst *rpst)
 	return 0;
 }
 
-static void *
+static uint32_t
 ipn3ke_rpst_scan_handle_request(__rte_unused void *param)
 {
 	struct ipn3ke_rpst *rpst;
@@ -2579,11 +2591,11 @@ ipn3ke_rpst_scan_handle_request(__rte_unused void *param)
 		}
 		rte_delay_us(50 * MS);
 
-		if (num == 0xffffff)
-			return NULL;
+		if (num == 0 || num == 0xffffff)
+			return 0;
 	}
 
-	return NULL;
+	return 0;
 }
 
 static int
@@ -2592,20 +2604,19 @@ ipn3ke_rpst_scan_check(void)
 	int ret;
 
 	if (ipn3ke_rpst_scan_num == 1) {
-		ret = rte_ctrl_thread_create(&ipn3ke_rpst_scan_thread,
-			"ipn3ke scanner",
-			NULL,
+		ret = rte_thread_create_internal_control(&ipn3ke_rpst_scan_thread,
+			"ipn3ke-scn",
 			ipn3ke_rpst_scan_handle_request, NULL);
 		if (ret) {
 			IPN3KE_AFU_PMD_ERR("Fail to create ipn3ke rpst scan thread");
 			return -1;
 		}
 	} else if (ipn3ke_rpst_scan_num == 0) {
-		ret = pthread_cancel(ipn3ke_rpst_scan_thread);
+		ret = pthread_cancel((pthread_t)ipn3ke_rpst_scan_thread.opaque_id);
 		if (ret)
 			IPN3KE_AFU_PMD_ERR("Can't cancel the thread");
 
-		ret = pthread_join(ipn3ke_rpst_scan_thread, NULL);
+		ret = rte_thread_join(ipn3ke_rpst_scan_thread, NULL);
 		if (ret)
 			IPN3KE_AFU_PMD_ERR("Can't join the thread");
 

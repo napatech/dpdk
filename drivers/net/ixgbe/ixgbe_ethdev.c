@@ -35,6 +35,7 @@
 #ifdef RTE_LIB_SECURITY
 #include <rte_security_driver.h>
 #endif
+#include <rte_os_shim.h>
 
 #include "ixgbe_logs.h"
 #include "base/ixgbe_api.h"
@@ -73,7 +74,7 @@
 
 #define IXGBE_MMW_SIZE_DEFAULT        0x4
 #define IXGBE_MMW_SIZE_JUMBO_FRAME    0x14
-#define IXGBE_MAX_RING_DESC           4096 /* replicate define from rxtx */
+#define IXGBE_MAX_RING_DESC           8192 /* replicate define from rxtx */
 
 /*
  *  Default values for RX/TX configuration
@@ -191,7 +192,8 @@ static int ixgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version,
 				 size_t fw_size);
 static int ixgbe_dev_info_get(struct rte_eth_dev *dev,
 			      struct rte_eth_dev_info *dev_info);
-static const uint32_t *ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+static const uint32_t *ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev,
+						      size_t *no_of_elements);
 static int ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
 static int ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
@@ -236,7 +238,7 @@ static int ixgbe_dev_interrupt_get_status(struct rte_eth_dev *dev);
 static int ixgbe_dev_interrupt_action(struct rte_eth_dev *dev);
 static void ixgbe_dev_interrupt_handler(void *param);
 static void ixgbe_dev_interrupt_delayed_handler(void *param);
-static void *ixgbe_dev_setup_link_thread_handler(void *param);
+static uint32_t ixgbe_dev_setup_link_thread_handler(void *param);
 static int ixgbe_dev_wait_setup_link_complete(struct rte_eth_dev *dev,
 					      uint32_t timeout_ms);
 
@@ -426,6 +428,7 @@ static const struct rte_pci_id pci_id_ixgbe_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599EN_SFP) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_XAUI_LOM) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_T3_LOM) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_LS) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X540T) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X540T1) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_SFP) },
@@ -447,6 +450,11 @@ static const struct rte_pci_id pci_id_ixgbe_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_KX4) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_KR) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_XFI) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_10G_T) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_2_5G_T) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_BACKPLANE) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_SFP) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_SGMII) },
 #ifdef RTE_LIBRTE_IXGBE_BYPASS
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_BYPASS) },
 #endif
@@ -467,6 +475,7 @@ static const struct rte_pci_id pci_id_ixgbevf_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_A_VF_HV) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_VF) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_VF_HV) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_VF) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -542,6 +551,7 @@ static const struct eth_dev_ops ixgbe_eth_dev_ops = {
 	.set_mc_addr_list     = ixgbe_dev_set_mc_addr_list,
 	.rxq_info_get         = ixgbe_rxq_info_get,
 	.txq_info_get         = ixgbe_txq_info_get,
+	.recycle_rxq_info_get = ixgbe_recycle_rxq_info_get,
 	.timesync_enable      = ixgbe_timesync_enable,
 	.timesync_disable     = ixgbe_timesync_disable,
 	.timesync_read_rx_timestamp = ixgbe_timesync_read_rx_timestamp,
@@ -1126,7 +1136,8 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 		return 0;
 	}
 
-	rte_atomic32_clear(&ad->link_thread_running);
+	/* NOTE: review for potential ordering optimization */
+	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
 	ixgbe_parse_devargs(eth_dev->data->dev_private,
 			    pci_dev->device.devargs);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
@@ -1151,10 +1162,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	}
 
 	if (hw->mac.ops.fw_recovery_mode && hw->mac.ops.fw_recovery_mode(hw)) {
-		PMD_INIT_LOG(ERR, "\nERROR: "
-			"Firmware recovery mode detected. Limiting functionality.\n"
-			"Refer to the Intel(R) Ethernet Adapters and Devices "
-			"User Guide for details on firmware recovery mode.");
+		PMD_INIT_LOG(ERR, "ERROR: Firmware recovery mode detected. Limiting functionality.");
 		return -EIO;
 	}
 
@@ -1187,7 +1195,8 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	diag = ixgbe_validate_eeprom_checksum(hw, &csum);
 	if (diag != IXGBE_SUCCESS) {
 		PMD_INIT_LOG(ERR, "The EEPROM checksum is not valid: %d", diag);
-		return -EIO;
+		ret = -EIO;
+		goto err_exit;
 	}
 
 #ifdef RTE_LIBRTE_IXGBE_BYPASS
@@ -1225,7 +1234,8 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 		PMD_INIT_LOG(ERR, "Unsupported SFP+ Module");
 	if (diag) {
 		PMD_INIT_LOG(ERR, "Hardware Initialization Failure: %d", diag);
-		return -EIO;
+		ret = -EIO;
+		goto err_exit;
 	}
 
 	/* Reset the hw statistics */
@@ -1245,7 +1255,8 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 			     "Failed to allocate %u bytes needed to store "
 			     "MAC addresses",
 			     RTE_ETHER_ADDR_LEN * hw->mac.num_rar_entries);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_exit;
 	}
 	/* Copy the permanent MAC address */
 	rte_ether_addr_copy((struct rte_ether_addr *)hw->mac.perm_addr,
@@ -1260,7 +1271,8 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 			     RTE_ETHER_ADDR_LEN * IXGBE_VMDQ_NUM_UC_MAC);
 		rte_free(eth_dev->data->mac_addrs);
 		eth_dev->data->mac_addrs = NULL;
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_exit;
 	}
 
 	/* initialize the vfta */
@@ -1344,6 +1356,11 @@ err_pf_host_init:
 	eth_dev->data->mac_addrs = NULL;
 	rte_free(eth_dev->data->hash_mac_addrs);
 	eth_dev->data->hash_mac_addrs = NULL;
+err_exit:
+#ifdef RTE_LIB_SECURITY
+	rte_free(eth_dev->security_ctx);
+	eth_dev->security_ctx = NULL;
+#endif
 	return ret;
 }
 
@@ -1624,7 +1641,8 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
-	rte_atomic32_clear(&ad->link_thread_running);
+	/* NOTE: review for potential ordering optimization */
+	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
 	ixgbevf_parse_devargs(eth_dev->data->dev_private,
 			      pci_dev->device.devargs);
 
@@ -1649,7 +1667,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	/* init_mailbox_params */
-	hw->mbx.ops.init_params(hw);
+	hw->mbx.ops[0].init_params(hw);
 
 	/* Reset the hw statistics */
 	ixgbevf_dev_stats_reset(eth_dev);
@@ -1761,15 +1779,15 @@ eth_ixgbe_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 	if (pci_dev->device.devargs) {
 		retval = rte_eth_devargs_parse(pci_dev->device.devargs->args,
-				&eth_da);
-		if (retval)
+				&eth_da, 1);
+		if (retval < 0)
 			return retval;
 	} else
 		memset(&eth_da, 0, sizeof(eth_da));
 
 	if (eth_da.nb_representor_ports > 0 &&
 	    eth_da.type != RTE_ETH_REPRESENTOR_VF) {
-		PMD_DRV_LOG(ERR, "unsupported representor type: %s\n",
+		PMD_DRV_LOG(ERR, "unsupported representor type: %s",
 			    pci_dev->device.devargs->args);
 		return -ENOTSUP;
 	}
@@ -1828,7 +1846,7 @@ static int eth_ixgbe_pci_remove(struct rte_pci_device *pci_dev)
 	if (!ethdev)
 		return 0;
 
-	if (ethdev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR)
+	if (rte_eth_dev_is_repr(ethdev))
 		return rte_eth_dev_pci_generic_remove(pci_dev,
 					ixgbe_vf_representor_uninit);
 	else
@@ -3039,7 +3057,7 @@ ixgbe_dev_close(struct rte_eth_dev *dev)
 
 	ixgbe_dev_free_queues(dev);
 
-	ixgbe_disable_pcie_master(hw);
+	ixgbe_disable_pcie_primary(hw);
 
 	/* reprogram the RAR[0] in case user changed it. */
 	ixgbe_set_rar(hw, 0, hw->mac.addr, 0, IXGBE_RAH_AV);
@@ -3369,7 +3387,8 @@ ixgbe_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->opackets = hw_stats->gptc;
 	stats->obytes = hw_stats->gotc;
 
-	for (i = 0; i < IXGBE_QUEUE_STAT_COUNTERS; i++) {
+	for (i = 0; i < RTE_MIN_T(IXGBE_QUEUE_STAT_COUNTERS,
+			RTE_ETHDEV_QUEUE_STAT_CNTRS, typeof(i)); i++) {
 		stats->q_ipackets[i] = hw_stats->qprc[i];
 		stats->q_opackets[i] = hw_stats->qptc[i];
 		stats->q_ibytes[i] = hw_stats->qbrc[i];
@@ -3852,23 +3871,32 @@ static int
 ixgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	u16 eeprom_verh, eeprom_verl;
-	u32 etrack_id;
+	struct ixgbe_nvm_version nvm_ver;
 	int ret;
 
-	ixgbe_read_eeprom(hw, 0x2e, &eeprom_verh);
-	ixgbe_read_eeprom(hw, 0x2d, &eeprom_verl);
+	ixgbe_get_oem_prod_version(hw, &nvm_ver);
+	if (nvm_ver.oem_valid) {
+		snprintf(fw_version, fw_size, "%x.%x.%x",
+			 nvm_ver.oem_major, nvm_ver.oem_minor,
+			 nvm_ver.oem_release);
+		return 0;
+	}
 
-	etrack_id = (eeprom_verh << 16) | eeprom_verl;
-	ret = snprintf(fw_version, fw_size, "0x%08x", etrack_id);
+	ixgbe_get_etk_id(hw, &nvm_ver);
+	ixgbe_get_orom_version(hw, &nvm_ver);
+
+	if (nvm_ver.or_valid) {
+		snprintf(fw_version, fw_size, "0x%08x, %d.%d.%d",
+			 nvm_ver.etk_id, nvm_ver.or_major,
+			 nvm_ver.or_build, nvm_ver.or_patch);
+		return 0;
+	}
+
+	ret = snprintf(fw_version, fw_size, "0x%08x", nvm_ver.etk_id);
 	if (ret < 0)
 		return -EINVAL;
 
-	ret += 1; /* add the size of '\0' */
-	if (fw_size < (size_t)ret)
-		return ret;
-	else
-		return 0;
+	return (fw_size < (size_t)ret++) ? ret : 0;
 }
 
 static int
@@ -3965,7 +3993,7 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 }
 
 static const uint32_t *
-ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
+ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		/* For non-vec functions,
@@ -3986,19 +4014,22 @@ ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_INNER_L3_IPV6_EXT,
 		RTE_PTYPE_INNER_L4_TCP,
 		RTE_PTYPE_INNER_L4_UDP,
-		RTE_PTYPE_UNKNOWN
 	};
 
 	if (dev->rx_pkt_burst == ixgbe_recv_pkts ||
 	    dev->rx_pkt_burst == ixgbe_recv_pkts_lro_single_alloc ||
 	    dev->rx_pkt_burst == ixgbe_recv_pkts_lro_bulk_alloc ||
-	    dev->rx_pkt_burst == ixgbe_recv_pkts_bulk_alloc)
+	    dev->rx_pkt_burst == ixgbe_recv_pkts_bulk_alloc) {
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
+	}
 
 #if defined(RTE_ARCH_X86) || defined(__ARM_NEON)
 	if (dev->rx_pkt_burst == ixgbe_recv_pkts_vec ||
-	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec)
+	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec) {
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
+	}
 #endif
 	return NULL;
 }
@@ -4073,7 +4104,7 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	int ret_val = 0;
 
 	/* If we were hit with a reset drop the link */
-	if (!mbx->ops.check_for_rst(hw, 0) || !mbx->timeout)
+	if (!mbx->ops[0].check_for_rst(hw, 0) || !mbx->timeout)
 		mac->get_link_status = true;
 
 	if (!mac->get_link_status)
@@ -4139,12 +4170,17 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	/* if the read failed it could just be a mailbox collision, best wait
 	 * until we are called again and don't report an error
 	 */
-	if (mbx->ops.read(hw, &in_msg, 1, 0))
+
+	/*
+	 * on MinGW, the read op call is interpreted as call into read() macro,
+	 * so avoid calling it directly.
+	 */
+	if ((mbx->ops[0].read)(hw, &in_msg, 1, 0))
 		goto out;
 
 	if (!(in_msg & IXGBE_VT_MSGTYPE_CTS)) {
-		/* msg is not CTS and is NACK we must have lost CTS status */
-		if (in_msg & IXGBE_VT_MSGTYPE_NACK)
+		/* msg is not CTS and is FAILURE we must have lost CTS status */
+		if (in_msg & IXGBE_VT_MSGTYPE_FAILURE)
 			mac->get_link_status = false;
 		goto out;
 	}
@@ -4176,7 +4212,8 @@ ixgbe_dev_wait_setup_link_complete(struct rte_eth_dev *dev, uint32_t timeout_ms)
 	struct ixgbe_adapter *ad = dev->data->dev_private;
 	uint32_t timeout = timeout_ms ? timeout_ms : WARNING_TIMEOUT;
 
-	while (rte_atomic32_read(&ad->link_thread_running)) {
+	/* NOTE: review for potential ordering optimization */
+	while (rte_atomic_load_explicit(&ad->link_thread_running, rte_memory_order_seq_cst)) {
 		msec_delay(1);
 		timeout--;
 
@@ -4193,7 +4230,7 @@ ixgbe_dev_wait_setup_link_complete(struct rte_eth_dev *dev, uint32_t timeout_ms)
 	return 1;
 }
 
-static void *
+static uint32_t
 ixgbe_dev_setup_link_thread_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
@@ -4204,7 +4241,7 @@ ixgbe_dev_setup_link_thread_handler(void *param)
 	u32 speed;
 	bool autoneg = false;
 
-	pthread_detach(pthread_self());
+	rte_thread_detach(rte_thread_self());
 	speed = hw->phy.autoneg_advertised;
 	if (!speed)
 		ixgbe_get_link_capabilities(hw, &speed, &autoneg);
@@ -4212,8 +4249,9 @@ ixgbe_dev_setup_link_thread_handler(void *param)
 	ixgbe_setup_link(hw, speed, true);
 
 	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
-	rte_atomic32_clear(&ad->link_thread_running);
-	return NULL;
+	/* NOTE: review for potential ordering optimization */
+	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
+	return 0;
 }
 
 /*
@@ -4265,6 +4303,9 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	int wait = 1;
 	u32 esdp_reg;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -1;
+
 	memset(&link, 0, sizeof(link));
 	link.link_status = RTE_ETH_LINK_DOWN;
 	link.link_speed = RTE_ETH_SPEED_NUM_NONE;
@@ -4280,11 +4321,6 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
 	if (wait_to_complete == 0 || dev->data->dev_conf.intr_conf.lsc != 0)
 		wait = 0;
-
-/* BSD has no interrupt mechanism, so force NIC status synchronization. */
-#ifdef RTE_EXEC_ENV_FREEBSD
-	wait = 1;
-#endif
 
 	if (vf)
 		diag = ixgbevf_check_link(hw, &link_speed, &link_up, wait);
@@ -4307,20 +4343,22 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	if (link_up == 0) {
 		if (ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
 			ixgbe_dev_wait_setup_link_complete(dev, 0);
-			if (rte_atomic32_test_and_set(&ad->link_thread_running)) {
+			/* NOTE: review for potential ordering optimization */
+			if (!rte_atomic_exchange_explicit(&ad->link_thread_running, 1,
+					rte_memory_order_seq_cst)) {
 				/* To avoid race condition between threads, set
 				 * the IXGBE_FLAG_NEED_LINK_CONFIG flag only
 				 * when there is no link thread running.
 				 */
 				intr->flags |= IXGBE_FLAG_NEED_LINK_CONFIG;
-				if (rte_ctrl_thread_create(&ad->link_thread_tid,
-					"ixgbe-link-handler",
-					NULL,
-					ixgbe_dev_setup_link_thread_handler,
-					dev) < 0) {
+				if (rte_thread_create_internal_control(&ad->link_thread_tid,
+						"ixgbe-link",
+						ixgbe_dev_setup_link_thread_handler, dev) < 0) {
 					PMD_DRV_LOG(ERR,
 						"Create link thread failed!");
-					rte_atomic32_clear(&ad->link_thread_running);
+					/* NOTE: review for potential ordering optimization */
+					rte_atomic_store_explicit(&ad->link_thread_running, 0,
+							rte_memory_order_seq_cst);
 				}
 			} else {
 				PMD_DRV_LOG(ERR,
@@ -4639,14 +4677,20 @@ ixgbe_dev_interrupt_action(struct rte_eth_dev *dev)
 			timeout = IXGBE_LINK_DOWN_CHECK_TIMEOUT;
 
 		ixgbe_dev_link_status_print(dev);
-		if (rte_eal_alarm_set(timeout * 1000,
-				      ixgbe_dev_interrupt_delayed_handler, (void *)dev) < 0)
-			PMD_DRV_LOG(ERR, "Error setting alarm");
-		else {
-			/* remember original mask */
-			intr->mask_original = intr->mask;
-			/* only disable lsc interrupt */
-			intr->mask &= ~IXGBE_EIMS_LSC;
+
+		/* Don't program delayed handler if LSC interrupt is disabled.
+		 * It means one is already programmed.
+		 */
+		if (intr->mask & IXGBE_EIMS_LSC) {
+			if (rte_eal_alarm_set(timeout * 1000,
+					      ixgbe_dev_interrupt_delayed_handler, (void *)dev) < 0)
+				PMD_DRV_LOG(ERR, "Error setting alarm");
+			else {
+				/* remember original mask */
+				intr->mask_original = intr->mask;
+				/* only disable lsc interrupt */
+				intr->mask &= ~IXGBE_EIMS_LSC;
+			}
 		}
 	}
 
@@ -5936,7 +5980,9 @@ ixgbe_set_ivar_map(struct ixgbe_hw *hw, int8_t direction,
 	} else if ((hw->mac.type == ixgbe_mac_82599EB) ||
 			(hw->mac.type == ixgbe_mac_X540) ||
 			(hw->mac.type == ixgbe_mac_X550) ||
-			(hw->mac.type == ixgbe_mac_X550EM_x)) {
+			(hw->mac.type == ixgbe_mac_X550EM_a) ||
+			(hw->mac.type == ixgbe_mac_X550EM_x) ||
+			(hw->mac.type == ixgbe_mac_E610)) {
 		if (direction == -1) {
 			/* other causes */
 			idx = ((queue & 1) * 8);
@@ -6071,6 +6117,7 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 		case ixgbe_mac_X540:
 		case ixgbe_mac_X550:
 		case ixgbe_mac_X550EM_x:
+		case ixgbe_mac_E610:
 			ixgbe_set_ivar_map(hw, -1, 1, IXGBE_MISC_VEC_ID);
 			break;
 		default:
@@ -6701,6 +6748,7 @@ ixgbe_read_systime_cyclecounter(struct rte_eth_dev *dev)
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
+	case ixgbe_mac_E610:
 		/* SYSTIMEL stores ns and SYSTIMEH stores seconds. */
 		systime_cycles = (uint64_t)IXGBE_READ_REG(hw, IXGBE_SYSTIML);
 		systime_cycles += (uint64_t)IXGBE_READ_REG(hw, IXGBE_SYSTIMH)
@@ -6725,6 +6773,7 @@ ixgbe_read_rx_tstamp_cyclecounter(struct rte_eth_dev *dev)
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
+	case ixgbe_mac_E610:
 		/* RXSTMPL stores ns and RXSTMPH stores seconds. */
 		rx_tstamp_cycles = (uint64_t)IXGBE_READ_REG(hw, IXGBE_RXSTMPL);
 		rx_tstamp_cycles += (uint64_t)IXGBE_READ_REG(hw, IXGBE_RXSTMPH)
@@ -6750,6 +6799,7 @@ ixgbe_read_tx_tstamp_cyclecounter(struct rte_eth_dev *dev)
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
+	case ixgbe_mac_E610:
 		/* TXSTMPL stores ns and TXSTMPH stores seconds. */
 		tx_tstamp_cycles = (uint64_t)IXGBE_READ_REG(hw, IXGBE_TXSTMPL);
 		tx_tstamp_cycles += (uint64_t)IXGBE_READ_REG(hw, IXGBE_TXSTMPH)
@@ -6798,6 +6848,7 @@ ixgbe_start_timecounters(struct rte_eth_dev *dev)
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
+	case ixgbe_mac_E610:
 		/* Independent of link speed. */
 		incval = 1;
 		/* Cycles read will be interpreted as ns. */
@@ -6880,6 +6931,12 @@ ixgbe_timesync_enable(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t tsync_ctl;
 	uint32_t tsauxc;
+	struct timespec ts;
+
+	memset(&ts, 0, sizeof(struct timespec));
+
+	/* get current system time */
+	clock_gettime(CLOCK_REALTIME, &ts);
 
 	/* Stop the timesync system time. */
 	IXGBE_WRITE_REG(hw, IXGBE_TIMINCA, 0x0);
@@ -6911,6 +6968,9 @@ ixgbe_timesync_enable(struct rte_eth_dev *dev)
 	IXGBE_WRITE_REG(hw, IXGBE_TSYNCTXCTL, tsync_ctl);
 
 	IXGBE_WRITE_FLUSH(hw);
+
+	/* ixgbe uses zero-based timestamping so only adjust timecounter */
+	ixgbe_timesync_write_time(dev, &ts);
 
 	return 0;
 }
@@ -7198,10 +7258,12 @@ ixgbe_reta_size_get(enum ixgbe_mac_type mac_type) {
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
+	case ixgbe_mac_E610:
 		return RTE_ETH_RSS_RETA_SIZE_512;
 	case ixgbe_mac_X550_vf:
 	case ixgbe_mac_X550EM_x_vf:
 	case ixgbe_mac_X550EM_a_vf:
+	case ixgbe_mac_E610_vf:
 		return RTE_ETH_RSS_RETA_SIZE_64;
 	case ixgbe_mac_X540_vf:
 	case ixgbe_mac_82599_vf:
@@ -7217,6 +7279,7 @@ ixgbe_reta_reg_get(enum ixgbe_mac_type mac_type, uint16_t reta_idx) {
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
 	case ixgbe_mac_X550EM_a:
+	case ixgbe_mac_E610:
 		if (reta_idx < RTE_ETH_RSS_RETA_SIZE_128)
 			return IXGBE_RETA(reta_idx >> 2);
 		else
@@ -7224,6 +7287,7 @@ ixgbe_reta_reg_get(enum ixgbe_mac_type mac_type, uint16_t reta_idx) {
 	case ixgbe_mac_X550_vf:
 	case ixgbe_mac_X550EM_x_vf:
 	case ixgbe_mac_X550EM_a_vf:
+	case ixgbe_mac_E610_vf:
 		return IXGBE_VFRETA(reta_idx >> 2);
 	default:
 		return IXGBE_RETA(reta_idx >> 2);

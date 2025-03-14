@@ -154,7 +154,7 @@ rte_acl_ipv4vlan_add_rules(struct rte_acl_ctx *ctx,
 	for (i = 0; i != num; i++) {
 		rc = acl_ipv4vlan_check_rule(rules + i);
 		if (rc != 0) {
-			RTE_LOG(ERR, ACL, "%s: rule #%u is invalid\n",
+			fprintf(stderr,  "%s: rule #%u is invalid\n",
 				__func__, i + 1);
 			return rc;
 		}
@@ -1749,4 +1749,4 @@ test_acl(void)
 
 #endif /* !RTE_EXEC_ENV_WINDOWS */
 
-REGISTER_TEST_COMMAND(acl_autotest, test_acl);
+REGISTER_FAST_TEST(acl_autotest, true, true, test_acl);

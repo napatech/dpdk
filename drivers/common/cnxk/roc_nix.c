@@ -13,12 +13,28 @@ roc_nix_is_lbk(struct roc_nix *roc_nix)
 	return nix->lbk_link;
 }
 
+bool
+roc_nix_is_esw(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+
+	return nix->esw_link;
+}
+
 int
 roc_nix_get_base_chan(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 
 	return nix->rx_chan_base;
+}
+
+uint8_t
+roc_nix_get_rx_chan_cnt(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+
+	return nix->rx_chan_cnt;
 }
 
 uint16_t
@@ -86,11 +102,14 @@ roc_nix_lf_inl_ipsec_cfg(struct roc_nix *roc_nix, struct roc_nix_ipsec_cfg *cfg,
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 	struct nix_inline_ipsec_lf_cfg *lf_cfg;
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
+	int rc;
 
 	lf_cfg = mbox_alloc_msg_nix_inline_ipsec_lf_cfg(mbox);
-	if (lf_cfg == NULL)
-		return -ENOSPC;
+	if (lf_cfg == NULL) {
+		rc = -ENOSPC;
+		goto exit;
+	}
 
 	if (enb) {
 		lf_cfg->enable = 1;
@@ -105,21 +124,30 @@ roc_nix_lf_inl_ipsec_cfg(struct roc_nix *roc_nix, struct roc_nix_ipsec_cfg *cfg,
 		lf_cfg->enable = 0;
 	}
 
-	return mbox_process(mbox);
+	rc = mbox_process(mbox);
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 int
 roc_nix_cpt_ctx_cache_sync(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
 	struct msg_req *req;
+	int rc;
 
 	req = mbox_alloc_msg_cpt_ctx_cache_sync(mbox);
-	if (req == NULL)
-		return -ENOSPC;
+	if (req == NULL) {
+		rc = -ENOSPC;
+		goto exit;
+	}
 
-	return mbox_process(mbox);
+	rc = mbox_process(mbox);
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 int
@@ -136,7 +164,7 @@ roc_nix_max_pkt_len(struct roc_nix *roc_nix)
 	if (roc_model_is_cn9k())
 		return NIX_CN9K_MAX_HW_FRS;
 
-	if (nix->lbk_link)
+	if (nix->lbk_link || nix->esw_link)
 		return NIX_LBK_MAX_HW_FRS;
 
 	return NIX_RPM_MAX_HW_FRS;
@@ -147,14 +175,14 @@ roc_nix_lf_alloc(struct roc_nix *roc_nix, uint32_t nb_rxq, uint32_t nb_txq,
 		 uint64_t rx_cfg)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
 	struct nix_lf_alloc_req *req;
 	struct nix_lf_alloc_rsp *rsp;
 	int rc = -ENOSPC;
 
 	req = mbox_alloc_msg_nix_lf_alloc(mbox);
 	if (req == NULL)
-		return rc;
+		goto fail;
 	req->rq_cnt = nb_rxq;
 	req->sq_cnt = nb_txq;
 	if (roc_nix->tx_compl_ena)
@@ -202,12 +230,24 @@ roc_nix_lf_alloc(struct roc_nix *roc_nix, uint32_t nb_rxq, uint32_t nb_txq,
 	nix->tx_link = rsp->tx_link;
 	nix->nb_rx_queues = nb_rxq;
 	nix->nb_tx_queues = nb_txq;
+
+	roc_idev_nix_rx_chan_set(roc_nix->port_id, rsp->rx_chan_base);
+
+	nix->rqs = plt_zmalloc(sizeof(struct roc_nix_rq *) * nb_rxq, 0);
+	if (!nix->rqs) {
+		rc = -ENOMEM;
+		goto fail;
+	}
+
 	nix->sqs = plt_zmalloc(sizeof(struct roc_nix_sq *) * nb_txq, 0);
-	if (!nix->sqs)
-		return -ENOMEM;
+	if (!nix->sqs) {
+		rc = -ENOMEM;
+		goto fail;
+	}
 
 	nix_tel_node_add(roc_nix);
 fail:
+	mbox_put(mbox);
 	return rc;
 }
 
@@ -215,18 +255,20 @@ int
 roc_nix_lf_free(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
 	struct nix_lf_free_req *req;
 	struct ndc_sync_op *ndc_req;
 	int rc = -ENOSPC;
 
+	plt_free(nix->rqs);
 	plt_free(nix->sqs);
+	nix->rqs = NULL;
 	nix->sqs = NULL;
 
 	/* Sync NDC-NIX for LF */
 	ndc_req = mbox_alloc_msg_ndc_sync_op(mbox);
 	if (ndc_req == NULL)
-		return rc;
+		goto exit;
 	ndc_req->nix_lf_tx_sync = 1;
 	ndc_req->nix_lf_rx_sync = 1;
 	rc = mbox_process(mbox);
@@ -234,38 +276,46 @@ roc_nix_lf_free(struct roc_nix *roc_nix)
 		plt_err("Error on NDC-NIX-[TX, RX] LF sync, rc %d", rc);
 
 	req = mbox_alloc_msg_nix_lf_free(mbox);
-	if (req == NULL)
-		return -ENOSPC;
+	if (req == NULL) {
+		rc = -ENOSPC;
+		goto exit;
+	}
 	/* Let AF driver free all this nix lf's
 	 * NPC entries allocated using NPC MBOX.
 	 */
 	req->flags = 0;
 
-	return mbox_process(mbox);
+	rc = mbox_process(mbox);
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 static inline int
 nix_lf_attach(struct dev *dev)
 {
-	struct mbox *mbox = dev->mbox;
+	struct mbox *mbox = mbox_get(dev->mbox);
 	struct rsrc_attach_req *req;
 	int rc = -ENOSPC;
 
 	/* Attach NIX(lf) */
 	req = mbox_alloc_msg_attach_resources(mbox);
 	if (req == NULL)
-		return rc;
+		goto exit;
 	req->modify = true;
 	req->nixlf = true;
 
-	return mbox_process(mbox);
+	rc = mbox_process(mbox);
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 static inline int
 nix_lf_get_msix_offset(struct dev *dev, struct nix *nix)
 {
 	struct msix_offset_rsp *msix_rsp;
-	struct mbox *mbox = dev->mbox;
+	struct mbox *mbox = mbox_get(dev->mbox);
 	int rc;
 
 	/* Get MSIX vector offsets */
@@ -274,30 +324,34 @@ nix_lf_get_msix_offset(struct dev *dev, struct nix *nix)
 	if (rc == 0)
 		nix->msixoff = msix_rsp->nix_msixoff;
 
+	mbox_put(mbox);
 	return rc;
 }
 
 static inline int
 nix_lf_detach(struct nix *nix)
 {
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
 	struct rsrc_detach_req *req;
 	int rc = -ENOSPC;
 
 	req = mbox_alloc_msg_detach_resources(mbox);
 	if (req == NULL)
-		return rc;
+		goto exit;
 	req->partial = true;
 	req->nixlf = true;
 
-	return mbox_process(mbox);
+	rc = mbox_process(mbox);
+exit:
+	mbox_put(mbox);
+	return rc;
 }
 
 static int
 roc_nix_get_hw_info(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
-	struct mbox *mbox = (&nix->dev)->mbox;
+	struct mbox *mbox = mbox_get((&nix->dev)->mbox);
 	struct nix_hw_info *hw_info;
 	int rc;
 
@@ -305,7 +359,7 @@ roc_nix_get_hw_info(struct roc_nix *roc_nix)
 	rc = mbox_process_msg(mbox, (void *)&hw_info);
 	if (rc == 0) {
 		nix->vwqe_interval = hw_info->vwqe_delay;
-		if (nix->lbk_link)
+		if (nix->lbk_link || nix->esw_link)
 			roc_nix->dwrr_mtu = hw_info->lbk_dwrr_mtu;
 		else if (nix->sdp_link)
 			roc_nix->dwrr_mtu = hw_info->sdp_dwrr_mtu;
@@ -313,6 +367,7 @@ roc_nix_get_hw_info(struct roc_nix *roc_nix)
 			roc_nix->dwrr_mtu = hw_info->rpm_dwrr_mtu;
 	}
 
+	mbox_put(mbox);
 	return rc;
 }
 
@@ -321,6 +376,7 @@ sdp_lbk_id_update(struct plt_pci_device *pci_dev, struct nix *nix)
 {
 	nix->sdp_link = false;
 	nix->lbk_link = false;
+	nix->esw_link = false;
 
 	/* Update SDP/LBK link based on PCI device id */
 	switch (pci_dev->id.device_id) {
@@ -331,6 +387,9 @@ sdp_lbk_id_update(struct plt_pci_device *pci_dev, struct nix *nix)
 	case PCI_DEVID_CNXK_RVU_AF_VF:
 		nix->lbk_link = true;
 		break;
+	case PCI_DEVID_CNXK_RVU_ESWITCH_VF:
+		nix->esw_link = true;
+		break;
 	default:
 		break;
 	}
@@ -339,15 +398,22 @@ sdp_lbk_id_update(struct plt_pci_device *pci_dev, struct nix *nix)
 uint64_t
 nix_get_blkaddr(struct dev *dev)
 {
+	uint64_t blkaddr;
 	uint64_t reg;
 
 	/* Reading the discovery register to know which NIX is the LF
 	 * attached to.
 	 */
-	reg = plt_read64(dev->bar2 +
-			 RVU_PF_BLOCK_ADDRX_DISC(RVU_BLOCK_ADDR_NIX0));
-
-	return reg & 0x1FFULL ? RVU_BLOCK_ADDR_NIX0 : RVU_BLOCK_ADDR_NIX1;
+	if (roc_model_is_cn9k() || roc_model_is_cn10k()) {
+		reg = plt_read64(dev->bar2 + RVU_PF_BLOCK_ADDRX_DISC(RVU_BLOCK_ADDR_NIX0));
+		blkaddr = reg & 0x1FFULL ? RVU_BLOCK_ADDR_NIX0 : RVU_BLOCK_ADDR_NIX1;
+	} else {
+		reg = plt_read64(dev->bar2 + RVU_PF_DISC);
+		blkaddr = reg & BIT_ULL(RVU_BLOCK_ADDR_NIX0) ? RVU_BLOCK_ADDR_NIX0 :
+			RVU_BLOCK_ADDR_NIX1;
+		blkaddr = RVU_BLOCK_ADDR_NIX0;
+	}
+	return blkaddr;
 }
 
 int
@@ -355,6 +421,7 @@ roc_nix_dev_init(struct roc_nix *roc_nix)
 {
 	enum roc_nix_rss_reta_sz reta_sz;
 	struct plt_pci_device *pci_dev;
+	struct roc_nix_list *nix_list;
 	uint16_t max_sqb_count;
 	uint64_t blkaddr;
 	struct dev *dev;
@@ -381,6 +448,12 @@ roc_nix_dev_init(struct roc_nix *roc_nix)
 	pci_dev = roc_nix->pci_dev;
 	dev = &nix->dev;
 
+	nix_list = roc_idev_nix_list_get();
+	if (nix_list == NULL)
+		return -EINVAL;
+
+	TAILQ_INSERT_TAIL(nix_list, roc_nix, next);
+
 	if (nix->dev.drv_inited)
 		return 0;
 
@@ -388,6 +461,10 @@ roc_nix_dev_init(struct roc_nix *roc_nix)
 		goto skip_dev_init;
 
 	memset(nix, 0, sizeof(*nix));
+
+	/* Since 0 is a valid BPID, use -1 to represent invalid value. */
+	memset(nix->bpid, -1, sizeof(nix->bpid));
+
 	/* Initialize device  */
 	rc = dev_init(dev, pci_dev);
 	if (rc) {
@@ -426,16 +503,8 @@ skip_dev_init:
 	sdp_lbk_id_update(pci_dev, nix);
 	nix->pci_dev = pci_dev;
 	nix->reta_sz = reta_sz;
-	nix->mtu = ROC_NIX_DEFAULT_HW_FRS;
-
-	/* Always start with full FC for LBK */
-	if (nix->lbk_link) {
-		nix->rx_pause = 1;
-		nix->tx_pause = 1;
-	} else if (!roc_nix_is_vf_or_sdp(roc_nix)) {
-		/* Get the current state of flow control */
-		roc_nix_fc_mode_get(roc_nix);
-	}
+	nix->mtu = roc_nix_max_pkt_len(roc_nix);
+	nix->dmac_flt_idx = -1;
 
 	/* Register error and ras interrupts */
 	rc = nix_register_irqs(nix);
@@ -481,5 +550,36 @@ roc_nix_dev_fini(struct roc_nix *roc_nix)
 	nix->dev.drv_inited = false;
 fini:
 	rc |= dev_fini(&nix->dev, nix->pci_dev);
+	return rc;
+}
+
+int
+roc_nix_max_rep_count(struct roc_nix *roc_nix)
+{
+	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
+	struct dev *dev = &nix->dev;
+	struct mbox *mbox = mbox_get(dev->mbox);
+	struct get_rep_cnt_rsp *rsp;
+	struct msg_req *req;
+	int rc, i;
+
+	req = mbox_alloc_msg_get_rep_cnt(mbox);
+	if (!req) {
+		rc = -ENOSPC;
+		goto exit;
+	}
+
+	req->hdr.pcifunc = roc_nix_get_pf_func(roc_nix);
+
+	rc = mbox_process_msg(mbox, (void *)&rsp);
+	if (rc)
+		goto exit;
+
+	roc_nix->rep_cnt = rsp->rep_cnt;
+	for (i = 0; i < rsp->rep_cnt; i++)
+		roc_nix->rep_pfvf_map[i] = rsp->rep_pfvf_map[i];
+
+exit:
+	mbox_put(mbox);
 	return rc;
 }

@@ -12,12 +12,14 @@
 #include <rte_errno.h>
 #include <rte_windows.h>
 
+#include "eal_private.h"
+
 /**
  * Log current function as not implemented and set rte_errno.
  */
 #define EAL_LOG_NOT_IMPLEMENTED() \
 	do { \
-		RTE_LOG(DEBUG, EAL, "%s() is not implemented\n", __func__); \
+		EAL_LOG(DEBUG, "%s() is not implemented", __func__); \
 		rte_errno = ENOTSUP; \
 	} while (0)
 
@@ -25,7 +27,7 @@
  * Log current function as a stub.
  */
 #define EAL_LOG_STUB() \
-	RTE_LOG(DEBUG, EAL, "Windows: %s() is a stub\n", __func__)
+	EAL_LOG(DEBUG, "Windows: %s() is a stub", __func__)
 
 /**
  * Create a map of processors and cores on the system.
@@ -34,18 +36,6 @@
  *  0 on success, (-1) on failure and rte_errno is set.
  */
 int eal_create_cpu_map(void);
-
-/**
- * Create a thread.
- *
- * @param thread
- *   The location to store the thread id if successful.
- * @param lcore_id
- *   The lcore_id of this worker thread.
- * @return
- *   0 for success, -1 if the thread is not created.
- */
-int eal_thread_create(pthread_t *thread, unsigned int lcore_id);
 
 /**
  * Get system NUMA node number for a socket ID.

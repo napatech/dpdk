@@ -116,6 +116,7 @@ fm10k_mbx_initlock(struct fm10k_hw *hw)
 
 static void
 fm10k_mbx_lock(struct fm10k_hw *hw)
+	__rte_exclusive_lock_function(FM10K_DEV_PRIVATE_TO_MBXLOCK(hw->back))
 {
 	while (!rte_spinlock_trylock(FM10K_DEV_PRIVATE_TO_MBXLOCK(hw->back)))
 		rte_delay_us(FM10K_MBXLOCK_DELAY_US);
@@ -123,6 +124,7 @@ fm10k_mbx_lock(struct fm10k_hw *hw)
 
 static void
 fm10k_mbx_unlock(struct fm10k_hw *hw)
+	__rte_unlock_function(FM10K_DEV_PRIVATE_TO_MBXLOCK(hw->back))
 {
 	rte_spinlock_unlock(FM10K_DEV_PRIVATE_TO_MBXLOCK(hw->back));
 }
@@ -1444,7 +1446,7 @@ fm10k_dev_infos_get(struct rte_eth_dev *dev,
 
 #ifdef RTE_LIBRTE_FM10K_RX_OLFLAGS_ENABLE
 static const uint32_t *
-fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev)
+fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 {
 	if (dev->rx_pkt_burst == fm10k_recv_pkts ||
 	    dev->rx_pkt_burst == fm10k_recv_scattered_pkts) {
@@ -1457,9 +1459,9 @@ fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 			RTE_PTYPE_L3_IPV6_EXT,
 			RTE_PTYPE_L4_TCP,
 			RTE_PTYPE_L4_UDP,
-			RTE_PTYPE_UNKNOWN
 		};
 
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
 	} else if (dev->rx_pkt_burst == fm10k_recv_pkts_vec ||
 		   dev->rx_pkt_burst == fm10k_recv_scattered_pkts_vec) {
@@ -1475,9 +1477,9 @@ fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 			RTE_PTYPE_TUNNEL_NVGRE,
 			RTE_PTYPE_TUNNEL_VXLAN,
 			RTE_PTYPE_TUNNEL_GRE,
-			RTE_PTYPE_UNKNOWN
 		};
 
+		*no_of_elements = RTE_DIM(ptypes_vec);
 		return ptypes_vec;
 	}
 
@@ -1485,7 +1487,8 @@ fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 }
 #else
 static const uint32_t *
-fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
+fm10k_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused,
+			       size_t *no_of_elements)
 {
 	return NULL;
 }
@@ -3055,7 +3058,7 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = pdev->intr_handle;
-	int diag, i;
+	int diag, i, ret;
 	struct fm10k_macvlan_filter_info *macvlan;
 
 	PMD_INIT_FUNC_TRACE();
@@ -3144,21 +3147,24 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 	diag = fm10k_stats_reset(dev);
 	if (diag != 0) {
 		PMD_INIT_LOG(ERR, "Stats reset failed: %d", diag);
-		return diag;
+		ret = diag;
+		goto err_stat;
 	}
 
 	/* Reset the hw */
 	diag = fm10k_reset_hw(hw);
 	if (diag != FM10K_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Hardware reset failed: %d", diag);
-		return -EIO;
+		ret = -EIO;
+		goto err_reset_hw;
 	}
 
 	/* Setup mailbox service */
 	diag = fm10k_setup_mbx_service(hw);
 	if (diag != FM10K_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Failed to setup mailbox: %d", diag);
-		return -EIO;
+		ret = -EIO;
+		goto err_mbx;
 	}
 
 	/*PF/VF has different interrupt handling mechanism */
@@ -3197,7 +3203,8 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 
 		if (switch_ready == false) {
 			PMD_INIT_LOG(ERR, "switch is not ready");
-			return -1;
+			ret = -1;
+			goto err_switch_ready;
 		}
 	}
 
@@ -3232,7 +3239,8 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 
 		if (!hw->mac.default_vid) {
 			PMD_INIT_LOG(ERR, "default VID is not ready");
-			return -1;
+			ret = -1;
+			goto err_vid;
 		}
 	}
 
@@ -3241,6 +3249,28 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 		MAIN_VSI_POOL_NUMBER);
 
 	return 0;
+
+err_vid:
+err_switch_ready:
+	rte_intr_disable(intr_handle);
+
+	if (hw->mac.type == fm10k_mac_pf) {
+		fm10k_dev_disable_intr_pf(dev);
+		rte_intr_callback_unregister(intr_handle,
+			fm10k_dev_interrupt_handler_pf, (void *)dev);
+	} else {
+		fm10k_dev_disable_intr_vf(dev);
+		rte_intr_callback_unregister(intr_handle,
+			fm10k_dev_interrupt_handler_vf, (void *)dev);
+	}
+
+err_mbx:
+err_reset_hw:
+err_stat:
+	rte_free(dev->data->mac_addrs);
+	dev->data->mac_addrs = NULL;
+
+	return ret;
 }
 
 static int

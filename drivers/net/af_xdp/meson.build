@@ -7,6 +7,12 @@ if is_windows
     subdir_done()
 endif
 
+if arch_subdir == 'x86' and dpdk_conf.get('RTE_ARCH_32')
+    build = false
+    reason = 'not supported on 32-bit x86'
+    subdir_done()
+endif
+
 sources = files('rte_eth_af_xdp.c')
 
 libxdp_ver = '>=1.2.2'
@@ -48,6 +54,14 @@ endif
 
 if build
   xsk_check_prefix = '''
+#ifndef typeof
+#define typeof __typeof__
+#endif
+
+#ifndef asm
+#define asm __asm__
+#endif
+
 #ifdef RTE_NET_AF_XDP_LIBXDP
 #include <xdp/xsk.h>
 #else
@@ -56,19 +70,23 @@ if build
   '''
 
   if cc.has_function('xsk_socket__create_shared', prefix : xsk_check_prefix,
-                     dependencies : ext_deps)
+                     dependencies : ext_deps, args: cflags)
       cflags += ['-DRTE_NET_AF_XDP_SHARED_UMEM']
   endif
   if cc.has_function('bpf_object__next_program',
                      prefix : '#include <bpf/libbpf.h>',
-                     dependencies : bpf_dep)
+                     dependencies : bpf_dep, args: cflags)
       cflags += ['-DRTE_NET_AF_XDP_LIBBPF_OBJ_OPEN']
   endif
   if cc.has_function('bpf_xdp_attach',
                      prefix : '#include <bpf/libbpf.h>',
-                     dependencies : bpf_dep)
+                     dependencies : bpf_dep, args: cflags)
       cflags += ['-DRTE_NET_AF_XDP_LIBBPF_XDP_ATTACH']
+  endif
+  if cc.has_function('xsk_socket__update_xskmap', prefix : xsk_check_prefix,
+                     dependencies : ext_deps, args: cflags)
+      cflags += ['-DETH_AF_XDP_UPDATE_XSKMAP']
   endif
 endif
 
-pmd_supports_disable_iova_as_pa = true
+require_iova_in_mbuf = false

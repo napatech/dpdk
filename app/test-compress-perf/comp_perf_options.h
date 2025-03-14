@@ -32,9 +32,9 @@ enum cperf_test_type {
 };
 
 enum comp_operation {
-	COMPRESS_ONLY,
-	DECOMPRESS_ONLY,
-	COMPRESS_DECOMPRESS
+	COMPRESS = (1 << 0),
+	DECOMPRESS = (1 << 1),
+	COMPRESS_DECOMPRESS = (COMPRESS | DECOMPRESS),
 };
 
 struct range_list {
@@ -61,8 +61,11 @@ struct comp_test_data {
 	uint16_t max_sgl_segs;
 	uint32_t total_segs;
 
+	uint8_t lz4_flags;
 	enum rte_comp_huffman huffman_enc;
 	enum comp_operation test_op;
+	enum rte_comp_algorithm test_algo;
+
 	int window_sz;
 	struct range_list level_lst;
 	uint8_t level;

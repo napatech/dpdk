@@ -505,8 +505,7 @@ rte_rawdev_pmd_allocate(const char *name, size_t dev_priv_size, int socket_id)
 	uint16_t dev_id;
 
 	if (rte_rawdev_pmd_get_named_dev(name) != NULL) {
-		RTE_RDEV_ERR("Event device with name %s already allocated!",
-			     name);
+		RTE_RDEV_ERR("Raw device with name %s already allocated!", name);
 		return NULL;
 	}
 
@@ -631,8 +630,8 @@ handle_dev_xstats(const char *cmd __rte_unused,
 
 	rte_tel_data_start_dict(d);
 	for (i = 0; i < num_xstats; i++)
-		rte_tel_data_add_dict_u64(d, xstat_names[i].name,
-				rawdev_xstats[i]);
+		rte_tel_data_add_dict_uint(d, xstat_names[i].name,
+					   rawdev_xstats[i]);
 
 	free(rawdev_xstats);
 	return 0;
@@ -657,7 +656,7 @@ handle_dev_dump(const char *cmd __rte_unused,
 	if (!rte_rawdev_pmd_is_valid_dev(dev_id))
 		return -EINVAL;
 
-	buf = calloc(sizeof(char), RTE_TEL_MAX_SINGLE_STRING_LEN);
+	buf = calloc(RTE_TEL_MAX_SINGLE_STRING_LEN, sizeof(char));
 	if (buf == NULL)
 		return -ENOMEM;
 

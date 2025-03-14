@@ -25,11 +25,13 @@
 #define ETH_MEMIF_DISC_STRING_SIZE		96
 #define ETH_MEMIF_SECRET_SIZE			24
 
-extern int memif_logtype;
+#define MAX_PKT_BURST				32
 
-#define MIF_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, memif_logtype, \
-		"%s(): " fmt "\n", __func__, ##args)
+extern int memif_logtype;
+#define RTE_LOGTYPE_MEMIF memif_logtype
+
+#define MIF_LOG(level, ...) \
+	RTE_LOG_LINE_PREFIX(level, MEMIF, "%s(): ", __func__, __VA_ARGS__)
 
 enum memif_role_t {
 	MEMIF_ROLE_SERVER,
@@ -89,6 +91,8 @@ struct pmd_internals {
 /**< use abstract socket address */
 
 	char *socket_filename;			/**< pointer to socket filename */
+	uid_t owner_uid;			/**< socket owner uid */
+	gid_t owner_gid;			/**< socket owner gid */
 	char secret[ETH_MEMIF_SECRET_SIZE]; /**< secret (optional security parameter) */
 
 	struct memif_control_channel *cc;	/**< control channel */

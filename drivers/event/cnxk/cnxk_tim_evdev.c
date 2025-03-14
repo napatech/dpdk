@@ -4,6 +4,8 @@
 
 #include <math.h>
 
+#include "roc_api.h"
+
 #include "cnxk_eventdev.h"
 #include "cnxk_tim_evdev.h"
 
@@ -14,12 +16,11 @@ static int
 cnxk_tim_chnk_pool_create(struct cnxk_tim_ring *tim_ring,
 			  struct rte_event_timer_adapter_conf *rcfg)
 {
-	unsigned int cache_sz = (tim_ring->nb_chunks / 1.5);
 	unsigned int mp_flags = 0;
+	unsigned int cache_sz;
 	char pool_name[25];
 	int rc;
 
-	cache_sz /= rte_lcore_count();
 	/* Create chunk pool. */
 	if (rcfg->flags & RTE_EVENT_TIMER_ADAPTER_F_SP_PUT) {
 		mp_flags = RTE_MEMPOOL_F_SP_PUT | RTE_MEMPOOL_F_SC_GET;
@@ -30,9 +31,7 @@ cnxk_tim_chnk_pool_create(struct cnxk_tim_ring *tim_ring,
 	snprintf(pool_name, sizeof(pool_name), "cnxk_tim_chunk_pool%d",
 		 tim_ring->ring_id);
 
-	if (cache_sz > CNXK_TIM_MAX_POOL_CACHE_SZ)
-		cache_sz = CNXK_TIM_MAX_POOL_CACHE_SZ;
-	cache_sz = cache_sz != 0 ? cache_sz : 2;
+	cache_sz = CNXK_TIM_MAX_POOL_CACHE_SZ;
 	tim_ring->nb_chunks += (cache_sz * rte_lcore_count());
 	if (!tim_ring->disable_npa) {
 		tim_ring->chunk_pool = rte_mempool_create_empty(
@@ -79,9 +78,25 @@ free:
 	return rc;
 }
 
+static int
+cnxk_tim_enable_hwwqe(struct cnxk_tim_evdev *dev, struct cnxk_tim_ring *tim_ring)
+{
+	struct roc_tim_hwwqe_cfg hwwqe_cfg;
+
+	memset(&hwwqe_cfg, 0, sizeof(hwwqe_cfg));
+	hwwqe_cfg.hwwqe_ena = 1;
+	hwwqe_cfg.grp_ena = 0;
+	hwwqe_cfg.flw_ctrl_ena = 0;
+	hwwqe_cfg.result_offset = CNXK_TIM_HWWQE_RES_OFFSET_B;
+
+	tim_ring->lmt_base = dev->tim.roc_sso->lmt_base;
+	return roc_tim_lf_config_hwwqe(&dev->tim, tim_ring->ring_id, &hwwqe_cfg);
+}
+
 static void
 cnxk_tim_set_fp_ops(struct cnxk_tim_ring *tim_ring)
 {
+	struct cnxk_tim_evdev *dev = cnxk_tim_priv_get();
 	uint8_t prod_flag = !tim_ring->prod_type_sp;
 
 	/* [STATS] [DFB/FB] [SP][MP]*/
@@ -98,6 +113,16 @@ cnxk_tim_set_fp_ops(struct cnxk_tim_ring *tim_ring)
 		TIM_ARM_TMO_FASTPATH_MODES
 #undef FP
 	};
+
+	if (dev == NULL)
+		return;
+
+	if (dev->tim.feat.hwwqe) {
+		cnxk_tim_ops.arm_burst = cnxk_tim_arm_burst_hwwqe;
+		cnxk_tim_ops.arm_tmo_tick_burst = cnxk_tim_arm_tmo_burst_hwwqe;
+		cnxk_tim_ops.cancel_burst = cnxk_tim_timer_cancel_burst_hwwqe;
+		return;
+	}
 
 	cnxk_tim_ops.arm_burst =
 		arm_burst[tim_ring->enable_stats][tim_ring->ena_dfb][prod_flag];
@@ -225,12 +250,13 @@ cnxk_tim_ring_create(struct rte_event_timer_adapter *adptr)
 		}
 	}
 
-	if (tim_ring->disable_npa) {
+	if (!dev->tim.feat.hwwqe && tim_ring->disable_npa) {
 		tim_ring->nb_chunks =
 			tim_ring->nb_timers /
 			CNXK_TIM_NB_CHUNK_SLOTS(tim_ring->chunk_sz);
 		tim_ring->nb_chunks = tim_ring->nb_chunks * tim_ring->nb_bkts;
 	} else {
+		tim_ring->disable_npa = 0;
 		tim_ring->nb_chunks = tim_ring->nb_timers;
 	}
 
@@ -256,6 +282,14 @@ cnxk_tim_ring_create(struct rte_event_timer_adapter *adptr)
 		goto tim_chnk_free;
 	}
 
+	if (dev->tim.feat.hwwqe) {
+		rc = cnxk_tim_enable_hwwqe(dev, tim_ring);
+		if (rc < 0) {
+			plt_err("Failed to enable hwwqe");
+			goto tim_chnk_free;
+		}
+	}
+
 	plt_write64((uint64_t)tim_ring->bkt, tim_ring->base + TIM_LF_RING_BASE);
 	plt_write64(tim_ring->aura, tim_ring->base + TIM_LF_RING_AURA);
 
@@ -266,10 +300,10 @@ cnxk_tim_ring_create(struct rte_event_timer_adapter *adptr)
 	cnxk_sso_updt_xae_cnt(cnxk_sso_pmd_priv(dev->event_dev), tim_ring,
 			      RTE_EVENT_TYPE_TIMER);
 	cnxk_sso_xae_reconfigure(dev->event_dev);
-	sso_set_priv_mem_fn(dev->event_dev, NULL, 0);
+	sso_set_priv_mem_fn(dev->event_dev, NULL);
 
 	plt_tim_dbg(
-		"Total memory used %" PRIu64 "MB\n",
+		"Total memory used %" PRIu64 "MB",
 		(uint64_t)(((tim_ring->nb_chunks * tim_ring->chunk_sz) +
 			    (tim_ring->nb_bkts * sizeof(struct cnxk_tim_bkt))) /
 			   BIT_ULL(20)));
@@ -359,7 +393,7 @@ cnxk_tim_stats_get(const struct rte_event_timer_adapter *adapter,
 		tim_ring->tick_fn(tim_ring->tbase) - tim_ring->ring_start_cyc;
 
 	stats->evtim_exp_count =
-		__atomic_load_n(&tim_ring->arm_cnt, __ATOMIC_RELAXED);
+		rte_atomic_load_explicit(&tim_ring->arm_cnt, rte_memory_order_relaxed);
 	stats->ev_enq_count = stats->evtim_exp_count;
 	stats->adapter_tick_count =
 		rte_reciprocal_divide_u64(bkt_cyc, &tim_ring->fast_div);
@@ -371,7 +405,7 @@ cnxk_tim_stats_reset(const struct rte_event_timer_adapter *adapter)
 {
 	struct cnxk_tim_ring *tim_ring = adapter->data->adapter_priv;
 
-	__atomic_store_n(&tim_ring->arm_cnt, 0, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&tim_ring->arm_cnt, 0, rte_memory_order_relaxed);
 	return 0;
 }
 
@@ -381,6 +415,7 @@ cnxk_tim_caps_get(const struct rte_eventdev *evdev, uint64_t flags,
 		  cnxk_sso_set_priv_mem_t priv_mem_fn)
 {
 	struct cnxk_tim_evdev *dev = cnxk_tim_priv_get();
+	struct cnxk_tim_ring *tim_ring;
 
 	RTE_SET_USED(flags);
 
@@ -392,6 +427,7 @@ cnxk_tim_caps_get(const struct rte_eventdev *evdev, uint64_t flags,
 	cnxk_tim_ops.start = cnxk_tim_ring_start;
 	cnxk_tim_ops.stop = cnxk_tim_ring_stop;
 	cnxk_tim_ops.get_info = cnxk_tim_ring_info_get;
+	cnxk_tim_ops.remaining_ticks_get = cnxk_tim_remaining_ticks_get;
 	sso_set_priv_mem_fn = priv_mem_fn;
 
 	if (dev->enable_stats) {
@@ -403,6 +439,12 @@ cnxk_tim_caps_get(const struct rte_eventdev *evdev, uint64_t flags,
 	dev->event_dev = (struct rte_eventdev *)(uintptr_t)evdev;
 	*caps = RTE_EVENT_TIMER_ADAPTER_CAP_INTERNAL_PORT |
 		RTE_EVENT_TIMER_ADAPTER_CAP_PERIODIC;
+
+	tim_ring = ((struct rte_event_timer_adapter_data
+			     *)((char *)caps - offsetof(struct rte_event_timer_adapter_data, caps)))
+			   ->adapter_priv;
+	if (tim_ring != NULL && rte_eal_process_type() == RTE_PROC_SECONDARY)
+		cnxk_tim_set_fp_ops(tim_ring);
 	*ops = &cnxk_tim_ops;
 
 	return 0;

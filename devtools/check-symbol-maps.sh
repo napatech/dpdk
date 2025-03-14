@@ -8,7 +8,7 @@ cd $(dirname $0)/..
 export LC_ALL=C
 
 if [ $# = 0 ] ; then
-    set -- $(find lib drivers -name '*.map')
+    set -- $(find lib drivers -name '*.map' -a ! -path drivers/version.map)
 fi
 
 ret=0
@@ -71,6 +71,44 @@ empty_maps=$(find_empty_maps $@)
 if [ -n "$empty_maps" ] ; then
     echo "Found empty maps:"
     echo "$empty_maps"
+    ret=1
+fi
+
+find_bad_format_maps ()
+{
+    abi_version=$(cut -d'.' -f 1 ABI_VERSION)
+    next_abi_version=$((abi_version + 1))
+    for map in $@ ; do
+        cat $map | awk '
+            /^(DPDK_('$abi_version'|'$next_abi_version')|EXPERIMENTAL|INTERNAL) \{$/ { next; } # start of a section
+            /^}( DPDK_'$abi_version')?;$/ { next; } # end of a section
+            /^$/ { next; } # empty line
+            /^\t(global:|local: \*;)$/ { next; } # qualifiers
+            /^\t[a-zA-Z_0-9]*;( # WINDOWS_NO_EXPORT)?$/ { next; } # symbols
+            /^\t# added in [0-9]*\.[0-9]*$/ { next; } # version comments
+            { print $0; }' || echo $map
+    done
+}
+
+bad_format_maps=$(find_bad_format_maps $@)
+if [ -n "$bad_format_maps" ] ; then
+    echo "Found badly formatted maps:"
+    echo "$bad_format_maps"
+    ret=1
+fi
+
+find_non_versioned_maps ()
+{
+    for map in $@ ; do
+        [ $(buildtools/map-list-symbol.sh -S EXPERIMENTAL -V unset $map | wc -l) = '0' ] ||
+            echo $map
+    done
+}
+
+non_versioned_maps=$(find_non_versioned_maps $@)
+if [ -n "$non_versioned_maps" ] ; then
+    echo "Found non versioned maps:"
+    echo "$non_versioned_maps"
     ret=1
 fi
 

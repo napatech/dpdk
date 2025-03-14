@@ -8,55 +8,9 @@
 
 #include "roc_api.h"
 
-static void
-ipsec_hmac_opad_ipad_gen(struct rte_crypto_sym_xform *auth_xform,
-			 uint8_t *hmac_opad_ipad)
-{
-	const uint8_t *key = auth_xform->auth.key.data;
-	uint32_t length = auth_xform->auth.key.length;
-	uint8_t opad[128] = {[0 ... 127] = 0x5c};
-	uint8_t ipad[128] = {[0 ... 127] = 0x36};
-	uint32_t i;
-
-	/* HMAC OPAD and IPAD */
-	for (i = 0; i < 127 && i < length; i++) {
-		opad[i] = opad[i] ^ key[i];
-		ipad[i] = ipad[i] ^ key[i];
-	}
-
-	/* Precompute hash of HMAC OPAD and IPAD to avoid
-	 * per packet computation
-	 */
-	switch (auth_xform->auth.algo) {
-	case RTE_CRYPTO_AUTH_MD5_HMAC:
-		roc_hash_md5_gen(opad, (uint32_t *)&hmac_opad_ipad[0]);
-		roc_hash_md5_gen(ipad, (uint32_t *)&hmac_opad_ipad[24]);
-		break;
-	case RTE_CRYPTO_AUTH_SHA1_HMAC:
-		roc_hash_sha1_gen(opad, (uint32_t *)&hmac_opad_ipad[0]);
-		roc_hash_sha1_gen(ipad, (uint32_t *)&hmac_opad_ipad[24]);
-		break;
-	case RTE_CRYPTO_AUTH_SHA256_HMAC:
-		roc_hash_sha256_gen(opad, (uint32_t *)&hmac_opad_ipad[0]);
-		roc_hash_sha256_gen(ipad, (uint32_t *)&hmac_opad_ipad[64]);
-		break;
-	case RTE_CRYPTO_AUTH_SHA384_HMAC:
-		roc_hash_sha512_gen(opad, (uint64_t *)&hmac_opad_ipad[0], 384);
-		roc_hash_sha512_gen(ipad, (uint64_t *)&hmac_opad_ipad[64], 384);
-		break;
-	case RTE_CRYPTO_AUTH_SHA512_HMAC:
-		roc_hash_sha512_gen(opad, (uint64_t *)&hmac_opad_ipad[0], 512);
-		roc_hash_sha512_gen(ipad, (uint64_t *)&hmac_opad_ipad[64], 512);
-		break;
-	default:
-		break;
-	}
-}
-
 static int
-ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2,
-			      uint8_t *cipher_key, uint8_t *salt_key,
-			      uint8_t *hmac_opad_ipad,
+ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2, uint8_t *cipher_key,
+			      uint8_t *salt_key, uint8_t *hmac_opad_ipad,
 			      struct rte_security_ipsec_xform *ipsec_xfrm,
 			      struct rte_crypto_sym_xform *crypto_xfrm)
 {
@@ -112,15 +66,15 @@ ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2,
 
 		switch (crypto_xfrm->aead.algo) {
 		case RTE_CRYPTO_AEAD_AES_GCM:
-			w2->s.enc_type = ROC_IE_OT_SA_ENC_AES_GCM;
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_NULL;
+			w2->s.enc_type = ROC_IE_SA_ENC_AES_GCM;
+			w2->s.auth_type = ROC_IE_SA_AUTH_NULL;
 			memcpy(salt_key, &ipsec_xfrm->salt, 4);
 			tmp_salt = (uint32_t *)salt_key;
 			*tmp_salt = rte_be_to_cpu_32(*tmp_salt);
 			break;
 		case RTE_CRYPTO_AEAD_AES_CCM:
-			w2->s.enc_type = ROC_IE_OT_SA_ENC_AES_CCM;
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_NULL;
+			w2->s.enc_type = ROC_IE_SA_ENC_AES_CCM;
+			w2->s.auth_type = ROC_IE_SA_AUTH_NULL;
 			ccm_flag = 0x07 & ~ROC_CPT_AES_CCM_CTR_LEN;
 			*salt_key = ccm_flag;
 			memcpy(PLT_PTR_ADD(salt_key, 1), &ipsec_xfrm->salt, 3);
@@ -134,16 +88,16 @@ ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2,
 		if (cipher_xfrm != NULL) {
 			switch (cipher_xfrm->cipher.algo) {
 			case RTE_CRYPTO_CIPHER_NULL:
-				w2->s.enc_type = ROC_IE_OT_SA_ENC_NULL;
+				w2->s.enc_type = ROC_IE_SA_ENC_NULL;
 				break;
 			case RTE_CRYPTO_CIPHER_AES_CBC:
-				w2->s.enc_type = ROC_IE_OT_SA_ENC_AES_CBC;
+				w2->s.enc_type = ROC_IE_SA_ENC_AES_CBC;
 				break;
 			case RTE_CRYPTO_CIPHER_AES_CTR:
-				w2->s.enc_type = ROC_IE_OT_SA_ENC_AES_CTR;
+				w2->s.enc_type = ROC_IE_SA_ENC_AES_CTR;
 				break;
 			case RTE_CRYPTO_CIPHER_3DES_CBC:
-				w2->s.enc_type = ROC_IE_OT_SA_ENC_3DES_CBC;
+				w2->s.enc_type = ROC_IE_SA_ENC_3DES_CBC;
 				break;
 			default:
 				return -ENOTSUP;
@@ -155,25 +109,29 @@ ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2,
 
 		switch (auth_xfrm->auth.algo) {
 		case RTE_CRYPTO_AUTH_NULL:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_NULL;
+			if (w2->s.dir == ROC_IE_SA_DIR_INBOUND && ipsec_xfrm->replay_win_sz) {
+				plt_err("anti-replay can't be supported with integrity service disabled");
+				return -EINVAL;
+			}
+			w2->s.auth_type = ROC_IE_SA_AUTH_NULL;
 			break;
 		case RTE_CRYPTO_AUTH_SHA1_HMAC:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_SHA1;
+			w2->s.auth_type = ROC_IE_SA_AUTH_SHA1;
 			break;
 		case RTE_CRYPTO_AUTH_SHA256_HMAC:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_SHA2_256;
+			w2->s.auth_type = ROC_IE_SA_AUTH_SHA2_256;
 			break;
 		case RTE_CRYPTO_AUTH_SHA384_HMAC:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_SHA2_384;
+			w2->s.auth_type = ROC_IE_SA_AUTH_SHA2_384;
 			break;
 		case RTE_CRYPTO_AUTH_SHA512_HMAC:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_SHA2_512;
+			w2->s.auth_type = ROC_IE_SA_AUTH_SHA2_512;
 			break;
 		case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_AES_XCBC_128;
+			w2->s.auth_type = ROC_IE_SA_AUTH_AES_XCBC_128;
 			break;
 		case RTE_CRYPTO_AUTH_AES_GMAC:
-			w2->s.auth_type = ROC_IE_OT_SA_AUTH_AES_GMAC;
+			w2->s.auth_type = ROC_IE_SA_AUTH_AES_GMAC;
 			key = auth_xfrm->auth.key.data;
 			length = auth_xfrm->auth.key.length;
 			memcpy(salt_key, &ipsec_xfrm->salt, 4);
@@ -188,7 +146,9 @@ ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2,
 			const uint8_t *auth_key = auth_xfrm->auth.key.data;
 			roc_aes_xcbc_key_derive(auth_key, hmac_opad_ipad);
 		} else {
-			ipsec_hmac_opad_ipad_gen(auth_xfrm, hmac_opad_ipad);
+			roc_se_hmac_opad_ipad_gen(w2->s.auth_type, auth_xfrm->auth.key.data,
+						  auth_xfrm->auth.key.length, &hmac_opad_ipad[0],
+						  ROC_SE_IPSEC);
 		}
 
 		tmp_key = (uint64_t *)hmac_opad_ipad;
@@ -214,12 +174,9 @@ ot_ipsec_sa_common_param_fill(union roc_ot_ipsec_sa_word2 *w2,
 	}
 
 	/* Set AES key length */
-	if (w2->s.enc_type == ROC_IE_OT_SA_ENC_AES_CBC ||
-	    w2->s.enc_type == ROC_IE_OT_SA_ENC_AES_CCM ||
-	    w2->s.enc_type == ROC_IE_OT_SA_ENC_AES_CTR ||
-	    w2->s.enc_type == ROC_IE_OT_SA_ENC_AES_GCM ||
-	    w2->s.enc_type == ROC_IE_OT_SA_ENC_AES_CCM ||
-	    w2->s.auth_type == ROC_IE_OT_SA_AUTH_AES_GMAC) {
+	if (w2->s.enc_type == ROC_IE_SA_ENC_AES_CBC || w2->s.enc_type == ROC_IE_SA_ENC_AES_CCM ||
+	    w2->s.enc_type == ROC_IE_SA_ENC_AES_CTR || w2->s.enc_type == ROC_IE_SA_ENC_AES_GCM ||
+	    w2->s.enc_type == ROC_IE_SA_ENC_AES_CCM || w2->s.auth_type == ROC_IE_SA_AUTH_AES_GMAC) {
 		switch (length) {
 		case ROC_CPT_AES128_KEY_LEN:
 			w2->s.aes_key_len = ROC_IE_SA_AES_KEY_LEN_128;
@@ -274,6 +231,14 @@ ot_ipsec_inb_ctx_size(struct roc_ot_ipsec_inb_sa *sa)
 	return size;
 }
 
+static void
+ot_ipsec_update_ipv6_addr_endianness(uint64_t *addr)
+{
+	*addr = rte_be_to_cpu_64(*addr);
+	addr++;
+	*addr = rte_be_to_cpu_64(*addr);
+}
+
 static int
 ot_ipsec_inb_tunnel_hdr_fill(struct roc_ot_ipsec_inb_sa *sa,
 			     struct rte_security_ipsec_xform *ipsec_xfrm)
@@ -306,9 +271,13 @@ ot_ipsec_inb_tunnel_hdr_fill(struct roc_ot_ipsec_inb_sa *sa,
 	case RTE_SECURITY_IPSEC_TUNNEL_IPV6:
 		sa->w2.s.outer_ip_ver = ROC_IE_SA_IP_VERSION_6;
 		memcpy(&sa->outer_hdr.ipv6.src_addr, &tunnel->ipv6.src_addr,
-		       sizeof(struct in6_addr));
+		       sizeof(sa->outer_hdr.ipv6.src_addr));
 		memcpy(&sa->outer_hdr.ipv6.dst_addr, &tunnel->ipv6.dst_addr,
-		       sizeof(struct in6_addr));
+		       sizeof(sa->outer_hdr.ipv6.dst_addr));
+
+		/* IP Source and Dest are in LE/CPU endian */
+		ot_ipsec_update_ipv6_addr_endianness((uint64_t *)&sa->outer_hdr.ipv6.src_addr);
+		ot_ipsec_update_ipv6_addr_endianness((uint64_t *)&sa->outer_hdr.ipv6.dst_addr);
 
 		break;
 	default:
@@ -336,6 +305,7 @@ cnxk_ot_ipsec_inb_sa_fill(struct roc_ot_ipsec_inb_sa *sa,
 			  struct rte_crypto_sym_xform *crypto_xfrm,
 			  bool is_inline)
 {
+	uint16_t sport = 4500, dport = 4500;
 	union roc_ot_ipsec_sa_word2 w2;
 	uint32_t replay_win_sz;
 	size_t offset;
@@ -381,8 +351,14 @@ cnxk_ot_ipsec_inb_sa_fill(struct roc_ot_ipsec_inb_sa *sa,
 	/* ESN */
 	sa->w2.s.esn_en = !!ipsec_xfrm->options.esn;
 	if (ipsec_xfrm->options.udp_encap) {
-		sa->w10.s.udp_src_port = 4500;
-		sa->w10.s.udp_dst_port = 4500;
+		if (ipsec_xfrm->udp.sport)
+			sport = ipsec_xfrm->udp.sport;
+
+		if (ipsec_xfrm->udp.dport)
+			dport = ipsec_xfrm->udp.dport;
+
+		sa->w10.s.udp_src_port = sport;
+		sa->w10.s.udp_dst_port = dport;
 	}
 
 	if (ipsec_xfrm->options.udp_ports_verify)
@@ -439,6 +415,7 @@ cnxk_ot_ipsec_outb_sa_fill(struct roc_ot_ipsec_outb_sa *sa,
 			   struct rte_crypto_sym_xform *crypto_xfrm)
 {
 	struct rte_security_ipsec_tunnel_param *tunnel = &ipsec_xfrm->tunnel;
+	uint16_t sport = 4500, dport = 4500;
 	union roc_ot_ipsec_sa_word2 w2;
 	size_t offset;
 	int rc;
@@ -495,9 +472,13 @@ cnxk_ot_ipsec_outb_sa_fill(struct roc_ot_ipsec_outb_sa *sa,
 	case RTE_SECURITY_IPSEC_TUNNEL_IPV6:
 		sa->w2.s.outer_ip_ver = ROC_IE_SA_IP_VERSION_6;
 		memcpy(&sa->outer_hdr.ipv6.src_addr, &tunnel->ipv6.src_addr,
-		       sizeof(struct in6_addr));
+		       sizeof(sa->outer_hdr.ipv6.src_addr));
 		memcpy(&sa->outer_hdr.ipv6.dst_addr, &tunnel->ipv6.dst_addr,
-		       sizeof(struct in6_addr));
+		       sizeof(sa->outer_hdr.ipv6.dst_addr));
+
+		/* IP Source and Dest are in LE/CPU endian */
+		ot_ipsec_update_ipv6_addr_endianness((uint64_t *)&sa->outer_hdr.ipv6.src_addr);
+		ot_ipsec_update_ipv6_addr_endianness((uint64_t *)&sa->outer_hdr.ipv6.dst_addr);
 
 		/* Outer header flow label source */
 		if (!ipsec_xfrm->options.copy_flabel) {
@@ -530,8 +511,14 @@ skip_tunnel_info:
 		sa->ctx.esn_val = ipsec_xfrm->esn.value - 1;
 
 	if (ipsec_xfrm->options.udp_encap) {
-		sa->w10.s.udp_src_port = 4500;
-		sa->w10.s.udp_dst_port = 4500;
+		if (ipsec_xfrm->udp.sport)
+			sport = ipsec_xfrm->udp.sport;
+
+		if (ipsec_xfrm->udp.dport)
+			dport = ipsec_xfrm->udp.dport;
+
+		sa->w10.s.udp_src_port = sport;
+		sa->w10.s.udp_dst_port = dport;
 	}
 
 	offset = offsetof(struct roc_ot_ipsec_outb_sa, ctx);
@@ -596,235 +583,6 @@ bool
 cnxk_ot_ipsec_outb_sa_valid(struct roc_ot_ipsec_outb_sa *sa)
 {
 	return !!sa->w2.s.valid;
-}
-
-static inline int
-ipsec_xfrm_verify(struct rte_security_ipsec_xform *ipsec_xfrm,
-		  struct rte_crypto_sym_xform *crypto_xfrm)
-{
-	if (crypto_xfrm->next == NULL)
-		return -EINVAL;
-
-	if (ipsec_xfrm->direction == RTE_SECURITY_IPSEC_SA_DIR_INGRESS) {
-		if (crypto_xfrm->type != RTE_CRYPTO_SYM_XFORM_AUTH ||
-		    crypto_xfrm->next->type != RTE_CRYPTO_SYM_XFORM_CIPHER)
-			return -EINVAL;
-	} else {
-		if (crypto_xfrm->type != RTE_CRYPTO_SYM_XFORM_CIPHER ||
-		    crypto_xfrm->next->type != RTE_CRYPTO_SYM_XFORM_AUTH)
-			return -EINVAL;
-	}
-
-	return 0;
-}
-
-static int
-onf_ipsec_sa_common_param_fill(struct roc_ie_onf_sa_ctl *ctl, uint8_t *salt,
-			       uint8_t *cipher_key, uint8_t *hmac_opad_ipad,
-			       struct rte_security_ipsec_xform *ipsec_xfrm,
-			       struct rte_crypto_sym_xform *crypto_xfrm)
-{
-	struct rte_crypto_sym_xform *auth_xfrm, *cipher_xfrm;
-	int rc, length, auth_key_len;
-	const uint8_t *key = NULL;
-	uint8_t ccm_flag = 0;
-
-	/* Set direction */
-	switch (ipsec_xfrm->direction) {
-	case RTE_SECURITY_IPSEC_SA_DIR_INGRESS:
-		ctl->direction = ROC_IE_SA_DIR_INBOUND;
-		auth_xfrm = crypto_xfrm;
-		cipher_xfrm = crypto_xfrm->next;
-		break;
-	case RTE_SECURITY_IPSEC_SA_DIR_EGRESS:
-		ctl->direction = ROC_IE_SA_DIR_OUTBOUND;
-		cipher_xfrm = crypto_xfrm;
-		auth_xfrm = crypto_xfrm->next;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	/* Set protocol - ESP vs AH */
-	switch (ipsec_xfrm->proto) {
-	case RTE_SECURITY_IPSEC_SA_PROTO_ESP:
-		ctl->ipsec_proto = ROC_IE_SA_PROTOCOL_ESP;
-		break;
-	case RTE_SECURITY_IPSEC_SA_PROTO_AH:
-		return -ENOTSUP;
-	default:
-		return -EINVAL;
-	}
-
-	/* Set mode - transport vs tunnel */
-	switch (ipsec_xfrm->mode) {
-	case RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT:
-		ctl->ipsec_mode = ROC_IE_SA_MODE_TRANSPORT;
-		break;
-	case RTE_SECURITY_IPSEC_SA_MODE_TUNNEL:
-		ctl->ipsec_mode = ROC_IE_SA_MODE_TUNNEL;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	/* Set encryption algorithm */
-	if (crypto_xfrm->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
-		length = crypto_xfrm->aead.key.length;
-
-		switch (crypto_xfrm->aead.algo) {
-		case RTE_CRYPTO_AEAD_AES_GCM:
-			ctl->enc_type = ROC_IE_ON_SA_ENC_AES_GCM;
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_NULL;
-			memcpy(salt, &ipsec_xfrm->salt, 4);
-			key = crypto_xfrm->aead.key.data;
-			break;
-		case RTE_CRYPTO_AEAD_AES_CCM:
-			ctl->enc_type = ROC_IE_ON_SA_ENC_AES_CCM;
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_NULL;
-			ccm_flag = 0x07 & ~ROC_CPT_AES_CCM_CTR_LEN;
-			*salt = ccm_flag;
-			memcpy(PLT_PTR_ADD(salt, 1), &ipsec_xfrm->salt, 3);
-			key = crypto_xfrm->aead.key.data;
-			break;
-		default:
-			return -ENOTSUP;
-		}
-
-	} else {
-		rc = ipsec_xfrm_verify(ipsec_xfrm, crypto_xfrm);
-		if (rc)
-			return rc;
-
-		switch (cipher_xfrm->cipher.algo) {
-		case RTE_CRYPTO_CIPHER_AES_CBC:
-			ctl->enc_type = ROC_IE_ON_SA_ENC_AES_CBC;
-			break;
-		case RTE_CRYPTO_CIPHER_AES_CTR:
-			ctl->enc_type = ROC_IE_ON_SA_ENC_AES_CTR;
-			break;
-		default:
-			return -ENOTSUP;
-		}
-
-		switch (auth_xfrm->auth.algo) {
-		case RTE_CRYPTO_AUTH_SHA1_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_SHA1;
-			break;
-		default:
-			return -ENOTSUP;
-		}
-		auth_key_len = auth_xfrm->auth.key.length;
-		if (auth_key_len < 20 || auth_key_len > 64)
-			return -ENOTSUP;
-
-		key = cipher_xfrm->cipher.key.data;
-		length = cipher_xfrm->cipher.key.length;
-
-		ipsec_hmac_opad_ipad_gen(auth_xfrm, hmac_opad_ipad);
-	}
-
-	switch (length) {
-	case ROC_CPT_AES128_KEY_LEN:
-		ctl->aes_key_len = ROC_IE_SA_AES_KEY_LEN_128;
-		break;
-	case ROC_CPT_AES192_KEY_LEN:
-		ctl->aes_key_len = ROC_IE_SA_AES_KEY_LEN_192;
-		break;
-	case ROC_CPT_AES256_KEY_LEN:
-		ctl->aes_key_len = ROC_IE_SA_AES_KEY_LEN_256;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	memcpy(cipher_key, key, length);
-
-	if (ipsec_xfrm->options.esn)
-		ctl->esn_en = 1;
-
-	ctl->spi = rte_cpu_to_be_32(ipsec_xfrm->spi);
-	return 0;
-}
-
-int
-cnxk_onf_ipsec_inb_sa_fill(struct roc_onf_ipsec_inb_sa *sa,
-			   struct rte_security_ipsec_xform *ipsec_xfrm,
-			   struct rte_crypto_sym_xform *crypto_xfrm)
-{
-	struct roc_ie_onf_sa_ctl *ctl = &sa->ctl;
-	int rc;
-
-	rc = onf_ipsec_sa_common_param_fill(ctl, sa->nonce, sa->cipher_key,
-					    sa->hmac_key, ipsec_xfrm,
-					    crypto_xfrm);
-	if (rc)
-		return rc;
-
-	rte_wmb();
-
-	/* Enable SA */
-	ctl->valid = 1;
-	return 0;
-}
-
-int
-cnxk_onf_ipsec_outb_sa_fill(struct roc_onf_ipsec_outb_sa *sa,
-			    struct rte_security_ipsec_xform *ipsec_xfrm,
-			    struct rte_crypto_sym_xform *crypto_xfrm)
-{
-	struct rte_security_ipsec_tunnel_param *tunnel = &ipsec_xfrm->tunnel;
-	struct roc_ie_onf_sa_ctl *ctl = &sa->ctl;
-	int rc;
-
-	/* Fill common params */
-	rc = onf_ipsec_sa_common_param_fill(ctl, sa->nonce, sa->cipher_key,
-					    sa->hmac_key, ipsec_xfrm,
-					    crypto_xfrm);
-	if (rc)
-		return rc;
-
-	if (ipsec_xfrm->mode != RTE_SECURITY_IPSEC_SA_MODE_TUNNEL)
-		goto skip_tunnel_info;
-
-	/* Tunnel header info */
-	switch (tunnel->type) {
-	case RTE_SECURITY_IPSEC_TUNNEL_IPV4:
-		memcpy(&sa->ip_src, &tunnel->ipv4.src_ip,
-		       sizeof(struct in_addr));
-		memcpy(&sa->ip_dst, &tunnel->ipv4.dst_ip,
-		       sizeof(struct in_addr));
-		break;
-	case RTE_SECURITY_IPSEC_TUNNEL_IPV6:
-		return -ENOTSUP;
-	default:
-		return -EINVAL;
-	}
-
-	/* Update udp encap ports */
-	if (ipsec_xfrm->options.udp_encap == 1) {
-		sa->udp_src = 4500;
-		sa->udp_dst = 4500;
-	}
-
-skip_tunnel_info:
-	rte_wmb();
-
-	/* Enable SA */
-	ctl->valid = 1;
-	return 0;
-}
-
-bool
-cnxk_onf_ipsec_inb_sa_valid(struct roc_onf_ipsec_inb_sa *sa)
-{
-	return !!sa->ctl.valid;
-}
-
-bool
-cnxk_onf_ipsec_outb_sa_valid(struct roc_onf_ipsec_outb_sa *sa)
-{
-	return !!sa->ctl.valid;
 }
 
 uint8_t
@@ -1048,11 +806,11 @@ on_ipsec_sa_ctl_set(struct rte_security_ipsec_xform *ipsec,
 	if (crypto_xform->type == RTE_CRYPTO_SYM_XFORM_AEAD) {
 		switch (crypto_xform->aead.algo) {
 		case RTE_CRYPTO_AEAD_AES_GCM:
-			ctl->enc_type = ROC_IE_ON_SA_ENC_AES_GCM;
+			ctl->enc_type = ROC_IE_SA_ENC_AES_GCM;
 			aes_key_len = crypto_xform->aead.key.length;
 			break;
 		case RTE_CRYPTO_AEAD_AES_CCM:
-			ctl->enc_type = ROC_IE_ON_SA_ENC_AES_CCM;
+			ctl->enc_type = ROC_IE_SA_ENC_AES_CCM;
 			aes_key_len = crypto_xform->aead.key.length;
 			break;
 		default:
@@ -1063,20 +821,20 @@ on_ipsec_sa_ctl_set(struct rte_security_ipsec_xform *ipsec,
 		if (cipher_xform != NULL) {
 			switch (cipher_xform->cipher.algo) {
 			case RTE_CRYPTO_CIPHER_NULL:
-				ctl->enc_type = ROC_IE_ON_SA_ENC_NULL;
+				ctl->enc_type = ROC_IE_SA_ENC_NULL;
 				break;
 			case RTE_CRYPTO_CIPHER_DES_CBC:
-				ctl->enc_type = ROC_IE_ON_SA_ENC_DES_CBC;
+				ctl->enc_type = ROC_IE_SA_ENC_DES_CBC;
 				break;
 			case RTE_CRYPTO_CIPHER_3DES_CBC:
-				ctl->enc_type = ROC_IE_ON_SA_ENC_3DES_CBC;
+				ctl->enc_type = ROC_IE_SA_ENC_3DES_CBC;
 				break;
 			case RTE_CRYPTO_CIPHER_AES_CBC:
-				ctl->enc_type = ROC_IE_ON_SA_ENC_AES_CBC;
+				ctl->enc_type = ROC_IE_SA_ENC_AES_CBC;
 				aes_key_len = cipher_xform->cipher.key.length;
 				break;
 			case RTE_CRYPTO_CIPHER_AES_CTR:
-				ctl->enc_type = ROC_IE_ON_SA_ENC_AES_CTR;
+				ctl->enc_type = ROC_IE_SA_ENC_AES_CTR;
 				aes_key_len = cipher_xform->cipher.key.length;
 				break;
 			default:
@@ -1087,32 +845,32 @@ on_ipsec_sa_ctl_set(struct rte_security_ipsec_xform *ipsec,
 
 		switch (auth_xform->auth.algo) {
 		case RTE_CRYPTO_AUTH_NULL:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_NULL;
+			ctl->auth_type = ROC_IE_SA_AUTH_NULL;
 			break;
 		case RTE_CRYPTO_AUTH_MD5_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_MD5;
+			ctl->auth_type = ROC_IE_SA_AUTH_MD5;
 			break;
 		case RTE_CRYPTO_AUTH_SHA1_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_SHA1;
+			ctl->auth_type = ROC_IE_SA_AUTH_SHA1;
 			break;
 		case RTE_CRYPTO_AUTH_SHA224_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_SHA2_224;
+			ctl->auth_type = ROC_IE_SA_AUTH_SHA2_224;
 			break;
 		case RTE_CRYPTO_AUTH_SHA256_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_SHA2_256;
+			ctl->auth_type = ROC_IE_SA_AUTH_SHA2_256;
 			break;
 		case RTE_CRYPTO_AUTH_SHA384_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_SHA2_384;
+			ctl->auth_type = ROC_IE_SA_AUTH_SHA2_384;
 			break;
 		case RTE_CRYPTO_AUTH_SHA512_HMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_SHA2_512;
+			ctl->auth_type = ROC_IE_SA_AUTH_SHA2_512;
 			break;
 		case RTE_CRYPTO_AUTH_AES_GMAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_AES_GMAC;
+			ctl->auth_type = ROC_IE_SA_AUTH_AES_GMAC;
 			aes_key_len = auth_xform->auth.key.length;
 			break;
 		case RTE_CRYPTO_AUTH_AES_XCBC_MAC:
-			ctl->auth_type = ROC_IE_ON_SA_AUTH_AES_XCBC_128;
+			ctl->auth_type = ROC_IE_SA_AUTH_AES_XCBC_128;
 			break;
 		default:
 			plt_err("Unsupported auth algorithm");
@@ -1121,12 +879,9 @@ on_ipsec_sa_ctl_set(struct rte_security_ipsec_xform *ipsec,
 	}
 
 	/* Set AES key length */
-	if (ctl->enc_type == ROC_IE_ON_SA_ENC_AES_CBC ||
-	    ctl->enc_type == ROC_IE_ON_SA_ENC_AES_CCM ||
-	    ctl->enc_type == ROC_IE_ON_SA_ENC_AES_CTR ||
-	    ctl->enc_type == ROC_IE_ON_SA_ENC_AES_GCM ||
-	    ctl->enc_type == ROC_IE_ON_SA_ENC_AES_CCM ||
-	    ctl->auth_type == ROC_IE_ON_SA_AUTH_AES_GMAC) {
+	if (ctl->enc_type == ROC_IE_SA_ENC_AES_CBC || ctl->enc_type == ROC_IE_SA_ENC_AES_CCM ||
+	    ctl->enc_type == ROC_IE_SA_ENC_AES_CTR || ctl->enc_type == ROC_IE_SA_ENC_AES_GCM ||
+	    ctl->enc_type == ROC_IE_SA_ENC_AES_CCM || ctl->auth_type == ROC_IE_SA_AUTH_AES_GMAC) {
 		switch (aes_key_len) {
 		case 16:
 			ctl->aes_key_len = ROC_IE_SA_AES_KEY_LEN_128;
@@ -1237,30 +992,26 @@ cnxk_on_ipsec_outb_sa_create(struct rte_security_ipsec_xform *ipsec,
 	if (ret)
 		return ret;
 
-	if (ctl->enc_type == ROC_IE_ON_SA_ENC_AES_GCM ||
-	    ctl->enc_type == ROC_IE_ON_SA_ENC_AES_CCM || ctl->auth_type == ROC_IE_ON_SA_AUTH_NULL ||
-	    ctl->auth_type == ROC_IE_ON_SA_AUTH_AES_GMAC) {
+	if (ctl->enc_type == ROC_IE_SA_ENC_AES_GCM || ctl->enc_type == ROC_IE_SA_ENC_AES_CCM ||
+	    ctl->auth_type == ROC_IE_SA_AUTH_NULL || ctl->auth_type == ROC_IE_SA_AUTH_AES_GMAC) {
 		template = &out_sa->aes_gcm.template;
 		ctx_len = offsetof(struct roc_ie_on_outb_sa, aes_gcm.template);
 	} else {
 		switch (ctl->auth_type) {
-		case ROC_IE_ON_SA_AUTH_MD5:
-		case ROC_IE_ON_SA_AUTH_SHA1:
+		case ROC_IE_SA_AUTH_MD5:
+		case ROC_IE_SA_AUTH_SHA1:
 			template = &out_sa->sha1.template;
-			ctx_len = offsetof(struct roc_ie_on_outb_sa,
-					   sha1.template);
+			ctx_len = offsetof(struct roc_ie_on_outb_sa, sha1.template);
 			break;
-		case ROC_IE_ON_SA_AUTH_SHA2_256:
-		case ROC_IE_ON_SA_AUTH_SHA2_384:
-		case ROC_IE_ON_SA_AUTH_SHA2_512:
+		case ROC_IE_SA_AUTH_SHA2_256:
+		case ROC_IE_SA_AUTH_SHA2_384:
+		case ROC_IE_SA_AUTH_SHA2_512:
 			template = &out_sa->sha2.template;
-			ctx_len = offsetof(struct roc_ie_on_outb_sa,
-					   sha2.template);
+			ctx_len = offsetof(struct roc_ie_on_outb_sa, sha2.template);
 			break;
-		case ROC_IE_ON_SA_AUTH_AES_XCBC_128:
+		case ROC_IE_SA_AUTH_AES_XCBC_128:
 			template = &out_sa->aes_xcbc.template;
-			ctx_len = offsetof(struct roc_ie_on_outb_sa,
-					   aes_xcbc.template);
+			ctx_len = offsetof(struct roc_ie_on_outb_sa, aes_xcbc.template);
 			break;
 		default:
 			plt_err("Unsupported auth algorithm");
@@ -1336,15 +1087,13 @@ cnxk_on_ipsec_outb_sa_create(struct rte_security_ipsec_xform *ipsec,
 			ip6->hop_limits = ipsec->tunnel.ipv6.hlimit ?
 						  ipsec->tunnel.ipv6.hlimit :
 						  0x40;
-			memcpy(&ip6->src_addr, &ipsec->tunnel.ipv6.src_addr,
-			       sizeof(struct in6_addr));
-			memcpy(&ip6->dst_addr, &ipsec->tunnel.ipv6.dst_addr,
-			       sizeof(struct in6_addr));
+			ip6->src_addr = ipsec->tunnel.ipv6.src_addr;
+			ip6->dst_addr = ipsec->tunnel.ipv6.dst_addr;
 		}
 	} else
 		ctx_len += sizeof(template->ip4);
 
-	ctx_len += RTE_ALIGN_CEIL(ctx_len, 8);
+	ctx_len = RTE_ALIGN_CEIL(ctx_len, 8);
 
 	if (crypto_xform->type != RTE_CRYPTO_SYM_XFORM_AEAD) {
 		uint8_t *hmac_opad_ipad = (uint8_t *)&out_sa->sha2;
@@ -1354,7 +1103,9 @@ cnxk_on_ipsec_outb_sa_create(struct rte_security_ipsec_xform *ipsec,
 
 			roc_aes_xcbc_key_derive(auth_key, hmac_opad_ipad);
 		} else if (auth_xform->auth.algo != RTE_CRYPTO_AUTH_NULL) {
-			ipsec_hmac_opad_ipad_gen(auth_xform, hmac_opad_ipad);
+			roc_se_hmac_opad_ipad_gen(
+				out_sa->common_sa.ctl.auth_type, auth_xform->auth.key.data,
+				auth_xform->auth.key.length, &hmac_opad_ipad[0], ROC_SE_IPSEC);
 		}
 	}
 
@@ -1376,6 +1127,11 @@ cnxk_on_ipsec_inb_sa_create(struct rte_security_ipsec_xform *ipsec,
 	if (ret)
 		return ret;
 
+	if (crypto_xform->type != RTE_CRYPTO_SYM_XFORM_AEAD &&
+	    crypto_xform->auth.algo == RTE_CRYPTO_AUTH_NULL && ipsec->replay_win_sz) {
+		plt_err("anti-replay can't be supported with integrity service disabled");
+		return -EINVAL;
+	}
 	if (crypto_xform->type == RTE_CRYPTO_SYM_XFORM_AEAD ||
 	    auth_xform->auth.algo == RTE_CRYPTO_AUTH_NULL ||
 	    auth_xform->auth.algo == RTE_CRYPTO_AUTH_AES_GMAC) {
@@ -1416,7 +1172,9 @@ cnxk_on_ipsec_inb_sa_create(struct rte_security_ipsec_xform *ipsec,
 
 			roc_aes_xcbc_key_derive(auth_key, hmac_opad_ipad);
 		} else if (auth_xform->auth.algo != RTE_CRYPTO_AUTH_NULL) {
-			ipsec_hmac_opad_ipad_gen(auth_xform, hmac_opad_ipad);
+			roc_se_hmac_opad_ipad_gen(
+				in_sa->common_sa.ctl.auth_type, auth_xform->auth.key.data,
+				auth_xform->auth.key.length, &hmac_opad_ipad[0], ROC_SE_IPSEC);
 		}
 	}
 

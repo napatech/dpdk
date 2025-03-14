@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2023 Intel Corporation
  */
 
 #ifndef _ICE_PARSER_RT_H_
@@ -48,6 +48,6 @@ void ice_parser_rt_pktbuf_set(struct ice_parser_rt *rt, const u8 *pkt_buf,
 			      int pkt_len);
 
 struct ice_parser_result;
-enum ice_status ice_parser_rt_execute(struct ice_parser_rt *rt,
-				      struct ice_parser_result *rslt);
+int ice_parser_rt_execute(struct ice_parser_rt *rt,
+			  struct ice_parser_result *rslt);
 #endif /* _ICE_PARSER_RT_H_ */

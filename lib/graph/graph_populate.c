@@ -9,6 +9,7 @@
 #include <rte_memzone.h>
 
 #include "graph_private.h"
+#include "graph_pcap_private.h"
 
 static size_t
 graph_fp_mem_calc_size(struct graph *graph)
@@ -38,6 +39,15 @@ graph_fp_mem_calc_size(struct graph *graph)
 		/* Pointer to next nodes(edges) */
 		sz += sizeof(struct rte_node *) * graph_node->node->nb_edges;
 	}
+	sz = RTE_ALIGN(sz, RTE_CACHE_LINE_SIZE);
+	graph->xstats_start = sz;
+	/* For 0..N node objects with xstats */
+	STAILQ_FOREACH(graph_node, &graph->node_list, next) {
+		if (graph_node->node->xstats == NULL)
+			continue;
+		sz = RTE_ALIGN(sz, RTE_CACHE_LINE_SIZE);
+		sz += sizeof(uint64_t) * graph_node->node->xstats->nb_xstats;
+	}
 
 	graph->mem_sz = sz;
 	return sz;
@@ -63,6 +73,7 @@ graph_header_popluate(struct graph *_graph)
 static void
 graph_nodes_populate(struct graph *_graph)
 {
+	rte_graph_off_t xstat_off = _graph->xstats_start;
 	rte_graph_off_t off = _graph->nodes_start;
 	struct rte_graph *graph = _graph->graph;
 	struct graph_node *graph_node;
@@ -75,7 +86,11 @@ graph_nodes_populate(struct graph *_graph)
 		memset(node, 0, sizeof(*node));
 		node->fence = RTE_GRAPH_FENCE;
 		node->off = off;
-		node->process = graph_node->node->process;
+		if (graph_pcap_is_enable()) {
+			node->process = graph_pcap_dispatch;
+			node->original_process = graph_node->node->process;
+		} else
+			node->process = graph_node->node->process;
 		memcpy(node->name, graph_node->node->name, RTE_GRAPH_NAMESIZE);
 		pid = graph_node->node->parent_id;
 		if (pid != RTE_NODE_ID_INVALID) { /* Cloned node */
@@ -84,6 +99,7 @@ graph_nodes_populate(struct graph *_graph)
 		}
 		node->id = graph_node->node->id;
 		node->parent_id = pid;
+		node->dispatch.lcore_id = graph_node->node->lcore_id;
 		nb_edges = graph_node->node->nb_edges;
 		node->nb_edges = nb_edges;
 		off += sizeof(struct rte_node);
@@ -92,6 +108,12 @@ graph_nodes_populate(struct graph *_graph)
 			node->nodes[count] = (struct rte_node *)&graph_node
 						     ->adjacency_list[count]
 						     ->node->name[0];
+
+		if (graph_node->node->xstats != NULL) {
+			node->xstat_off = xstat_off - off;
+			xstat_off += sizeof(uint64_t) * graph_node->node->xstats->nb_xstats;
+			xstat_off = RTE_ALIGN(xstat_off, RTE_CACHE_LINE_SIZE);
+		}
 
 		off += sizeof(struct rte_node *) * nb_edges;
 		off = RTE_ALIGN(off, RTE_CACHE_LINE_SIZE);
@@ -152,7 +174,7 @@ fail:
 }
 
 static int
-graph_src_nodes_populate(struct graph *_graph)
+graph_src_nodes_offset_populate(struct graph *_graph)
 {
 	struct rte_graph *graph = _graph->graph;
 	struct graph_node *graph_node;
@@ -183,9 +205,11 @@ graph_fp_mem_populate(struct graph *graph)
 	int rc;
 
 	graph_header_popluate(graph);
+	if (graph_pcap_is_enable())
+		graph_pcap_init(graph);
 	graph_nodes_populate(graph);
 	rc = graph_node_nexts_populate(graph);
-	rc |= graph_src_nodes_populate(graph);
+	rc |= graph_src_nodes_offset_populate(graph);
 
 	return rc;
 }
@@ -227,6 +251,9 @@ graph_nodes_mem_destroy(struct rte_graph *graph)
 int
 graph_fp_mem_destroy(struct graph *graph)
 {
+	if (graph_pcap_is_enable())
+		graph_pcap_exit(graph->graph);
+
 	graph_nodes_mem_destroy(graph->graph);
 	return rte_memzone_free(graph->mz);
 }

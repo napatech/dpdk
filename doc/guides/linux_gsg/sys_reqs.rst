@@ -27,12 +27,13 @@ Compilation of the DPDK
     The setup commands and installed packages needed on various systems may be different.
     For details on Linux distributions and the versions tested, please consult the DPDK Release Notes.
 
-*   General development tools including a supported C compiler such as gcc (version 4.9+) or clang (version 3.4+),
+*   General development tools including a C compiler supporting the C11 standard,
+    including standard atomics, for example: GCC (version 5.0+) or Clang (version 3.6+),
     and ``pkg-config`` or ``pkgconf`` to be used when building end-user binaries against DPDK.
 
     * For RHEL/Fedora systems these can be installed using ``dnf groupinstall "Development Tools"``
     * For Ubuntu/Debian systems these can be installed using ``apt install build-essential``
-    * For Alpine Linux, ``apk add alpine-sdk bsd-compat-headers libexecinfo-dev``
+    * For Alpine Linux, ``apk add alpine-sdk bsd-compat-headers``
 
 .. note::
 
@@ -43,7 +44,7 @@ Compilation of the DPDK
 
 *   Python 3.6 or later.
 
-*   Meson (version 0.53.2+) and ninja
+*   Meson (version 0.57+) and ninja
 
     * ``meson`` & ``ninja-build`` packages in most Linux distributions
     * If the packaged version is below the minimum version, the latest versions
@@ -105,7 +106,7 @@ System Software
 
 **Required:**
 
-*   Kernel version >= 4.14
+*   Kernel version >= 4.19
 
     The kernel version required is based on the oldest long term stable kernel available
     at kernel.org when the DPDK version is in development.

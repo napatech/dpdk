@@ -25,7 +25,14 @@
 #define CRYPTO_ADAPTER_MEM_NAME_LEN 32
 #define CRYPTO_ADAPTER_MAX_EV_ENQ_RETRIES 100
 
-#define CRYPTO_ADAPTER_OPS_BUFFER_SZ (BATCH_SIZE + BATCH_SIZE)
+/* MAX_OPS_IN_BUFFER contains size for  batch of dequeued events */
+#define MAX_OPS_IN_BUFFER BATCH_SIZE
+
+/* CRYPTO_ADAPTER_OPS_BUFFER_SZ to accommodate MAX_OPS_IN_BUFFER +
+ * additional space for one batch
+ */
+#define CRYPTO_ADAPTER_OPS_BUFFER_SZ (MAX_OPS_IN_BUFFER + BATCH_SIZE)
+
 #define CRYPTO_ADAPTER_BUFFER_SZ 1024
 
 /* Flush an instance's enqueue buffers every CRYPTO_ENQ_FLUSH_THRESHOLD
@@ -35,7 +42,7 @@
 
 #define ECA_ADAPTER_ARRAY "crypto_adapter_array"
 
-struct crypto_ops_circular_buffer {
+struct __rte_cache_aligned crypto_ops_circular_buffer {
 	/* index of head element in circular buffer */
 	uint16_t head;
 	/* index of tail element in circular buffer */
@@ -46,14 +53,14 @@ struct crypto_ops_circular_buffer {
 	uint16_t size;
 	/* Pointer to hold rte_crypto_ops for batching */
 	struct rte_crypto_op **op_buffer;
-} __rte_cache_aligned;
+};
 
-struct event_crypto_adapter {
+struct __rte_cache_aligned event_crypto_adapter {
 	/* Event device identifier */
 	uint8_t eventdev_id;
 	/* Event port identifier */
 	uint8_t event_port_id;
-	/* Store event device's implicit release capability */
+	/* Store event port's implicit release capability */
 	uint8_t implicit_release_disabled;
 	/* Flag to indicate backpressure at cryptodev
 	 * Stop further dequeuing events from eventdev
@@ -91,10 +98,10 @@ struct event_crypto_adapter {
 	uint16_t nb_qps;
 	/* Adapter mode */
 	enum rte_event_crypto_adapter_mode mode;
-} __rte_cache_aligned;
+};
 
 /* Per crypto device information */
-struct crypto_device_info {
+struct __rte_cache_aligned crypto_device_info {
 	/* Pointer to cryptodev */
 	struct rte_cryptodev *dev;
 	/* Pointer to queue pair info */
@@ -111,25 +118,47 @@ struct crypto_device_info {
 	 * be invoked if not already invoked
 	 */
 	uint16_t num_qpairs;
-} __rte_cache_aligned;
+};
 
 /* Per queue pair information */
-struct crypto_queue_pair_info {
+struct __rte_cache_aligned crypto_queue_pair_info {
 	/* Set to indicate queue pair is enabled */
 	bool qp_enabled;
 	/* Circular buffer for batching crypto ops to cdev */
 	struct crypto_ops_circular_buffer cbuf;
-} __rte_cache_aligned;
+};
 
 static struct event_crypto_adapter **event_crypto_adapter;
 
 /* Macros to check for valid adapter */
 #define EVENT_CRYPTO_ADAPTER_ID_VALID_OR_ERR_RET(id, retval) do { \
 	if (!eca_valid_id(id)) { \
-		RTE_EDEV_LOG_ERR("Invalid crypto adapter id = %d\n", id); \
+		RTE_EDEV_LOG_ERR("Invalid crypto adapter id = %d", id); \
 		return retval; \
 	} \
 } while (0)
+
+#define ECA_DYNFIELD_NAME "eca_ev_opaque_data"
+/* Device-specific metadata field type */
+typedef uint8_t eca_dynfield_t;
+
+/* mbuf dynamic field offset for device-specific metadata */
+int eca_dynfield_offset = -1;
+
+static int
+eca_dynfield_register(void)
+{
+	static const struct rte_mbuf_dynfield eca_dynfield_desc = {
+		.name = ECA_DYNFIELD_NAME,
+		.size = sizeof(eca_dynfield_t),
+		.align = alignof(eca_dynfield_t),
+		.flags = 0,
+	};
+
+	eca_dynfield_offset =
+		rte_mbuf_dynfield_register(&eca_dynfield_desc);
+	return eca_dynfield_offset;
+}
 
 static inline int
 eca_valid_id(uint8_t id)
@@ -188,7 +217,8 @@ eca_circular_buffer_batch_ready(struct crypto_ops_circular_buffer *bufp)
 static inline bool
 eca_circular_buffer_space_for_batch(struct crypto_ops_circular_buffer *bufp)
 {
-	return (bufp->size - bufp->count) >= BATCH_SIZE;
+	/* circular buffer can have atmost MAX_OPS_IN_BUFFER */
+	return (bufp->size - bufp->count) >= MAX_OPS_IN_BUFFER;
 }
 
 static inline void
@@ -237,12 +267,29 @@ eca_circular_buffer_flush_to_cdev(struct crypto_ops_circular_buffer *bufp,
 	struct rte_crypto_op **ops = bufp->op_buffer;
 
 	if (*tailp > *headp)
+		/* Flush ops from head pointer to (tail - head) OPs */
 		n = *tailp - *headp;
 	else if (*tailp < *headp)
+		/* Circ buffer - Rollover.
+		 * Flush OPs from head to max size of buffer.
+		 * Rest of the OPs will be flushed in next iteration.
+		 */
 		n = bufp->size - *headp;
-	else {
-		*nb_ops_flushed = 0;
-		return 0;  /* buffer empty */
+	else { /* head == tail case */
+		/* when head == tail,
+		 * circ buff is either full(tail pointer roll over) or empty
+		 */
+		if (bufp->count != 0) {
+			/* Circ buffer - FULL.
+			 * Flush OPs from head to max size of buffer.
+			 * Rest of the OPS will be flushed in next iteration.
+			 */
+			n = bufp->size - *headp;
+		} else {
+			/* Circ buffer - Empty */
+			*nb_ops_flushed = 0;
+			return 0;
+		}
 	}
 
 	*nb_ops_flushed = rte_cryptodev_enqueue_burst(cdev_id, qp_id,
@@ -287,9 +334,12 @@ eca_default_config_cb(uint8_t id, uint8_t dev_id,
 		rte_event_dev_stop(dev_id);
 	port_id = dev_conf.nb_event_ports;
 	dev_conf.nb_event_ports += 1;
+	if (port_conf->event_port_cfg & RTE_EVENT_PORT_CFG_SINGLE_LINK)
+		dev_conf.nb_single_link_event_port_queues += 1;
+
 	ret = rte_event_dev_configure(dev_id, &dev_conf);
 	if (ret) {
-		RTE_EDEV_LOG_ERR("failed to configure event dev %u\n", dev_id);
+		RTE_EDEV_LOG_ERR("failed to configure event dev %u", dev_id);
 		if (started) {
 			if (rte_event_dev_start(dev_id))
 				return -EIO;
@@ -299,7 +349,7 @@ eca_default_config_cb(uint8_t id, uint8_t dev_id,
 
 	ret = rte_event_port_setup(dev_id, port_id, port_conf);
 	if (ret) {
-		RTE_EDEV_LOG_ERR("failed to setup event port %u\n", port_id);
+		RTE_EDEV_LOG_ERR("failed to setup event port %u", port_id);
 		return ret;
 	}
 
@@ -320,7 +370,6 @@ rte_event_crypto_adapter_create_ext(uint8_t id, uint8_t dev_id,
 {
 	struct event_crypto_adapter *adapter;
 	char mem_name[CRYPTO_ADAPTER_NAME_LEN];
-	struct rte_event_dev_info dev_info;
 	int socket_id;
 	uint8_t i;
 	int ret;
@@ -361,17 +410,6 @@ rte_event_crypto_adapter_create_ext(uint8_t id, uint8_t dev_id,
 		return -ENOMEM;
 	}
 
-	ret = rte_event_dev_info_get(dev_id, &dev_info);
-	if (ret < 0) {
-		RTE_EDEV_LOG_ERR("Failed to get info for eventdev %d: %s!",
-				 dev_id, dev_info.driver_name);
-		eca_circular_buffer_free(&adapter->ebuf);
-		rte_free(adapter);
-		return ret;
-	}
-
-	adapter->implicit_release_disabled = (dev_info.event_dev_cap &
-			RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE);
 	adapter->eventdev_id = dev_id;
 	adapter->socket_id = socket_id;
 	adapter->conf_cb = conf_cb;
@@ -383,7 +421,7 @@ rte_event_crypto_adapter_create_ext(uint8_t id, uint8_t dev_id,
 					sizeof(struct crypto_device_info), 0,
 					socket_id);
 	if (adapter->cdevs == NULL) {
-		RTE_EDEV_LOG_ERR("Failed to get mem for crypto devices\n");
+		RTE_EDEV_LOG_ERR("Failed to get mem for crypto devices");
 		eca_circular_buffer_free(&adapter->ebuf);
 		rte_free(adapter);
 		return -ENOMEM;
@@ -395,8 +433,6 @@ rte_event_crypto_adapter_create_ext(uint8_t id, uint8_t dev_id,
 
 	event_crypto_adapter[id] = adapter;
 
-	rte_eventdev_trace_crypto_adapter_create(id, dev_id, adapter, conf_arg,
-		mode);
 	return 0;
 }
 
@@ -423,6 +459,8 @@ rte_event_crypto_adapter_create(uint8_t id, uint8_t dev_id,
 						  pc);
 	if (ret)
 		rte_free(pc);
+
+	rte_eventdev_trace_crypto_adapter_create(id, dev_id, port_config, mode,	ret);
 
 	return ret;
 }
@@ -475,6 +513,25 @@ eca_enq_to_cryptodev(struct event_crypto_adapter *adapter, struct rte_event *ev,
 		crypto_op = ev[i].event_ptr;
 		if (crypto_op == NULL)
 			continue;
+
+		/** "struct rte_event::impl_opaque" field passed on from
+		 *  eventdev PMD could have different value per event.
+		 *  For session-based crypto operations retain
+		 *  "struct rte_event::impl_opaque" into mbuf dynamic field and
+		 *  restore it back after copying event information from
+		 *  session event metadata.
+		 *  For session-less, each crypto operation carries event
+		 *  metadata and retains "struct rte_event:impl_opaque"
+		 *  information to be passed back to eventdev PMD.
+		 */
+		if (crypto_op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
+			struct rte_mbuf *mbuf = crypto_op->sym->m_src;
+
+			*RTE_MBUF_DYNFIELD(mbuf,
+					eca_dynfield_offset,
+					eca_dynfield_t *) = ev[i].impl_opaque;
+		}
+
 		m_data = rte_cryptodev_session_event_mdata_get(crypto_op);
 		if (m_data == NULL) {
 			rte_pktmbuf_free(crypto_op->sym->m_src);
@@ -497,6 +554,9 @@ eca_enq_to_cryptodev(struct event_crypto_adapter *adapter, struct rte_event *ev,
 								cdev_id,
 								qp_id,
 								&nb_enqueued);
+			stats->crypto_enq_count += nb_enqueued;
+			n += nb_enqueued;
+
 			/**
 			 * If some crypto ops failed to flush to cdev and
 			 * space for another batch is not available, stop
@@ -507,9 +567,6 @@ eca_enq_to_cryptodev(struct event_crypto_adapter *adapter, struct rte_event *ev,
 							&qp_info->cbuf)))
 				adapter->stop_enq_to_cryptodev = true;
 		}
-
-		stats->crypto_enq_count += nb_enqueued;
-		n += nb_enqueued;
 	}
 
 	return n;
@@ -585,14 +642,15 @@ eca_crypto_adapter_enq_run(struct event_crypto_adapter *adapter,
 	if (adapter->mode == RTE_EVENT_CRYPTO_ADAPTER_OP_NEW)
 		return 0;
 
-	if (unlikely(adapter->stop_enq_to_cryptodev)) {
-		nb_enqueued += eca_crypto_enq_flush(adapter);
-
-		if (unlikely(adapter->stop_enq_to_cryptodev))
-			goto skip_event_dequeue_burst;
-	}
-
 	for (nb_enq = 0; nb_enq < max_enq; nb_enq += n) {
+
+		if (unlikely(adapter->stop_enq_to_cryptodev)) {
+			nb_enqueued += eca_crypto_enq_flush(adapter);
+
+			if (unlikely(adapter->stop_enq_to_cryptodev))
+				break;
+		}
+
 		stats->event_poll_count++;
 		n = rte_event_dequeue_burst(event_dev_id,
 					    event_port_id, ev, BATCH_SIZE, 0);
@@ -602,8 +660,6 @@ eca_crypto_adapter_enq_run(struct event_crypto_adapter *adapter,
 
 		nb_enqueued += eca_enq_to_cryptodev(adapter, ev, n);
 	}
-
-skip_event_dequeue_burst:
 
 	if ((++adapter->transmit_loop_count &
 		(CRYPTO_ENQ_FLUSH_THRESHOLD - 1)) == 0) {
@@ -642,6 +698,21 @@ eca_ops_enqueue_burst(struct event_crypto_adapter *adapter,
 
 		rte_memcpy(ev, &m_data->response_info, sizeof(*ev));
 		ev->event_ptr = ops[i];
+
+		/** Restore "struct rte_event::impl_opaque" from mbuf
+		 *  dynamic field for session based crypto operation.
+		 *  For session-less, each crypto operations carries event
+		 *  metadata and retains "struct rte_event::impl_opaque"
+		 *  information to be passed back to eventdev PMD.
+		 */
+		if (ops[i]->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
+			struct rte_mbuf *mbuf = ops[i]->sym->m_src;
+
+			ev->impl_opaque = *RTE_MBUF_DYNFIELD(mbuf,
+							eca_dynfield_offset,
+							eca_dynfield_t *);
+		}
+
 		ev->event_type = RTE_EVENT_TYPE_CRYPTODEV;
 		if (adapter->implicit_release_disabled)
 			ev->op = RTE_EVENT_OP_FORWARD;
@@ -681,7 +752,7 @@ eca_circular_buffer_flush_to_evdev(struct event_crypto_adapter *adapter,
 	else
 		return 0;  /* buffer empty */
 
-	nb_ops_flushed =  eca_ops_enqueue_burst(adapter, ops, n);
+	nb_ops_flushed =  eca_ops_enqueue_burst(adapter, &ops[*headp], n);
 	bufp->count -= nb_ops_flushed;
 	if (!bufp->count) {
 		*headp = 0;
@@ -766,7 +837,7 @@ eca_crypto_adapter_deq_run(struct event_crypto_adapter *adapter,
 				for (i = nb_enqueued; i < n; i++)
 					eca_circular_buffer_add(
 						&adapter->ebuf,
-						ops[nb_enqueued]);
+						ops[i]);
 
 check:
 				nb_deq += n;
@@ -837,6 +908,7 @@ eca_init_service(struct event_crypto_adapter *adapter, uint8_t id)
 	struct rte_event_crypto_adapter_conf adapter_conf;
 	struct rte_service_spec service;
 	int ret;
+	uint32_t impl_rel;
 
 	if (adapter->service_inited)
 		return 0;
@@ -866,6 +938,31 @@ eca_init_service(struct event_crypto_adapter *adapter, uint8_t id)
 
 	adapter->max_nb = adapter_conf.max_nb;
 	adapter->event_port_id = adapter_conf.event_port_id;
+
+	if (rte_event_port_attr_get(adapter->eventdev_id,
+				adapter->event_port_id,
+				RTE_EVENT_PORT_ATTR_IMPLICIT_RELEASE_DISABLE,
+				&impl_rel)) {
+		RTE_EDEV_LOG_ERR("Failed to get port info for eventdev %" PRId32,
+				 adapter->eventdev_id);
+		eca_circular_buffer_free(&adapter->ebuf);
+		rte_free(adapter);
+		return -EINVAL;
+	}
+
+	adapter->implicit_release_disabled = (uint8_t)impl_rel;
+
+	/** Register for mbuf dyn field to store/restore
+	 *  "struct rte_event::impl_opaque"
+	 */
+	eca_dynfield_offset = eca_dynfield_register();
+	if (eca_dynfield_offset  < 0) {
+		RTE_EDEV_LOG_ERR("Failed to register eca mbuf dyn field");
+		eca_circular_buffer_free(&adapter->ebuf);
+		rte_free(adapter);
+		return -EINVAL;
+	}
+
 	adapter->service_inited = 1;
 
 	return ret;
@@ -1289,6 +1386,12 @@ rte_event_crypto_adapter_stats_get(uint8_t id,
 	stats->crypto_deq_count += dev_stats_sum.crypto_deq_count;
 	stats->event_enq_count += dev_stats_sum.event_enq_count;
 
+	rte_eventdev_trace_crypto_adapter_stats_get(id, stats,
+		stats->event_poll_count, stats->event_deq_count,
+		stats->crypto_enq_count, stats->crypto_enq_fail,
+		stats->crypto_deq_count, stats->event_enq_count,
+		stats->event_enq_retry_count, stats->event_enq_fail_count);
+
 	return 0;
 }
 
@@ -1299,6 +1402,8 @@ rte_event_crypto_adapter_stats_reset(uint8_t id)
 	struct crypto_device_info *dev_info;
 	struct rte_eventdev *dev;
 	uint32_t i;
+
+	rte_eventdev_trace_crypto_adapter_stats_reset(id);
 
 	if (eca_memzone_lookup())
 		return -ENOMEM;
@@ -1324,6 +1429,107 @@ rte_event_crypto_adapter_stats_reset(uint8_t id)
 }
 
 int
+rte_event_crypto_adapter_runtime_params_init(
+		struct rte_event_crypto_adapter_runtime_params *params)
+{
+	if (params == NULL)
+		return -EINVAL;
+
+	memset(params, 0, sizeof(*params));
+	params->max_nb = DEFAULT_MAX_NB;
+
+	return 0;
+}
+
+static int
+crypto_adapter_cap_check(struct event_crypto_adapter *adapter)
+{
+	int ret;
+	uint32_t caps;
+
+	if (!adapter->nb_qps)
+		return -EINVAL;
+	ret = rte_event_crypto_adapter_caps_get(adapter->eventdev_id,
+						adapter->next_cdev_id,
+						&caps);
+	if (ret) {
+		RTE_EDEV_LOG_ERR("Failed to get adapter caps dev %" PRIu8
+			" cdev %" PRIu8, adapter->eventdev_id,
+			adapter->next_cdev_id);
+		return ret;
+	}
+
+	if ((caps & RTE_EVENT_CRYPTO_ADAPTER_CAP_INTERNAL_PORT_OP_FWD) ||
+	    (caps & RTE_EVENT_CRYPTO_ADAPTER_CAP_INTERNAL_PORT_OP_NEW))
+		return -ENOTSUP;
+
+	return 0;
+}
+
+int
+rte_event_crypto_adapter_runtime_params_set(uint8_t id,
+		struct rte_event_crypto_adapter_runtime_params *params)
+{
+	struct event_crypto_adapter *adapter;
+	int ret;
+
+	if (eca_memzone_lookup())
+		return -ENOMEM;
+
+	EVENT_CRYPTO_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
+
+	if (params == NULL) {
+		RTE_EDEV_LOG_ERR("params pointer is NULL");
+		return -EINVAL;
+	}
+
+	adapter = eca_id_to_adapter(id);
+	if (adapter == NULL)
+		return -EINVAL;
+
+	ret = crypto_adapter_cap_check(adapter);
+	if (ret)
+		return ret;
+
+	rte_spinlock_lock(&adapter->lock);
+	adapter->max_nb = params->max_nb;
+	rte_spinlock_unlock(&adapter->lock);
+
+	return 0;
+}
+
+int
+rte_event_crypto_adapter_runtime_params_get(uint8_t id,
+		struct rte_event_crypto_adapter_runtime_params *params)
+{
+	struct event_crypto_adapter *adapter;
+	int ret;
+
+	if (eca_memzone_lookup())
+		return -ENOMEM;
+
+
+	EVENT_CRYPTO_ADAPTER_ID_VALID_OR_ERR_RET(id, -EINVAL);
+
+	if (params == NULL) {
+		RTE_EDEV_LOG_ERR("params pointer is NULL");
+		return -EINVAL;
+	}
+
+	adapter = eca_id_to_adapter(id);
+	if (adapter == NULL)
+		return -EINVAL;
+
+	ret = crypto_adapter_cap_check(adapter);
+	if (ret)
+		return ret;
+
+	params->max_nb = adapter->max_nb;
+
+	return 0;
+}
+
+int
 rte_event_crypto_adapter_service_id_get(uint8_t id, uint32_t *service_id)
 {
 	struct event_crypto_adapter *adapter;
@@ -1336,6 +1542,8 @@ rte_event_crypto_adapter_service_id_get(uint8_t id, uint32_t *service_id)
 
 	if (adapter->service_inited)
 		*service_id = adapter->service_id;
+
+	rte_eventdev_trace_crypto_adapter_service_id_get(id, *service_id);
 
 	return adapter->service_inited ? 0 : -ESRCH;
 }
@@ -1353,6 +1561,8 @@ rte_event_crypto_adapter_event_port_get(uint8_t id, uint8_t *event_port_id)
 
 	*event_port_id = adapter->event_port_id;
 
+	rte_eventdev_trace_crypto_adapter_event_port_get(id, *event_port_id);
+
 	return 0;
 }
 
@@ -1365,6 +1575,8 @@ rte_event_crypto_adapter_vector_limits_get(
 	struct rte_eventdev *dev;
 	uint32_t cap;
 	int ret;
+
+	rte_eventdev_trace_crypto_adapter_vector_limits_get(dev_id, cdev_id, limits);
 
 	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
 

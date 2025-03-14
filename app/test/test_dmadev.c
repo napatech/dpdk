@@ -18,10 +18,41 @@
 
 #define ERR_RETURN(...) do { print_err(__func__, __LINE__, __VA_ARGS__); return -1; } while (0)
 
-#define COPY_LEN 1024
+#define TEST_NAME_MAX_LEN 80
+#define TEST_RINGSIZE 512
+#define COPY_LEN 2048
 
+static struct rte_dma_info info;
 static struct rte_mempool *pool;
+static bool check_err_stats;
+static int16_t test_dev_id;
 static uint16_t id_count;
+static uint16_t vchan;
+
+enum {
+	TEST_PARAM_REMOTE_ADDR = 0,
+	TEST_PARAM_MAX,
+};
+
+static const char * const dma_test_param[] = {
+	[TEST_PARAM_REMOTE_ADDR] = "remote_addr",
+};
+
+static uint64_t env_test_param[TEST_PARAM_MAX];
+
+enum {
+	TEST_M2D_AUTO_FREE = 0,
+	TEST_MAX,
+};
+
+struct dma_add_test {
+	const char *name;
+	bool enabled;
+};
+
+struct dma_add_test dma_add_test[] = {
+	[TEST_M2D_AUTO_FREE] = {.name = "m2d_auto_free", .enabled = false},
+};
 
 static void
 __rte_format_printf(3, 4)
@@ -35,12 +66,27 @@ print_err(const char *func, int lineno, const char *format, ...)
 	va_end(ap);
 }
 
+struct runtest_param {
+	const char name[TEST_NAME_MAX_LEN];
+	int (*test_fn)(int16_t dev_id, uint16_t vchan);
+	int iterations;
+};
+
 static int
-runtest(const char *printable, int (*test_fn)(int16_t dev_id, uint16_t vchan), int iterations,
-		int16_t dev_id, uint16_t vchan, bool check_err_stats)
+runtest(const void *args)
 {
+	int (*test_fn)(int16_t dev_id, uint16_t vchan);
+	const struct runtest_param *param = args;
 	struct rte_dma_stats stats;
+	const char *printable;
+	int iterations;
+	int16_t dev_id;
 	int i;
+
+	printable = param->name;
+	iterations = param->iterations;
+	test_fn = param->test_fn;
+	dev_id = test_dev_id;
 
 	rte_dma_stats_reset(dev_id, vchan);
 	printf("DMA Dev %d: Running %s Tests %s\n", dev_id, printable,
@@ -175,77 +221,85 @@ do_multi_copies(int16_t dev_id, uint16_t vchan,
 }
 
 static int
+test_single_copy(int16_t dev_id, uint16_t vchan)
+{
+	uint16_t i;
+	uint16_t id;
+	enum rte_dma_status_code status;
+	struct rte_mbuf *src, *dst;
+	char *src_data, *dst_data;
+
+	src = rte_pktmbuf_alloc(pool);
+	dst = rte_pktmbuf_alloc(pool);
+	src_data = rte_pktmbuf_mtod(src, char *);
+	dst_data = rte_pktmbuf_mtod(dst, char *);
+
+	for (i = 0; i < COPY_LEN; i++)
+		src_data[i] = rte_rand() & 0xFF;
+
+	id = rte_dma_copy(dev_id, vchan, rte_pktmbuf_iova(src), rte_pktmbuf_iova(dst),
+			COPY_LEN, RTE_DMA_OP_FLAG_SUBMIT);
+	if (id != id_count)
+		ERR_RETURN("Error with rte_dma_copy, got %u, expected %u\n",
+				id, id_count);
+
+	/* give time for copy to finish, then check it was done */
+	await_hw(dev_id, vchan);
+
+	for (i = 0; i < COPY_LEN; i++)
+		if (dst_data[i] != src_data[i])
+			ERR_RETURN("Data mismatch at char %u [Got %02x not %02x]\n", i,
+					dst_data[i], src_data[i]);
+
+	/* now check completion works */
+	id = ~id;
+	if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 1)
+		ERR_RETURN("Error with rte_dma_completed\n");
+
+	if (id != id_count)
+		ERR_RETURN("Error:incorrect job id received, %u [expected %u]\n",
+				id, id_count);
+
+	/* check for completed and id when no job done */
+	id = ~id;
+	if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 0)
+		ERR_RETURN("Error with rte_dma_completed when no job done\n");
+	if (id != id_count)
+		ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
+				id, id_count);
+
+	/* check for completed_status and id when no job done */
+	id = ~id;
+	if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
+		ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
+	if (id != id_count)
+		ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
+				id, id_count);
+
+	rte_pktmbuf_free(src);
+	rte_pktmbuf_free(dst);
+
+	/* now check completion returns nothing more */
+	if (rte_dma_completed(dev_id, 0, 1, NULL, NULL) != 0)
+		ERR_RETURN("Error with rte_dma_completed in empty check\n");
+
+	id_count++;
+
+	return 0;
+}
+
+static int
 test_enqueue_copies(int16_t dev_id, uint16_t vchan)
 {
-	enum rte_dma_status_code status;
 	unsigned int i;
-	uint16_t id;
 
 	/* test doing a single copy */
-	do {
-		struct rte_mbuf *src, *dst;
-		char *src_data, *dst_data;
-
-		src = rte_pktmbuf_alloc(pool);
-		dst = rte_pktmbuf_alloc(pool);
-		src_data = rte_pktmbuf_mtod(src, char *);
-		dst_data = rte_pktmbuf_mtod(dst, char *);
-
-		for (i = 0; i < COPY_LEN; i++)
-			src_data[i] = rte_rand() & 0xFF;
-
-		id = rte_dma_copy(dev_id, vchan, rte_pktmbuf_iova(src), rte_pktmbuf_iova(dst),
-				COPY_LEN, RTE_DMA_OP_FLAG_SUBMIT);
-		if (id != id_count)
-			ERR_RETURN("Error with rte_dma_copy, got %u, expected %u\n",
-					id, id_count);
-
-		/* give time for copy to finish, then check it was done */
-		await_hw(dev_id, vchan);
-
-		for (i = 0; i < COPY_LEN; i++)
-			if (dst_data[i] != src_data[i])
-				ERR_RETURN("Data mismatch at char %u [Got %02x not %02x]\n", i,
-						dst_data[i], src_data[i]);
-
-		/* now check completion works */
-		id = ~id;
-		if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 1)
-			ERR_RETURN("Error with rte_dma_completed\n");
-
-		if (id != id_count)
-			ERR_RETURN("Error:incorrect job id received, %u [expected %u]\n",
-					id, id_count);
-
-		/* check for completed and id when no job done */
-		id = ~id;
-		if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 0)
-			ERR_RETURN("Error with rte_dma_completed when no job done\n");
-		if (id != id_count)
-			ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
-					id, id_count);
-
-		/* check for completed_status and id when no job done */
-		id = ~id;
-		if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
-			ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
-		if (id != id_count)
-			ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
-					id, id_count);
-
-		rte_pktmbuf_free(src);
-		rte_pktmbuf_free(dst);
-
-		/* now check completion returns nothing more */
-		if (rte_dma_completed(dev_id, 0, 1, NULL, NULL) != 0)
-			ERR_RETURN("Error with rte_dma_completed in empty check\n");
-
-		id_count++;
-
-	} while (0);
+	if (test_single_copy(dev_id, vchan) < 0)
+		return -1;
 
 	/* test doing a multiple single copies */
 	do {
+		uint16_t id;
 		const uint16_t max_ops = 4;
 		struct rte_mbuf *src, *dst;
 		char *src_data, *dst_data;
@@ -294,6 +348,167 @@ test_enqueue_copies(int16_t dev_id, uint16_t vchan)
 			|| do_multi_copies(dev_id, vchan, 0, 1, 0)
 			/* test using completed_status in place of regular completed API */
 			|| do_multi_copies(dev_id, vchan, 0, 0, 1);
+}
+
+static int
+test_stop_start(int16_t dev_id, uint16_t vchan)
+{
+	/* device is already started on input, should be (re)started on output */
+
+	uint16_t id = 0;
+	enum rte_dma_status_code status = RTE_DMA_STATUS_SUCCESSFUL;
+
+	/* - test stopping a device works ok,
+	 * - then do a start-stop without doing a copy
+	 * - finally restart the device
+	 * checking for errors at each stage, and validating we can still copy at the end.
+	 */
+	if (rte_dma_stop(dev_id) < 0)
+		ERR_RETURN("Error stopping device\n");
+
+	if (rte_dma_start(dev_id) < 0)
+		ERR_RETURN("Error restarting device\n");
+	if (rte_dma_stop(dev_id) < 0)
+		ERR_RETURN("Error stopping device after restart (no jobs executed)\n");
+
+	if (rte_dma_start(dev_id) < 0)
+		ERR_RETURN("Error restarting device after multiple stop-starts\n");
+
+	/* before doing a copy, we need to know what the next id will be it should
+	 * either be:
+	 * - the last completed job before start if driver does not reset id on stop
+	 * - or -1 i.e. next job is 0, if driver does reset the job ids on stop
+	 */
+	if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
+		ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
+	id += 1; /* id_count is next job id */
+	if (id != id_count && id != 0)
+		ERR_RETURN("Unexpected next id from device after stop-start. Got %u, expected %u or 0\n",
+				id, id_count);
+
+	id_count = id;
+	if (test_single_copy(dev_id, vchan) < 0)
+		ERR_RETURN("Error performing copy after device restart\n");
+	return 0;
+}
+
+static int
+test_enqueue_sg_copies(int16_t dev_id, uint16_t vchan)
+{
+	unsigned int src_len, dst_len, n_sge, len, i, j, k;
+	char orig_src[COPY_LEN], orig_dst[COPY_LEN];
+	struct rte_dma_info info = { 0 };
+	enum rte_dma_status_code status;
+	uint16_t id, n_src, n_dst;
+
+	if (rte_dma_info_get(dev_id, &info) < 0)
+		ERR_RETURN("Failed to get dev info");
+
+	if (info.max_sges < 2)
+		ERR_RETURN("Test needs minimum 2 SG pointers");
+
+	n_sge = info.max_sges;
+
+	for (n_src = 1; n_src <= n_sge; n_src++) {
+		for (n_dst = 1; n_dst <= n_sge; n_dst++) {
+			/* Normalize SG buffer lengths */
+			len = COPY_LEN;
+			len -= (len % (n_src * n_dst));
+			dst_len = len / n_dst;
+			src_len = len / n_src;
+
+			struct rte_dma_sge sg_src[n_sge], sg_dst[n_sge];
+			struct rte_mbuf *src[n_sge], *dst[n_sge];
+			char *src_data[n_sge], *dst_data[n_sge];
+
+			for (i = 0 ; i < len; i++)
+				orig_src[i] = rte_rand() & 0xFF;
+
+			memset(orig_dst, 0, len);
+
+			for (i = 0; i < n_src; i++) {
+				src[i] = rte_pktmbuf_alloc(pool);
+				RTE_ASSERT(src[i] != NULL);
+				sg_src[i].addr = rte_pktmbuf_iova(src[i]);
+				sg_src[i].length = src_len;
+				src_data[i] = rte_pktmbuf_mtod(src[i], char *);
+			}
+
+			for (k = 0; k < n_dst; k++) {
+				dst[k] = rte_pktmbuf_alloc(pool);
+				RTE_ASSERT(dst[k] != NULL);
+				sg_dst[k].addr = rte_pktmbuf_iova(dst[k]);
+				sg_dst[k].length = dst_len;
+				dst_data[k] = rte_pktmbuf_mtod(dst[k], char *);
+			}
+
+			for (i = 0; i < n_src; i++) {
+				for (j = 0; j < src_len; j++)
+					src_data[i][j] = orig_src[i * src_len + j];
+			}
+
+			for (k = 0; k < n_dst; k++)
+				memset(dst_data[k], 0, dst_len);
+
+			printf("\tsrc segs: %2d [seg len: %4d] - dst segs: %2d [seg len : %4d]\n",
+				n_src, src_len, n_dst, dst_len);
+
+			id = rte_dma_copy_sg(dev_id, vchan, sg_src, sg_dst, n_src, n_dst,
+					     RTE_DMA_OP_FLAG_SUBMIT);
+
+			if (id != id_count)
+				ERR_RETURN("Error with rte_dma_copy_sg, got %u, expected %u\n",
+					id, id_count);
+
+			/* Give time for copy to finish, then check it was done */
+			await_hw(dev_id, vchan);
+
+			for (k = 0; k < n_dst; k++)
+				memcpy((&orig_dst[0] + k * dst_len), dst_data[k], dst_len);
+
+			if (memcmp(orig_src, orig_dst, COPY_LEN))
+				ERR_RETURN("Data mismatch");
+
+			/* Verify completion */
+			id = ~id;
+			if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 1)
+				ERR_RETURN("Error with rte_dma_completed\n");
+
+			/* Verify expected index(id_count) */
+			if (id != id_count)
+				ERR_RETURN("Error:incorrect job id received, %u [expected %u]\n",
+						id, id_count);
+
+			/* Check for completed and id when no job done */
+			id = ~id;
+			if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 0)
+				ERR_RETURN("Error with rte_dma_completed when no job done\n");
+
+			if (id != id_count)
+				ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
+					   id, id_count);
+
+			/* Check for completed_status and id when no job done */
+			id = ~id;
+			if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
+				ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
+			if (id != id_count)
+				ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
+						id, 0);
+
+			for (i = 0; i < n_src; i++)
+				rte_pktmbuf_free(src[i]);
+			for (i = 0; i < n_dst; i++)
+				rte_pktmbuf_free(dst[i]);
+
+			/* Verify that completion returns nothing more */
+			if (rte_dma_completed(dev_id, 0, 1, NULL, NULL) != 0)
+				ERR_RETURN("Error with rte_dma_completed in empty check\n");
+
+			id_count++;
+		}
+	}
+	return 0;
 }
 
 /* Failure handling test cases - global macros and variables for those tests*/
@@ -748,26 +963,184 @@ test_burst_capacity(int16_t dev_id, uint16_t vchan)
 }
 
 static int
-test_dmadev_instance(int16_t dev_id)
+test_m2d_auto_free(int16_t dev_id, uint16_t vchan)
 {
-#define TEST_RINGSIZE 512
-#define CHECK_ERRS    true
+#define NR_MBUF 256
+	struct rte_mempool_cache *cache;
+	struct rte_mbuf *src[NR_MBUF];
+	uint32_t buf_cnt1, buf_cnt2;
+	struct rte_mempool_ops *ops;
+	uint16_t nb_done = 0;
+	bool dma_err = false;
+	int retry = 100;
+	int i, ret = 0;
+	rte_iova_t dst;
+
+	dst = (rte_iova_t)env_test_param[TEST_PARAM_REMOTE_ADDR];
+
+	/* Capture buffer count before allocating source buffer. */
+	cache = rte_mempool_default_cache(pool, rte_lcore_id());
+	ops = rte_mempool_get_ops(pool->ops_index);
+	buf_cnt1 = ops->get_count(pool) + cache->len;
+
+	if (rte_pktmbuf_alloc_bulk(pool, src, NR_MBUF) != 0)
+		ERR_RETURN("alloc src mbufs failed.\n");
+
+	if ((buf_cnt1 - NR_MBUF) != (ops->get_count(pool) + cache->len)) {
+		printf("Buffer count check failed.\n");
+		ret = -1;
+		goto done;
+	}
+
+	for (i = 0; i < NR_MBUF; i++) {
+		ret = rte_dma_copy(dev_id, vchan, rte_mbuf_data_iova(src[i]), dst,
+				   COPY_LEN, RTE_DMA_OP_FLAG_AUTO_FREE);
+
+		if (ret < 0) {
+			printf("rte_dma_copy returned error.\n");
+			goto done;
+		}
+	}
+
+	rte_dma_submit(dev_id, vchan);
+	do {
+		nb_done += rte_dma_completed(dev_id, vchan, (NR_MBUF - nb_done), NULL, &dma_err);
+		if (dma_err)
+			break;
+		/* Sleep for 1 millisecond */
+		rte_delay_us_sleep(1000);
+	} while (retry-- && (nb_done < NR_MBUF));
+
+	buf_cnt2 = ops->get_count(pool) + cache->len;
+	if ((buf_cnt1 != buf_cnt2) || dma_err) {
+		printf("Free mem to dev buffer test failed.\n");
+		ret = -1;
+	}
+
+done:
+	/* If the test passes source buffer will be freed in hardware. */
+	if (ret < 0)
+		rte_pktmbuf_free_bulk(&src[nb_done], (NR_MBUF - nb_done));
+
+	return ret;
+}
+
+static int
+prepare_m2d_auto_free(int16_t dev_id, uint16_t vchan)
+{
+	const struct rte_dma_vchan_conf qconf = {
+		.direction = RTE_DMA_DIR_MEM_TO_DEV,
+		.nb_desc = TEST_RINGSIZE,
+		.auto_free.m2d.pool = pool,
+		.dst_port.port_type = RTE_DMA_PORT_PCIE,
+		.dst_port.pcie.coreid = 0,
+	};
+
+	/* Stop the device to reconfigure vchan. */
+	if (rte_dma_stop(dev_id) < 0)
+		ERR_RETURN("Error stopping device %u\n", dev_id);
+
+	if (rte_dma_vchan_setup(dev_id, vchan, &qconf) < 0)
+		ERR_RETURN("Error with queue configuration\n");
+
+	if (rte_dma_start(dev_id) != 0)
+		ERR_RETURN("Error with rte_dma_start()\n");
+
+	return 0;
+}
+
+static int
+test_dmadev_sg_copy_setup(void)
+{
+	int ret = TEST_SUCCESS;
+
+	if ((info.dev_capa & RTE_DMA_CAPA_OPS_COPY_SG) == 0)
+		return TEST_SKIPPED;
+
+	return ret;
+}
+
+static int
+test_dmadev_burst_setup(void)
+{
+	if (rte_dma_burst_capacity(test_dev_id, vchan) < 64) {
+		RTE_LOG(ERR, USER1,
+			"DMA Dev %u: insufficient burst capacity (64 required), skipping tests\n",
+			test_dev_id);
+		return TEST_SKIPPED;
+	}
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_dmadev_err_handling_setup(void)
+{
+	int ret = TEST_SKIPPED;
+
+	/* to test error handling we can provide null pointers for source or dest in copies. This
+	 * requires VA mode in DPDK, since NULL(0) is a valid physical address.
+	 * We also need hardware that can report errors back.
+	 */
+	if (rte_eal_iova_mode() != RTE_IOVA_VA)
+		RTE_LOG(ERR, USER1,
+			"DMA Dev %u: DPDK not in VA mode, skipping error handling tests\n",
+			test_dev_id);
+	else if ((info.dev_capa & RTE_DMA_CAPA_HANDLES_ERRORS) == 0)
+		RTE_LOG(ERR, USER1,
+			"DMA Dev %u: device does not report errors, skipping error handling tests\n",
+			test_dev_id);
+	else
+		ret = TEST_SUCCESS;
+
+	return ret;
+}
+
+static int
+test_dmadev_fill_setup(void)
+{
+	int ret = TEST_SUCCESS;
+
+	if ((info.dev_capa & RTE_DMA_CAPA_OPS_FILL) == 0) {
+		RTE_LOG(ERR, USER1,
+			"DMA Dev %u: No device fill support, skipping fill tests\n", test_dev_id);
+		ret = TEST_SKIPPED;
+	}
+
+	return ret;
+}
+
+static int
+test_dmadev_autofree_setup(void)
+{
+	int ret = TEST_SKIPPED;
+
+	if ((info.dev_capa & RTE_DMA_CAPA_M2D_AUTO_FREE) &&
+	    dma_add_test[TEST_M2D_AUTO_FREE].enabled == true) {
+		if (prepare_m2d_auto_free(test_dev_id, vchan) != 0)
+			return ret;
+
+		ret = TEST_SUCCESS;
+	}
+
+	return ret;
+}
+
+static int
+test_dmadev_setup(void)
+{
+	int16_t dev_id = test_dev_id;
 	struct rte_dma_stats stats;
-	struct rte_dma_info info;
 	const struct rte_dma_conf conf = { .nb_vchans = 1};
 	const struct rte_dma_vchan_conf qconf = {
 			.direction = RTE_DMA_DIR_MEM_TO_MEM,
 			.nb_desc = TEST_RINGSIZE,
 	};
-	const int vchan = 0;
 	int ret;
 
 	ret = rte_dma_info_get(dev_id, &info);
 	if (ret != 0)
 		ERR_RETURN("Error with rte_dma_info_get()\n");
-
-	printf("\n### Test dmadev instance %u [%s]\n",
-			dev_id, info.dev_name);
 
 	if (info.max_vchans < 1)
 		ERR_RETURN("Error, no channels available on device id %u\n", dev_id);
@@ -802,86 +1175,156 @@ test_dmadev_instance(int16_t dev_id)
 			TEST_RINGSIZE * 2, /* n == num elements */
 			32,  /* cache size */
 			0,   /* priv size */
-			2048, /* data room size */
+			COPY_LEN + RTE_PKTMBUF_HEADROOM, /* data room size */
 			info.numa_node);
 	if (pool == NULL)
 		ERR_RETURN("Error with mempool creation\n");
 
-	/* run the test cases, use many iterations to ensure UINT16_MAX id wraparound */
-	if (runtest("copy", test_enqueue_copies, 640, dev_id, vchan, CHECK_ERRS) < 0)
-		goto err;
+	check_err_stats = false;
+	vchan = 0;
 
-	/* run some burst capacity tests */
-	if (rte_dma_burst_capacity(dev_id, vchan) < 64)
-		printf("DMA Dev %u: insufficient burst capacity (64 required), skipping tests\n",
-				dev_id);
-	else if (runtest("burst capacity", test_burst_capacity, 1, dev_id, vchan, CHECK_ERRS) < 0)
-		goto err;
-
-	/* to test error handling we can provide null pointers for source or dest in copies. This
-	 * requires VA mode in DPDK, since NULL(0) is a valid physical address.
-	 * We also need hardware that can report errors back.
-	 */
-	if (rte_eal_iova_mode() != RTE_IOVA_VA)
-		printf("DMA Dev %u: DPDK not in VA mode, skipping error handling tests\n", dev_id);
-	else if ((info.dev_capa & RTE_DMA_CAPA_HANDLES_ERRORS) == 0)
-		printf("DMA Dev %u: device does not report errors, skipping error handling tests\n",
-				dev_id);
-	else if (runtest("error handling", test_completion_handling, 1,
-			dev_id, vchan, !CHECK_ERRS) < 0)
-		goto err;
-
-	if ((info.dev_capa & RTE_DMA_CAPA_OPS_FILL) == 0)
-		printf("DMA Dev %u: No device fill support, skipping fill tests\n", dev_id);
-	else if (runtest("fill", test_enqueue_fill, 1, dev_id, vchan, CHECK_ERRS) < 0)
-		goto err;
-
-	rte_mempool_free(pool);
-	rte_dma_stop(dev_id);
-	rte_dma_stats_reset(dev_id, vchan);
 	return 0;
+}
 
-err:
+static void
+test_dmadev_teardown(void)
+{
 	rte_mempool_free(pool);
-	rte_dma_stop(dev_id);
-	return -1;
+	rte_dma_stop(test_dev_id);
+	rte_dma_stats_reset(test_dev_id, vchan);
+	test_dev_id = -EINVAL;
 }
 
 static int
-test_apis(void)
+test_dmadev_instance(int16_t dev_id)
 {
-	const char *pmd = "dma_skeleton";
-	int id;
+	struct rte_dma_info dev_info;
+	enum {
+		  TEST_COPY = 0,
+		  TEST_COPY_SG,
+		  TEST_START,
+		  TEST_BURST,
+		  TEST_ERR,
+		  TEST_FILL,
+		  TEST_M2D,
+		  TEST_END
+	};
+
+	static struct runtest_param param[] = {
+		{"copy", test_enqueue_copies, 640},
+		{"sg_copy", test_enqueue_sg_copies, 1},
+		{"stop_start", test_stop_start, 1},
+		{"burst_capacity", test_burst_capacity, 1},
+		{"error_handling", test_completion_handling, 1},
+		{"fill", test_enqueue_fill, 1},
+		{"m2d_auto_free", test_m2d_auto_free, 128},
+	};
+
+	static struct unit_test_suite ts = {
+		.suite_name = "DMA dev instance testsuite",
+		.setup = test_dmadev_setup,
+		.teardown = test_dmadev_teardown,
+		.unit_test_cases = {
+			TEST_CASE_NAMED_WITH_DATA("copy",
+				NULL, NULL,
+				runtest, &param[TEST_COPY]),
+			TEST_CASE_NAMED_WITH_DATA("sg_copy",
+				test_dmadev_sg_copy_setup, NULL,
+				runtest, &param[TEST_COPY_SG]),
+			TEST_CASE_NAMED_WITH_DATA("stop_start",
+				NULL, NULL,
+				runtest, &param[TEST_START]),
+			TEST_CASE_NAMED_WITH_DATA("burst_capacity",
+				test_dmadev_burst_setup, NULL,
+				runtest, &param[TEST_BURST]),
+			TEST_CASE_NAMED_WITH_DATA("error_handling",
+				test_dmadev_err_handling_setup, NULL,
+				runtest, &param[TEST_ERR]),
+			TEST_CASE_NAMED_WITH_DATA("fill",
+				test_dmadev_fill_setup, NULL,
+				runtest, &param[TEST_FILL]),
+			TEST_CASE_NAMED_WITH_DATA("m2d_autofree",
+				test_dmadev_autofree_setup, NULL,
+				runtest, &param[TEST_M2D]),
+			TEST_CASES_END()
+		}
+	};
+
 	int ret;
 
-	/* attempt to create skeleton instance - ignore errors due to one being already present */
-	rte_vdev_init(pmd, NULL);
-	id = rte_dma_get_dev_id_by_name(pmd);
-	if (id < 0)
+	if (rte_dma_info_get(dev_id, &dev_info) < 0)
 		return TEST_SKIPPED;
-	printf("\n### Test dmadev infrastructure using skeleton driver\n");
-	ret = test_dma_api(id);
+
+	test_dev_id = dev_id;
+	printf("\n### Test dmadev instance %u [%s]\n",
+		   test_dev_id, dev_info.dev_name);
+
+	ret = unit_test_suite_runner(&ts);
+	test_dev_id = -EINVAL;
 
 	return ret;
+}
+
+static void
+parse_dma_env_var(void)
+{
+	char *dma_env_param_str = getenv("DPDK_ADD_DMA_TEST_PARAM");
+	char *dma_env_test_str = getenv("DPDK_ADD_DMA_TEST");
+	char *params[32] = {0};
+	char *tests[32] = {0};
+	char *var[2] = {0};
+	int n_var = 0;
+	int i, j;
+
+	/* Additional test from commandline. */
+	if (dma_env_test_str && strlen(dma_env_test_str) > 0) {
+		n_var = rte_strsplit(dma_env_test_str, strlen(dma_env_test_str), tests,
+				RTE_DIM(tests), ',');
+		for (i = 0; i < n_var; i++) {
+			for (j = 0; j < TEST_MAX; j++) {
+				if (!strcmp(tests[i], dma_add_test[j].name))
+					dma_add_test[j].enabled = true;
+			}
+		}
+	}
+
+	/* Commandline variables for test */
+	if (dma_env_param_str && strlen(dma_env_param_str) > 0) {
+		n_var = rte_strsplit(dma_env_param_str, strlen(dma_env_param_str), params,
+				       RTE_DIM(params), ',');
+		for (i = 0; i < n_var; i++) {
+			rte_strsplit(params[i], strlen(params[i]), var,	RTE_DIM(var), '=');
+			for (j = 0; j < TEST_PARAM_MAX; j++) {
+				if (!strcmp(var[0], dma_test_param[j]))
+					env_test_param[j] = strtoul(var[1], NULL, 16);
+			}
+		}
+	}
 }
 
 static int
 test_dma(void)
 {
+	const char *pmd = "dma_skeleton";
 	int i;
 
-	/* basic sanity on dmadev infrastructure */
-	if (test_apis() < 0)
-		ERR_RETURN("Error performing API tests\n");
+	parse_dma_env_var();
+
+	/* attempt to create skeleton instance - ignore errors due to one being already present*/
+	rte_vdev_init(pmd, NULL);
 
 	if (rte_dma_count_avail() == 0)
 		return TEST_SKIPPED;
 
-	RTE_DMA_FOREACH_DEV(i)
+	RTE_DMA_FOREACH_DEV(i) {
+		if (test_dma_api(i) < 0)
+			ERR_RETURN("Error performing API tests\n");
+
 		if (test_dmadev_instance(i) < 0)
 			ERR_RETURN("Error, test failure for device %d\n", i);
+	}
 
 	return 0;
 }
 
-REGISTER_TEST_COMMAND(dmadev_autotest, test_dma);
+REGISTER_DRIVER_TEST(dmadev_autotest, test_dma);

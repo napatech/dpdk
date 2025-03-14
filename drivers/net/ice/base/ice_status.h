@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2023 Intel Corporation
  */
 
 #ifndef _ICE_STATUS_H_
@@ -35,6 +35,8 @@ enum ice_status {
 	ICE_ERR_NVM_CHECKSUM			= -51,
 	ICE_ERR_BUF_TOO_SHORT			= -52,
 	ICE_ERR_NVM_BLANK_MODE			= -53,
+
+	ICE_ERR_UNKNOWN_PHY			= -60,
 
 	/* ARQ/ASQ specific error codes. Range -100..-109 */
 	ICE_ERR_AQ_ERROR			= -100,

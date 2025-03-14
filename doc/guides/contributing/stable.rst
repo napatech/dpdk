@@ -53,7 +53,8 @@ LTS Release
 
 A stable release can be designated as an LTS release based on community
 agreement and a commitment from a maintainer. The current policy is that each
-year's November (X.11) release will be maintained as an LTS for 2 years.
+year's November (X.11) release will be maintained as an LTS for 3 years,
+however that is dependent on continued community support for validation.
 
 After the X.11 release, an LTS branch will be created for it at
 https://git.dpdk.org/dpdk-stable where bugfixes will be backported to.
@@ -125,6 +126,14 @@ but may be considered in some cases where:
 
 * It is fixing a performance regression that occurred previously.
 * An existing feature in LTS is not usable as intended without it.
+
+APIs marked as ``experimental`` are not considered part of the ABI version
+and can be changed without prior notice. This is necessary for the API to be
+improved and stabilized and become part of the ABI version in the future.
+
+However, in LTS releases ``experimental`` API should not be changed as there
+will not be a future ABI version on the branch and compatibility with previous
+release of an LTS version is of the highest importance.
 
 The Stable Mailing List
 -----------------------

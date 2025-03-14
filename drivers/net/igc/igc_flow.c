@@ -327,14 +327,14 @@ igc_parse_pattern_ether(const struct rte_flow_item *item,
 	IGC_SET_FILTER_MASK(filter, IGC_FILTER_MASK_ETHER);
 
 	/* destination and source MAC address are not supported */
-	if (!rte_is_zero_ether_addr(&mask->src) ||
-		!rte_is_zero_ether_addr(&mask->dst))
+	if (!rte_is_zero_ether_addr(&mask->hdr.src_addr) ||
+		!rte_is_zero_ether_addr(&mask->hdr.dst_addr))
 		return rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM_MASK, item,
 				"Only support ether-type");
 
 	/* ether-type mask bits must be all 1 */
-	if (IGC_NOT_ALL_BITS_SET(mask->type))
+	if (IGC_NOT_ALL_BITS_SET(mask->hdr.ether_type))
 		return rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM_MASK, item,
 				"Ethernet type mask bits must be all 1");
@@ -342,7 +342,7 @@ igc_parse_pattern_ether(const struct rte_flow_item *item,
 	ether = &filter->ethertype;
 
 	/* get ether-type */
-	ether->ether_type = rte_be_to_cpu_16(spec->type);
+	ether->ether_type = rte_be_to_cpu_16(spec->hdr.ether_type);
 
 	/* ether-type should not be IPv4 and IPv6 */
 	if (ether->ether_type == RTE_ETHER_TYPE_IPV4 ||
@@ -435,8 +435,8 @@ igc_parse_pattern_ipv6(const struct rte_flow_item *item,
 	if (mask->hdr.vtc_flow ||
 		mask->hdr.payload_len ||
 		mask->hdr.hop_limits ||
-		!igc_is_zero_ipv6_addr(mask->hdr.src_addr) ||
-		!igc_is_zero_ipv6_addr(mask->hdr.dst_addr))
+		!igc_is_zero_ipv6_addr(&mask->hdr.src_addr) ||
+		!igc_is_zero_ipv6_addr(&mask->hdr.dst_addr))
 		return rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM, item,
 				"IPv6 only support protocol");

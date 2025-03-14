@@ -120,7 +120,7 @@ words="$selfdir/words-case.txt"
 for word in $(cat $words); do
 	bad=$(echo "$headlines" | grep -iw $word | grep -vw $word)
 	if [ "$word" = "Tx" ]; then
-		bad=$(echo $bad | grep -v 'OCTEON\ TX')
+		bad=$(echo $bad | grep -v 'OCTEON TX')
 	fi
 	for bad_line in $bad; do
 		bad_word=$(echo $bad_line | cut -d":" -f2 | grep -iwo $word)
@@ -257,6 +257,23 @@ bad=$(for commit in $commits; do
 	git log --format='\t%s' -1 $commit
 done)
 [ -z "$bad" ] || { printf "Missing 'Signed-off-by:' tag: \n$bad\n"\
+	&& failure=true;}
+
+# check names
+names=$(git log --format='From: %an <%ae>%n%b' --reverse $range |
+	sed -rn 's,.*: (.*<.*@.*>),\1,p' |
+	sort -u)
+bad=$(for contributor in $names ; do
+	contributor=$(echo $contributor | sed 's,(,\\(,')
+	! grep -qE "^$contributor($| <)" $selfdir/../.mailmap || continue
+	name=${contributor%% <*}
+	if grep -q "^$name <" $selfdir/../.mailmap ; then
+		printf "\t$contributor is not the primary email address\n"
+	else
+		printf "\t$contributor is unknown in .mailmap\n"
+	fi
+done)
+[ -z "$bad" ] || { printf "Contributor name/email mismatch with .mailmap: \n$bad\n"\
 	&& failure=true;}
 
 total=$(echo "$commits" | wc -l)

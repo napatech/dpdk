@@ -302,11 +302,11 @@ test_multi_alloc_statistics(void)
 	rte_malloc_get_socket_stats(socket,&post_stats);
 	/* Check statistics reported are correct */
 	/* All post stats should be equal to pre stats after alloc freed */
-	if ((post_stats.heap_totalsz_bytes != pre_stats.heap_totalsz_bytes) &&
-			(post_stats.heap_freesz_bytes!=pre_stats.heap_freesz_bytes) &&
-			(post_stats.heap_allocsz_bytes!=pre_stats.heap_allocsz_bytes)&&
-			(post_stats.alloc_count!=pre_stats.alloc_count)&&
-			(post_stats.free_count!=pre_stats.free_count)) {
+	if ((post_stats.heap_totalsz_bytes != pre_stats.heap_totalsz_bytes) ||
+			(post_stats.heap_freesz_bytes != pre_stats.heap_freesz_bytes) ||
+			(post_stats.heap_allocsz_bytes != pre_stats.heap_allocsz_bytes) ||
+			(post_stats.alloc_count != pre_stats.alloc_count) ||
+			(post_stats.free_count != pre_stats.free_count)) {
 		printf("Malloc statistics are incorrect - freed alloc\n");
 		return -1;
 	}
@@ -363,11 +363,11 @@ test_multi_alloc_statistics(void)
 		return -1;
 	}
 
-	if ((post_stats.heap_totalsz_bytes != pre_stats.heap_totalsz_bytes) &&
-			(post_stats.heap_freesz_bytes!=pre_stats.heap_freesz_bytes) &&
-			(post_stats.heap_allocsz_bytes!=pre_stats.heap_allocsz_bytes)&&
-			(post_stats.alloc_count!=pre_stats.alloc_count)&&
-			(post_stats.free_count!=pre_stats.free_count)) {
+	if ((post_stats.heap_totalsz_bytes != pre_stats.heap_totalsz_bytes) ||
+			(post_stats.heap_freesz_bytes != pre_stats.heap_freesz_bytes) ||
+			(post_stats.heap_allocsz_bytes != pre_stats.heap_allocsz_bytes) ||
+			(post_stats.alloc_count != pre_stats.alloc_count) ||
+			(post_stats.free_count != pre_stats.free_count)) {
 		printf("Malloc statistics are incorrect - freed alloc\n");
 		return -1;
 	}
@@ -692,8 +692,6 @@ test_random_alloc_free(void *_ __rte_unused)
 	unsigned i;
 	unsigned count = 0;
 
-	rte_srand((unsigned)rte_rdtsc());
-
 	for (i = 0; i < N; i++){
 		unsigned free_mem = 0;
 		size_t allocated_size;
@@ -937,6 +935,7 @@ test_alloc_single_socket(int32_t socket)
 	if (mem == NULL)
 		return -1;
 	if (addr_to_socket(mem) != desired_socket) {
+		rte_free(mem);
 		return -1;
 	}
 	rte_free(mem);
@@ -1090,4 +1089,4 @@ test_malloc(void)
 	return 0;
 }
 
-REGISTER_TEST_COMMAND(malloc_autotest, test_malloc);
+REGISTER_FAST_TEST(malloc_autotest, false, true, test_malloc);

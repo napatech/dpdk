@@ -247,6 +247,10 @@ alloc_devargs(const char *name, const char *args)
 		devargs->data = strdup(args);
 	else
 		devargs->data = strdup("");
+	if (devargs->data == NULL) {
+		free(devargs);
+		return NULL;
+	}
 	devargs->args = devargs->data;
 
 	ret = strlcpy(devargs->name, name, sizeof(devargs->name));
@@ -272,6 +276,7 @@ insert_vdev(const char *name, const char *args,
 		return -EINVAL;
 
 	devargs = alloc_devargs(name, args);
+
 	if (!devargs)
 		return -ENOMEM;
 
@@ -283,7 +288,6 @@ insert_vdev(const char *name, const char *args,
 
 	dev->device.bus = &rte_vdev_bus;
 	dev->device.numa_node = SOCKET_ID_ANY;
-	dev->device.name = devargs->name;
 
 	if (find_vdev(name)) {
 		/*
@@ -298,6 +302,7 @@ insert_vdev(const char *name, const char *args,
 	if (init)
 		rte_devargs_insert(&devargs);
 	dev->device.devargs = devargs;
+	dev->device.name = devargs->name;
 	TAILQ_INSERT_TAIL(&vdev_device_list, dev, next);
 
 	if (p_dev)
@@ -578,18 +583,19 @@ vdev_cleanup(void)
 		int ret = 0;
 
 		if (dev->device.driver == NULL)
-			continue;
+			goto free;
 
 		drv = container_of(dev->device.driver, const struct rte_vdev_driver, driver);
 
 		if (drv->remove == NULL)
-			continue;
+			goto free;
 
 		ret = drv->remove(dev);
 		if (ret < 0)
 			error = -1;
 
 		dev->device.driver = NULL;
+free:
 		free(dev);
 	}
 

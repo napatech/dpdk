@@ -28,6 +28,46 @@
 #include "mlx5_flow_os.h"
 
 /**
+ * Validate given external queue's port is valid or not.
+ *
+ * @param[in] port_id
+ *   The port identifier of the Ethernet device.
+ *
+ * @return
+ *   0 on success, non-0 otherwise
+ */
+int
+mlx5_devx_extq_port_validate(uint16_t port_id)
+{
+	struct rte_eth_dev *dev;
+	struct mlx5_priv *priv;
+
+	if (rte_eth_dev_is_valid_port(port_id) < 0) {
+		DRV_LOG(ERR, "There is no Ethernet device for port %u.",
+			port_id);
+		rte_errno = ENODEV;
+		return -rte_errno;
+	}
+	dev = &rte_eth_devices[port_id];
+	priv = dev->data->dev_private;
+	if (!mlx5_imported_pd_and_ctx(priv->sh->cdev)) {
+		DRV_LOG(ERR, "Port %u "
+			"external queue isn't supported on local PD and CTX.",
+			port_id);
+		rte_errno = ENOTSUP;
+		return -rte_errno;
+	}
+	if (!mlx5_devx_obj_ops_en(priv->sh)) {
+		DRV_LOG(ERR,
+			"Port %u external queue isn't supported by Verbs API.",
+			port_id);
+		rte_errno = ENOTSUP;
+		return -rte_errno;
+	}
+	return 0;
+}
+
+/**
  * Modify RQ vlan stripping offload
  *
  * @param rxq
@@ -372,6 +412,8 @@ mlx5_rxq_create_devx_cq_resources(struct mlx5_rxq_priv *rxq)
 	if (priv->config.cqe_comp && !rxq_data->hw_timestamp &&
 	    !rxq_data->lro) {
 		cq_attr.cqe_comp_en = 1u;
+		cq_attr.cqe_comp_layout = priv->config.enh_cqe_comp;
+		rxq_data->cqe_comp_layout = cq_attr.cqe_comp_layout;
 		rxq_data->mcqe_format = priv->config.cqe_comp_fmt;
 		rxq_data->byte_mask = UINT32_MAX;
 		switch (priv->config.cqe_comp_fmt) {
@@ -455,6 +497,56 @@ mlx5_rxq_create_devx_cq_resources(struct mlx5_rxq_priv *rxq)
 }
 
 /**
+ * Create a global queue counter for all the port hairpin queues.
+ *
+ * @param priv
+ *   Device private data.
+ *
+ * @return
+ *   The counter_set_id of the queue counter object, 0 otherwise.
+ */
+static uint32_t
+mlx5_set_hairpin_queue_counter_obj(struct mlx5_priv *priv)
+{
+	if (priv->q_counters_hairpin != NULL)
+		return priv->q_counters_hairpin->id;
+
+	/* Queue counter allocation failed in the past - don't try again. */
+	if (priv->q_counters_allocation_failure != 0)
+		return 0;
+
+	if (priv->pci_dev == NULL) {
+		DRV_LOG(DEBUG, "Hairpin out of buffer counter is "
+				"only supported on PCI device.");
+		priv->q_counters_allocation_failure = 1;
+		return 0;
+	}
+
+	switch (priv->pci_dev->id.device_id) {
+	/* Counting out of buffer drops on hairpin queues is supported only on CX7 and up. */
+	case PCI_DEVICE_ID_MELLANOX_CONNECTX7:
+	case PCI_DEVICE_ID_MELLANOX_CONNECTXVF:
+	case PCI_DEVICE_ID_MELLANOX_BLUEFIELD3:
+	case PCI_DEVICE_ID_MELLANOX_BLUEFIELDVF:
+
+		priv->q_counters_hairpin = mlx5_devx_cmd_queue_counter_alloc(priv->sh->cdev->ctx);
+		if (priv->q_counters_hairpin == NULL) {
+			/* Failed to allocate */
+			DRV_LOG(DEBUG, "Some of the statistics of port %d "
+				"will not be available.", priv->dev_data->port_id);
+			priv->q_counters_allocation_failure = 1;
+			return 0;
+		}
+		return priv->q_counters_hairpin->id;
+	default:
+		DRV_LOG(DEBUG, "Hairpin out of buffer counter "
+				"is not available on this NIC.");
+		priv->q_counters_allocation_failure = 1;
+		return 0;
+	}
+}
+
+/**
  * Create the Rx hairpin queue object.
  *
  * @param rxq
@@ -499,7 +591,9 @@ mlx5_rxq_obj_hairpin_new(struct mlx5_rxq_priv *rxq)
 	unlocked_attr.wq_attr.log_hairpin_num_packets =
 			unlocked_attr.wq_attr.log_hairpin_data_sz -
 			MLX5_HAIRPIN_QUEUE_STRIDE;
-	unlocked_attr.counter_set_id = priv->counter_set_id;
+
+	unlocked_attr.counter_set_id = mlx5_set_hairpin_queue_counter_obj(priv);
+
 	rxq_ctrl->rxq.delay_drop = priv->config.hp_delay_drop;
 	unlocked_attr.delay_drop_en = priv->config.hp_delay_drop;
 	unlocked_attr.hairpin_data_buffer_type =
@@ -590,7 +684,8 @@ mlx5_rxq_devx_obj_new(struct mlx5_rxq_priv *rxq)
 		DRV_LOG(ERR, "Failed to create CQ.");
 		goto error;
 	}
-	rxq_data->delay_drop = priv->config.std_delay_drop;
+	if (!rxq_data->shared || !rxq_ctrl->started)
+		rxq_data->delay_drop = priv->config.std_delay_drop;
 	/* Create RQ using DevX API. */
 	ret = mlx5_rxq_create_devx_rq_resources(rxq);
 	if (ret) {
@@ -671,7 +766,7 @@ mlx5_devx_ind_table_create_rqt_attr(struct rte_eth_dev *dev,
 	}
 	for (i = 0; i != queues_n; ++i) {
 		if (mlx5_is_external_rxq(dev, queues[i])) {
-			struct mlx5_external_rxq *ext_rxq =
+			struct mlx5_external_q *ext_rxq =
 					mlx5_ext_rxq_get(dev, queues[i]);
 
 			rqt_attr->rq_list[i] = ext_rxq->hw_id;
@@ -801,7 +896,8 @@ static void
 mlx5_devx_tir_attr_set(struct rte_eth_dev *dev, const uint8_t *rss_key,
 		       uint64_t hash_fields,
 		       const struct mlx5_ind_table_obj *ind_tbl,
-		       int tunnel, struct mlx5_devx_tir_attr *tir_attr)
+		       int tunnel, bool symmetric_hash_function,
+		       struct mlx5_devx_tir_attr *tir_attr)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	bool is_hairpin;
@@ -832,6 +928,7 @@ mlx5_devx_tir_attr_set(struct rte_eth_dev *dev, const uint8_t *rss_key,
 	tir_attr->disp_type = MLX5_TIRC_DISP_TYPE_INDIRECT;
 	tir_attr->rx_hash_fn = MLX5_RX_HASH_FN_TOEPLITZ;
 	tir_attr->tunneled_offload_en = !!tunnel;
+	tir_attr->rx_hash_symmetric = symmetric_hash_function;
 	/* If needed, translate hash_fields bitmap to PRM format. */
 	if (hash_fields) {
 		struct mlx5_rx_hash_field_select *rx_hash_field_select =
@@ -900,7 +997,8 @@ mlx5_devx_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 	int err;
 
 	mlx5_devx_tir_attr_set(dev, hrxq->rss_key, hrxq->hash_fields,
-			       hrxq->ind_table, tunnel, &tir_attr);
+			       hrxq->ind_table, tunnel, hrxq->symmetric_hash_function,
+			       &tir_attr);
 	hrxq->tir = mlx5_devx_cmd_create_tir(priv->sh->cdev->ctx, &tir_attr);
 	if (!hrxq->tir) {
 		DRV_LOG(ERR, "Port %u cannot create DevX TIR.",
@@ -913,7 +1011,7 @@ mlx5_devx_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 	if (hrxq->hws_flags) {
 		hrxq->action = mlx5dr_action_create_dest_tir
 			(priv->dr_ctx,
-			 (struct mlx5dr_devx_obj *)hrxq->tir, hrxq->hws_flags);
+			 (struct mlx5dr_devx_obj *)hrxq->tir, hrxq->hws_flags, true);
 		if (!hrxq->action)
 			goto error;
 		return 0;
@@ -967,13 +1065,13 @@ static int
 mlx5_devx_hrxq_modify(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 		       const uint8_t *rss_key,
 		       uint64_t hash_fields,
+		       bool symmetric_hash_function,
 		       const struct mlx5_ind_table_obj *ind_tbl)
 {
 	struct mlx5_devx_modify_tir_attr modify_tir = {0};
 
 	/*
 	 * untested for modification fields:
-	 * - rx_hash_symmetric not set in hrxq_new(),
 	 * - rx_hash_fn set hard-coded in hrxq_new(),
 	 * - lro_xxx not set after rxq setup
 	 */
@@ -981,11 +1079,13 @@ mlx5_devx_hrxq_modify(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 		modify_tir.modify_bitmask |=
 			MLX5_MODIFY_TIR_IN_MODIFY_BITMASK_INDIRECT_TABLE;
 	if (hash_fields != hrxq->hash_fields ||
+			symmetric_hash_function != hrxq->symmetric_hash_function ||
 			memcmp(hrxq->rss_key, rss_key, MLX5_RSS_HASH_KEY_LEN))
 		modify_tir.modify_bitmask |=
 			MLX5_MODIFY_TIR_IN_MODIFY_BITMASK_HASH;
 	mlx5_devx_tir_attr_set(dev, rss_key, hash_fields, ind_tbl,
 			       0, /* N/A - tunnel modification unsupported */
+			       symmetric_hash_function,
 			       &modify_tir.tir);
 	modify_tir.tirn = hrxq->tir->id;
 	if (mlx5_devx_cmd_modify_tir(hrxq->tir, &modify_tir)) {
@@ -1127,6 +1227,10 @@ mlx5_devx_drop_action_destroy(struct rte_eth_dev *dev)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq = priv->drop_queue.hrxq;
 
+#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
+	if (hrxq->action != NULL)
+		mlx5_flow_os_destroy_flow_action(hrxq->action);
+#endif
 	if (hrxq->tir != NULL)
 		mlx5_devx_tir_destroy(hrxq);
 	if (hrxq->ind_table->ind_table != NULL)
@@ -1190,17 +1294,19 @@ static uint32_t
 mlx5_get_txq_tis_num(struct rte_eth_dev *dev, uint16_t queue_idx)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	int tis_idx;
+	struct mlx5_txq_data *txq_data = (*priv->txqs)[queue_idx];
+	int tis_idx = 0;
 
-	if (priv->sh->bond.n_port && priv->sh->lag.affinity_mode ==
-			MLX5_LAG_MODE_TIS) {
-		tis_idx = (priv->lag_affinity_idx + queue_idx) %
-			priv->sh->bond.n_port;
-		DRV_LOG(INFO, "port %d txq %d gets affinity %d and maps to PF %d.",
-			dev->data->port_id, queue_idx, tis_idx + 1,
-			priv->sh->lag.tx_remap_affinity[tis_idx]);
-	} else {
-		tis_idx = 0;
+	if (priv->sh->bond.n_port) {
+		if (txq_data->tx_aggr_affinity) {
+			tis_idx = txq_data->tx_aggr_affinity;
+		} else if (priv->sh->lag.affinity_mode == MLX5_LAG_MODE_TIS) {
+			tis_idx = (priv->lag_affinity_idx + queue_idx) %
+				priv->sh->bond.n_port + 1;
+			DRV_LOG(INFO, "port %d txq %d gets affinity %d and maps to PF %d.",
+				dev->data->port_id, queue_idx, tis_idx,
+				priv->sh->lag.tx_remap_affinity[tis_idx - 1]);
+		}
 	}
 	MLX5_ASSERT(priv->sh->tis[tis_idx]);
 	return priv->sh->tis[tis_idx]->id;
@@ -1461,8 +1567,12 @@ mlx5_txq_devx_obj_new(struct rte_eth_dev *dev, uint16_t idx)
 	MLX5_ASSERT(ppriv);
 	txq_obj->txq_ctrl = txq_ctrl;
 	txq_obj->dev = dev;
-	cqe_n = (1UL << txq_data->elts_n) / MLX5_TX_COMP_THRESH +
-		1 + MLX5_TX_COMP_THRESH_INLINE_DIV;
+	if (__rte_trace_point_fp_is_enabled() &&
+	    txq_data->offloads & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP)
+		cqe_n = UINT16_MAX / 2 - 1;
+	else
+		cqe_n = (1UL << txq_data->elts_n) / MLX5_TX_COMP_THRESH +
+			1 + MLX5_TX_COMP_THRESH_INLINE_DIV;
 	log_desc_n = log2above(cqe_n);
 	cqe_n = 1UL << log_desc_n;
 	if (cqe_n > UINT16_MAX) {

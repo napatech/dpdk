@@ -17,9 +17,63 @@ NVIDIA MLX5 Ethernet Driver
 The mlx5 Ethernet poll mode driver library (**librte_net_mlx5**) provides support
 for **NVIDIA ConnectX-4**, **NVIDIA ConnectX-4 Lx** , **NVIDIA ConnectX-5**,
 **NVIDIA ConnectX-6**, **NVIDIA ConnectX-6 Dx**, **NVIDIA ConnectX-6 Lx**,
-**NVIDIA ConnectX-7**, **NVIDIA BlueField** and **NVIDIA BlueField-2**
-families of 10/25/40/50/100/200 Gb/s adapters
+**NVIDIA ConnectX-7**, **NVIDIA BlueField**, **NVIDIA BlueField-2** and
+**NVIDIA BlueField-3** families of 10/25/40/50/100/200/400 Gb/s adapters
 as well as their virtual functions (VF) in SR-IOV context.
+
+Supported NICs
+--------------
+
+The following NVIDIA device families are supported by the same mlx5 driver:
+
+  - ConnectX-4
+  - ConnectX-4 Lx
+  - ConnectX-5
+  - ConnectX-5 Ex
+  - ConnectX-6
+  - ConnectX-6 Dx
+  - ConnectX-6 Lx
+  - ConnectX-7
+  - BlueField
+  - BlueField-2
+  - BlueField-3
+
+Below are detailed device names:
+
+* NVIDIA\ |reg| ConnectX\ |reg|-4 10G MCX4111A-XCAT (1x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 10G MCX412A-XCAT (2x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 25G MCX4111A-ACAT (1x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 25G MCX412A-ACAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX413A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX4131A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX415A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX413A-GCAT (1x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX4131A-GCAT (1x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX414A-BCAT (2x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX415A-GCAT (1x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX416A-BCAT (2x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX416A-GCAT (2x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX415A-CCAT (1x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 100G MCX416A-CCAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4111A-XCAT (1x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4121A-XCAT (2x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4111A-ACAT (1x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4121A-ACAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 40G MCX4131A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-5 100G MCX556A-ECAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-5 Ex EN 100G MCX516A-CDAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Lx EN 25G MCX631102AN-ADAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-7 200G CX713106AE-HEA_QP1_Ax (2x200G)
+* NVIDIA\ |reg| BlueField\ |reg|-2 25G MBF2H332A-AEEOT_A1 (2x25Gg
+* NVIDIA\ |reg| BlueField\ |reg|-3 200GbE 900-9D3B6-00CV-AA0 (2x200)
+* NVIDIA\ |reg| BlueField\ |reg|-3 200GbE 900-9D3B6-00SV-AA0 (2x200)
+* NVIDIA\ |reg| BlueField\ |reg|-3 400GbE 900-9D3B6-00CN-AB0 (2x400)
+* NVIDIA\ |reg| BlueField\ |reg|-3 100GbE 900-9D3B4-00CC-EA0 (2x100)
+* NVIDIA\ |reg| BlueField\ |reg|-3 100GbE 900-9D3B4-00SC-EA0 (2x100)
+* NVIDIA\ |reg| BlueField\ |reg|-3 400GbE 900-9D3B4-00EN-EA0 (1x100)
 
 
 Design
@@ -56,6 +110,7 @@ Features
   and source only, destination only or both.
 - Several RSS hash keys, one for each flow type.
 - Default RSS operation with no hash key specification.
+- Symmetric RSS function.
 - Configurable RETA table.
 - Link flow control (pause frame).
 - Support for multiple MAC addresses.
@@ -89,15 +144,22 @@ Features
 - Hairpin.
 - Multiple-thread flow insertion.
 - Matching on IPv4 Internet Header Length (IHL).
+- Matching on IPv6 routing extension header.
 - Matching on GTP extension header with raw encap/decap action.
 - Matching on Geneve TLV option header with raw encap/decap action.
 - Matching on ESP header SPI field.
+- Matching on InfiniBand BTH.
+- Matching on random value.
 - Modify IPv4/IPv6 ECN field.
+- Push or remove IPv6 routing extension.
+- NAT64.
 - RSS support in sample action.
 - E-Switch mirroring and jump.
 - E-Switch mirroring and modify.
+- Send to kernel.
 - 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
   flow group.
+- Flow quota.
 - Flow metering, including meter policy API.
 - Flow meter hierarchy.
 - Flow meter mark.
@@ -106,6 +168,9 @@ Features
 - Sub-Function representors.
 - Sub-Function.
 - Matching on represented port.
+- Matching on aggregated affinity.
+- Matching on external Tx queue.
+- Matching on E-Switch manager.
 
 
 Limitations
@@ -125,6 +190,14 @@ Limitations
 
     - IPv4/TCP with CVLAN filtering
     - L4 steering rules for port RSS of UDP, TCP and IP
+
+- PCI Virtual Function MTU:
+
+  MTU settings on PCI Virtual Functions have no effect.
+  The maximum receivable packet size for a VF is determined by the MTU
+  configured on its associated Physical Function.
+  DPDK applications using VFs must be prepared to handle packets
+  up to the maximum size of this PF port.
 
 - For secondary process:
 
@@ -147,10 +220,13 @@ Limitations
 
   - Does not support shared Rx queue and hairpin Rx queue.
 
+- The symmetric RSS function is supported by swapping source and destination
+  addresses and ports.
+
 - Host shaper:
 
-  - Support BlueField series NIC from BlueField 2.
-  - When configuring host shaper with MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED flag set,
+  - Support BlueField series NIC from BlueField-2.
+  - When configuring host shaper with ``RTE_PMD_MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED`` flag,
     only rates 0 and 100Mbps are supported.
 
 - HW steering:
@@ -159,6 +235,9 @@ Limitations
   - Set ``dv_flow_en`` to 2 in order to enable HW steering.
   - Async queue-based ``rte_flow_async`` APIs supported only.
   - NIC ConnectX-5 and before are not supported.
+  - Reconfiguring flow API engine is not supported.
+    Any subsequent call to ``rte_flow_configure()`` with different configuration
+    than initially provided will be rejected with ``-ENOTSUP`` error code.
   - Partial match with item template is not supported.
   - IPv6 5-tuple matching is not supported.
   - With E-Switch enabled, ports which share the E-Switch domain
@@ -174,6 +253,31 @@ Limitations
 
     - ``-EAGAIN`` for ``rte_eth_dev_start()``.
     - ``-EBUSY`` for ``rte_eth_dev_stop()``.
+
+  - Matching on ICMP6 following IPv6 routing extension header,
+    should match ``ipv6_routing_ext_next_hdr`` instead of ICMP6.
+    IPv6 routing extension matching is not supported in flow template relaxed
+    matching mode (see ``struct rte_flow_pattern_template_attr::relaxed_matching``).
+
+  - The supported actions order is as below::
+
+          MARK (a)
+          *_DECAP (b)
+          OF_POP_VLAN
+          COUNT | AGE
+          METER_MARK | CONNTRACK
+          OF_PUSH_VLAN
+          MODIFY_FIELD
+          *_ENCAP (c)
+          JUMP | DROP | RSS (a) | QUEUE (a) | REPRESENTED_PORT (d)
+
+    a. Only supported on ingress.
+    b. Any decapsulation action, including the combination of RAW_ENCAP and RAW_DECAP actions
+       which results in L3 decapsulation.
+       Not supported on egress.
+    c. Any encapsulation action, including the combination of RAW_ENCAP and RAW_DECAP actions
+       which results in L3 encap.
+    d. Only in transfer (switchdev) mode.
 
 - When using Verbs flow engine (``dv_flow_en`` = 0), flow pattern without any
   specific VLAN will match for VLAN packets as well:
@@ -228,18 +332,25 @@ Limitations
   size and ``txq_inline_min`` settings and may be from 2 (worst case forced by maximal
   inline settings) to 58.
 
-- Match on VXLAN supports the following fields only:
+- Match on VXLAN supports any bits in the tunnel header
 
-     - VNI
-     - Last reserved 8-bits
+  - Flag 8-bits and first 24-bits reserved fields matching
+    is only supported when using DV flow engine (``dv_flow_en`` = 2).
+  - For ConnectX-5, the UDP destination port must be the standard one (4789).
+  - Default UDP destination is 4789 if not explicitly specified.
+  - Group zero's behavior may differ which depends on FW.
 
-  Last reserved 8-bits matching is only supported When using DV flow
-  engine (``dv_flow_en`` = 1).
-  For ConnectX-5, the UDP destination port must be the standard one (4789).
-  Group zero's behavior may differ which depends on FW.
-  Matching value equals 0 (value & mask) is not supported.
+- Matching on VXLAN-GPE header fields:
+
+     - ``rsvd0``/``rsvd1`` matching support depends on FW version
+       when using DV flow engine (``dv_flow_en`` = 1).
+     - ``protocol`` should be explicitly specified in HWS (``dv_flow_en`` = 2).
 
 - L3 VXLAN and VXLAN-GPE tunnels cannot be supported together with MPLSoGRE and MPLSoUDP.
+
+- MPLSoGRE is not supported in HW steering (``dv_flow_en`` = 2).
+
+- MPLSoUDP with multiple MPLS headers is only supported in HW steering (``dv_flow_en`` = 2).
 
 - Match on Geneve header supports the following fields only:
 
@@ -255,11 +366,55 @@ Limitations
      - Length
      - Data
 
-  Only one Class/Type/Length Geneve TLV option is supported per shared device.
   Class/Type/Length fields must be specified as well as masks.
   Class/Type/Length specified masks must be full.
   Matching Geneve TLV option without specifying data is not supported.
   Matching Geneve TLV option with ``data & mask == 0`` is not supported.
+
+  In SW steering (``dv_flow_en`` = 1):
+
+     - Only one Class/Type/Length Geneve TLV option is supported per shared device.
+     - Supported only with ``FLEX_PARSER_PROFILE_ENABLE`` = 0.
+
+  In HW steering (``dv_flow_en`` = 2):
+
+     - Multiple Class/Type/Length Geneve TLV options are supported per physical device.
+     - Multiple of same Geneve TLV option isn't supported at the same pattern template.
+     - Supported only with ``FLEX_PARSER_PROFILE_ENABLE`` = 8.
+     - Supported also with ``FLEX_PARSER_PROFILE_ENABLE`` = 0 for single DW only.
+     - Supported for FW version **xx.37.0142** and above.
+
+  .. _geneve_parser_api:
+
+  - An API (``rte_pmd_mlx5_create_geneve_tlv_parser``)
+    is available for the flexible parser used in HW steering:
+
+    Each physical device has 7 DWs for GENEVE TLV options.
+    Partial option configuration is supported,
+    mask for data is provided in parser creation
+    indicating which DWs configuration is requested.
+    Only masked data DWs can be matched later as item field using flow API.
+
+    - Matching of ``type`` field is supported for each configured option.
+    - However, for matching ``class`` field,
+      the option should be configured with ``match_on_class_mode=2``.
+      One extra DW is consumed for it.
+    - Matching on ``length`` field is not supported.
+
+    - More limitations with ``FLEX_PARSER_PROFILE_ENABLE`` = 0:
+
+      - single DW
+      - ``sample_len`` must be equal to ``option_len`` and not bigger than 1.
+      - ``match_on_class_mode`` different than 1 is not supported.
+      - ``offset`` must be 0.
+
+    Although the parser is created per physical device, this API is port oriented.
+    Each port should call this API before using GENEVE OPT item,
+    but its configuration must use the same options list
+    with same internal order configured by first port.
+
+    Calling this API for different ports under same physical device doesn't consume
+    more DWs, the first one creates the parser and the rest use same configuration.
 
 - VF: flow rules created on VF devices can only match traffic targeted at the
   configured MAC addresses (see ``rte_eth_dev_mac_addr_add()``).
@@ -274,19 +429,50 @@ Limitations
   extension header type = 0x85).
 - Match on GTP extension header is not supported in group 0.
 
+- When using DV/Verbs flow engine (``dv_flow_en`` = 1/0 respectively),
+  match on SPI field in ESP header for group 0 is supported from ConnectX-7.
+
+- Matching on SPI field in ESP header is supported over the PF only.
+
 - Flex item:
 
-  - Hardware support: BlueField-2.
+  - Hardware support: **NVIDIA BlueField-2** and **NVIDIA BlueField-3**.
   - Flex item is supported on PF only.
   - Hardware limits ``header_length_mask_width`` up to 6 bits.
   - Firmware supports 8 global sample fields.
     Each flex item allocates non-shared sample fields from that pool.
   - Supported flex item can have 1 input link - ``eth`` or ``udp``
-    and up to 2 output links - ``ipv4`` or ``ipv6``.
+    and up to 3 output links - ``ipv4`` or ``ipv6``.
   - Flex item fields (``next_header``, ``next_protocol``, ``samples``)
     do not participate in RSS hash functions.
   - In flex item configuration, ``next_header.field_base`` value
     must be byte aligned (multiple of 8).
+  - Modify field with flex item, the offset must be byte aligned (multiple of 8).
+
+- Match on random value:
+
+  - Supported only with HW Steering enabled (``dv_flow_en`` = 2).
+  - Supported only in table with ``nb_flows=1``.
+  - NIC ingress/egress flow in group 0 is not supported.
+  - Supports matching only 16 bits (LSB).
+
+- Match with compare result item (``RTE_FLOW_ITEM_TYPE_COMPARE``):
+
+  - Only supported in HW steering(``dv_flow_en`` = 2) mode.
+  - Only single flow is supported to the flow table.
+  - Only single item is supported per pattern template.
+  - In switch mode, when the ``repr_matching_en`` flag is enabled in the devargs
+    (which is the default setting),
+    the match with compare result item is not supported for ``ingress`` rules.
+    This is because an implicit ``REPRESENTED_PORT`` needs to be added to the matcher,
+    which conflicts with the single item limitation.
+  - Only 32-bit comparison is supported or 16-bit for random field.
+  - Only supported for ``RTE_FLOW_FIELD_META``, ``RTE_FLOW_FIELD_TAG``,
+    ``RTE_FLOW_FIELD_ESP_SEQ_NUM``,
+    ``RTE_FLOW_FIELD_RANDOM`` and ``RTE_FLOW_FIELD_VALUE``.
+  - The field type ``RTE_FLOW_FIELD_VALUE`` must be the base (``b``) field.
+  - The field type ``RTE_FLOW_FIELD_RANDOM`` can only be compared with
+    ``RTE_FLOW_FIELD_VALUE``.
 
 - No Tx metadata go to the E-Switch steering domain for the Flow group 0.
   The flows within group 0 and set metadata action are rejected by hardware.
@@ -391,9 +577,9 @@ Limitations
 
 - E-Switch Manager matching:
 
-  - For Bluefield with old FW
+  - For BlueField with old FW
     which doesn't expose the E-Switch Manager vport ID in the capability,
-    matching E-Switch Manager should be used only in Bluefield embedded CPU mode.
+    matching E-Switch Manager should be used only in BlueField embedded CPU mode.
 
 - Raw encapsulation:
 
@@ -405,8 +591,16 @@ Limitations
   - The input buffer, providing the removal size, is not validated.
   - The buffer size must match the length of the headers to be removed.
 
-- ICMP(code/type/identifier/sequence number) / ICMP6(code/type) matching, IP-in-IP and MPLS flow matching are all
-  mutually exclusive features which cannot be supported together
+- Outer UDP checksum calculation for encapsulation flow actions:
+
+  - Currently available NVIDIA NICs and DPUs do not have a capability to calculate
+    the UDP checksum in the header added using encapsulation flow actions.
+
+    Applications are required to use 0 in UDP checksum field in such flow actions.
+    Resulting packet will have outer UDP checksum equal to 0.
+
+- ICMP(code/type/identifier/sequence number) / ICMP6(code/type/identifier/sequence number) matching,
+  IP-in-IP and MPLS flow matching are all mutually exclusive features which cannot be supported together
   (see :ref:`mlx5_firmware_config`).
 
 - LRO:
@@ -430,7 +624,8 @@ Limitations
 - CRC:
 
   - ``RTE_ETH_RX_OFFLOAD_KEEP_CRC`` cannot be supported with decapsulation
-    for some NICs (such as ConnectX-6 Dx, ConnectX-6 Lx, and BlueField-2).
+    for some NICs (such as ConnectX-6 Dx, ConnectX-6 Lx, ConnectX-7, BlueField-2,
+    and BlueField-3).
     The capability bit ``scatter_fcs_w_decap_disable`` shows NIC support.
 
 - TX mbuf fast free:
@@ -448,15 +643,23 @@ Limitations
 
   - Supports ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action only within NIC Rx and
     E-Switch steering domain.
-  - For E-Switch Sampling flow with sample ratio > 1, additional actions are not
-    supported in the sample actions list.
+  - In E-Switch steering domain, for sampling with sample ratio > 1 in a transfer rule,
+    additional actions are not supported in the sample actions list.
   - For ConnectX-5, the ``RTE_FLOW_ACTION_TYPE_SAMPLE`` is typically used as
     first action in the E-Switch egress flow if with header modify or
     encapsulation actions.
-  - For NIC Rx flow, supports ``MARK``, ``COUNT``, ``QUEUE``, ``RSS`` in the
+  - For NIC Rx flow, supports only ``MARK``, ``COUNT``, ``QUEUE``, ``RSS`` in the
     sample actions list.
-  - For E-Switch mirroring flow, supports ``RAW ENCAP``, ``Port ID``,
-    ``VXLAN ENCAP``, ``NVGRE ENCAP`` in the sample actions list.
+  - In E-Switch steering domain, for mirroring with sample ratio = 1 in a transfer rule,
+    supports only ``RAW_ENCAP``, ``PORT_ID``, ``REPRESENTED_PORT``, ``VXLAN_ENCAP``, ``NVGRE_ENCAP``
+    in the sample actions list.
+  - In E-Switch steering domain, for mirroring with sample ratio = 1 in a transfer rule,
+    the encapsulation actions (``RAW_ENCAP`` or ``VXLAN_ENCAP`` or ``NVGRE_ENCAP``)
+    support uplink port only.
+  - In E-Switch steering domain, for mirroring with sample ratio = 1 in a transfer rule,
+    the port actions (``PORT_ID`` or ``REPRESENTED_PORT``) with uplink port and ``JUMP`` action
+    are not supported without the encapsulation actions
+    (``RAW_ENCAP`` or ``VXLAN_ENCAP`` or ``NVGRE_ENCAP``) in the sample actions list.
   - For ConnectX-5 trusted device, the application metadata with SET_TAG index 0
     is not supported before ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action.
 
@@ -464,8 +667,22 @@ Limitations
 
   - Supports the 'set' and 'add' operations for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
   - Modification of an arbitrary place in a packet via the special ``RTE_FLOW_FIELD_START`` Field ID is not supported.
-  - Modification of the 802.1Q Tag, VXLAN Network or GENEVE Network ID's is not supported.
-  - Encapsulation levels are not supported, can modify outermost header fields only.
+  - Modify field action using ``RTE_FLOW_FIELD_RANDOM`` is not supported.
+  - Modification of the 802.1Q tag is not supported.
+  - Modification of VXLAN network or GENEVE network ID is supported only for HW steering.
+  - Modification of the VXLAN header is supported with below limitations:
+
+    - Only for HW steering (``dv_flow_en=2``).
+    - Support VNI and the last reserved byte modifications for traffic
+      with default UDP destination port: 4789 for VXLAN and VXLAN-GBP, 4790 for VXLAN-GPE.
+
+  - Modification of GENEVE network ID is not supported when configured
+    ``FLEX_PARSER_PROFILE_ENABLE`` supports Geneve TLV options.
+    See :ref:`mlx5_firmware_config` for more flex parser information.
+  - Modification of GENEVE TLV option fields is supported only for HW steering.
+    Only DWs configured in :ref:`parser creation <geneve_parser_api>` can be modified,
+    'type' and 'class' fields can be modified when ``match_on_class_mode=2``.
+  - Modification of GENEVE TLV option data supports one DW per action.
   - Offsets cannot skip past the boundary of a field.
   - If the field type is ``RTE_FLOW_FIELD_MAC_TYPE``
     and packet contains one or more VLAN headers,
@@ -479,6 +696,34 @@ Limitations
   - For flow metadata fields (e.g. META or TAG)
     offset specifies the number of bits to skip from field's start,
     starting from LSB in the least significant byte, in the host order.
+  - Modification of the MPLS header is supported with some limitations:
+
+    - Only in HW steering.
+    - Only in ``src`` field.
+    - Only for outermost tunnel header (``level=2``).
+      For ``RTE_FLOW_FIELD_MPLS``,
+      the default encapsulation level ``0`` describes the outermost tunnel header.
+
+      .. note::
+
+         The default encapsulation level ``0`` describes
+         the "outermost that match is supported",
+         currently it is the first tunnel,
+         but it can be changed to outer when it is supported.
+
+  - Default encapsulation level ``0`` describes outermost.
+  - Encapsulation level ``2`` is supported with some limitations:
+
+    - Only in HW steering.
+    - Only in ``src`` field.
+    - ``RTE_FLOW_FIELD_VLAN_ID`` is not supported.
+    - ``RTE_FLOW_FIELD_IPV4_PROTO`` is not supported.
+    - ``RTE_FLOW_FIELD_IPV6_PROTO/DSCP/ECN`` are not supported.
+    - ``RTE_FLOW_FIELD_ESP_PROTO/SPI/SEQ_NUM`` are not supported.
+    - ``RTE_FLOW_FIELD_TCP_SEQ/ACK_NUM`` are not supported.
+    - Second tunnel fields are not supported.
+
+  - Encapsulation levels greater than ``2`` are not supported.
 
 - Age action:
 
@@ -503,10 +748,54 @@ Limitations
   The last extension header item 'next header' field can specify the following
   header protocol type.
 
+- Match on IPv6 routing extension header supports the following fields only:
+
+  - ``type``
+  - ``next_hdr``
+  - ``segments_left``
+
+  Only supports HW steering (``dv_flow_en=2``).
+
+- IPv6 routing extension push/remove:
+
+  - Supported only with HW Steering enabled (``dv_flow_en=2``).
+  - Supported in non-zero group
+    (no limits on transfer domain if ``fdb_def_rule_en=1`` which is default).
+  - Only supports TCP or UDP as next layer.
+  - IPv6 routing header must be the only present extension.
+  - Not supported on guest port.
+
+- NAT64 action:
+
+  - Supported only with HW Steering enabled (``dv_flow_en`` = 2).
+  - FW version: at least ``XX.39.1002``.
+  - Supported only on non-root table.
+  - Actions order limitation should follow the modify fields action.
+  - The last 2 TAG registers will be used implicitly in address backup mode.
+  - Even if the action can be shared, new steering entries will be created per flow rule.
+    It is recommended a single rule with NAT64 should be shared
+    to reduce the duplication of entries.
+    The default address and other fields conversion will be handled with NAT64 action.
+    To support other address, new rule(s) with modify fields on the IP addresses should be created.
+  - TOS / Traffic Class is not supported now.
+
 - Hairpin:
 
   - Hairpin between two ports could only manual binding and explicit Tx flow mode. For single port hairpin, all the combinations of auto/manual binding and explicit/implicit Tx flow mode could be supported.
   - Hairpin in switchdev SR-IOV mode is not supported till now.
+  - ``out_of_buffer`` statistics are not available on:
+    - NICs older than ConnectX-7.
+    - DPUs older than BlueField-3.
+
+- Quota:
+
+  - Quota implemented for HWS / template API.
+  - Maximal value for quota SET and ADD operations in INT32_MAX (2GB).
+  - Application cannot use 2 consecutive ADD updates.
+    Next tokens update after ADD must always be SET.
+  - Quota flow action cannot be used with Meter or CT flow actions in the same rule.
+  - Quota flow action and item supported in non-root HWS tables.
+  - Maximal number of HW quota and HW meter objects <= 16e6.
 
 - Meter:
 
@@ -538,27 +827,52 @@ Limitations
   - When using HWS flow engine (``dv_flow_en`` = 2),
     only meter mark action is supported.
 
+- Ptype:
+
+  - Only supports HW steering (``dv_flow_en=2``).
+  - The supported values are:
+    L2: ``RTE_PTYPE_L2_ETHER``, ``RTE_PTYPE_L2_ETHER_VLAN``, ``RTE_PTYPE_L2_ETHER_QINQ``
+    L3: ``RTE_PTYPE_L3_IPV4``, ``RTE_PTYPE_L3_IPV6``
+    L4: ``RTE_PTYPE_L4_TCP``, ``RTE_PTYPE_L4_UDP``, ``RTE_PTYPE_L4_ICMP``
+    and their ``RTE_PTYPE_INNER_XXX`` counterparts as well as ``RTE_PTYPE_TUNNEL_ESP``.
+    Any other values are not supported. Using them as a value will cause unexpected behavior.
+  - Matching on both outer and inner IP fragmented is supported
+    using ``RTE_PTYPE_L4_FRAG`` and ``RTE_PTYPE_INNER_L4_FRAG`` values.
+    They are not part of L4 types, so they should be provided explicitly
+    as a mask value during pattern template creation.
+    Providing ``RTE_PTYPE_L4_MASK`` during pattern template creation
+    and ``RTE_PTYPE_L4_FRAG`` during flow rule creation
+    will cause unexpected behavior.
+
 - Integrity:
 
-  - Integrity offload is enabled starting from **ConnectX-6 Dx**.
   - Verification bits provided by the hardware are ``l3_ok``, ``ipv4_csum_ok``, ``l4_ok``, ``l4_csum_ok``.
   - ``level`` value 0 references outer headers.
   - Negative integrity item verification is not supported.
-  - Multiple integrity items not supported in a single flow rule.
-  - Flow rule items supplied by application must explicitly specify network headers referred by integrity item.
-    For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits, reference to L4 network header,
-    TCP or UDP, must be in the rule pattern as well::
 
-      flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end …
+  - With SW steering (``dv_flow_en=1``)
 
-      flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec l4_ok / eth / ipv4 proto is udp / end …
+    - Integrity offload is enabled starting from **ConnectX-6 Dx**.
+    - Multiple integrity items not supported in a single flow rule.
+    - Flow rule items supplied by application must explicitly specify
+      network headers referred by integrity item.
+
+      For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits,
+      reference to L4 network header, TCP or UDP, must be in the rule pattern as well::
+
+         flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end ...
+         flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec l4_ok / eth / ipv4 proto is udp / end ...
+
+  - With HW steering (``dv_flow_en=2``)
+    - The ``l3_ok`` field represents all L3 checks, but nothing about IPv4 checksum.
+    - The ``l4_ok`` field represents all L4 checks including L4 checksum.
 
 - Connection tracking:
 
   - Cannot co-exist with ASO meter, ASO age action in a single flow rule.
   - Flow rules insertion rate and memory consumption need more optimization.
-  - 256 ports maximum.
-  - 4M connections maximum with ``dv_flow_en`` 1 mode. 16M with ``dv_flow_en`` 2.
+  - 16 ports maximum (with ``dv_flow_en=1``).
+  - 32M connections maximum.
 
 - Multi-thread flow insertion:
 
@@ -572,6 +886,12 @@ Limitations
 - Bonding under socket direct mode
 
   - Needs MLNX_OFED 5.4+.
+
+- Match on aggregated affinity:
+
+  - Supports NIC ingress flow in group 0.
+  - Supports E-Switch flow in group 0 and depends on
+    device-managed flow steering (DMFS) mode.
 
 - Timestamps:
 
@@ -597,7 +917,43 @@ Limitations
 
   Matching on checksum and sequence needs MLNX_OFED 5.6+.
 
+- Matching on NVGRE header:
+
+  - c_rc_k_s_rsvd0_ver
+  - protocol
+  - tni
+  - flow_id
+
+  In SW steering (``dv_flow_en`` = 1), only tni is supported.
+  In HW steering (``dv_flow_en`` = 2), all fields are supported.
+
 - The NIC egress flow rules on representor port are not supported.
+
+- In switch mode, flow rule matching ``RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT`` item
+  with port ID ``UINT16_MAX`` means matching packets sent by E-Switch manager from software.
+  Need MLNX_OFED 24.04+.
+
+- A driver limitation for ``RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR`` action
+  restricts the ``port_id`` configuration to only accept the value ``0xffff``,
+  indicating the E-Switch manager.
+  If the ``repr_matching_en`` flag is enabled, the traffic will be directed
+  to the representor of the source virtual port (SF/VF), while if it is disabled,
+  the traffic will be routed based on the steering rules in the ingress domain.
+
+- Send to kernel action (``RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL``):
+
+  - Supported on non-root table.
+  - Supported in isolated mode.
+  - In HW steering (``dv_flow_en`` = 2):
+    - not supported on guest port.
+
+- During live migration to a new process set its flow engine as standby mode,
+  the user should only program flow rules in group 0 (``fdb_def_rule_en=0``).
+  Live migration is only supported under SWS (``dv_flow_en=1``).
+  The flow group 0 is shared between DPDK processes
+  while the other flow groups are limited to the current process.
+  The flow engine of a process cannot move from active to standby mode
+  if preceding active application rules are still present and vice versa.
 
 
 Statistics
@@ -610,6 +966,74 @@ Port statistics can be queried using ``rte_eth_stats_get()``. The received and s
 Extended statistics can be queried using ``rte_eth_xstats_get()``. The extended statistics expose a wider set of counters counted by the device. The extended port statistics counts the number of packets received or sent successfully by the port. As NVIDIA NICs are using the :ref:`Bifurcated Linux Driver <linux_gsg_linux_drivers>` those counters counts also packet received or sent by the Linux kernel. The counters with ``_phy`` suffix counts the total events on the physical port, therefore not valid for VF.
 
 Finally per-flow statistics can by queried using ``rte_flow_query`` when attaching a count action for specific flow. The flow counter counts the number of packets received successfully by the port and match the specific flow.
+
+
+Extended Statistics Counters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Send Scheduling Counters
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The mlx5 PMD provides a comprehensive set of counters designed for
+debugging and diagnostics related to packet scheduling during transmission.
+These counters are applicable only if the port was configured with the ``tx_pp`` devarg
+and reflect the status of the PMD scheduling infrastructure
+based on Clock and Rearm Queues, used as a workaround on ConnectX-6 DX NICs.
+
+``tx_pp_missed_interrupt_errors``
+  Indicates that the Rearm Queue interrupt was not serviced on time.
+  The EAL manages interrupts in a dedicated thread,
+  and it is possible that other time-consuming actions were being processed concurrently.
+
+``tx_pp_rearm_queue_errors``
+  Signifies hardware errors that occurred on the Rearm Queue,
+  typically caused by delays in servicing interrupts.
+
+``tx_pp_clock_queue_errors``
+  Reflects hardware errors on the Clock Queue,
+  which usually indicate configuration issues
+  or problems with the internal NIC hardware or firmware.
+
+``tx_pp_timestamp_past_errors``
+  Tracks the application attempted to send packets with timestamps set in the past.
+  It is useful for debugging application code
+  and does not indicate a malfunction of the PMD.
+
+``tx_pp_timestamp_future_errors``
+  Records attempts by the application to send packets
+  with timestamps set too far into the future,
+  exceeding the hardware’s scheduling capabilities.
+  Like the previous counter, it aids in application debugging
+  without suggesting a PMD malfunction.
+
+``tx_pp_jitter``
+  Measures the internal NIC real-time clock jitter estimation
+  between two consecutive Clock Queue completions, expressed in nanoseconds.
+  Significant jitter may signal potential clock synchronization issues,
+  possibly due to inappropriate adjustments
+  made by a system PTP (Precision Time Protocol) agent.
+
+``tx_pp_wander``
+  Indicates the long-term stability of the internal NIC real-time clock
+  over 2^24 completions, measured in nanoseconds.
+  Significant wander may also suggest clock synchronization problems.
+
+``tx_pp_sync_lost``
+  A general operational indicator;
+  a non-zero value indicates that the driver has lost synchronization with the Clock Queue,
+  resulting in improper scheduling operations.
+  To restore correct scheduling functionality, it is necessary to restart the port.
+
+The following counters are particularly valuable for verifying and debugging application code.
+They do not indicate driver or hardware malfunctions
+and are applicable to newer hardware with direct on-time scheduling capabilities
+(such as ConnectX-7 and above):
+
+``tx_pp_timestamp_order_errors``
+  Indicates attempts by the application to send packets
+  with timestamps that are not in strictly ascending order.
+  Since the PMD does not reorder packets within hardware queues,
+  violations of timestamp order can lead to packets being sent at incorrect times.
 
 
 Compilation
@@ -631,8 +1055,8 @@ Firmware configuration
 
 See :ref:`mlx5_firmware_config` guide.
 
-Driver options
-~~~~~~~~~~~~~~
+Runtime Configuration
+~~~~~~~~~~~~~~~~~~~~~
 
 Please refer to :ref:`mlx5 common options <mlx5_common_driver_options>`
 for an additional list of options shared with other mlx5 drivers.
@@ -646,20 +1070,26 @@ for an additional list of options shared with other mlx5 drivers.
   Multi-Packet Rx queue configuration: Hash RSS format is used in case
   MPRQ is disabled, Checksum format is used in case MPRQ is enabled.
 
-  Specifying 2 as a ``rxq_cqe_comp_en`` value selects Flow Tag format for
-  better compression rate in case of RTE Flow Mark traffic.
-  Specifying 3 as a ``rxq_cqe_comp_en`` value selects Checksum format.
-  Specifying 4 as a ``rxq_cqe_comp_en`` value selects L3/L4 Header format for
+  The lower 3 bits define the CQE compression format:
+  Specifying 2 in these bits of the ``rxq_cqe_comp_en`` parameter selects
+  the flow tag format for better compression rate in case of flow mark traffic.
+  Specifying 3 in these bits selects checksum format.
+  Specifying 4 in these bits selects L3/L4 header format for
   better compression rate in case of mixed TCP/UDP and IPv4/IPv6 traffic.
   CQE compression format selection requires DevX to be enabled. If there is
   no DevX enabled/supported the value is reset to 1 by default.
 
+  8th bit defines the CQE compression layout.
+  Setting this bit to 1 turns enhanced CQE compression layout on.
+  Enhanced CQE compression is designed for better latency and SW utilization.
+  This bit is ignored if only the basic CQE compression layout is supported.
+
   Supported on:
 
   - x86_64 with ConnectX-4, ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, BlueField and BlueField-2.
+    ConnectX-6 Lx, ConnectX-7, BlueField, BlueField-2, and BlueField-3.
   - POWER9 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, BlueField and BlueField-2.
+    ConnectX-6 Lx, ConnectX-7 BlueField, BlueField-2, and BlueField-3.
 
 - ``rxq_pkt_pad_en`` parameter [int]
 
@@ -672,9 +1102,9 @@ for an additional list of options shared with other mlx5 drivers.
   Supported on:
 
   - x86_64 with ConnectX-4, ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, BlueField and BlueField-2.
+    ConnectX-6 Lx, ConnectX-7, BlueField, BlueField-2, and BlueField-3.
   - POWER8 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, BlueField and BlueField-2.
+    ConnectX-6 Lx, ConnectX-7, BlueField, BlueField-2, and BlueField-3.
 
 - ``delay_drop`` parameter [int]
 
@@ -912,8 +1342,8 @@ for an additional list of options shared with other mlx5 drivers.
 - ``txq_mpw_en`` parameter [int]
 
   A nonzero value enables Enhanced Multi-Packet Write (eMPW) for ConnectX-5,
-  ConnectX-6, ConnectX-6 Dx, ConnectX-6 Lx, BlueField, BlueField-2.
-  eMPW allows the Tx burst function to pack up multiple packets
+  ConnectX-6, ConnectX-6 Dx, ConnectX-6 Lx, ConnectX-7, BlueField, BlueField-2
+  BlueField-3. eMPW allows the Tx burst function to pack up multiple packets
   in a single descriptor session in order to save PCI bandwidth
   and improve performance at the cost of a slightly higher CPU usage.
   When ``txq_inline_mpw`` is set along with ``txq_mpw_en``,
@@ -958,7 +1388,7 @@ for an additional list of options shared with other mlx5 drivers.
 - ``tx_vec_en`` parameter [int]
 
   A nonzero value enables Tx vector on ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-  ConnectX-6 Lx, BlueField and BlueField-2 NICs
+  ConnectX-6 Lx, ConnectX-7, BlueField, BlueField-2, and BlueField-3 NICs
   if the number of global Tx queues on the port is less than ``txqs_max_vec``.
   The parameter is deprecated and ignored.
 
@@ -999,7 +1429,8 @@ for an additional list of options shared with other mlx5 drivers.
     ``META`` related actions and items operate only within NIC Tx and
     NIC Rx steering domains, no ``MARK`` and ``META`` information crosses
     the domain boundaries. The ``MARK`` item is 24 bits wide, the ``META``
-    item is 32 bits wide and match supported on egress only.
+    item is 32 bits wide and match supported on egress only
+    when ``dv_flow_en`` = 1.
 
   - 1, this engages extensive metadata mode, the ``MARK`` and ``META``
     related actions and items operate within all supported steering domains,
@@ -1121,6 +1552,9 @@ for an additional list of options shared with other mlx5 drivers.
   - 0. If representor matching is disabled, then there will be no implicit
     item added. As a result, ingress flow rules will match traffic
     coming to any port, not only the port on which flow rule is created.
+    Because of that, default flow rules for ingress traffic cannot be created
+    and port starts in isolated mode by default. Port cannot be switched back
+    to non-isolated mode.
 
   - 1. If representor matching is enabled (default setting),
     then each ingress pattern template has an implicit REPRESENTED_PORT
@@ -1201,52 +1635,138 @@ for an additional list of options shared with other mlx5 drivers.
   By default, the PMD will set this value to 1.
 
 
-Supported NICs
---------------
+Multiport E-Switch
+------------------
 
-The following NVIDIA device families are supported by the same mlx5 driver:
+In standard deployments of NVIDIA ConnectX and BlueField HCAs, where embedded switch is enabled,
+each physical port is associated with a single switching domain.
+Only PFs, VFs and SFs related to that physical port are connected to this domain
+and offloaded flow rules are allowed to steer traffic only between the entities in the given domain.
 
-  - ConnectX-4
-  - ConnectX-4 Lx
-  - ConnectX-5
-  - ConnectX-5 Ex
-  - ConnectX-6
-  - ConnectX-6 Dx
-  - ConnectX-6 Lx
-  - ConnectX-7
-  - BlueField
-  - BlueField-2
+The following diagram pictures the high level overview of this architecture::
 
-Below are detailed device names:
+       .---. .------. .------. .---. .------. .------.
+       |PF0| |PF0VFi| |PF0SFi| |PF1| |PF1VFi| |PF1SFi|
+       .-+-. .--+---. .--+---. .-+-. .--+---. .--+---.
+         |      |        |       |      |        |
+     .---|------|--------|-------|------|--------|---------.
+     |   |      |        |       |      |        |      HCA|
+     | .-+------+--------+---. .-+------+--------+---.     |
+     | |                     | |                     |     |
+     | |      E-Switch       | |     E-Switch        |     |
+     | |         PF0         | |        PF1          |     |
+     | |                     | |                     |     |
+     | .---------+-----------. .--------+------------.     |
+     |           |                      |                  |
+     .--------+--+---+---------------+--+---+--------------.
+              |      |               |      |
+              | PHY0 |               | PHY1 |
+              |      |               |      |
+              .------.               .------.
 
-* NVIDIA\ |reg| ConnectX\ |reg|-4 10G MCX4111A-XCAT (1x10G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 10G MCX412A-XCAT (2x10G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 25G MCX4111A-ACAT (1x25G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 25G MCX412A-ACAT (2x25G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX413A-BCAT (1x40G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX4131A-BCAT (1x40G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX415A-BCAT (1x40G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX413A-GCAT (1x50G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX4131A-GCAT (1x50G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX414A-BCAT (2x50G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX415A-GCAT (1x50G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX416A-BCAT (2x50G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX416A-GCAT (2x50G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX415A-CCAT (1x100G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 100G MCX416A-CCAT (2x100G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4111A-XCAT (1x10G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4121A-XCAT (2x10G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4111A-ACAT (1x25G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4121A-ACAT (2x25G)
-* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 40G MCX4131A-BCAT (1x40G)
-* NVIDIA\ |reg| ConnectX\ |reg|-5 100G MCX556A-ECAT (2x100G)
-* NVIDIA\ |reg| ConnectX\ |reg|-5 Ex EN 100G MCX516A-CDAT (2x100G)
-* NVIDIA\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
-* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
-* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
-* NVIDIA\ |reg| ConnectX\ |reg|-6 Lx EN 25G MCX631102AN-ADAT (2x25G)
-* NVIDIA\ |reg| ConnectX\ |reg|-7 200G CX713106AE-HEA_QP1_Ax (2x200G)
-* NVIDIA\ |reg| BlueField\ |reg|-2 25G MBF2H332A-AEEOT_A1 (2x25G)
+Multiport E-Switch is a deployment scenario where:
+
+- All physical ports, PFs, VFs and SFs share the same switching domain.
+- Each physical port gets a separate representor port.
+- Traffic can be matched or forwarded explicitly between any of the entities
+  connected to the domain.
+
+The following diagram pictures the high level overview of this architecture::
+
+       .---. .------. .------. .---. .------. .------.
+       |PF0| |PF0VFi| |PF0SFi| |PF1| |PF1VFi| |PF1SFi|
+       .-+-. .--+---. .--+---. .-+-. .--+---. .--+---.
+         |      |        |       |      |        |
+     .---|------|--------|-------|------|--------|---------.
+     |   |      |        |       |      |        |      HCA|
+     | .-+------+--------+-------+------+--------+---.     |
+     | |                                             |     |
+     | |                   Shared                    |     |
+     | |                  E-Switch                   |     |
+     | |                                             |     |
+     | .---------+----------------------+------------.     |
+     |           |                      |                  |
+     .--------+--+---+---------------+--+---+--------------.
+              |      |               |      |
+              | PHY0 |               | PHY1 |
+              |      |               |      |
+              .------.               .------.
+
+In this deployment a single application can control the switching and forwarding behavior for all
+entities on the HCA.
+
+With this configuration, mlx5 PMD supports:
+
+- matching traffic coming from physical port, PF, VF or SF using REPRESENTED_PORT items;
+- matching traffic coming from E-Switch manager
+  using REPRESENTED_PORT item with port ID ``UINT16_MAX``;
+- forwarding traffic to physical port, PF, VF or SF using REPRESENTED_PORT actions;
+
+Requirements
+~~~~~~~~~~~~
+
+Supported HCAs:
+
+- ConnectX family: ConnectX-6 Dx and above.
+- BlueField family: BlueField-2 and above.
+- FW version: at least ``XX.37.1014``.
+
+Supported mlx5 kernel modules versions:
+
+- Upstream Linux - from version 6.3.
+- Modules packaged in MLNX_OFED - from version v23.04-0.5.3.3.
+
+Configuration
+~~~~~~~~~~~~~
+
+#. Apply required FW configuration::
+
+      sudo mlxconfig -d /dev/mst/mt4125_pciconf0 set LAG_RESOURCE_ALLOCATION=1
+
+#. Reset FW or cold reboot the host.
+
+#. Switch E-Switch mode on all of the PFs to ``switchdev`` mode::
+
+      sudo devlink dev eswitch set pci/0000:08:00.0 mode switchdev
+      sudo devlink dev eswitch set pci/0000:08:00.1 mode switchdev
+
+#. Enable Multiport E-Switch on all of the PFs::
+
+      sudo devlink dev param set pci/0000:08:00.0 name esw_multiport value true cmode runtime
+      sudo devlink dev param set pci/0000:08:00.1 name esw_multiport value true cmode runtime
+
+#. Configure required number of VFs/SFs::
+
+      echo 4 | sudo tee /sys/class/net/eth2/device/sriov_numvfs
+      echo 4 | sudo tee /sys/class/net/eth3/device/sriov_numvfs
+
+#. Start testpmd and verify that all ports are visible::
+
+      $ sudo dpdk-testpmd -a 08:00.0,dv_flow_en=2,representor=pf0-1vf0-3 -- -i
+      testpmd> show port summary all
+      Number of available ports: 10
+      Port MAC Address       Name         Driver         Status   Link
+      0    E8:EB:D5:18:22:BC 08:00.0_p0   mlx5_pci       up       200 Gbps
+      1    E8:EB:D5:18:22:BD 08:00.0_p1   mlx5_pci       up       200 Gbps
+      2    D2:F6:43:0B:9E:19 08:00.0_representor_c0pf0vf0 mlx5_pci       up       200 Gbps
+      3    E6:42:27:B7:68:BD 08:00.0_representor_c0pf0vf1 mlx5_pci       up       200 Gbps
+      4    A6:5B:7F:8B:B8:47 08:00.0_representor_c0pf0vf2 mlx5_pci       up       200 Gbps
+      5    12:93:50:45:89:02 08:00.0_representor_c0pf0vf3 mlx5_pci       up       200 Gbps
+      6    06:D3:B2:79:FE:AC 08:00.0_representor_c0pf1vf0 mlx5_pci       up       200 Gbps
+      7    12:FC:08:E4:C2:CA 08:00.0_representor_c0pf1vf1 mlx5_pci       up       200 Gbps
+      8    8E:A9:9A:D0:35:4C 08:00.0_representor_c0pf1vf2 mlx5_pci       up       200 Gbps
+      9    E6:35:83:1F:B0:A9 08:00.0_representor_c0pf1vf3 mlx5_pci       up       200 Gbps
+
+Limitations
+~~~~~~~~~~~
+
+- Multiport E-Switch is not supported on Windows.
+- Multiport E-Switch is supported only with HW Steering flow engine (``dv_flow_en=2``).
+- Matching traffic coming from a physical port and forwarding it to a physical port
+  (either the same or other one) is not supported.
+
+  In order to achieve such a functionality, an application has to setup hairpin queues
+  between physical port representors and forward the traffic using hairpin queues.
 
 
 Sub-Function
@@ -1267,15 +1787,15 @@ Use <sfnum> to probe SF representor::
 Performance tuning
 ------------------
 
-1. Configure aggressive CQE Zipping for maximum performance::
+#. Configure aggressive CQE Zipping for maximum performance::
 
         mlxconfig -d <mst device> s CQE_COMPRESSION=1
 
-  To set it back to the default CQE Zipping mode use::
+   To set it back to the default CQE Zipping mode use::
 
         mlxconfig -d <mst device> s CQE_COMPRESSION=0
 
-2. In case of virtualization:
+#. In case of virtualization:
 
    - Make sure that hypervisor kernel is 3.16 or newer.
    - Configure boot with ``iommu=pt``.
@@ -1283,7 +1803,7 @@ Performance tuning
    - Make sure to allocate a VM on huge pages.
    - Make sure to set CPU pinning.
 
-3. Use the CPU near local NUMA node to which the PCIe adapter is connected,
+#. Use the CPU near local NUMA node to which the PCIe adapter is connected,
    for better performance. For VMs, verify that the right CPU
    and NUMA node are pinned according to the above. Run::
 
@@ -1291,21 +1811,21 @@ Performance tuning
 
    to identify the NUMA node to which the PCIe adapter is connected.
 
-4. If more than one adapter is used, and root complex capabilities allow
+#. If more than one adapter is used, and root complex capabilities allow
    to put both adapters on the same NUMA node without PCI bandwidth degradation,
    it is recommended to locate both adapters on the same NUMA node.
    This in order to forward packets from one to the other without
    NUMA performance penalty.
 
-5. Disable pause frames::
+#. Disable pause frames::
 
         ethtool -A <netdev> rx off tx off
 
-6. Verify IO non-posted prefetch is disabled by default. This can be checked
+#. Verify IO non-posted prefetch is disabled by default. This can be checked
    via the BIOS configuration. Please contact you server provider for more
    information about the settings.
 
-.. note::
+   .. note::
 
         On some machines, depends on the machine integrator, it is beneficial
         to set the PCI max read request parameter to 1K. This can be
@@ -1322,7 +1842,7 @@ Performance tuning
         The XXX can be different on different systems. Make sure to configure
         according to the setpci output.
 
-7. To minimize overhead of searching Memory Regions:
+#. To minimize overhead of searching Memory Regions:
 
    - '--socket-mem' is recommended to pin memory by predictable amount.
    - Configure per-lcore cache when creating Mempools for packet buffer.
@@ -1547,6 +2067,14 @@ shortened below as "OFED".
    |                       | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
 
+.. table:: Minimal SW/HW versions for flow template API
+
+   +-----------------+--------------------+--------------------+
+   | DPDK            | NIC                | Firmware           |
+   +=================+====================+====================+
+   | 22.11           | ConnectX-6 Dx      | xx.35.1012         |
+   +-----------------+--------------------+--------------------+
+
 Notes for metadata
 ------------------
 
@@ -1572,6 +2100,77 @@ All references to these flows held by the application should be discarded
 directly but neither destroyed nor flushed.
 
 The application should re-create the flows as required after the port restart.
+
+
+Notes for flow counters
+-----------------------
+
+mlx5 PMD supports the ``COUNT`` flow action,
+which provides an ability to count packets (and bytes)
+matched against a given flow rule.
+This section describes the high level overview of
+how this support is implemented and limitations.
+
+HW steering flow engine
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Flow counters are allocated from HW in bulks.
+A set of bulks forms a flow counter pool managed by PMD.
+When flow counters are queried from HW,
+each counter is identified by an offset in a given bulk.
+Querying HW flow counter requires sending a request to HW,
+which will request a read of counter values for given offsets.
+HW will asynchronously provide these values through a DMA write.
+
+In order to optimize HW to SW communication,
+these requests are handled in a separate counter service thread
+spawned by mlx5 PMD.
+This service thread will refresh the counter values stored in memory,
+in cycles, each spanning ``svc_cycle_time`` milliseconds.
+By default, ``svc_cycle_time`` is set to 500.
+When applications query the ``COUNT`` flow action,
+PMD returns the values stored in host memory.
+
+mlx5 PMD manages 3 global rings of allocated counter offsets:
+
+- ``free`` ring - Counters which were not used at all.
+- ``wait_reset`` ring - Counters which were used in some flow rules,
+  but were recently freed (flow rule was destroyed
+  or an indirect action was destroyed).
+  Since the count value might have changed
+  between the last counter service thread cycle and the moment it was freed,
+  the value in host memory might be stale.
+  During the next service thread cycle,
+  such counters will be moved to ``reuse`` ring.
+- ``reuse`` ring - Counters which were used at least once
+  and can be reused in new flow rules.
+
+When counters are assigned to a flow rule (or allocated to indirect action),
+the PMD first tries to fetch a counter from ``reuse`` ring.
+If it's empty, the PMD fetches a counter from ``free`` ring.
+
+The counter service thread works as follows:
+
+#. Record counters stored in ``wait_reset`` ring.
+#. Read values of all counters which were used at least once
+   or are currently in use.
+#. Move recorded counters from ``wait_reset`` to ``reuse`` ring.
+#. Sleep for ``(query time) - svc_cycle_time`` milliseconds
+#. Repeat.
+
+Because freeing a counter (by destroying a flow rule or destroying indirect action)
+does not immediately make it available for the application,
+the PMD might return:
+
+- ``ENOENT`` if no counter is available in ``free``, ``reuse``
+  or ``wait_reset`` rings.
+  No counter will be available until the application releases some of them.
+- ``EAGAIN`` if no counter is available in ``free`` and ``reuse`` rings,
+  but there are counters in ``wait_reset`` ring.
+  This means that after the next service thread cycle new counters will be available.
+
+The application has to be aware that flow rule create or indirect action create
+might need be retried.
 
 
 Notes for hairpin
@@ -1831,9 +2430,15 @@ The procedure below is an example of using a ConnectX-5 adapter card (pf0) with 
         $ ip link set p0 vf 0 trust on
         $ ip link set p0 vf 1 trust on
 
-#. Configure all VFs using mlxreg::
+#. Configure all VFs using ``mlxreg``:
 
-   $ mlxreg -d /dev/mst/mt4121_pciconf0 --reg_name VHCA_TRUST_LEVEL --yes --set "all_vhca=0x1,trust_level=0x1"
+   - For MFT >= 4.21::
+
+     $ mlxreg -d /dev/mst/mt4121_pciconf0 --reg_name VHCA_TRUST_LEVEL --yes --indexes 'all_vhca=0x1,vhca_id=0x0' --set 'trust_level=0x1'
+
+   - For MFT < 4.21::
+
+     $ mlxreg -d /dev/mst/mt4121_pciconf0 --reg_name VHCA_TRUST_LEVEL --yes --set "all_vhca=0x1,trust_level=0x1"
 
    .. note::
 
@@ -1842,6 +2447,87 @@ The procedure below is an example of using a ConnectX-5 adapter card (pf0) with 
 #. For each VF PCIe, using the following command to bind the driver::
 
    $ echo "0000:82:00.2" >> /sys/bus/pci/drivers/mlx5_core/bind
+
+How to trace Tx datapath
+------------------------
+
+The mlx5 PMD provides Tx datapath tracing capability with extra debug information:
+when and how packets were scheduled,
+and when the actual sending was completed by the NIC hardware.
+
+Steps to enable Tx datapath tracing:
+
+#. Build DPDK application with enabled datapath tracing
+
+   The Meson option ``--enable_trace_fp=true`` and
+   the C flag ``ALLOW_EXPERIMENTAL_API`` should be specified.
+
+   .. code-block:: console
+
+      meson configure --buildtype=debug -Denable_trace_fp=true
+         -Dc_args='-DRTE_LIBRTE_MLX5_DEBUG -DRTE_ENABLE_ASSERT -DALLOW_EXPERIMENTAL_API' build
+
+#. Configure the NIC
+
+   If the sending completion timings are important,
+   the NIC should be configured to provide realtime timestamps.
+   The non-volatile settings parameter  ``REAL_TIME_CLOCK_ENABLE`` should be configured as ``1``.
+
+   .. code-block:: console
+
+      mlxconfig -d /dev/mst/mt4125_pciconf0 s REAL_TIME_CLOCK_ENABLE=1
+
+   The ``mlxconfig`` utility is part of the MFT package.
+
+#. Run application with EAL parameter enabling tracing in mlx5 Tx datapath
+
+   By default all tracepoints are disabled.
+   To analyze Tx datapath and its timings: ``--trace=pmd.net.mlx5.tx``.
+
+#. Commit the tracing data to the storage (with ``rte_trace_save()`` API call).
+
+#. Install or build the ``babeltrace2`` package
+
+   The Python script analyzing gathered trace data uses the ``babeltrace2`` library.
+   The package should be either installed or built from source as shown below.
+
+   .. code-block:: console
+
+      git clone https://github.com/efficios/babeltrace.git
+      cd babeltrace
+      ./bootstrap
+      ./configure -help
+      ./configure --disable-api-doc --disable-man-pages
+                  --disable-python-bindings-doc --enable-python-plugins
+                  --enable-python-binding
+
+#. Run analyzing script
+
+   ``mlx5_trace.py`` is used to combine related events (packet firing and completion)
+   and to show the results in human-readable view.
+
+   The analyzing script is located in the DPDK source tree: ``drivers/net/mlx5/tools``.
+
+   It requires Python 3.6 and ``babeltrace2`` package.
+
+   The parameter of the script is the trace data folder.
+
+   The optional parameter ``-a`` forces to dump incomplete bursts.
+
+   The optional parameter ``-v [level]`` forces to dump raw records data
+   for the specified level and below.
+   Level 0 dumps bursts, level 1 dumps WQEs, level 2 dumps mbufs.
+
+   .. code-block:: console
+
+      mlx5_trace.py /var/log/rte-2023-01-23-AM-11-52-39
+
+#. Interpreting the script output data
+
+   All the timings are given in nanoseconds.
+   The list of Tx bursts per port/queue is presented in the output.
+   Each list element contains the list of built WQEs with specific opcodes.
+   Each WQE contains the list of the encompassed packets to send.
 
 Host shaper
 -----------
@@ -1894,7 +2580,7 @@ Then the PMD call the callback registered previously,
 which will delay a while to let Rx queue empty,
 then disable host shaper.
 
-Let's assume we have a simple BlueField 2 setup:
+Let's assume we have a simple BlueField-2 setup:
 port 0 is uplink, port 1 is VF representor.
 Each port has 2 Rx queues.
 To control traffic from the host to the Arm device,
@@ -1937,8 +2623,8 @@ and disables ``avail_thresh_triggered``.
    testpmd> mlx5 set port 1 host_shaper avail_thresh_triggered 0 rate 50
 
 
-Testpmd
--------
+Testpmd driver specific commands
+--------------------------------
 
 port attach with socket path
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2001,3 +2687,123 @@ where:
 * ``sw_queue_id``: queue index in range [64536, 65535].
   This range is the highest 1000 numbers.
 * ``hw_queue_id``: queue index given by HW in queue creation.
+
+
+Dump RQ/SQ/CQ HW context for debug purposes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Dump RQ/CQ HW context for a given port/queue to a file::
+
+   testpmd> mlx5 port (port_id) queue (queue_id) dump rq_context (file_name)
+
+Dump SQ/CQ HW context for a given port/queue to a file::
+
+   testpmd> mlx5 port (port_id) queue (queue_id) dump sq_context (file_name)
+
+
+Set Flow Engine Mode
+~~~~~~~~~~~~~~~~~~~~
+
+Set the flow engine to active or standby mode with specific flags (bitmap style).
+See ``RTE_PMD_MLX5_FLOW_ENGINE_FLAG_*`` for the flag definitions.
+
+.. code-block:: console
+
+   testpmd> mlx5 set flow_engine <active|standby> [<flags>]
+
+This command is used for testing live migration,
+and works for software steering only.
+Default FDB jump should be disabled if switchdev is enabled.
+The mode will propagate to all the probed ports.
+
+
+GENEVE TLV options parser
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+See the :ref:`GENEVE parser API <geneve_parser_api>` for more information.
+
+Set
+^^^
+
+Add single option to the global option list::
+
+   testpmd> mlx5 set tlv_option class (class) type (type) len (length) \
+            offset (sample_offset) sample_len (sample_len) \
+            class_mode (ignore|fixed|matchable) data (0xffffffff|0x0 [0xffffffff|0x0]*)
+
+where:
+
+* ``class``: option class.
+* ``type``: option type.
+* ``length``: option data length in 4 bytes granularity.
+* ``sample_offset``: offset to data list related to option data start.
+  The offset is in 4 bytes granularity.
+* ``sample_len``: length data list in 4 bytes granularity.
+* ``ignore``: ignore ``class`` field.
+* ``fixed``: option class is fixed and defines the option along with the type.
+* ``matchable``: ``class`` field is matchable.
+* ``data``: list of masks indicating which DW should be configure.
+  The size of list should be equal to ``sample_len``.
+* ``0xffffffff``: this DW should be configure.
+* ``0x0``: this DW shouldn't be configure.
+
+Flush
+^^^^^
+
+Remove several options from the global option list::
+
+   testpmd> mlx5 flush tlv_options max (nb_option)
+
+where:
+
+* ``nb_option``: maximum number of option to remove from list. The order is LIFO.
+
+List
+^^^^
+
+Print all options which are set in the global option list so far::
+
+   testpmd> mlx5 list tlv_options
+
+Output contains the values of each option, one per line.
+There is no output at all when no options are configured on the global list::
+
+   ID      Type    Class   Class_mode   Len     Offset  Sample_len   Data
+   [...]   [...]   [...]   [...]        [...]   [...]   [...]        [...]
+
+Setting several options and listing them::
+
+   testpmd> mlx5 set tlv_option class 1 type 1 len 4 offset 1 sample_len 3
+            class_mode fixed data 0xffffffff 0x0 0xffffffff
+   testpmd: set new option in global list, now it has 1 options
+   testpmd> mlx5 set tlv_option class 1 type 2 len 2 offset 0 sample_len 2
+            class_mode fixed data 0xffffffff 0xffffffff
+   testpmd: set new option in global list, now it has 2 options
+   testpmd> mlx5 set tlv_option class 1 type 3 len 5 offset 4 sample_len 1
+            class_mode fixed data 0xffffffff
+   testpmd: set new option in global list, now it has 3 options
+   testpmd> mlx5 list tlv_options
+   ID      Type    Class   Class_mode   Len    Offset  Sample_len  Data
+   0       1       1       fixed        4      1       3           0xffffffff 0x0 0xffffffff
+   1       2       1       fixed        2      0       2           0xffffffff 0xffffffff
+   2       3       1       fixed        5      4       1           0xffffffff
+   testpmd>
+
+Apply
+^^^^^
+
+Create GENEVE TLV parser for specific port using option list which are set so far::
+
+   testpmd> mlx5 port (port_id) apply tlv_options
+
+The same global option list can used by several ports.
+
+Destroy
+^^^^^^^
+
+Destroy GENEVE TLV parser for specific port::
+
+   testpmd> mlx5 port (port_id) destroy tlv_options
+
+This command doesn't destroy the global list,
+For releasing options, ``flush`` command should be used.

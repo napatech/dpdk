@@ -31,20 +31,20 @@ rte_bpf_get_jit(const struct rte_bpf *bpf, struct rte_bpf_jit *jit)
 }
 
 int
-bpf_jit(struct rte_bpf *bpf)
+__rte_bpf_jit(struct rte_bpf *bpf)
 {
 	int32_t rc;
 
 #if defined(RTE_ARCH_X86_64)
-	rc = bpf_jit_x86(bpf);
+	rc = __rte_bpf_jit_x86(bpf);
 #elif defined(RTE_ARCH_ARM64)
-	rc = bpf_jit_arm64(bpf);
+	rc = __rte_bpf_jit_arm64(bpf);
 #else
 	rc = -ENOTSUP;
 #endif
 
 	if (rc != 0)
-		RTE_BPF_LOG(WARNING, "%s(%p) failed, error code: %d;\n",
+		RTE_BPF_LOG_LINE(WARNING, "%s(%p) failed, error code: %d;",
 			__func__, bpf, rc);
 	return rc;
 }

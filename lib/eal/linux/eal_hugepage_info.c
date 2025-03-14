@@ -50,7 +50,7 @@ map_shared_memory(const char *filename, const size_t mem_size, int flags)
 	retval = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
 			MAP_SHARED, fd, 0);
 	close(fd);
-	return retval;
+	return retval == MAP_FAILED ? NULL : retval;
 }
 
 static void *
@@ -110,7 +110,7 @@ get_num_hugepages(const char *subdir, size_t sz, unsigned int reusable_pages)
 		over_pages = 0;
 
 	if (num_pages == 0 && over_pages == 0 && reusable_pages)
-		RTE_LOG(WARNING, EAL, "No available %zu kB hugepages reported\n",
+		EAL_LOG(WARNING, "No available %zu kB hugepages reported",
 				sz >> 10);
 
 	num_pages += over_pages;
@@ -155,7 +155,7 @@ get_num_hugepages_on_node(const char *subdir, unsigned int socket, size_t sz)
 		return 0;
 
 	if (num_pages == 0)
-		RTE_LOG(WARNING, EAL, "No free %zu kB hugepages reported on node %u\n",
+		EAL_LOG(WARNING, "No free %zu kB hugepages reported on node %u",
 				sz >> 10, socket);
 
 	/*
@@ -214,6 +214,8 @@ get_hugepage_dir(uint64_t hugepage_sz, char *hugedir, int len)
 	char buf[BUFSIZ];
 	const struct internal_config *internal_conf =
 		eal_get_internal_configuration();
+	const size_t hugepage_dir_len = (internal_conf->hugepage_dir != NULL) ?
+		strlen(internal_conf->hugepage_dir) : 0;
 	struct stat st;
 
 	/*
@@ -233,10 +235,11 @@ get_hugepage_dir(uint64_t hugepage_sz, char *hugedir, int len)
 
 	while (fgets(buf, sizeof(buf), fd)){
 		const char *pagesz_str;
+		size_t mountpt_len = 0;
 
 		if (rte_strsplit(buf, sizeof(buf), splitstr, _FIELDNAME_MAX,
 				split_tok) != _FIELDNAME_MAX) {
-			RTE_LOG(ERR, EAL, "Error parsing %s\n", proc_mounts);
+			EAL_LOG(ERR, "Error parsing %s", proc_mounts);
 			break; /* return NULL */
 		}
 
@@ -265,12 +268,16 @@ get_hugepage_dir(uint64_t hugepage_sz, char *hugedir, int len)
 			break;
 		}
 
+		mountpt_len = strlen(splitstr[MOUNTPT]);
+
 		/*
-		 * Ignore any mount that doesn't contain the --huge-dir
-		 * directory.
+		 * Ignore any mount that doesn't contain the --huge-dir directory
+		 * or where mount point is not a parent path of --huge-dir
 		 */
 		if (strncmp(internal_conf->hugepage_dir, splitstr[MOUNTPT],
-			strlen(splitstr[MOUNTPT])) != 0) {
+				mountpt_len) != 0 ||
+			(hugepage_dir_len > mountpt_len &&
+				internal_conf->hugepage_dir[mountpt_len] != '/')) {
 			continue;
 		}
 
@@ -278,7 +285,7 @@ get_hugepage_dir(uint64_t hugepage_sz, char *hugedir, int len)
 		 * We found a match, but only prefer it if it's a longer match
 		 * (so /mnt/1 is preferred over /mnt for matching /mnt/1/2)).
 		 */
-		if (strlen(splitstr[MOUNTPT]) > strlen(found))
+		if (mountpt_len > strlen(found))
 			strlcpy(found, splitstr[MOUNTPT], len);
 	} /* end while fgets */
 
@@ -318,7 +325,7 @@ walk_hugedir(const char *hugedir, walk_hugedir_t *cb, void *user_data)
 
 	dir = opendir(hugedir);
 	if (!dir) {
-		RTE_LOG(ERR, EAL, "Unable to open hugepage directory %s\n",
+		EAL_LOG(ERR, "Unable to open hugepage directory %s",
 				hugedir);
 		goto error;
 	}
@@ -326,7 +333,7 @@ walk_hugedir(const char *hugedir, walk_hugedir_t *cb, void *user_data)
 
 	dirent = readdir(dir);
 	if (!dirent) {
-		RTE_LOG(ERR, EAL, "Unable to read hugepage directory %s\n",
+		EAL_LOG(ERR, "Unable to read hugepage directory %s",
 				hugedir);
 		goto error;
 	}
@@ -370,7 +377,7 @@ error:
 	if (dir)
 		closedir(dir);
 
-	RTE_LOG(ERR, EAL, "Error while walking hugepage dir: %s\n",
+	EAL_LOG(ERR, "Error while walking hugepage dir: %s",
 		strerror(errno));
 
 	return -1;
@@ -396,7 +403,7 @@ inspect_hugedir_cb(const struct walk_hugedir_data *whd)
 	struct stat st;
 
 	if (fstat(whd->file_fd, &st) < 0)
-		RTE_LOG(DEBUG, EAL, "%s(): stat(\"%s\") failed: %s",
+		EAL_LOG(DEBUG, "%s(): stat(\"%s\") failed: %s",
 				__func__, whd->file_name, strerror(errno));
 	else
 		(*total_size) += st.st_size;
@@ -485,8 +492,8 @@ hugepage_info_init(void)
 
 	dir = opendir(sys_dir_path);
 	if (dir == NULL) {
-		RTE_LOG(ERR, EAL,
-			"Cannot open directory %s to read system hugepage info\n",
+		EAL_LOG(ERR,
+			"Cannot open directory %s to read system hugepage info",
 			sys_dir_path);
 		return -1;
 	}
@@ -513,10 +520,10 @@ hugepage_info_init(void)
 			num_pages = get_num_hugepages(dirent->d_name,
 					hpi->hugepage_sz, 0);
 			if (num_pages > 0)
-				RTE_LOG(NOTICE, EAL,
+				EAL_LOG(NOTICE,
 					"%" PRIu32 " hugepages of size "
 					"%" PRIu64 " reserved, but no mounted "
-					"hugetlbfs found for that size\n",
+					"hugetlbfs found for that size",
 					num_pages, hpi->hugepage_sz);
 			/* if we have kernel support for reserving hugepages
 			 * through mmap, and we're in in-memory mode, treat this
@@ -526,9 +533,9 @@ hugepage_info_init(void)
 			 */
 #ifdef MAP_HUGE_SHIFT
 			if (internal_conf->in_memory) {
-				RTE_LOG(DEBUG, EAL, "In-memory mode enabled, "
+				EAL_LOG(DEBUG, "In-memory mode enabled, "
 					"hugepages of size %" PRIu64 " bytes "
-					"will be allocated anonymously\n",
+					"will be allocated anonymously",
 					hpi->hugepage_sz);
 				calc_num_pages(hpi, dirent, 0);
 				num_sizes++;
@@ -542,8 +549,8 @@ hugepage_info_init(void)
 
 		/* if blocking lock failed */
 		if (flock(hpi->lock_descriptor, LOCK_EX) == -1) {
-			RTE_LOG(CRIT, EAL,
-				"Failed to lock hugepage directory!\n");
+			EAL_LOG(CRIT,
+				"Failed to lock hugepage directory!");
 			break;
 		}
 
@@ -619,7 +626,7 @@ eal_hugepage_info_init(void)
 	tmp_hpi = create_shared_memory(eal_hugepage_info_path(),
 			sizeof(internal_conf->hugepage_info));
 	if (tmp_hpi == NULL) {
-		RTE_LOG(ERR, EAL, "Failed to create shared memory!\n");
+		EAL_LOG(ERR, "Failed to create shared memory!");
 		return -1;
 	}
 
@@ -634,7 +641,7 @@ eal_hugepage_info_init(void)
 	}
 
 	if (munmap(tmp_hpi, sizeof(internal_conf->hugepage_info)) < 0) {
-		RTE_LOG(ERR, EAL, "Failed to unmap shared memory!\n");
+		EAL_LOG(ERR, "Failed to unmap shared memory!");
 		return -1;
 	}
 	return 0;
@@ -650,14 +657,14 @@ int eal_hugepage_info_read(void)
 	tmp_hpi = open_shared_memory(eal_hugepage_info_path(),
 				  sizeof(internal_conf->hugepage_info));
 	if (tmp_hpi == NULL) {
-		RTE_LOG(ERR, EAL, "Failed to open shared memory!\n");
+		EAL_LOG(ERR, "Failed to open shared memory!");
 		return -1;
 	}
 
 	memcpy(hpi, tmp_hpi, sizeof(internal_conf->hugepage_info));
 
 	if (munmap(tmp_hpi, sizeof(internal_conf->hugepage_info)) < 0) {
-		RTE_LOG(ERR, EAL, "Failed to unmap shared memory!\n");
+		EAL_LOG(ERR, "Failed to unmap shared memory!");
 		return -1;
 	}
 	return 0;

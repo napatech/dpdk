@@ -52,9 +52,15 @@ struct mlx5dr_wqe_gta_ctrl_seg {
 
 struct mlx5dr_wqe_gta_data_seg_ste {
 	__be32 rsvd0_ctr_id;
-	__be32 rsvd1[4];
-	__be32 action[3];
-	__be32 tag[8];
+	__be32 rsvd1_definer;
+	__be32 rsvd2[3];
+	union {
+		struct {
+			__be32 action[3];
+			__be32 tag[8];
+		};
+		__be32 jumbo[11];
+	};
 };
 
 struct mlx5dr_wqe_gta_data_seg_arg {
@@ -100,6 +106,7 @@ struct mlx5dr_send_ring_dep_wqe {
 	uint32_t rtc_1;
 	uint32_t retry_rtc_0;
 	uint32_t retry_rtc_1;
+	uint32_t direct_index;
 	void *user_data;
 };
 
@@ -107,7 +114,6 @@ struct mlx5dr_send_ring_sq {
 	char *buf;
 	uint32_t sqn;
 	__be32 *db;
-	void *reg_addr;
 	uint16_t cur_post;
 	uint16_t buf_mask;
 	struct mlx5dr_send_ring_priv *wr_priv;
@@ -137,7 +143,7 @@ struct mlx5dr_completed_poll {
 	uint16_t mask;
 };
 
-struct mlx5dr_send_engine {
+struct __rte_cache_aligned mlx5dr_send_engine {
 	struct mlx5dr_send_ring send_ring[MLX5DR_NUM_SEND_RINGS]; /* For now 1:1 mapping */
 	struct mlx5dv_devx_uar *uar; /* Uar is shared between rings of a queue */
 	struct mlx5dr_completed_poll completed;
@@ -146,7 +152,7 @@ struct mlx5dr_send_engine {
 	uint16_t rings;
 	uint16_t num_entries;
 	bool err;
-} __rte_cache_aligned;
+};
 
 struct mlx5dr_send_engine_post_ctrl {
 	struct mlx5dr_send_engine *queue;
@@ -159,6 +165,8 @@ struct mlx5dr_send_engine_post_attr {
 	uint8_t opmod;
 	uint8_t notify_hw;
 	uint8_t fence;
+	uint8_t match_definer_id;
+	uint8_t range_definer_id;
 	size_t len;
 	struct mlx5dr_rule *rule;
 	uint32_t id;
@@ -180,8 +188,10 @@ struct mlx5dr_send_ste_attr {
 	uint32_t direct_index;
 	struct mlx5dr_send_engine_post_attr send_attr;
 	struct mlx5dr_rule_match_tag *wqe_tag;
+	struct mlx5dr_rule_match_tag *range_wqe_tag;
 	struct mlx5dr_wqe_gta_ctrl_seg *wqe_ctrl;
 	struct mlx5dr_wqe_gta_data_seg_ste *wqe_data;
+	struct mlx5dr_wqe_gta_data_seg_ste *range_wqe_data;
 };
 
 /**
@@ -192,8 +202,6 @@ struct mlx5dr_send_ste_attr {
  *   value to write in CPU endian format.
  * @param addr
  *   Address to write to.
- * @param lock
- *   Address of the lock to use for that UAR access.
  */
 static __rte_always_inline void
 mlx5dr_uar_write64_relaxed(uint64_t val, void *addr)
@@ -238,7 +246,18 @@ void mlx5dr_send_engine_post_end(struct mlx5dr_send_engine_post_ctrl *ctrl,
 void mlx5dr_send_ste(struct mlx5dr_send_engine *queue,
 		     struct mlx5dr_send_ste_attr *ste_attr);
 
+void mlx5dr_send_stes_fw(struct mlx5dr_send_engine *queue,
+			 struct mlx5dr_send_ste_attr *ste_attr);
+
 void mlx5dr_send_engine_flush_queue(struct mlx5dr_send_engine *queue);
+
+static inline bool mlx5dr_send_engine_empty(struct mlx5dr_send_engine *queue)
+{
+	struct mlx5dr_send_ring_sq *send_sq = &queue->send_ring->send_sq;
+	struct mlx5dr_send_ring_cq *send_cq = &queue->send_ring->send_cq;
+
+	return ((send_sq->cur_post & send_sq->buf_mask) == send_cq->poll_wqe);
+}
 
 static inline bool mlx5dr_send_engine_full(struct mlx5dr_send_engine *queue)
 {

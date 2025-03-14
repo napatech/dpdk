@@ -5,38 +5,48 @@
 #include "roc_api.h"
 #include "roc_priv.h"
 
+#define cpt_dump(file, fmt, ...) do {                                           \
+	if ((file) == NULL)							\
+		plt_dump(fmt, ##__VA_ARGS__);					\
+	else									\
+		fprintf(file, fmt "\n", ##__VA_ARGS__);				\
+} while (0)
+
 void
-roc_cpt_parse_hdr_dump(const struct cpt_parse_hdr_s *cpth)
+roc_cpt_parse_hdr_dump(FILE *file, const struct cpt_parse_hdr_s *cpth)
 {
 	struct cpt_frag_info_s *frag_info;
 	uint32_t offset;
 	uint64_t *slot;
 
-	plt_print("CPT_PARSE \t0x%p:", cpth);
+	cpt_dump(file, "CPT_PARSE \t0x%p:", cpth);
 
 	/* W0 */
-	plt_print("W0: cookie \t0x%x\t\tmatch_id \t0x%04x\t\terr_sum \t%u \t",
-		  cpth->w0.cookie, cpth->w0.match_id, cpth->w0.err_sum);
-	plt_print("W0: reas_sts \t0x%x\t\tet_owr \t%u\t\tpkt_fmt \t%u \t",
+	cpt_dump(file, "W0: cookie \t0x%x\t\tmatch_id \t0x%04x \t",
+		  cpth->w0.cookie, cpth->w0.match_id);
+	cpt_dump(file, "W0: err_sum \t%u \t", cpth->w0.err_sum);
+	cpt_dump(file, "W0: reas_sts \t0x%x\t\tet_owr \t%u\t\tpkt_fmt \t%u \t",
 		  cpth->w0.reas_sts, cpth->w0.et_owr, cpth->w0.pkt_fmt);
-	plt_print("W0: pad_len \t%u\t\tnum_frags \t%u\t\tpkt_out \t%u \t",
+	cpt_dump(file, "W0: pad_len \t%u\t\tnum_frags \t%u\t\tpkt_out \t%u \t",
 		  cpth->w0.pad_len, cpth->w0.num_frags, cpth->w0.pkt_out);
 
 	/* W1 */
-	plt_print("W1: wqe_ptr \t0x%016lx\t", plt_be_to_cpu_64(cpth->wqe_ptr));
+	cpt_dump(file, "W1: wqe_ptr \t0x%016lx\t",
+			plt_be_to_cpu_64(cpth->wqe_ptr));
 
 	/* W2 */
-	plt_print("W2: frag_age \t0x%x\t\torig_pf_func \t0x%04x",
+	cpt_dump(file, "W2: frag_age \t0x%x\t\torig_pf_func \t0x%04x",
 		  cpth->w2.frag_age, cpth->w2.orig_pf_func);
-	plt_print("W2: il3_off \t0x%x\t\tfi_pad \t0x%x\t\tfi_offset \t0x%x \t",
-		  cpth->w2.il3_off, cpth->w2.fi_pad, cpth->w2.fi_offset);
+	cpt_dump(file, "W2: il3_off \t0x%x\t\tfi_pad \t0x%x \t",
+		  cpth->w2.il3_off, cpth->w2.fi_pad);
+	cpt_dump(file, "W2: fi_offset \t0x%x \t", cpth->w2.fi_offset);
 
 	/* W3 */
-	plt_print("W3: hw_ccode \t0x%x\t\tuc_ccode \t0x%x\t\tspi \t0x%08x",
+	cpt_dump(file, "W3: hw_ccode \t0x%x\t\tuc_ccode \t0x%x\t\tspi \t0x%08x",
 		  cpth->w3.hw_ccode, cpth->w3.uc_ccode, cpth->w3.spi);
 
 	/* W4 */
-	plt_print("W4: esn \t%" PRIx64 " \t OR frag1_wqe_ptr \t0x%" PRIx64,
+	cpt_dump(file, "W4: esn \t%" PRIx64 " \t OR frag1_wqe_ptr \t0x%" PRIx64,
 		  cpth->esn, plt_be_to_cpu_64(cpth->frag1_wqe_ptr));
 
 	/* offset of 0 implies 256B, otherwise it implies offset*8B */
@@ -44,24 +54,24 @@ roc_cpt_parse_hdr_dump(const struct cpt_parse_hdr_s *cpth)
 	offset = (((offset - 1) & 0x1f) + 1) * 8;
 	frag_info = PLT_PTR_ADD(cpth, offset);
 
-	plt_print("CPT Fraginfo \t0x%p:", frag_info);
+	cpt_dump(file, "CPT Fraginfo \t0x%p:", frag_info);
 
 	/* W0 */
-	plt_print("W0: f0.info \t0x%x", frag_info->w0.f0.info);
-	plt_print("W0: f1.info \t0x%x", frag_info->w0.f1.info);
-	plt_print("W0: f2.info \t0x%x", frag_info->w0.f2.info);
-	plt_print("W0: f3.info \t0x%x", frag_info->w0.f3.info);
+	cpt_dump(file, "W0: f0.info \t0x%x", frag_info->w0.f0.info);
+	cpt_dump(file, "W0: f1.info \t0x%x", frag_info->w0.f1.info);
+	cpt_dump(file, "W0: f2.info \t0x%x", frag_info->w0.f2.info);
+	cpt_dump(file, "W0: f3.info \t0x%x", frag_info->w0.f3.info);
 
 	/* W1 */
-	plt_print("W1: frag_size0 \t0x%x", frag_info->w1.frag_size0);
-	plt_print("W1: frag_size1 \t0x%x", frag_info->w1.frag_size1);
-	plt_print("W1: frag_size2 \t0x%x", frag_info->w1.frag_size2);
-	plt_print("W1: frag_size3 \t0x%x", frag_info->w1.frag_size3);
+	cpt_dump(file, "W1: frag_size0 \t0x%x", frag_info->w1.frag_size0);
+	cpt_dump(file, "W1: frag_size1 \t0x%x", frag_info->w1.frag_size1);
+	cpt_dump(file, "W1: frag_size2 \t0x%x", frag_info->w1.frag_size2);
+	cpt_dump(file, "W1: frag_size3 \t0x%x", frag_info->w1.frag_size3);
 
 	slot = (uint64_t *)(frag_info + 1);
-	plt_print("Frag Slot2:  WQE ptr \t%p",
+	cpt_dump(file, "Frag Slot2:  WQE ptr \t%p",
 		  (void *)plt_be_to_cpu_64(slot[0]));
-	plt_print("Frag Slot3:  WQE ptr \t%p",
+	cpt_dump(file, "Frag Slot3:  WQE ptr \t%p",
 		  (void *)plt_be_to_cpu_64(slot[1]));
 }
 
@@ -71,11 +81,14 @@ cpt_af_reg_read(struct roc_cpt *roc_cpt, uint64_t reg, uint64_t *val)
 	struct cpt *cpt = roc_cpt_to_cpt_priv(roc_cpt);
 	struct cpt_rd_wr_reg_msg *msg;
 	struct dev *dev = &cpt->dev;
+	struct mbox *mbox = mbox_get(dev->mbox);
 	int ret;
 
-	msg = mbox_alloc_msg_cpt_rd_wr_register(dev->mbox);
-	if (msg == NULL)
-		return -EIO;
+	msg = mbox_alloc_msg_cpt_rd_wr_register(mbox);
+	if (msg == NULL) {
+		ret = -EIO;
+		goto exit;
+	}
 
 	msg->hdr.pcifunc = dev->pf_func;
 
@@ -84,12 +97,17 @@ cpt_af_reg_read(struct roc_cpt *roc_cpt, uint64_t reg, uint64_t *val)
 	msg->ret_val = val;
 
 	ret = mbox_process_msg(dev->mbox, (void *)&msg);
-	if (ret)
-		return -EIO;
+	if (ret) {
+		ret =  -EIO;
+		goto exit;
+	}
 
 	*val = msg->val;
 
-	return 0;
+	ret = 0;
+exit:
+	mbox_put(mbox);
+	return ret;
 }
 
 static int
@@ -99,16 +117,21 @@ cpt_sts_print(struct roc_cpt *roc_cpt)
 	struct dev *dev = &cpt->dev;
 	struct cpt_sts_req *req;
 	struct cpt_sts_rsp *rsp;
+	struct mbox *mbox = mbox_get(dev->mbox);
 	int ret;
 
-	req = mbox_alloc_msg_cpt_sts_get(dev->mbox);
-	if (req == NULL)
-		return -EIO;
+	req = mbox_alloc_msg_cpt_sts_get(mbox);
+	if (req == NULL) {
+		ret = -EIO;
+		goto exit;
+	}
 
 	req->blkaddr = 0;
 	ret = mbox_process_msg(dev->mbox, (void *)&rsp);
-	if (ret)
-		return -EIO;
+	if (ret) {
+		ret = -EIO;
+		goto exit;
+	}
 
 	plt_print("    %s:\t0x%016" PRIx64, "inst_req_pc", rsp->inst_req_pc);
 	plt_print("    %s:\t0x%016" PRIx64, "inst_lat_pc", rsp->inst_lat_pc);
@@ -161,7 +184,10 @@ cpt_sts_print(struct roc_cpt *roc_cpt)
 	plt_print("    %s:\t\t0x%016" PRIx64, "cptclk_cnt", rsp->cptclk_cnt);
 	plt_print("    %s:\t\t0x%016" PRIx64, "diag", rsp->diag);
 
-	return 0;
+	ret = 0;
+exit:
+	mbox_put(mbox);
+	return ret;
 }
 
 int

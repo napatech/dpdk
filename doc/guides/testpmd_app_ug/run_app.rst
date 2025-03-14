@@ -232,6 +232,7 @@ The command line options are:
        noisy
        5tswap
        shared-rxq
+       recycle_mbufs
 
 *   ``--rss-ip``
 
@@ -388,12 +389,15 @@ The command line options are:
        10 - 10Mbps (not supported)
        100 - 100Mbps (not supported)
        1000 - 1Gbps
+       2500 - 2.5Gbps
+       5000 - 5Gbps
        10000 - 10Gbps
        25000 - 25Gbps
        40000 - 40Gbps
        50000 - 50Gbps
        100000 - 100Gbps
        200000 - 200Gbps
+       400000 - 400Gbps
        ...
 
 *   ``--disable-link-check``
@@ -418,6 +422,10 @@ The command line options are:
 
     Set the logical core N to perform bitrate calculation.
 
+*   ``--latencystats=N``
+
+    Set the logical core N to perform latency and jitter calculations.
+
 *   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|err_recovering|recovery_success|recovery_failed|all>``
 
     Enable printing the occurrence of the designated event. Using all will
@@ -435,6 +443,11 @@ The command line options are:
     configured flow rules only (see flow command).
 
     Ports that do not support this mode are automatically discarded.
+
+*   ``--disable-flow-flush``
+
+    Disable port flow flush when stopping port.
+    This allows testing keep flow rules or shared flow objects across restart.
 
 *   ``--tx-offloads=0xXXXXXXXX``
 
@@ -480,6 +493,15 @@ The command line options are:
       allocated area
     * xmemhuge: create and populate mempool using externally and anonymously
       allocated hugepage area
+
+*   ``--noisy-forward-mode=mode``
+
+    Set the noisy vnf forwarding mode where ``mode`` is one of the following::
+
+       io (the default)
+       mac
+       macswap
+       5tswap
 
 *   ``--noisy-tx-sw-buffer-size``
 
@@ -549,6 +571,9 @@ The command line options are:
 
     The default value is 0. Hairpin will use single port mode and implicit Tx flow mode.
 
+*   ``--hairpin-map=Rx port id:Rx queue:Tx port id:Tx queue:queues number``
+
+    Set explicit hairpin configuration.
 
 Testpmd Multi-Process Command-line Options
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

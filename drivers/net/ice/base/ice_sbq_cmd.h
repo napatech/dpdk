@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2023 Intel Corporation
  */
 
 #ifndef _ICE_SBQ_CMD_H_
@@ -48,7 +48,8 @@ struct ice_sbq_evt_desc {
 };
 
 enum ice_sbq_msg_dev {
-	phy_56g = 0x02,
+	eth56g_dev_0 = 2,
+	eth56g_dev_1 = 13,
 	rmn_0	= 0x02,
 	rmn_1	= 0x03,
 	rmn_2	= 0x04,

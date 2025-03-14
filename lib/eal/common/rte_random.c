@@ -7,20 +7,25 @@
 #endif
 #include <unistd.h>
 
+#include <rte_bitops.h>
 #include <rte_branch_prediction.h>
 #include <rte_cycles.h>
 #include <rte_lcore.h>
+#include <rte_lcore_var.h>
 #include <rte_random.h>
 
-struct rte_rand_state {
+struct __rte_cache_aligned rte_rand_state {
 	uint64_t z1;
 	uint64_t z2;
 	uint64_t z3;
 	uint64_t z4;
 	uint64_t z5;
-} __rte_cache_aligned;
+};
 
-static struct rte_rand_state rand_states[RTE_MAX_LCORE];
+RTE_LCORE_VAR_HANDLE(struct rte_rand_state, rand_state);
+
+/* instance to be shared by all unregistered non-EAL threads */
+static struct rte_rand_state unregistered_rand_state;
 
 static uint32_t
 __rte_rand_lcg32(uint32_t *seed)
@@ -79,8 +84,14 @@ rte_srand(uint64_t seed)
 	unsigned int lcore_id;
 
 	/* add lcore_id to seed to avoid having the same sequence */
-	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++)
-		__rte_srand_lfsr258(seed + lcore_id, &rand_states[lcore_id]);
+	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+		struct rte_rand_state *lcore_state =
+			RTE_LCORE_VAR_LCORE(lcore_id, rand_state);
+
+		__rte_srand_lfsr258(seed + lcore_id, lcore_state);
+	}
+
+	__rte_srand_lfsr258(seed + lcore_id, &unregistered_rand_state);
 }
 
 static __rte_always_inline uint64_t
@@ -114,14 +125,14 @@ __rte_rand_lfsr258(struct rte_rand_state *state)
 static __rte_always_inline
 struct rte_rand_state *__rte_rand_get_state(void)
 {
-	unsigned int lcore_id;
+	unsigned int idx;
 
-	lcore_id = rte_lcore_id();
+	idx = rte_lcore_id();
 
-	if (unlikely(lcore_id == LCORE_ID_ANY))
-		lcore_id = rte_get_main_lcore();
+	if (unlikely(idx == LCORE_ID_ANY))
+		return &unregistered_rand_state;
 
-	return &rand_states[lcore_id];
+	return RTE_LCORE_VAR(rand_state);
 }
 
 uint64_t
@@ -148,7 +159,7 @@ rte_rand_max(uint64_t upper_bound)
 
 	state = __rte_rand_get_state();
 
-	ones = __builtin_popcountll(upper_bound);
+	ones = rte_popcount64(upper_bound);
 
 	/* Handle power-of-2 upper_bound as a special case, since it
 	 * has no bias issues.
@@ -163,7 +174,7 @@ rte_rand_max(uint64_t upper_bound)
 	 * the value and generate a new one.
 	 */
 
-	leading_zeros = __builtin_clzll(upper_bound);
+	leading_zeros = rte_clz64(upper_bound);
 	mask >>= leading_zeros;
 
 	do {
@@ -220,6 +231,8 @@ __rte_random_initial_seed(void)
 RTE_INIT(rte_rand_init)
 {
 	uint64_t seed;
+
+	RTE_LCORE_VAR_ALLOC(rand_state);
 
 	seed = __rte_random_initial_seed();
 

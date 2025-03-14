@@ -11,26 +11,27 @@
 #include <rte_os_shim.h>
 #ifdef RTE_EXEC_ENV_WINDOWS
 #include <rte_windows.h>
+#ifndef LINE_MAX
+/**
+ * The LINE_MAX value is derived from POSIX.
+ * Windows environment may not have POSIX definitions.
+ */
+#define LINE_MAX 2048
+#endif
 #else
 #include <termios.h>
 #endif
 
 #include <cmdline.h>
 
-#define RDLINE_BUF_SIZE 512
+#define RDLINE_BUF_SIZE LINE_MAX
 #define RDLINE_PROMPT_SIZE  32
 #define RDLINE_VT100_BUF_SIZE  8
 #define RDLINE_HISTORY_BUF_SIZE BUFSIZ
 #define RDLINE_HISTORY_MAX_LINE 64
 
-enum rdline_status {
-	RDLINE_INIT,
-	RDLINE_RUNNING,
-	RDLINE_EXITED
-};
-
 struct rdline {
-	enum rdline_status status;
+	volatile enum rdline_status status;
 	/* rdline bufs */
 	struct cirbuf left;
 	struct cirbuf right;
@@ -90,11 +91,11 @@ void terminal_adjust(struct cmdline *cl);
 /* Restore terminal settings form oldterm. */
 void terminal_restore(const struct cmdline *cl);
 
-/* Check if a single character can be read from input. */
-int cmdline_poll_char(struct cmdline *cl);
-
 /* Read one character from input. */
 ssize_t cmdline_read_char(struct cmdline *cl, char *c);
+
+/* Force current cmdline read to unblock. */
+void cmdline_cancel(struct cmdline *cl);
 
 /* vdprintf(3) */
 __rte_format_printf(2, 0)

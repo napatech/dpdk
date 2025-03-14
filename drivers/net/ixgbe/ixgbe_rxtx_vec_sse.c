@@ -10,7 +10,7 @@
 #include "ixgbe_rxtx.h"
 #include "ixgbe_rxtx_vec_common.h"
 
-#include <tmmintrin.h>
+#include <rte_vect.h>
 
 #ifndef __INTEL_COMPILER
 #pragma GCC diagnostic ignored "-Wcast-qual"
@@ -574,7 +574,7 @@ _recv_raw_pkts_vec(struct ixgbe_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		desc_to_ptype_v(descs, rxq->pkt_type_mask, &rx_pkts[pos]);
 
 		/* C.4 calc available number of desc */
-		var = __builtin_popcountll(_mm_cvtsi128_si64(staterr));
+		var = rte_popcount64(_mm_cvtsi128_si64(staterr));
 		nb_pkts_recd += var;
 		if (likely(var != RTE_IXGBE_DESCS_PER_LOOP))
 			break;

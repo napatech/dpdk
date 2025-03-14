@@ -1,10 +1,8 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2010-2014 Intel Corporation.
 
-.. _Environment_Abstraction_Layer:
-
-Environment Abstraction Layer
-=============================
+Environment Abstraction Layer (EAL) Library
+===========================================
 
 The Environment Abstraction Layer (EAL) is responsible for gaining access to low-level resources such as hardware and memory space.
 It provides a generic interface that hides the environment specifics from the applications and libraries.
@@ -39,7 +37,7 @@ EAL in a Linux-userland Execution Environment
 In a Linux user space environment, the DPDK application runs as a user-space application using the pthread library.
 
 The EAL performs physical memory allocation using mmap() in hugetlbfs (using huge page sizes to increase performance).
-This memory is exposed to DPDK service layers such as the :ref:`Mempool Library <Mempool_Library>`.
+This memory is exposed to DPDK service layers such as the :doc:`mempool_lib`.
 
 At this point, the DPDK services layer will be initialized, then through pthread setaffinity calls,
 each execution unit will be assigned to a specific logical core to run as a user-level thread.
@@ -80,8 +78,7 @@ Multi-process Support
 ~~~~~~~~~~~~~~~~~~~~~
 
 The Linux EAL allows a multi-process as well as a multi-threaded (pthread) deployment model.
-See chapter
-:ref:`Multi-process Support <Multi-process_Support>` for more details.
+See chapter :doc:`multi_proc_support` for more details.
 
 Memory Mapping Discovery and Memory Reservation
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -154,8 +151,7 @@ of memory that can be used by DPDK application.
     and IPC must not be mixed: it is not safe to allocate/free memory inside
     memory-related or IPC callbacks, and it is not safe to use IPC inside
     memory-related callbacks. See chapter
-    :ref:`Multi-process Support <Multi-process_Support>` for more details about
-    DPDK IPC.
+    :doc:`multi_proc_support` for more details about DPDK IPC.
 
 Legacy Memory Mode
 ^^^^^^^^^^^^^^^^^^
@@ -433,19 +429,50 @@ with them once they're registered.
 Per-lcore and Shared Variables
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. note::
+By default, static variables, memory blocks allocated on the DPDK heap,
+and other types of memory are shared by all DPDK threads.
 
-    lcore refers to a logical execution unit of the processor, sometimes called a hardware *thread*.
+An application, a DPDK library, or a PMD may opt to keep per-thread state.
 
-Shared variables are the default behavior.
-Per-lcore variables are implemented using *Thread Local Storage* (TLS) to provide per-thread local storage.
+Per-thread data can be maintained using either :doc:`lcore variables <lcore_var>`,
+*thread-local storage (TLS)* (see ``rte_per_lcore.h``),
+or a static array of ``RTE_MAX_LCORE`` elements, indexed by ``rte_lcore_id()``.
+These methods allow per-lcore data to be largely internal to the module
+and not directly exposed in its API.
+Another approach is to explicitly handle per-thread aspects in the API
+(e.g., the ports in the eventdev API).
+
+Lcore variables are suitable for small objects that are statically allocated
+at the time of module or application initialization.
+An lcore variable takes on one value for each lcore ID-equipped thread
+(i.e., for both EAL threads and registered non-EAL threads,
+in total ``RTE_MAX_LCORE`` instances).
+The lifetime of lcore variables is independent of the owning threads
+and can, therefore, be initialized before the threads are created.
+
+Variables with thread-local storage are allocated when the thread is created
+and exist until the thread terminates.
+These are applicable for every thread in the process.
+Only very small objects should be allocated in TLS,
+as large TLS objects can significantly slow down thread creation
+and may unnecessarily increase the memory footprint of applications
+that extensively use unregistered threads.
+
+A common but now largely obsolete DPDK pattern is to use a static array
+sized according to the maximum number of lcore ID-equipped threads
+(i.e., with ``RTE_MAX_LCORE`` elements).
+To avoid *false sharing*, each element must be both cache-aligned
+and include an ``RTE_CACHE_GUARD``.
+This extensive use of padding causes internal fragmentation (i.e., unused space)
+and reduces cache hit rates.
+
+For more discussions on per-lcore state,
+refer to the :doc:`lcore variables documentation <lcore_var>`.
 
 Logs
 ~~~~
 
-A logging API is provided by EAL.
-By default, in a Linux application, logs are sent to syslog and also to the console.
-However, the log function can be overridden by the user to use a different logging mechanism.
+While originally part of EAL, DPDK logging functionality is now provided by the :doc:`log_lib`.
 
 Trace and Debug Functions
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -529,6 +556,31 @@ Misc Functions
 
 Locks and atomic operations are per-architecture (i686 and x86_64).
 
+Lock annotations
+~~~~~~~~~~~~~~~~
+
+R/W locks, seq locks and spinlocks have been instrumented to help developers in
+catching issues in DPDK.
+
+This instrumentation relies on
+`clang Thread Safety checks <https://clang.llvm.org/docs/ThreadSafetyAnalysis.html>`_.
+All attributes are prefixed with __rte and are fully described in the clang
+documentation.
+
+Some general comments:
+
+- it is important that lock requirements are expressed at the function
+  declaration level in headers so that other code units can be inspected,
+- when some global lock is necessary to some user-exposed API, it is preferred
+  to expose it via an internal helper rather than expose the global variable,
+- there are a list of known limitations with clang instrumentation, but before
+  waiving checks with ``__rte_no_thread_safety_analysis`` in your code, please
+  discuss it on the mailing list,
+
+The checks are enabled by default for libraries and drivers.
+They can be disabled by setting ``annotate_locks`` to ``false`` in
+the concerned library/driver ``meson.build``.
+
 IOVA Mode Detection
 ~~~~~~~~~~~~~~~~~~~
 
@@ -585,8 +637,6 @@ devices would fail anyway.
     ``RTE_PCI_DRV_NEED_IOVA_AS_VA`` flag is used to dictate that this PCI
     driver can only work in RTE_IOVA_VA mode.
 
-    When the KNI kernel module is detected, RTE_IOVA_PA mode is preferred as a
-    performance penalty is expected in RTE_IOVA_VA mode.
 
 IOVA Mode Configuration
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -735,7 +785,7 @@ Control Thread API
 ~~~~~~~~~~~~~~~~~~
 
 It is possible to create Control Threads using the public API
-``rte_ctrl_thread_create()``.
+``rte_thread_create_control()``.
 Those threads can be used for management/infrastructure tasks and are used
 internally by DPDK for multi process support and interrupt handling.
 
@@ -786,15 +836,15 @@ Known Issues
 
   This means, use cases involving preemptible pthreads should consider using rte_ring carefully.
 
-  1. It CAN be used for preemptible single-producer and single-consumer use case.
+  #. It CAN be used for preemptible single-producer and single-consumer use case.
 
-  2. It CAN be used for non-preemptible multi-producer and preemptible single-consumer use case.
+  #. It CAN be used for non-preemptible multi-producer and preemptible single-consumer use case.
 
-  3. It CAN be used for preemptible single-producer and non-preemptible multi-consumer use case.
+  #. It CAN be used for preemptible single-producer and non-preemptible multi-consumer use case.
 
-  4. It MAY be used by preemptible multi-producer and/or preemptible multi-consumer pthreads whose scheduling policy are all SCHED_OTHER(cfs), SCHED_IDLE or SCHED_BATCH. User SHOULD be aware of the performance penalty before using it.
+  #. It MAY be used by preemptible multi-producer and/or preemptible multi-consumer pthreads whose scheduling policy are all SCHED_OTHER(cfs), SCHED_IDLE or SCHED_BATCH. User SHOULD be aware of the performance penalty before using it.
 
-  5. It MUST not be used by multi-producer/consumer pthreads, whose scheduling policies are SCHED_FIFO or SCHED_RR.
+  #. It MUST not be used by multi-producer/consumer pthreads, whose scheduling policies are SCHED_FIFO or SCHED_RR.
 
   Alternatively, applications can use the lock-free stack mempool handler. When
   considering this handler, note that:
@@ -834,9 +884,9 @@ Signal Safety
   Other functions are not signal safe because they use one or more
   library routines that are not themselves signal safe.
   For example, calling ``rte_panic()`` is not safe in a signal handler
-  because it uses ``rte_log()`` and ``rte_log()`` calls the
-  ``syslog()`` library function which is in the list of
-  signal safe functions in
+  because it uses ``rte_log()`` and ``rte_log()`` may call ``vfprintf()`` or
+  ``syslog()`` library functions which are not in the list of
+  signal safe functions
   `Signal-Safety manual page <https://man7.org/linux/man-pages/man7/signal-safety.7.html>`_.
 
   The set of functions that are expected to be async-signal-safe in DPDK

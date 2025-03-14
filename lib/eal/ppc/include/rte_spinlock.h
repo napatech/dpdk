@@ -6,13 +6,13 @@
 #ifndef _RTE_SPINLOCK_PPC_64_H_
 #define _RTE_SPINLOCK_PPC_64_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <rte_common.h>
 #include <rte_pause.h>
 #include "generic/rte_spinlock.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Fixme: Use intrinsics to implement the spinlock on Power architecture */
 
@@ -20,6 +20,7 @@ extern "C" {
 
 static inline void
 rte_spinlock_lock(rte_spinlock_t *sl)
+	__rte_no_thread_safety_analysis
 {
 	while (__sync_lock_test_and_set(&sl->locked, 1))
 		while (sl->locked)
@@ -28,12 +29,14 @@ rte_spinlock_lock(rte_spinlock_t *sl)
 
 static inline void
 rte_spinlock_unlock(rte_spinlock_t *sl)
+	__rte_no_thread_safety_analysis
 {
 	__sync_lock_release(&sl->locked);
 }
 
 static inline int
 rte_spinlock_trylock(rte_spinlock_t *sl)
+	__rte_no_thread_safety_analysis
 {
 	return __sync_lock_test_and_set(&sl->locked, 1) == 0;
 }

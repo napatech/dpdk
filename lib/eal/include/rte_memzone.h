@@ -51,7 +51,6 @@ struct rte_memzone {
 	char name[RTE_MEMZONE_NAMESIZE];  /**< Name of the memory zone. */
 
 	rte_iova_t iova;                  /**< Start IO address. */
-	RTE_STD_C11
 	union {
 		void *addr;                   /**< Start virtual address. */
 		uint64_t addr_64;             /**< Makes sure addr is always 64-bits */
@@ -64,6 +63,28 @@ struct rte_memzone {
 
 	uint32_t flags;                   /**< Characteristics of this memzone. */
 } __rte_packed;
+
+/**
+ * Set the maximum number of memzones.
+ *
+ * This function can only be called prior to rte_eal_init().
+ *
+ * @param max
+ *   Maximum number of memzones.
+ * @return
+ *  0 on success, -1 otherwise.
+ */
+int rte_memzone_max_set(size_t max);
+
+/**
+ * Get the maximum number of memzones.
+ *
+ * @note: The maximum value will not change after calling rte_eal_init().
+ *
+ * @return
+ *   Maximum number of memzones.
+ */
+size_t rte_memzone_max_get(void);
 
 /**
  * Reserve a portion of physical memory.

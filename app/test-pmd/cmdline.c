@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -39,6 +40,7 @@
 #include <rte_gro.h>
 #endif
 #include <rte_mbuf_dyn.h>
+#include <rte_trace.h>
 
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
@@ -61,6 +63,7 @@
 #include <rte_pmd_bnxt.h>
 #endif
 #include "testpmd.h"
+#include "cmdline_cman.h"
 #include "cmdline_mtr.h"
 #include "cmdline_tm.h"
 #include "bpf_cmd.h"
@@ -167,13 +170,22 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port port_id (module_eeprom|eeprom)\n"
 			"    Display the module EEPROM or EEPROM information for port_id.\n\n"
 
+			"set port (port_id) eeprom (accept_risk) magic (magic_num)"
+			" value (value) offset (offset)\n"
+			"    Set the device eeprom for certain port.\nNote:\n"
+			"    This is a high-risk command and its misuse may"
+			" result in unexpected behaviour from the NIC.\n"
+			"    By inserting \"accept_risk\" into the command, the"
+			" user is acknowledging and taking responsibility for"
+			" this risk.\n\n"
+
 			"show port X rss reta (size) (mask0,mask1,...)\n"
 			"    Display the rss redirection table entry indicated"
 			" by masks on port X. size is used to indicate the"
 			" hardware supported reta size\n\n"
 
-			"show port (port_id) rss-hash [key]\n"
-			"    Display the RSS hash functions and RSS hash key of port\n\n"
+			"show port (port_id) rss-hash [key | algorithm]\n"
+			"    Display the RSS hash functions, RSS hash key and RSS hash algorithms of port\n\n"
 
 			"clear port (info|stats|xstats|fdir) (port_id|all)\n"
 			"    Clear information for port_id, or all.\n\n"
@@ -235,9 +247,8 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port (port_id) rxq|txq (queue_id) desc (desc_id) status"
 			"       Show status of rx|tx descriptor.\n\n"
 
-			"show port (port_id) rxq (queue_id) desc used count\n"
-			"    Show current number of filled receive"
-			" packet descriptors.\n\n"
+			"show port (port_id) rxq|txq (queue_id) desc used count\n"
+			"    Show current number of used descriptor count for rx|tx.\n\n"
 
 			"show port (port_id) macs|mcast_macs"
 			"       Display list of mac addresses added to port.\n\n"
@@ -253,6 +264,39 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show port (port_id) flow_ctrl"
 			"	Show flow control info of a port.\n\n"
+
+			"dump_physmem\n"
+			"    Dumps all physical memory segment layouts\n\n"
+
+			"dump_socket_mem\n"
+			"    Dumps the memory usage of all sockets\n\n"
+
+			"dump_memzone\n"
+			"    Dumps the layout of all memory zones\n\n"
+
+			"dump_struct_sizes\n"
+			"    Dumps the size of all memory structures\n\n"
+
+			"dump_ring\n"
+			"    Dumps the status of all or specific element in DPDK rings\n\n"
+
+			"dump_mempool\n"
+			"    Dumps the statistics of all or specific memory pool\n\n"
+
+			"dump_devargs\n"
+			"    Dumps the user device list\n\n"
+
+			"dump_lcores\n"
+			"    Dumps the logical cores list\n\n"
+
+			"dump_trace\n"
+			"    Dumps the tracing data to the folder according to the current EAL settings\n\n"
+
+			"dump_log_types\n"
+			"    Dumps the log level for all the dpdk modules\n\n"
+
+			"show port (port_id) speed_lanes capabilities"
+			"	Show speed lanes capabilities of a port.\n\n"
 		);
 	}
 
@@ -468,6 +512,15 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"mac_addr add port (port_id) vf (vf_id) (mac_address)\n"
 			"    Add a MAC address for a VF on the port.\n\n"
 
+			"mcast_addr add (port_id) (mcast_addr)\n"
+			"    Add a multicast MAC addresses on port_id.\n\n"
+
+			"mcast_addr remove (port_id) (mcast_addr)\n"
+			"    Remove a multicast MAC address from port_id.\n\n"
+
+			"mcast_addr flush (port_id)\n"
+			"    Flush all multicast MAC addresses on port_id.\n\n"
+
 			"set vf mac addr (port_id) (vf_id) (XX:XX:XX:XX:XX:XX)\n"
 			"    Set the MAC address for a VF from the PF.\n\n"
 
@@ -610,6 +663,21 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"set port (port_id) fec_mode auto|off|rs|baser\n"
 			"    set fec mode for a specific port\n\n"
 
+			"show port cman capa (port_id)\n"
+			"    Show congestion management capabilities\n\n"
+
+			"show port cman config (port_id)\n"
+			"    Show congestion management configuration\n\n"
+
+			"set port cman config (port_id) (queue_id) default | "
+			"[obj (queue|queue_mempool) mode red (min_thresh) "
+			"(max_thresh) (prob_inv)]\n"
+			"    Set congestion management configuration\n\n"
+
+			"set port (port_id) led (on|off)\n"
+			"    Set a controllable LED associated with a certain"
+			" port on or off.\n\n"
+
 			, list_pkt_forwarding_modes()
 		);
 	}
@@ -641,7 +709,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Detach physical or virtual dev by port_id\n\n"
 
 			"port config (port_id|all)"
-			" speed (10|100|1000|10000|25000|40000|50000|100000|200000|auto)"
+			" speed (10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto)"
 			" duplex (half|full|auto)\n"
 			"    Set speed and duplex for all ports or port_id\n\n"
 
@@ -664,7 +732,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"port config all rss (all|default|level-default|level-outer|level-inner|"
 			"ip|tcp|udp|sctp|tunnel|vlan|none|"
 			"ipv4|ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp|ipv4-other|"
-			"ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|"
+			"ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|ipv6-flow-label|"
 			"l2-payload|port|vxlan|geneve|nvgre|gtpu|eth|s-vlan|c-vlan|"
 			"esp|ah|l2tpv3|pfcp|pppoe|ecpri|mpls|ipv4-chksum|l4-chksum|"
 			"l2tpv2|l3-pre96|l3-pre64|l3-pre56|l3-pre48|l3-pre40|l3-pre32|"
@@ -673,6 +741,10 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"port config port-id rss reta (hash,queue)[,(hash,queue)]\n"
 			"    Set the RSS redirection table.\n\n"
+
+			"port config (port_id) rss-hash-algo (default|simple_xor|toeplitz|"
+			"symmetric_toeplitz|symmetric_toeplitz_sort)\n"
+			"    Set the RSS hash algorithm.\n\n"
 
 			"port config (port_id) dcb vt (on|off) (traffic_class)"
 			" pfc (on|off)\n"
@@ -711,7 +783,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"port config (port_id) udp_tunnel_port add|rm vxlan|geneve|ecpri (udp_port)\n\n"
 			"    Add/remove UDP tunnel port for tunneling offload\n\n"
 
-			"port config <port_id> rx_offload vlan_strip|"
+			"port config (port_id|all) rx_offload all|vlan_strip|"
 			"ipv4_cksum|udp_cksum|tcp_cksum|tcp_lro|qinq_strip|"
 			"outer_ipv4_cksum|macsec_strip|"
 			"vlan_filter|vlan_extend|scatter|"
@@ -719,7 +791,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"     Enable or disable a per port Rx offloading"
 			" on all Rx queues of a port\n\n"
 
-			"port (port_id) rxq (queue_id) rx_offload vlan_strip|"
+			"port (port_id) rxq (queue_id) rx_offload all|vlan_strip|"
 			"ipv4_cksum|udp_cksum|tcp_cksum|tcp_lro|qinq_strip|"
 			"outer_ipv4_cksum|macsec_strip|"
 			"vlan_filter|vlan_extend|scatter|"
@@ -727,7 +799,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Enable or disable a per queue Rx offloading"
 			" only on a specific Rx queue\n\n"
 
-			"port config (port_id) tx_offload vlan_insert|"
+			"port config (port_id|all) tx_offload all|vlan_insert|"
 			"ipv4_cksum|udp_cksum|tcp_cksum|sctp_cksum|tcp_tso|"
 			"udp_tso|outer_ipv4_cksum|qinq_insert|vxlan_tnl_tso|"
 			"gre_tnl_tso|ipip_tnl_tso|geneve_tnl_tso|"
@@ -736,7 +808,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Enable or disable a per port Tx offloading"
 			" on all Tx queues of a port\n\n"
 
-			"port (port_id) txq (queue_id) tx_offload vlan_insert|"
+			"port (port_id) txq (queue_id) tx_offload all|vlan_insert|"
 			"ipv4_cksum|udp_cksum|tcp_cksum|sctp_cksum|tcp_tso|"
 			"udp_tso|outer_ipv4_cksum|qinq_insert|vxlan_tnl_tso|"
 			"gre_tnl_tso|ipip_tnl_tso|geneve_tnl_tso|macsec_insert"
@@ -764,6 +836,13 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"port cleanup (port_id) txq (queue_id) (free_cnt)\n"
 			"    Cleanup txq mbufs for a specific Tx queue\n\n"
+
+			"port config (port_id) txq (queue_id) affinity (value)\n"
+			"    Map a Tx queue with an aggregated port "
+			"of the DPDK port\n\n"
+
+			"port config (port_id|all) speed_lanes (value)\n"
+			"    Set number of lanes for all ports or port_id for a forced speed\n\n"
 		);
 	}
 
@@ -791,6 +870,10 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"flow destroy {port_id} rule {rule_id} [...]\n"
 			"    Destroy specific flow rules.\n\n"
+
+			"flow update {port_id} {rule_id}"
+			" actions {action} [/ {action} [...]] / end [user_id]\n"
+			"    Update a flow rule with new actions.\n\n"
 
 			"flow flush {port_id}\n"
 			"    Destroy all flow rules.\n\n"
@@ -1328,6 +1411,10 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 		}
 		if (!strcmp(speedstr, "1000")) {
 			*speed = RTE_ETH_LINK_SPEED_1G;
+		} else if (!strcmp(speedstr, "2500")) {
+			*speed = RTE_ETH_LINK_SPEED_2_5G;
+		} else if (!strcmp(speedstr, "5000")) {
+			*speed = RTE_ETH_LINK_SPEED_5G;
 		} else if (!strcmp(speedstr, "10000")) {
 			*speed = RTE_ETH_LINK_SPEED_10G;
 		} else if (!strcmp(speedstr, "25000")) {
@@ -1340,6 +1427,8 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 			*speed = RTE_ETH_LINK_SPEED_100G;
 		} else if (!strcmp(speedstr, "200000")) {
 			*speed = RTE_ETH_LINK_SPEED_200G;
+		} else if (!strcmp(speedstr, "400000")) {
+			*speed = RTE_ETH_LINK_SPEED_400G;
 		} else if (!strcmp(speedstr, "auto")) {
 			*speed = RTE_ETH_LINK_SPEED_AUTONEG;
 		} else {
@@ -1390,7 +1479,7 @@ static cmdline_parse_token_string_t cmd_config_speed_all_item1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item1, "speed");
 static cmdline_parse_token_string_t cmd_config_speed_all_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, value1,
-				"10#100#1000#10000#25000#40000#50000#100000#200000#auto");
+				"10#100#1000#2500#5000#10000#25000#40000#50000#100000#200000#400000#auto");
 static cmdline_parse_token_string_t cmd_config_speed_all_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item2, "duplex");
 static cmdline_parse_token_string_t cmd_config_speed_all_value2 =
@@ -1401,7 +1490,7 @@ static cmdline_parse_inst_t cmd_config_speed_all = {
 	.f = cmd_config_speed_all_parsed,
 	.data = NULL,
 	.help_str = "port config all speed "
-		"10|100|1000|10000|25000|40000|50000|100000|200000|auto duplex "
+		"10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
 							"half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_all_port,
@@ -1465,7 +1554,7 @@ static cmdline_parse_token_string_t cmd_config_speed_specific_item1 =
 								"speed");
 static cmdline_parse_token_string_t cmd_config_speed_specific_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, value1,
-				"10#100#1000#10000#25000#40000#50000#100000#200000#auto");
+				"10#100#1000#2500#5000#10000#25000#40000#50000#100000#200000#400000#auto");
 static cmdline_parse_token_string_t cmd_config_speed_specific_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, item2,
 								"duplex");
@@ -1477,7 +1566,7 @@ static cmdline_parse_inst_t cmd_config_speed_specific = {
 	.f = cmd_config_speed_specific_parsed,
 	.data = NULL,
 	.help_str = "port config <port_id> speed "
-		"10|100|1000|10000|25000|40000|50000|100000|200000|auto duplex "
+		"10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
 							"half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_specific_port,
@@ -1487,6 +1576,244 @@ static cmdline_parse_inst_t cmd_config_speed_specific = {
 		(void *)&cmd_config_speed_specific_value1,
 		(void *)&cmd_config_speed_specific_item2,
 		(void *)&cmd_config_speed_specific_value2,
+		NULL,
+	},
+};
+
+static int
+parse_speed_lanes_cfg(portid_t pid, uint32_t lanes)
+{
+	int ret;
+
+	ret = rte_eth_speed_lanes_set(pid, lanes);
+	if (ret == -ENOTSUP) {
+		fprintf(stderr, "Function not implemented\n");
+		return -1;
+	} else if (ret < 0) {
+		fprintf(stderr, "Set speed lanes failed\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+static void
+show_speed_lanes_capability(unsigned int num, struct rte_eth_speed_lanes_capa *speed_lanes_capa)
+{
+	unsigned int i;
+	uint32_t capa;
+
+	printf("\n%-15s %-10s", "Supported-speeds", "Valid-lanes");
+	printf("\n-----------------------------------\n");
+	for (i = 0; i < num; i++) {
+		printf("%-17s ",
+		       rte_eth_link_speed_to_str(speed_lanes_capa[i].speed));
+		capa = speed_lanes_capa[i].capa;
+		int s = 0;
+
+		while (capa) {
+			if (capa & 0x1)
+				printf("%-2d ", s);
+			s++;
+			capa = capa >> 1;
+		}
+		printf("\n");
+	}
+}
+
+/* *** display speed lanes per port capabilities *** */
+struct cmd_show_speed_lanes_result {
+	cmdline_fixed_string_t cmd_show;
+	cmdline_fixed_string_t cmd_port;
+	cmdline_fixed_string_t cmd_keyword;
+	portid_t cmd_pid;
+};
+
+static void
+cmd_show_speed_lanes_parsed(void *parsed_result,
+			    __rte_unused struct cmdline *cl,
+			    __rte_unused void *data)
+{
+	struct cmd_show_speed_lanes_result *res = parsed_result;
+	struct rte_eth_speed_lanes_capa *speed_lanes_capa;
+	unsigned int num;
+	int ret;
+
+	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
+		fprintf(stderr, "Invalid port id %u\n", res->cmd_pid);
+		return;
+	}
+
+	ret = rte_eth_speed_lanes_get_capability(res->cmd_pid, NULL, 0);
+	if (ret == -ENOTSUP) {
+		fprintf(stderr, "Function not implemented\n");
+		return;
+	} else if (ret < 0) {
+		fprintf(stderr, "Get speed lanes capability failed: %d\n", ret);
+		return;
+	}
+
+	num = (unsigned int)ret;
+	speed_lanes_capa = calloc(num, sizeof(*speed_lanes_capa));
+	if (speed_lanes_capa == NULL) {
+		fprintf(stderr, "Failed to alloc speed lanes capability buffer\n");
+		return;
+	}
+
+	ret = rte_eth_speed_lanes_get_capability(res->cmd_pid, speed_lanes_capa, num);
+	if (ret < 0) {
+		fprintf(stderr, "Error getting speed lanes capability: %d\n", ret);
+		goto out;
+	}
+
+	show_speed_lanes_capability(num, speed_lanes_capa);
+out:
+	free(speed_lanes_capa);
+}
+
+static cmdline_parse_token_string_t cmd_show_speed_lanes_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_speed_lanes_result,
+				 cmd_show, "show");
+static cmdline_parse_token_string_t cmd_show_speed_lanes_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_speed_lanes_result,
+				 cmd_port, "port");
+static cmdline_parse_token_num_t cmd_show_speed_lanes_pid =
+	TOKEN_NUM_INITIALIZER(struct cmd_show_speed_lanes_result,
+			      cmd_pid, RTE_UINT16);
+static cmdline_parse_token_string_t cmd_show_speed_lanes_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_speed_lanes_result,
+				 cmd_keyword, "speed_lanes");
+static cmdline_parse_token_string_t cmd_show_speed_lanes_cap_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_speed_lanes_result,
+				 cmd_keyword, "capabilities");
+
+static cmdline_parse_inst_t cmd_show_speed_lanes = {
+	.f = cmd_show_speed_lanes_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> speed_lanes capabilities",
+	.tokens = {
+		(void *)&cmd_show_speed_lanes_show,
+		(void *)&cmd_show_speed_lanes_port,
+		(void *)&cmd_show_speed_lanes_pid,
+		(void *)&cmd_show_speed_lanes_keyword,
+		(void *)&cmd_show_speed_lanes_cap_keyword,
+		NULL,
+	},
+};
+
+/* *** configure speed_lanes for all ports *** */
+struct cmd_config_speed_lanes_all {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t all;
+	cmdline_fixed_string_t item;
+	uint32_t lanes;
+};
+
+static void
+cmd_config_speed_lanes_all_parsed(void *parsed_result,
+				  __rte_unused struct cmdline *cl,
+				  __rte_unused void *data)
+{
+	struct cmd_config_speed_lanes_all *res = parsed_result;
+	portid_t pid;
+
+	if (!all_ports_stopped()) {
+		fprintf(stderr, "Please stop all ports first\n");
+		return;
+	}
+
+	RTE_ETH_FOREACH_DEV(pid) {
+		if (parse_speed_lanes_cfg(pid, res->lanes))
+			return;
+	}
+
+	cmd_reconfig_device_queue(RTE_PORT_ALL, 1, 1);
+}
+
+static cmdline_parse_token_string_t cmd_config_speed_lanes_all_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_all, port, "port");
+static cmdline_parse_token_string_t cmd_config_speed_lanes_all_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_all, keyword,
+				 "config");
+static cmdline_parse_token_string_t cmd_config_speed_lanes_all_all =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_all, all, "all");
+static cmdline_parse_token_string_t cmd_config_speed_lanes_all_item =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_all, item,
+				 "speed_lanes");
+static cmdline_parse_token_num_t cmd_config_speed_lanes_all_lanes =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_speed_lanes_all, lanes, RTE_UINT32);
+
+static cmdline_parse_inst_t cmd_config_speed_lanes_all = {
+	.f = cmd_config_speed_lanes_all_parsed,
+	.data = NULL,
+	.help_str = "port config all speed_lanes <value>",
+	.tokens = {
+		(void *)&cmd_config_speed_lanes_all_port,
+		(void *)&cmd_config_speed_lanes_all_keyword,
+		(void *)&cmd_config_speed_lanes_all_all,
+		(void *)&cmd_config_speed_lanes_all_item,
+		(void *)&cmd_config_speed_lanes_all_lanes,
+		NULL,
+	},
+};
+
+/* *** configure speed_lanes for specific port *** */
+struct cmd_config_speed_lanes_specific {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t keyword;
+	uint16_t port_id;
+	cmdline_fixed_string_t item;
+	uint32_t lanes;
+};
+
+static void
+cmd_config_speed_lanes_specific_parsed(void *parsed_result,
+				       __rte_unused struct cmdline *cl,
+				       __rte_unused void *data)
+{
+	struct cmd_config_speed_lanes_specific *res = parsed_result;
+
+	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
+		return;
+
+	if (!port_is_stopped(res->port_id)) {
+		fprintf(stderr, "Please stop port %u first\n", res->port_id);
+		return;
+	}
+
+	if (parse_speed_lanes_cfg(res->port_id, res->lanes))
+		return;
+
+	cmd_reconfig_device_queue(res->port_id, 1, 1);
+}
+
+static cmdline_parse_token_string_t cmd_config_speed_lanes_specific_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_specific, port,
+				 "port");
+static cmdline_parse_token_string_t cmd_config_speed_lanes_specific_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_specific, keyword,
+				 "config");
+static cmdline_parse_token_num_t cmd_config_speed_lanes_specific_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_speed_lanes_specific, port_id,
+			      RTE_UINT16);
+static cmdline_parse_token_string_t cmd_config_speed_lanes_specific_item =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_lanes_specific, item,
+				 "speed_lanes");
+static cmdline_parse_token_num_t cmd_config_speed_lanes_specific_lanes =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_speed_lanes_specific, lanes,
+			      RTE_UINT32);
+
+static cmdline_parse_inst_t cmd_config_speed_lanes_specific = {
+	.f = cmd_config_speed_lanes_specific_parsed,
+	.data = NULL,
+	.help_str = "port config <port_id> speed_lanes <value>",
+	.tokens = {
+		(void *)&cmd_config_speed_lanes_specific_port,
+		(void *)&cmd_config_speed_lanes_specific_keyword,
+		(void *)&cmd_config_speed_lanes_specific_id,
+		(void *)&cmd_config_speed_lanes_specific_item,
+		(void *)&cmd_config_speed_lanes_specific_lanes,
 		NULL,
 	},
 };
@@ -1575,7 +1902,6 @@ cmd_config_loopback_specific_parsed(void *parsed_result,
 
 	cmd_reconfig_device_queue(res->port_id, 1, 1);
 }
-
 
 static cmdline_parse_token_string_t cmd_config_loopback_specific_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_loopback_specific, port,
@@ -2068,7 +2394,7 @@ static cmdline_parse_inst_t cmd_config_rss = {
 		"all|default|level-default|level-outer|level-inner|"
 		"ip|tcp|udp|sctp|tunnel|vlan|none|"
 		"ipv4|ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp|ipv4-other|"
-		"ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|"
+		"ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|ipv6-flow-label|"
 		"l2-payload|port|vxlan|geneve|nvgre|gtpu|eth|s-vlan|c-vlan|"
 		"esp|ah|l2tpv3|pfcp|pppoe|ecpri|mpls|ipv4-chksum|l4-chksum|"
 		"l2tpv2|l3-pre96|l3-pre64|l3-pre56|l3-pre48|l3-pre40|l3-pre32|"
@@ -2184,7 +2510,7 @@ static cmdline_parse_token_string_t cmd_config_rss_hash_key_rss_type =
 				 "ipv4#ipv4-frag#ipv4-tcp#ipv4-udp#ipv4-sctp#"
 				 "ipv4-other#ipv6#ipv6-frag#ipv6-tcp#ipv6-udp#"
 				 "ipv6-sctp#ipv6-other#l2-payload#ipv6-ex#"
-				 "ipv6-tcp-ex#ipv6-udp-ex#"
+				 "ipv6-tcp-ex#ipv6-udp-ex#ipv6-flow-label#"
 				 "l3-src-only#l3-dst-only#l4-src-only#l4-dst-only#"
 				 "l2-src-only#l2-dst-only#s-vlan#c-vlan#"
 				 "l2tpv3#esp#ah#pfcp#pppoe#gtpu#ecpri#mpls#l2tpv2");
@@ -2197,7 +2523,7 @@ static cmdline_parse_inst_t cmd_config_rss_hash_key = {
 	.help_str = "port config <port_id> rss-hash-key "
 		"ipv4|ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp|ipv4-other|"
 		"ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|"
-		"l2-payload|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|"
+		"l2-payload|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|ipv6-flow-label|"
 		"l3-src-only|l3-dst-only|l4-src-only|l4-dst-only|"
 		"l2-src-only|l2-dst-only|s-vlan|c-vlan|"
 		"l2tpv3|esp|ah|pfcp|pppoe|gtpu|ecpri|mpls|l2tpv2 "
@@ -2209,6 +2535,83 @@ static cmdline_parse_inst_t cmd_config_rss_hash_key = {
 		(void *)&cmd_config_rss_hash_key_rss_hash_key,
 		(void *)&cmd_config_rss_hash_key_rss_type,
 		(void *)&cmd_config_rss_hash_key_value,
+		NULL,
+	},
+};
+
+/* *** configure rss hash algorithm *** */
+struct cmd_config_rss_hash_algo {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t config;
+	portid_t port_id;
+	cmdline_fixed_string_t rss_hash_algo;
+	cmdline_fixed_string_t algo;
+};
+
+static void
+cmd_config_rss_hash_algo_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_rss_hash_algo *res = parsed_result;
+	uint8_t rss_key[RSS_HASH_KEY_LENGTH];
+	struct rte_eth_rss_conf rss_conf;
+	uint32_t algorithm;
+	int ret;
+
+	rss_conf.rss_key_len = RSS_HASH_KEY_LENGTH;
+	rss_conf.rss_key = rss_key;
+	ret = rte_eth_dev_rss_hash_conf_get(res->port_id, &rss_conf);
+	if (ret != 0) {
+		fprintf(stderr, "failed to get port %u RSS configuration\n",
+			res->port_id);
+		return;
+	}
+
+	algorithm = (uint32_t)rss_conf.algorithm;
+	ret = rte_eth_find_rss_algo(res->algo, &algorithm);
+	if (ret != 0) {
+		fprintf(stderr, "port %u configured invalid RSS hash algorithm: %s\n",
+			res->port_id, res->algo);
+		return;
+	}
+
+	rss_conf.algorithm = algorithm;
+	ret = rte_eth_dev_rss_hash_update(res->port_id, &rss_conf);
+	if (ret != 0) {
+		fprintf(stderr, "failed to set port %u RSS hash algorithm\n",
+			res->port_id);
+		return;
+	}
+}
+
+static cmdline_parse_token_string_t cmd_config_rss_hash_algo_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_rss_hash_algo, port, "port");
+static cmdline_parse_token_string_t cmd_config_rss_hash_algo_config =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_rss_hash_algo, config,
+				 "config");
+static cmdline_parse_token_num_t cmd_config_rss_hash_algo_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_rss_hash_algo, port_id,
+			      RTE_UINT16);
+static cmdline_parse_token_string_t cmd_config_rss_hash_algo_rss_hash_algo =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_rss_hash_algo,
+				 rss_hash_algo, "rss-hash-algo");
+static cmdline_parse_token_string_t cmd_config_rss_hash_algo_algo =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_rss_hash_algo, algo,
+				 "default#simple_xor#toeplitz#"
+				 "symmetric_toeplitz#symmetric_toeplitz_sort");
+
+static cmdline_parse_inst_t cmd_config_rss_hash_algo = {
+	.f = cmd_config_rss_hash_algo_parsed,
+	.data = NULL,
+	.help_str = "port config <port_id> rss-hash-algo "
+		"default|simple_xor|toeplitz|symmetric_toeplitz|symmetric_toeplitz_sort",
+	.tokens = {
+		(void *)&cmd_config_rss_hash_algo_port,
+		(void *)&cmd_config_rss_hash_algo_config,
+		(void *)&cmd_config_rss_hash_algo_port_id,
+		(void *)&cmd_config_rss_hash_algo_rss_hash_algo,
+		(void *)&cmd_config_rss_hash_algo_algo,
 		NULL,
 	},
 };
@@ -2964,15 +3367,17 @@ struct cmd_showport_rss_hash {
 	cmdline_fixed_string_t rss_hash;
 	cmdline_fixed_string_t rss_type;
 	cmdline_fixed_string_t key; /* optional argument */
+	cmdline_fixed_string_t algorithm; /* optional argument */
 };
 
 static void cmd_showport_rss_hash_parsed(void *parsed_result,
 				__rte_unused struct cmdline *cl,
-				void *show_rss_key)
+				__rte_unused void *data)
 {
 	struct cmd_showport_rss_hash *res = parsed_result;
 
-	port_rss_hash_conf_show(res->port_id, show_rss_key != NULL);
+	port_rss_hash_conf_show(res->port_id,
+		!strcmp(res->key, "key"), !strcmp(res->algorithm, "algorithm"));
 }
 
 static cmdline_parse_token_string_t cmd_showport_rss_hash_show =
@@ -2987,6 +3392,8 @@ static cmdline_parse_token_string_t cmd_showport_rss_hash_rss_hash =
 				 "rss-hash");
 static cmdline_parse_token_string_t cmd_showport_rss_hash_rss_key =
 	TOKEN_STRING_INITIALIZER(struct cmd_showport_rss_hash, key, "key");
+static cmdline_parse_token_string_t cmd_showport_rss_hash_rss_algo =
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_rss_hash, algorithm, "algorithm");
 
 static cmdline_parse_inst_t cmd_showport_rss_hash = {
 	.f = cmd_showport_rss_hash_parsed,
@@ -3003,7 +3410,7 @@ static cmdline_parse_inst_t cmd_showport_rss_hash = {
 
 static cmdline_parse_inst_t cmd_showport_rss_hash_key = {
 	.f = cmd_showport_rss_hash_parsed,
-	.data = (void *)1,
+	.data = NULL,
 	.help_str = "show port <port_id> rss-hash key",
 	.tokens = {
 		(void *)&cmd_showport_rss_hash_show,
@@ -3011,6 +3418,20 @@ static cmdline_parse_inst_t cmd_showport_rss_hash_key = {
 		(void *)&cmd_showport_rss_hash_port_id,
 		(void *)&cmd_showport_rss_hash_rss_hash,
 		(void *)&cmd_showport_rss_hash_rss_key,
+		NULL,
+	},
+};
+
+static cmdline_parse_inst_t cmd_showport_rss_hash_algo = {
+	.f = cmd_showport_rss_hash_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> rss-hash algorithm",
+	.tokens = {
+		(void *)&cmd_showport_rss_hash_show,
+		(void *)&cmd_showport_rss_hash_port,
+		(void *)&cmd_showport_rss_hash_port_id,
+		(void *)&cmd_showport_rss_hash_rss_hash,
+		(void *)&cmd_showport_rss_hash_rss_algo,
 		NULL,
 	},
 };
@@ -3448,6 +3869,8 @@ parse_hdrs_list(const char *str, const char *item_name, unsigned int max_items,
 
 	nb_item = 0;
 	char *str2 = strdup(str);
+	if (str2 == NULL)
+		return nb_item;
 	cur = strtok_r(str2, ",", &tmp);
 	while (cur != NULL) {
 		parsed_items[nb_item] = get_ptype(cur);
@@ -4853,6 +5276,7 @@ cmd_tso_set_parsed(void *parsed_result,
 {
 	struct cmd_tso_set_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
+	uint64_t offloads;
 	int ret;
 
 	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
@@ -4869,37 +5293,34 @@ cmd_tso_set_parsed(void *parsed_result,
 	if (ret != 0)
 		return;
 
-	if ((ports[res->port_id].tso_segsz != 0) &&
-		(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_TSO) == 0) {
-		fprintf(stderr, "Error: TSO is not supported by port %d\n",
-			res->port_id);
-		return;
+	if (ports[res->port_id].tso_segsz != 0) {
+		if ((dev_info.tx_offload_capa & (RTE_ETH_TX_OFFLOAD_TCP_TSO |
+				RTE_ETH_TX_OFFLOAD_UDP_TSO)) == 0) {
+			fprintf(stderr, "Error: both TSO and UFO are not supported by port %d\n",
+				res->port_id);
+			return;
+		}
+		/* display warnings if configuration is not supported by the NIC */
+		if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_TSO) == 0)
+			printf("Warning: port %d doesn't support TSO\n", res->port_id);
+		if ((dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_TSO) == 0)
+			printf("Warning: port %d doesn't support UFO\n", res->port_id);
 	}
 
 	if (ports[res->port_id].tso_segsz == 0) {
 		ports[res->port_id].dev_conf.txmode.offloads &=
-						~RTE_ETH_TX_OFFLOAD_TCP_TSO;
-		printf("TSO for non-tunneled packets is disabled\n");
+			~(RTE_ETH_TX_OFFLOAD_TCP_TSO | RTE_ETH_TX_OFFLOAD_UDP_TSO);
+		printf("TSO and UFO for non-tunneled packets is disabled\n");
 	} else {
-		ports[res->port_id].dev_conf.txmode.offloads |=
-						RTE_ETH_TX_OFFLOAD_TCP_TSO;
-		printf("TSO segment size for non-tunneled packets is %d\n",
+		offloads = (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_TSO) ?
+					RTE_ETH_TX_OFFLOAD_TCP_TSO : 0;
+		offloads |= (dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_TSO) ?
+					RTE_ETH_TX_OFFLOAD_UDP_TSO : 0;
+		ports[res->port_id].dev_conf.txmode.offloads |= offloads;
+		printf("segment size for non-tunneled packets is %d\n",
 			ports[res->port_id].tso_segsz);
 	}
 	cmd_config_queue_tx_offloads(&ports[res->port_id]);
-
-	/* display warnings if configuration is not supported by the NIC */
-	ret = eth_dev_info_get_print_err(res->port_id, &dev_info);
-	if (ret != 0)
-		return;
-
-	if ((ports[res->port_id].tso_segsz != 0) &&
-		(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_TCP_TSO) == 0) {
-		fprintf(stderr,
-			"Warning: TSO enabled but not supported by port %d\n",
-			res->port_id);
-	}
-
 	cmd_reconfig_device_queue(res->port_id, 1, 1);
 }
 
@@ -4957,39 +5378,27 @@ struct cmd_tunnel_tso_set_result {
 	portid_t port_id;
 };
 
-static struct rte_eth_dev_info
-check_tunnel_tso_nic_support(portid_t port_id)
+static void
+check_tunnel_tso_nic_support(portid_t port_id, uint64_t tx_offload_capa)
 {
-	struct rte_eth_dev_info dev_info;
-
-	if (eth_dev_info_get_print_err(port_id, &dev_info) != 0)
-		return dev_info;
-
-	if (!(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO))
-		fprintf(stderr,
-			"Warning: VXLAN TUNNEL TSO not supported therefore not enabled for port %d\n",
+	if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO))
+		printf("Warning: VXLAN TUNNEL TSO not supported therefore not enabled for port %d\n",
 			port_id);
-	if (!(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO))
-		fprintf(stderr,
-			"Warning: GRE TUNNEL TSO not supported therefore not enabled for port %d\n",
+	if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO))
+		printf("Warning: GRE TUNNEL TSO not supported therefore not enabled for port %d\n",
 			port_id);
-	if (!(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO))
-		fprintf(stderr,
-			"Warning: IPIP TUNNEL TSO not supported therefore not enabled for port %d\n",
+	if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO))
+		printf("Warning: IPIP TUNNEL TSO not supported therefore not enabled for port %d\n",
 			port_id);
-	if (!(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO))
-		fprintf(stderr,
-			"Warning: GENEVE TUNNEL TSO not supported therefore not enabled for port %d\n",
+	if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO))
+		printf("Warning: GENEVE TUNNEL TSO not supported therefore not enabled for port %d\n",
 			port_id);
-	if (!(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_IP_TNL_TSO))
-		fprintf(stderr,
-			"Warning: IP TUNNEL TSO not supported therefore not enabled for port %d\n",
+	if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_IP_TNL_TSO))
+		printf("Warning: IP TUNNEL TSO not supported therefore not enabled for port %d\n",
 			port_id);
-	if (!(dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO))
-		fprintf(stderr,
-			"Warning: UDP TUNNEL TSO not supported therefore not enabled for port %d\n",
+	if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO))
+		printf("Warning: UDP TUNNEL TSO not supported therefore not enabled for port %d\n",
 			port_id);
-	return dev_info;
 }
 
 static void
@@ -4999,6 +5408,13 @@ cmd_tunnel_tso_set_parsed(void *parsed_result,
 {
 	struct cmd_tunnel_tso_set_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
+	uint64_t all_tunnel_tso = RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
+				RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
+				RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |
+				RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
+				RTE_ETH_TX_OFFLOAD_IP_TNL_TSO |
+				RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO;
+	int ret;
 
 	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
 		return;
@@ -5010,28 +5426,19 @@ cmd_tunnel_tso_set_parsed(void *parsed_result,
 	if (!strcmp(res->mode, "set"))
 		ports[res->port_id].tunnel_tso_segsz = res->tso_segsz;
 
-	dev_info = check_tunnel_tso_nic_support(res->port_id);
 	if (ports[res->port_id].tunnel_tso_segsz == 0) {
-		ports[res->port_id].dev_conf.txmode.offloads &=
-			~(RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
-			  RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
-			  RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |
-			  RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
-			  RTE_ETH_TX_OFFLOAD_IP_TNL_TSO |
-			  RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO);
+		ports[res->port_id].dev_conf.txmode.offloads &= ~all_tunnel_tso;
 		printf("TSO for tunneled packets is disabled\n");
 	} else {
-		uint64_t tso_offloads = (RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
-					 RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
-					 RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |
-					 RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
-					 RTE_ETH_TX_OFFLOAD_IP_TNL_TSO |
-					 RTE_ETH_TX_OFFLOAD_UDP_TNL_TSO);
+		ret = eth_dev_info_get_print_err(res->port_id, &dev_info);
+		if (ret != 0)
+			return;
 
-		ports[res->port_id].dev_conf.txmode.offloads |=
-			(tso_offloads & dev_info.tx_offload_capa);
-		printf("TSO segment size for tunneled packets is %d\n",
-			ports[res->port_id].tunnel_tso_segsz);
+		if ((all_tunnel_tso & dev_info.tx_offload_capa) == 0) {
+			fprintf(stderr, "Error: port=%u don't support tunnel TSO offloads.\n",
+				res->port_id);
+			return;
+		}
 
 		/* Below conditions are needed to make it work:
 		 * (1) tunnel TSO is supported by the NIC;
@@ -5044,14 +5451,23 @@ cmd_tunnel_tso_set_parsed(void *parsed_result,
 		 * is not necessary for IPv6 tunneled pkts because there's no
 		 * checksum in IP header anymore.
 		 */
-
-		if (!ports[res->port_id].parse_tunnel)
+		if (!ports[res->port_id].parse_tunnel) {
 			fprintf(stderr,
-				"Warning: csum parse_tunnel must be set so that tunneled packets are recognized\n");
+				"Error: csum parse_tunnel must be set so that tunneled packets are recognized\n");
+			return;
+		}
 		if (!(ports[res->port_id].dev_conf.txmode.offloads &
-		      RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM))
+		      RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM)) {
 			fprintf(stderr,
-				"Warning: csum set outer-ip must be set to hw if outer L3 is IPv4; not necessary for IPv6\n");
+				"Error: csum set outer-ip must be set to hw if outer L3 is IPv4; not necessary for IPv6\n");
+			return;
+		}
+
+		check_tunnel_tso_nic_support(res->port_id, dev_info.tx_offload_capa);
+		ports[res->port_id].dev_conf.txmode.offloads |=
+				(all_tunnel_tso & dev_info.tx_offload_capa);
+		printf("TSO segment size for tunneled packets is %d\n",
+			ports[res->port_id].tunnel_tso_segsz);
 	}
 
 	cmd_config_queue_tx_offloads(&ports[res->port_id]);
@@ -7059,6 +7475,123 @@ static cmdline_parse_inst_t cmd_showeeprom = {
 	},
 };
 
+/* *** SET PORT EEPROM *** */
+struct cmd_seteeprom_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t port;
+	uint16_t portnum;
+	cmdline_fixed_string_t eeprom;
+	cmdline_fixed_string_t confirm_str;
+	cmdline_fixed_string_t magic_str;
+	uint32_t magic;
+	cmdline_fixed_string_t value;
+	cmdline_multi_string_t token_str;
+};
+
+static void cmd_seteeprom_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_seteeprom_result *res = parsed_result;
+	uint32_t offset = 0;
+	uint32_t length;
+	uint8_t *value;
+	char *token_str;
+	char *token;
+
+	token_str = res->token_str;
+	token = strtok_r(token_str, " \f\n\r\t\v", &token_str);
+
+	/* Parse Hex string to Byte data */
+	if (strlen(token) % 2 != 0) {
+		fprintf(stderr, "Bad Argument: %s\nHex string must be in multiples of 2 Bytes\n",
+			token);
+		return;
+	}
+
+	length = strlen(token) / 2;
+	value = calloc(length, sizeof(uint8_t));
+	for (int count = 0; count < (int)(length); count++) {
+		if (sscanf(token, "%2hhx", &value[count]) != 1) {
+			fprintf(stderr, "Bad Argument: %s\nValue must be a hex string\n",
+				token - (count + 1));
+			goto out;
+		}
+		token += 2;
+	}
+
+	/* Second token: offset string */
+	token = strtok_r(token_str, " \f\n\r\t\v", &token_str);
+	if (token != NULL) {
+		if (strcmp(token, "offset") == 0) {
+			/* Third token: offset */
+			token = strtok_r(token_str, " \f\n\r\t\v", &token_str);
+			if (token == NULL) {
+				fprintf(stderr, "No offset specified\n");
+				goto out;
+			}
+
+			char *end;
+			offset = strtoul(token, &end, 10);
+			if (offset == 0 && strcmp(end, "") != 0) {
+				fprintf(stderr, "Bad Argument: %s\n", token);
+				goto out;
+			}
+		} else {
+			fprintf(stderr, "Bad Argument: %s\n", token);
+			goto out;
+		}
+	}
+
+	port_eeprom_set(res->portnum, res->magic, offset, length, value);
+
+out:
+	free(value);
+}
+
+static cmdline_parse_token_string_t cmd_seteeprom_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, set, "set");
+static cmdline_parse_token_string_t cmd_seteeprom_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, port, "port");
+static cmdline_parse_token_num_t cmd_seteeprom_portnum =
+	TOKEN_NUM_INITIALIZER(struct cmd_seteeprom_result, portnum, RTE_UINT16);
+static cmdline_parse_token_string_t cmd_seteeprom_eeprom =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, eeprom, "eeprom");
+static cmdline_parse_token_string_t cmd_seteeprom_confirm_str =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, confirm_str, "accept_risk");
+static cmdline_parse_token_string_t cmd_seteeprom_magic_str =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, magic_str, "magic");
+static cmdline_parse_token_num_t cmd_seteeprom_magic =
+	TOKEN_NUM_INITIALIZER(struct cmd_seteeprom_result, magic, RTE_UINT32);
+static cmdline_parse_token_string_t cmd_seteeprom_value =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, value, "value");
+static cmdline_parse_token_string_t cmd_seteeprom_token_str =
+	TOKEN_STRING_INITIALIZER(struct cmd_seteeprom_result, token_str, TOKEN_STRING_MULTI);
+
+static cmdline_parse_inst_t cmd_seteeprom = {
+	.f = cmd_seteeprom_parsed,
+	.data = NULL,
+	.help_str = "set port <port_id> eeprom <accept_risk> magic <magic_num> "
+		"value <value> offset <offset>: Set eeprom value for port_id.\n"
+		"Note:\n"
+		"This is a high-risk command and its misuse may result in "
+		"unexpected behaviour from the NIC.\n"
+		"By inserting \"accept_risk\" into the command, the user is "
+		"acknowledging and taking responsibility for this risk.",
+	.tokens = {
+		(void *)&cmd_seteeprom_set,
+		(void *)&cmd_seteeprom_port,
+		(void *)&cmd_seteeprom_portnum,
+		(void *)&cmd_seteeprom_eeprom,
+		(void *)&cmd_seteeprom_confirm_str,
+		(void *)&cmd_seteeprom_magic_str,
+		(void *)&cmd_seteeprom_magic,
+		(void *)&cmd_seteeprom_value,
+		(void *)&cmd_seteeprom_token_str,
+		NULL,
+	},
+};
+
 /* *** SHOW QUEUE INFO *** */
 struct cmd_showqueue_result {
 	cmdline_fixed_string_t show;
@@ -8345,6 +8878,12 @@ static void cmd_dump_parsed(void *parsed_result,
 		rte_mempool_list_dump(stdout);
 	else if (!strcmp(res->dump, "dump_devargs"))
 		rte_devargs_dump(stdout);
+	else if (!strcmp(res->dump, "dump_lcores"))
+		rte_lcore_dump(stdout);
+#ifndef RTE_EXEC_ENV_WINDOWS
+	else if (!strcmp(res->dump, "dump_trace"))
+		rte_trace_save();
+#endif
 	else if (!strcmp(res->dump, "dump_log_types"))
 		rte_log_dump(stdout);
 }
@@ -8358,6 +8897,10 @@ static cmdline_parse_token_string_t cmd_dump_dump =
 		"dump_ring#"
 		"dump_mempool#"
 		"dump_devargs#"
+		"dump_lcores#"
+#ifndef RTE_EXEC_ENV_WINDOWS
+		"dump_trace#"
+#endif
 		"dump_log_types");
 
 static cmdline_parse_inst_t cmd_dump = {
@@ -8434,9 +8977,7 @@ do { \
 #define IPV6_ADDR_TO_ARRAY(ip_addr, ip) \
 do { \
 	if ((ip_addr).family == AF_INET6) \
-		rte_memcpy(&(ip), \
-				 &((ip_addr).addr.ipv6), \
-				 sizeof(struct in6_addr)); \
+		ip = ip_addr.addr.ipv6; \
 	else { \
 		fprintf(stderr, "invalid parameter.\n"); \
 		return; \
@@ -8494,6 +9035,45 @@ static cmdline_parse_inst_t cmd_mcast_addr = {
 		(void *)&cmd_mcast_addr_what,
 		(void *)&cmd_mcast_addr_portnum,
 		(void *)&cmd_mcast_addr_addr,
+		NULL,
+	},
+};
+
+/* *** FLUSH MULTICAST MAC ADDRESS ON PORT *** */
+struct cmd_mcast_addr_flush_result {
+	cmdline_fixed_string_t mcast_addr_cmd;
+	cmdline_fixed_string_t what;
+	uint16_t port_num;
+};
+
+static void cmd_mcast_addr_flush_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_mcast_addr_flush_result *res = parsed_result;
+
+	mcast_addr_flush(res->port_num);
+}
+
+static cmdline_parse_token_string_t cmd_mcast_addr_flush_cmd =
+	TOKEN_STRING_INITIALIZER(struct cmd_mcast_addr_result,
+				 mcast_addr_cmd, "mcast_addr");
+static cmdline_parse_token_string_t cmd_mcast_addr_flush_what =
+	TOKEN_STRING_INITIALIZER(struct cmd_mcast_addr_result, what,
+				 "flush");
+static cmdline_parse_token_num_t cmd_mcast_addr_flush_portnum =
+	TOKEN_NUM_INITIALIZER(struct cmd_mcast_addr_result, port_num,
+				 RTE_UINT16);
+
+static cmdline_parse_inst_t cmd_mcast_addr_flush = {
+	.f = cmd_mcast_addr_flush_parsed,
+	.data = (void *)0,
+	.help_str = "mcast_addr flush <port_id> : "
+		"flush all multicast MAC addresses on port_id",
+	.tokens = {
+		(void *)&cmd_mcast_addr_flush_cmd,
+		(void *)&cmd_mcast_addr_flush_what,
+		(void *)&cmd_mcast_addr_flush_portnum,
 		NULL,
 	},
 };
@@ -10830,8 +11410,8 @@ print_rx_offloads(uint64_t offloads)
 	if (offloads == 0)
 		return;
 
-	begin = __builtin_ctzll(offloads);
-	end = sizeof(offloads) * CHAR_BIT - __builtin_clzll(offloads);
+	begin = rte_ctz64(offloads);
+	end = sizeof(offloads) * CHAR_BIT - rte_clz64(offloads);
 
 	single_offload = 1ULL << begin;
 	for (bit = begin; bit < end; bit++) {
@@ -11001,7 +11581,7 @@ static cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_rx_off
 static cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_offload =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_port_rx_offload_result,
-		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
+		 offload, "all#vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "vlan_filter#vlan_extend#"
 			   "scatter#buffer_split#timestamp#security#"
@@ -11036,16 +11616,12 @@ search_rx_offload(const char *name)
 }
 
 static void
-cmd_config_per_port_rx_offload_parsed(void *parsed_result,
-				__rte_unused struct cmdline *cl,
-				__rte_unused void *data)
+config_port_rx_offload(portid_t port_id, char *name, bool on)
 {
-	struct cmd_config_per_port_rx_offload_result *res = parsed_result;
-	portid_t port_id = res->port_id;
 	struct rte_eth_dev_info dev_info;
 	struct rte_port *port = &ports[port_id];
-	uint64_t single_offload;
 	uint16_t nb_rx_queues;
+	uint64_t offload;
 	int q;
 	int ret;
 
@@ -11056,34 +11632,55 @@ cmd_config_per_port_rx_offload_parsed(void *parsed_result,
 		return;
 	}
 
-	single_offload = search_rx_offload(res->offload);
-	if (single_offload == 0) {
-		fprintf(stderr, "Unknown offload name: %s\n", res->offload);
-		return;
-	}
-
 	ret = eth_dev_info_get_print_err(port_id, &dev_info);
 	if (ret != 0)
 		return;
 
-	nb_rx_queues = dev_info.nb_rx_queues;
-	if (!strcmp(res->on_off, "on")) {
-		port->dev_conf.rxmode.offloads |= single_offload;
-		for (q = 0; q < nb_rx_queues; q++)
-			port->rxq[q].conf.offloads |= single_offload;
+	if (!strcmp(name, "all")) {
+		offload = dev_info.rx_offload_capa;
 	} else {
-		port->dev_conf.rxmode.offloads &= ~single_offload;
+		offload = search_rx_offload(name);
+		if (offload == 0) {
+			fprintf(stderr, "Unknown offload name: %s\n", name);
+			return;
+		}
+		if ((offload & dev_info.rx_offload_capa) == 0) {
+			fprintf(stderr, "Error: port %u doesn't support offload: %s.\n",
+				port_id, name);
+			return;
+		}
+	}
+
+	nb_rx_queues = dev_info.nb_rx_queues;
+	if (on) {
+		port->dev_conf.rxmode.offloads |= offload;
 		for (q = 0; q < nb_rx_queues; q++)
-			port->rxq[q].conf.offloads &= ~single_offload;
+			port->rxq[q].conf.offloads |= offload;
+	} else {
+		port->dev_conf.rxmode.offloads &= ~offload;
+		for (q = 0; q < nb_rx_queues; q++)
+			port->rxq[q].conf.offloads &= ~offload;
 	}
 
 	cmd_reconfig_device_queue(port_id, 1, 1);
 }
 
+static void
+cmd_config_per_port_rx_offload_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_per_port_rx_offload_result *res = parsed_result;
+	bool on;
+
+	on = strcmp(res->on_off, "on") == 0;
+	config_port_rx_offload(res->port_id, res->offload, on);
+}
+
 static cmdline_parse_inst_t cmd_config_per_port_rx_offload = {
 	.f = cmd_config_per_port_rx_offload_parsed,
 	.data = NULL,
-	.help_str = "port config <port_id> rx_offload vlan_strip|ipv4_cksum|"
+	.help_str = "port config <port_id> rx_offload all|vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|vlan_filter|vlan_extend|"
 		    "scatter|buffer_split|timestamp|security|"
@@ -11095,6 +11692,79 @@ static cmdline_parse_inst_t cmd_config_per_port_rx_offload = {
 		(void *)&cmd_config_per_port_rx_offload_result_rx_offload,
 		(void *)&cmd_config_per_port_rx_offload_result_offload,
 		(void *)&cmd_config_per_port_rx_offload_result_on_off,
+		NULL,
+	}
+};
+
+/* Enable/Disable all port Rx offloading */
+struct cmd_config_all_port_rx_offload_result {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t config;
+	cmdline_fixed_string_t port_all;
+	cmdline_fixed_string_t rx_offload;
+	cmdline_fixed_string_t offload;
+	cmdline_fixed_string_t on_off;
+};
+
+static cmdline_parse_token_string_t cmd_config_all_port_rx_offload_result_port =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_rx_offload_result,
+		 port, "port");
+static cmdline_parse_token_string_t cmd_config_all_port_rx_offload_result_config =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_rx_offload_result,
+		 config, "config");
+
+static cmdline_parse_token_string_t cmd_config_all_port_rx_offload_result_port_all =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_all_port_rx_offload_result,
+				 port_all, "all");
+static cmdline_parse_token_string_t cmd_config_all_port_rx_offload_result_rx_offload =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_rx_offload_result,
+		 rx_offload, "rx_offload");
+static cmdline_parse_token_string_t cmd_config_all_port_rx_offload_result_offload =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_rx_offload_result,
+		 offload, "all#vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
+			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
+			   "vlan_filter#vlan_extend#"
+			   "scatter#buffer_split#timestamp#security#"
+			   "keep_crc#rss_hash");
+static cmdline_parse_token_string_t cmd_config_all_port_rx_offload_result_on_off =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_rx_offload_result,
+		 on_off, "on#off");
+
+static void
+cmd_config_all_port_rx_offload_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_all_port_rx_offload_result *res = parsed_result;
+	bool on_off;
+	portid_t i;
+
+	on_off = strcmp(res->on_off, "on") == 0;
+	RTE_ETH_FOREACH_DEV(i)
+		config_port_rx_offload(i, res->offload, on_off);
+
+}
+
+static cmdline_parse_inst_t cmd_config_all_port_rx_offload = {
+	.f = cmd_config_all_port_rx_offload_parsed,
+	.data = NULL,
+	.help_str = "port config all rx_offload all|vlan_strip|ipv4_cksum|"
+		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
+		    "macsec_strip|vlan_filter|vlan_extend|"
+		    "scatter|buffer_split|timestamp|security|"
+		    "keep_crc|rss_hash on|off",
+	.tokens = {
+		(void *)&cmd_config_all_port_rx_offload_result_port,
+		(void *)&cmd_config_all_port_rx_offload_result_config,
+		(void *)&cmd_config_all_port_rx_offload_result_port_all,
+		(void *)&cmd_config_all_port_rx_offload_result_rx_offload,
+		(void *)&cmd_config_all_port_rx_offload_result_offload,
+		(void *)&cmd_config_all_port_rx_offload_result_on_off,
 		NULL,
 	}
 };
@@ -11133,7 +11803,7 @@ static cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_rxoff
 static cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_offload =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_queue_rx_offload_result,
-		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
+		 offload, "all#vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "vlan_filter#vlan_extend#"
 			   "scatter#buffer_split#timestamp#security#keep_crc");
@@ -11152,7 +11822,7 @@ cmd_config_per_queue_rx_offload_parsed(void *parsed_result,
 	portid_t port_id = res->port_id;
 	uint16_t queue_id = res->queue_id;
 	struct rte_port *port = &ports[port_id];
-	uint64_t single_offload;
+	uint64_t offload;
 	int ret;
 
 	if (port->port_status != RTE_PORT_STOPPED) {
@@ -11173,16 +11843,25 @@ cmd_config_per_queue_rx_offload_parsed(void *parsed_result,
 		return;
 	}
 
-	single_offload = search_rx_offload(res->offload);
-	if (single_offload == 0) {
-		fprintf(stderr, "Unknown offload name: %s\n", res->offload);
-		return;
+	if (!strcmp(res->offload, "all")) {
+		offload = dev_info.rx_queue_offload_capa;
+	} else {
+		offload = search_rx_offload(res->offload);
+		if (offload == 0) {
+			fprintf(stderr, "Unknown offload name: %s\n", res->offload);
+			return;
+		}
+		if ((offload & dev_info.rx_queue_offload_capa) == 0) {
+			fprintf(stderr, "Error: port %u doesn't support per queue offload: %s.\n",
+				port_id, res->offload);
+			return;
+		}
 	}
 
 	if (!strcmp(res->on_off, "on"))
-		port->rxq[queue_id].conf.offloads |= single_offload;
+		port->rxq[queue_id].conf.offloads |= offload;
 	else
-		port->rxq[queue_id].conf.offloads &= ~single_offload;
+		port->rxq[queue_id].conf.offloads &= ~offload;
 
 	cmd_reconfig_device_queue(port_id, 1, 1);
 }
@@ -11191,7 +11870,7 @@ static cmdline_parse_inst_t cmd_config_per_queue_rx_offload = {
 	.f = cmd_config_per_queue_rx_offload_parsed,
 	.data = NULL,
 	.help_str = "port <port_id> rxq <queue_id> rx_offload "
-		    "vlan_strip|ipv4_cksum|"
+		    "all|vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|vlan_filter|vlan_extend|"
 		    "scatter|buffer_split|timestamp|security|"
@@ -11249,8 +11928,8 @@ print_tx_offloads(uint64_t offloads)
 	if (offloads == 0)
 		return;
 
-	begin = __builtin_ctzll(offloads);
-	end = sizeof(offloads) * CHAR_BIT - __builtin_clzll(offloads);
+	begin = rte_ctz64(offloads);
+	end = sizeof(offloads) * CHAR_BIT - rte_clz64(offloads);
 
 	single_offload = 1ULL << begin;
 	for (bit = begin; bit < end; bit++) {
@@ -11420,7 +12099,7 @@ static cmdline_parse_token_string_t cmd_config_per_port_tx_offload_result_tx_off
 static cmdline_parse_token_string_t cmd_config_per_port_tx_offload_result_offload =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_port_tx_offload_result,
-		 offload, "vlan_insert#ipv4_cksum#udp_cksum#tcp_cksum#"
+		 offload, "all#vlan_insert#ipv4_cksum#udp_cksum#tcp_cksum#"
 			  "sctp_cksum#tcp_tso#udp_tso#outer_ipv4_cksum#"
 			  "qinq_insert#vxlan_tnl_tso#gre_tnl_tso#"
 			  "ipip_tnl_tso#geneve_tnl_tso#macsec_insert#"
@@ -11459,16 +12138,12 @@ search_tx_offload(const char *name)
 }
 
 static void
-cmd_config_per_port_tx_offload_parsed(void *parsed_result,
-				__rte_unused struct cmdline *cl,
-				__rte_unused void *data)
+config_port_tx_offload(portid_t port_id, char *name, bool on)
 {
-	struct cmd_config_per_port_tx_offload_result *res = parsed_result;
-	portid_t port_id = res->port_id;
 	struct rte_eth_dev_info dev_info;
 	struct rte_port *port = &ports[port_id];
-	uint64_t single_offload;
 	uint16_t nb_tx_queues;
+	uint64_t offload;
 	int q;
 	int ret;
 
@@ -11479,35 +12154,56 @@ cmd_config_per_port_tx_offload_parsed(void *parsed_result,
 		return;
 	}
 
-	single_offload = search_tx_offload(res->offload);
-	if (single_offload == 0) {
-		fprintf(stderr, "Unknown offload name: %s\n", res->offload);
-		return;
-	}
-
 	ret = eth_dev_info_get_print_err(port_id, &dev_info);
 	if (ret != 0)
 		return;
 
-	nb_tx_queues = dev_info.nb_tx_queues;
-	if (!strcmp(res->on_off, "on")) {
-		port->dev_conf.txmode.offloads |= single_offload;
-		for (q = 0; q < nb_tx_queues; q++)
-			port->txq[q].conf.offloads |= single_offload;
+	if (!strcmp(name, "all")) {
+		offload = dev_info.tx_offload_capa;
 	} else {
-		port->dev_conf.txmode.offloads &= ~single_offload;
+		offload = search_tx_offload(name);
+		if (offload == 0) {
+			fprintf(stderr, "Unknown offload name: %s\n", name);
+			return;
+		}
+		if ((offload & dev_info.tx_offload_capa) == 0) {
+			fprintf(stderr, "Error: port %u doesn't support offload: %s.\n",
+				port_id, name);
+			return;
+		}
+	}
+
+	nb_tx_queues = dev_info.nb_tx_queues;
+	if (on) {
+		port->dev_conf.txmode.offloads |= offload;
 		for (q = 0; q < nb_tx_queues; q++)
-			port->txq[q].conf.offloads &= ~single_offload;
+			port->txq[q].conf.offloads |= offload;
+	} else {
+		port->dev_conf.txmode.offloads &= ~offload;
+		for (q = 0; q < nb_tx_queues; q++)
+			port->txq[q].conf.offloads &= ~offload;
 	}
 
 	cmd_reconfig_device_queue(port_id, 1, 1);
+}
+
+static void
+cmd_config_per_port_tx_offload_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_per_port_tx_offload_result *res = parsed_result;
+	bool on;
+
+	on = strcmp(res->on_off, "on") == 0;
+	config_port_tx_offload(res->port_id, res->offload, on);
 }
 
 static cmdline_parse_inst_t cmd_config_per_port_tx_offload = {
 	.f = cmd_config_per_port_tx_offload_parsed,
 	.data = NULL,
 	.help_str = "port config <port_id> tx_offload "
-		    "vlan_insert|ipv4_cksum|udp_cksum|tcp_cksum|"
+		    "all|vlan_insert|ipv4_cksum|udp_cksum|tcp_cksum|"
 		    "sctp_cksum|tcp_tso|udp_tso|outer_ipv4_cksum|"
 		    "qinq_insert|vxlan_tnl_tso|gre_tnl_tso|"
 		    "ipip_tnl_tso|geneve_tnl_tso|macsec_insert|"
@@ -11520,6 +12216,80 @@ static cmdline_parse_inst_t cmd_config_per_port_tx_offload = {
 		(void *)&cmd_config_per_port_tx_offload_result_tx_offload,
 		(void *)&cmd_config_per_port_tx_offload_result_offload,
 		(void *)&cmd_config_per_port_tx_offload_result_on_off,
+		NULL,
+	}
+};
+
+/* Enable/Disable all port Tx offloading */
+struct cmd_config_all_port_tx_offload_result {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t config;
+	cmdline_fixed_string_t port_all;
+	cmdline_fixed_string_t tx_offload;
+	cmdline_fixed_string_t offload;
+	cmdline_fixed_string_t on_off;
+};
+
+static cmdline_parse_token_string_t cmd_config_all_port_tx_offload_result_port =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_tx_offload_result,
+		 port, "port");
+static cmdline_parse_token_string_t cmd_config_all_port_tx_offload_result_config =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_tx_offload_result,
+		 config, "config");
+static cmdline_parse_token_string_t cmd_config_all_port_tx_offload_result_port_all =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_all_port_tx_offload_result,
+				 port_all, "all");
+static cmdline_parse_token_string_t cmd_config_all_port_tx_offload_result_tx_offload =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_tx_offload_result,
+		 tx_offload, "tx_offload");
+static cmdline_parse_token_string_t cmd_config_all_port_tx_offload_result_offload =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_tx_offload_result,
+		 offload, "all#vlan_insert#ipv4_cksum#udp_cksum#tcp_cksum#"
+			  "sctp_cksum#tcp_tso#udp_tso#outer_ipv4_cksum#"
+			  "qinq_insert#vxlan_tnl_tso#gre_tnl_tso#"
+			  "ipip_tnl_tso#geneve_tnl_tso#macsec_insert#"
+			  "mt_lockfree#multi_segs#mbuf_fast_free#security#"
+			  "send_on_timestamp");
+static cmdline_parse_token_string_t cmd_config_all_port_tx_offload_result_on_off =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_config_all_port_tx_offload_result,
+		 on_off, "on#off");
+
+static void
+cmd_config_all_port_tx_offload_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_all_port_tx_offload_result *res = parsed_result;
+	portid_t i;
+	bool on_off;
+
+	on_off = strcmp(res->on_off, "on") == 0;
+	RTE_ETH_FOREACH_DEV(i)
+		config_port_tx_offload(i, res->offload, on_off);
+}
+
+static cmdline_parse_inst_t cmd_config_all_port_tx_offload = {
+	.f = cmd_config_all_port_tx_offload_parsed,
+	.data = NULL,
+	.help_str = "port config all tx_offload "
+		    "all|vlan_insert|ipv4_cksum|udp_cksum|tcp_cksum|"
+		    "sctp_cksum|tcp_tso|udp_tso|outer_ipv4_cksum|"
+		    "qinq_insert|vxlan_tnl_tso|gre_tnl_tso|"
+		    "ipip_tnl_tso|geneve_tnl_tso|macsec_insert|"
+		    "mt_lockfree|multi_segs|mbuf_fast_free|security|"
+		    "send_on_timestamp on|off",
+	.tokens = {
+		(void *)&cmd_config_all_port_tx_offload_result_port,
+		(void *)&cmd_config_all_port_tx_offload_result_config,
+		(void *)&cmd_config_all_port_tx_offload_result_port_all,
+		(void *)&cmd_config_all_port_tx_offload_result_tx_offload,
+		(void *)&cmd_config_all_port_tx_offload_result_offload,
+		(void *)&cmd_config_all_port_tx_offload_result_on_off,
 		NULL,
 	}
 };
@@ -11558,7 +12328,7 @@ static cmdline_parse_token_string_t cmd_config_per_queue_tx_offload_result_txoff
 static cmdline_parse_token_string_t cmd_config_per_queue_tx_offload_result_offload =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_queue_tx_offload_result,
-		 offload, "vlan_insert#ipv4_cksum#udp_cksum#tcp_cksum#"
+		 offload, "all#vlan_insert#ipv4_cksum#udp_cksum#tcp_cksum#"
 			  "sctp_cksum#tcp_tso#udp_tso#outer_ipv4_cksum#"
 			  "qinq_insert#vxlan_tnl_tso#gre_tnl_tso#"
 			  "ipip_tnl_tso#geneve_tnl_tso#macsec_insert#"
@@ -11578,7 +12348,7 @@ cmd_config_per_queue_tx_offload_parsed(void *parsed_result,
 	portid_t port_id = res->port_id;
 	uint16_t queue_id = res->queue_id;
 	struct rte_port *port = &ports[port_id];
-	uint64_t single_offload;
+	uint64_t offload;
 	int ret;
 
 	if (port->port_status != RTE_PORT_STOPPED) {
@@ -11599,16 +12369,25 @@ cmd_config_per_queue_tx_offload_parsed(void *parsed_result,
 		return;
 	}
 
-	single_offload = search_tx_offload(res->offload);
-	if (single_offload == 0) {
-		fprintf(stderr, "Unknown offload name: %s\n", res->offload);
-		return;
+	if (!strcmp(res->offload, "all")) {
+		offload = dev_info.tx_queue_offload_capa;
+	} else {
+		offload = search_tx_offload(res->offload);
+		if (offload == 0) {
+			fprintf(stderr, "Unknown offload name: %s\n", res->offload);
+			return;
+		}
+		if ((offload & dev_info.tx_queue_offload_capa) == 0) {
+			fprintf(stderr, "Error: port %u doesn't support per queue offload: %s.\n",
+				port_id, res->offload);
+			return;
+		}
 	}
 
 	if (!strcmp(res->on_off, "on"))
-		port->txq[queue_id].conf.offloads |= single_offload;
+		port->txq[queue_id].conf.offloads |= offload;
 	else
-		port->txq[queue_id].conf.offloads &= ~single_offload;
+		port->txq[queue_id].conf.offloads &= ~offload;
 
 	cmd_reconfig_device_queue(port_id, 1, 1);
 }
@@ -11617,7 +12396,7 @@ static cmdline_parse_inst_t cmd_config_per_queue_tx_offload = {
 	.f = cmd_config_per_queue_tx_offload_parsed,
 	.data = NULL,
 	.help_str = "port <port_id> txq <queue_id> tx_offload "
-		    "vlan_insert|ipv4_cksum|udp_cksum|tcp_cksum|"
+		    "all|vlan_insert|ipv4_cksum|udp_cksum|tcp_cksum|"
 		    "sctp_cksum|tcp_tso|udp_tso|outer_ipv4_cksum|"
 		    "qinq_insert|vxlan_tnl_tso|gre_tnl_tso|"
 		    "ipip_tnl_tso|geneve_tnl_tso|macsec_insert|"
@@ -11952,6 +12731,9 @@ cmd_show_fec_mode_parsed(void *parsed_result,
 	case RTE_ETH_FEC_MODE_CAPA_MASK(RS):
 		strlcpy(buf, "rs", sizeof(buf));
 		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(LLRS):
+		strlcpy(buf, "llrs", sizeof(buf));
+		break;
 	default:
 		return;
 	}
@@ -12047,7 +12829,7 @@ cmd_set_port_fec_mode_parsed(
 static cmdline_parse_inst_t cmd_set_fec_mode = {
 	.f = cmd_set_port_fec_mode_parsed,
 	.data = NULL,
-	.help_str = "set port <port_id> fec_mode auto|off|rs|baser",
+	.help_str = "set port <port_id> fec_mode auto|off|rs|baser|llrs",
 	.tokens = {
 		(void *)&cmd_set_port_fec_mode_set,
 		(void *)&cmd_set_port_fec_mode_port,
@@ -12254,12 +13036,13 @@ cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
 	struct cmd_show_rx_tx_desc_status_result *res = parsed_result;
 	int rc;
 
-	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
-		fprintf(stderr, "invalid port id %u\n", res->cmd_pid);
-		return;
-	}
-
 	if (!strcmp(res->cmd_keyword, "rxq")) {
+		if (rte_eth_rx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+			fprintf(stderr,
+				"Invalid input: port id = %d, queue id = %d\n",
+				res->cmd_pid, res->cmd_qid);
+			return;
+		}
 		rc = rte_eth_rx_descriptor_status(res->cmd_pid, res->cmd_qid,
 					     res->cmd_did);
 		if (rc < 0) {
@@ -12275,6 +13058,12 @@ cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
 		else
 			printf("Desc status = UNAVAILABLE\n");
 	} else if (!strcmp(res->cmd_keyword, "txq")) {
+		if (rte_eth_tx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+			fprintf(stderr,
+				"Invalid input: port id = %d, queue id = %d\n",
+				res->cmd_pid, res->cmd_qid);
+			return;
+		}
 		rc = rte_eth_tx_descriptor_status(res->cmd_pid, res->cmd_qid,
 					     res->cmd_did);
 		if (rc < 0) {
@@ -12334,11 +13123,11 @@ static cmdline_parse_inst_t cmd_show_rx_tx_desc_status = {
 	},
 };
 
-/* *** display rx queue desc used count *** */
-struct cmd_show_rx_queue_desc_used_count_result {
+/* *** display rx/tx queue descriptor used count *** */
+struct cmd_show_rx_tx_queue_desc_used_count_result {
 	cmdline_fixed_string_t cmd_show;
 	cmdline_fixed_string_t cmd_port;
-	cmdline_fixed_string_t cmd_rxq;
+	cmdline_fixed_string_t cmd_dir;
 	cmdline_fixed_string_t cmd_desc;
 	cmdline_fixed_string_t cmd_used;
 	cmdline_fixed_string_t cmd_count;
@@ -12347,71 +13136,88 @@ struct cmd_show_rx_queue_desc_used_count_result {
 };
 
 static void
-cmd_show_rx_queue_desc_used_count_parsed(void *parsed_result,
-		__rte_unused struct cmdline *cl,
-		__rte_unused void *data)
+cmd_show_rx_tx_queue_desc_used_count_parsed(void *parsed_result, __rte_unused struct cmdline *cl,
+					    __rte_unused void *data)
 {
-	struct cmd_show_rx_queue_desc_used_count_result *res = parsed_result;
+	struct cmd_show_rx_tx_queue_desc_used_count_result *res = parsed_result;
 	int rc;
 
-	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
-		fprintf(stderr, "invalid port id %u\n", res->cmd_pid);
-		return;
-	}
+	if (!strcmp(res->cmd_dir, "rxq")) {
+		if (rte_eth_rx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+			fprintf(stderr, "Invalid input: port id = %d, queue id = %d\n",
+				res->cmd_pid, res->cmd_qid);
+			return;
+		}
 
-	rc = rte_eth_rx_queue_count(res->cmd_pid, res->cmd_qid);
-	if (rc < 0) {
-		fprintf(stderr, "Invalid queueid = %d\n", res->cmd_qid);
-		return;
+		rc = rte_eth_rx_queue_count(res->cmd_pid, res->cmd_qid);
+		if (rc < 0) {
+			fprintf(stderr, "Rx queue count get failed rc=%d queue_id=%d\n", rc,
+				res->cmd_qid);
+			return;
+		}
+		printf("RxQ %d used desc count = %d\n", res->cmd_qid, rc);
+	} else if (!strcmp(res->cmd_dir, "txq")) {
+		if (rte_eth_tx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+			fprintf(stderr, "Invalid input: port id = %d, queue id = %d\n",
+				res->cmd_pid, res->cmd_qid);
+			return;
+		}
+
+		rc = rte_eth_tx_queue_count(res->cmd_pid, res->cmd_qid);
+		if (rc < 0) {
+			fprintf(stderr, "Tx queue count get failed rc=%d queue_id=%d\n", rc,
+				res->cmd_qid);
+			return;
+		}
+		printf("TxQ %d used desc count = %d\n", res->cmd_qid, rc);
 	}
-	printf("Used desc count = %d\n", rc);
 }
 
-static cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_show =
+static cmdline_parse_token_string_t cmd_show_rx_tx_queue_desc_used_count_show =
 	TOKEN_STRING_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
 		 cmd_show, "show");
-static cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_port =
+static cmdline_parse_token_string_t cmd_show_rx_tx_queue_desc_used_count_port =
 	TOKEN_STRING_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
 		 cmd_port, "port");
-static cmdline_parse_token_num_t cmd_show_rx_queue_desc_used_count_pid =
+static cmdline_parse_token_num_t cmd_show_rx_tx_queue_desc_used_count_pid =
 	TOKEN_NUM_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
 		 cmd_pid, RTE_UINT16);
-static cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_rxq =
+static cmdline_parse_token_string_t cmd_show_rx_tx_queue_desc_used_count_dir =
 	TOKEN_STRING_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
-		 cmd_rxq, "rxq");
-static cmdline_parse_token_num_t cmd_show_rx_queue_desc_used_count_qid =
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
+		 cmd_dir, "rxq#txq");
+static cmdline_parse_token_num_t cmd_show_rx_tx_queue_desc_used_count_qid =
 	TOKEN_NUM_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
 		 cmd_qid, RTE_UINT16);
-static cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_desc =
+static cmdline_parse_token_string_t cmd_show_rx_tx_queue_desc_used_count_desc =
 	TOKEN_STRING_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
-		 cmd_count, "desc");
-static cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_used =
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
+		 cmd_desc, "desc");
+static cmdline_parse_token_string_t cmd_show_rx_tx_queue_desc_used_count_used =
 	TOKEN_STRING_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
 		 cmd_count, "used");
-static cmdline_parse_token_string_t cmd_show_rx_queue_desc_used_count_count =
+static cmdline_parse_token_string_t cmd_show_rx_tx_queue_desc_used_count_count =
 	TOKEN_STRING_INITIALIZER
-		(struct cmd_show_rx_queue_desc_used_count_result,
+		(struct cmd_show_rx_tx_queue_desc_used_count_result,
 		 cmd_count, "count");
-static cmdline_parse_inst_t cmd_show_rx_queue_desc_used_count = {
-	.f = cmd_show_rx_queue_desc_used_count_parsed,
+static cmdline_parse_inst_t cmd_show_rx_tx_queue_desc_used_count = {
+	.f = cmd_show_rx_tx_queue_desc_used_count_parsed,
 	.data = NULL,
-	.help_str = "show port <port_id> rxq <queue_id> desc used count",
+	.help_str = "show port <port_id> rxq|txq <queue_id> desc used count",
 	.tokens = {
-		(void *)&cmd_show_rx_queue_desc_used_count_show,
-		(void *)&cmd_show_rx_queue_desc_used_count_port,
-		(void *)&cmd_show_rx_queue_desc_used_count_pid,
-		(void *)&cmd_show_rx_queue_desc_used_count_rxq,
-		(void *)&cmd_show_rx_queue_desc_used_count_qid,
-		(void *)&cmd_show_rx_queue_desc_used_count_desc,
-		(void *)&cmd_show_rx_queue_desc_used_count_used,
-		(void *)&cmd_show_rx_queue_desc_used_count_count,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_show,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_port,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_pid,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_dir,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_qid,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_desc,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_used,
+		(void *)&cmd_show_rx_tx_queue_desc_used_count_count,
 		NULL,
 	},
 };
@@ -12621,236 +13427,385 @@ static cmdline_parse_inst_t cmd_show_port_flow_transfer_proxy = {
 	}
 };
 
+/* *** configure port txq affinity value *** */
+struct cmd_config_tx_affinity_map {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t config;
+	portid_t portid;
+	cmdline_fixed_string_t txq;
+	uint16_t qid;
+	cmdline_fixed_string_t affinity;
+	uint8_t value;
+};
+
+static void
+cmd_config_tx_affinity_map_parsed(void *parsed_result,
+				  __rte_unused struct cmdline *cl,
+				  __rte_unused void *data)
+{
+	struct cmd_config_tx_affinity_map *res = parsed_result;
+	int ret;
+
+	if (port_id_is_invalid(res->portid, ENABLED_WARN))
+		return;
+
+	if (res->portid == (portid_t)RTE_PORT_ALL) {
+		printf("Invalid port id\n");
+		return;
+	}
+
+	if (strcmp(res->txq, "txq")) {
+		printf("Unknown parameter\n");
+		return;
+	}
+	if (tx_queue_id_is_invalid(res->qid))
+		return;
+
+	ret = rte_eth_dev_count_aggr_ports(res->portid);
+	if (ret < 0) {
+		printf("Failed to count the aggregated ports: (%s)\n",
+			strerror(-ret));
+		return;
+	}
+
+	ret = rte_eth_dev_map_aggr_tx_affinity(res->portid, res->qid, res->value);
+	if (ret != 0) {
+		printf("Failed to map tx queue with an aggregated port: %s\n",
+			rte_strerror(-ret));
+		return;
+	}
+}
+
+cmdline_parse_token_string_t cmd_config_tx_affinity_map_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_affinity_map,
+				 port, "port");
+cmdline_parse_token_string_t cmd_config_tx_affinity_map_config =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_affinity_map,
+				 config, "config");
+cmdline_parse_token_num_t cmd_config_tx_affinity_map_portid =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_tx_affinity_map,
+				 portid, RTE_UINT16);
+cmdline_parse_token_string_t cmd_config_tx_affinity_map_txq =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_affinity_map,
+				 txq, "txq");
+cmdline_parse_token_num_t cmd_config_tx_affinity_map_qid =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_tx_affinity_map,
+			      qid, RTE_UINT16);
+cmdline_parse_token_string_t cmd_config_tx_affinity_map_affinity =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_affinity_map,
+				 affinity, "affinity");
+cmdline_parse_token_num_t cmd_config_tx_affinity_map_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_tx_affinity_map,
+			      value, RTE_UINT8);
+
+static cmdline_parse_inst_t cmd_config_tx_affinity_map = {
+	.f = cmd_config_tx_affinity_map_parsed,
+	.data = (void *)0,
+	.help_str = "port config <port_id> txq <queue_id> affinity <value>",
+	.tokens = {
+		(void *)&cmd_config_tx_affinity_map_port,
+		(void *)&cmd_config_tx_affinity_map_config,
+		(void *)&cmd_config_tx_affinity_map_portid,
+		(void *)&cmd_config_tx_affinity_map_txq,
+		(void *)&cmd_config_tx_affinity_map_qid,
+		(void *)&cmd_config_tx_affinity_map_affinity,
+		(void *)&cmd_config_tx_affinity_map_value,
+		NULL,
+	},
+};
+
+/* *** SET THE LED FOR CERTAIN PORT TO ON/OFF *** */
+struct cmd_dev_led_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t port;
+	portid_t port_id;
+	cmdline_fixed_string_t led;
+	cmdline_fixed_string_t state;
+};
+
+static void
+cmd_set_dev_led_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_dev_led_result *res = parsed_result;
+
+	if (strcmp(res->state, "on") == 0)
+		set_dev_led(res->port_id, true);
+	else
+		set_dev_led(res->port_id, false);
+}
+
+static cmdline_parse_token_string_t cmd_dev_led_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_dev_led_result, set, "set");
+static cmdline_parse_token_string_t cmd_dev_led_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_dev_led_result, port, "port");
+static cmdline_parse_token_num_t cmd_dev_led_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_dev_led_result, port_id, RTE_UINT16);
+static cmdline_parse_token_string_t cmd_dev_led =
+	TOKEN_STRING_INITIALIZER(struct cmd_dev_led_result, led, "led");
+static cmdline_parse_token_string_t cmd_dev_state =
+	TOKEN_STRING_INITIALIZER(struct cmd_dev_led_result, state, "on#off");
+
+static cmdline_parse_inst_t cmd_set_dev_led = {
+	.f = cmd_set_dev_led_parsed,
+	.data = NULL,
+	.help_str = "set port <port_id> led <on/off>",
+	.tokens = {
+		(void *)&cmd_dev_led_set,
+		(void *)&cmd_dev_led_port,
+		(void *)&cmd_dev_led_port_id,
+		(void *)&cmd_dev_led,
+		(void *)&cmd_dev_state,
+		NULL,
+	},
+};
+
 /* ******************************************************************************** */
 
 /* list of instructions */
 static cmdline_parse_ctx_t builtin_ctx[] = {
-	(cmdline_parse_inst_t *)&cmd_help_brief,
-	(cmdline_parse_inst_t *)&cmd_help_long,
-	(cmdline_parse_inst_t *)&cmd_quit,
-	(cmdline_parse_inst_t *)&cmd_load_from_file,
-	(cmdline_parse_inst_t *)&cmd_showport,
-	(cmdline_parse_inst_t *)&cmd_showqueue,
-	(cmdline_parse_inst_t *)&cmd_showeeprom,
-	(cmdline_parse_inst_t *)&cmd_showportall,
-	(cmdline_parse_inst_t *)&cmd_representor_info,
-	(cmdline_parse_inst_t *)&cmd_showdevice,
-	(cmdline_parse_inst_t *)&cmd_showcfg,
-	(cmdline_parse_inst_t *)&cmd_showfwdall,
-	(cmdline_parse_inst_t *)&cmd_start,
-	(cmdline_parse_inst_t *)&cmd_start_tx_first,
-	(cmdline_parse_inst_t *)&cmd_start_tx_first_n,
-	(cmdline_parse_inst_t *)&cmd_set_link_up,
-	(cmdline_parse_inst_t *)&cmd_set_link_down,
-	(cmdline_parse_inst_t *)&cmd_reset,
-	(cmdline_parse_inst_t *)&cmd_set_numbers,
-	(cmdline_parse_inst_t *)&cmd_set_log,
-	(cmdline_parse_inst_t *)&cmd_set_rxoffs,
-	(cmdline_parse_inst_t *)&cmd_set_rxpkts,
-	(cmdline_parse_inst_t *)&cmd_set_rxhdrs,
-	(cmdline_parse_inst_t *)&cmd_set_txpkts,
-	(cmdline_parse_inst_t *)&cmd_set_txsplit,
-	(cmdline_parse_inst_t *)&cmd_set_txtimes,
-	(cmdline_parse_inst_t *)&cmd_set_fwd_list,
-	(cmdline_parse_inst_t *)&cmd_set_fwd_mask,
-	(cmdline_parse_inst_t *)&cmd_set_fwd_mode,
-	(cmdline_parse_inst_t *)&cmd_set_fwd_retry_mode,
-	(cmdline_parse_inst_t *)&cmd_set_burst_tx_retry,
-	(cmdline_parse_inst_t *)&cmd_set_promisc_mode_one,
-	(cmdline_parse_inst_t *)&cmd_set_promisc_mode_all,
-	(cmdline_parse_inst_t *)&cmd_set_allmulti_mode_one,
-	(cmdline_parse_inst_t *)&cmd_set_allmulti_mode_all,
-	(cmdline_parse_inst_t *)&cmd_set_flush_rx,
-	(cmdline_parse_inst_t *)&cmd_set_link_check,
-	(cmdline_parse_inst_t *)&cmd_vlan_offload,
-	(cmdline_parse_inst_t *)&cmd_vlan_tpid,
-	(cmdline_parse_inst_t *)&cmd_rx_vlan_filter_all,
-	(cmdline_parse_inst_t *)&cmd_rx_vlan_filter,
-	(cmdline_parse_inst_t *)&cmd_tx_vlan_set,
-	(cmdline_parse_inst_t *)&cmd_tx_vlan_set_qinq,
-	(cmdline_parse_inst_t *)&cmd_tx_vlan_reset,
-	(cmdline_parse_inst_t *)&cmd_tx_vlan_set_pvid,
-	(cmdline_parse_inst_t *)&cmd_csum_set,
-	(cmdline_parse_inst_t *)&cmd_csum_show,
-	(cmdline_parse_inst_t *)&cmd_csum_tunnel,
-	(cmdline_parse_inst_t *)&cmd_csum_mac_swap,
-	(cmdline_parse_inst_t *)&cmd_tso_set,
-	(cmdline_parse_inst_t *)&cmd_tso_show,
-	(cmdline_parse_inst_t *)&cmd_tunnel_tso_set,
-	(cmdline_parse_inst_t *)&cmd_tunnel_tso_show,
+	&cmd_help_brief,
+	&cmd_help_long,
+	&cmd_quit,
+	&cmd_load_from_file,
+	&cmd_showport,
+	&cmd_showqueue,
+	&cmd_showeeprom,
+	&cmd_seteeprom,
+	&cmd_showportall,
+	&cmd_representor_info,
+	&cmd_showdevice,
+	&cmd_showcfg,
+	&cmd_showfwdall,
+	&cmd_start,
+	&cmd_start_tx_first,
+	&cmd_start_tx_first_n,
+	&cmd_set_link_up,
+	&cmd_set_link_down,
+	&cmd_reset,
+	&cmd_set_numbers,
+	&cmd_set_log,
+	&cmd_set_rxoffs,
+	&cmd_set_rxpkts,
+	&cmd_set_rxhdrs,
+	&cmd_set_txpkts,
+	&cmd_set_txsplit,
+	&cmd_set_txtimes,
+	&cmd_set_fwd_list,
+	&cmd_set_fwd_mask,
+	&cmd_set_fwd_mode,
+	&cmd_set_fwd_retry_mode,
+	&cmd_set_burst_tx_retry,
+	&cmd_set_promisc_mode_one,
+	&cmd_set_promisc_mode_all,
+	&cmd_set_allmulti_mode_one,
+	&cmd_set_allmulti_mode_all,
+	&cmd_set_flush_rx,
+	&cmd_set_link_check,
+	&cmd_vlan_offload,
+	&cmd_vlan_tpid,
+	&cmd_rx_vlan_filter_all,
+	&cmd_rx_vlan_filter,
+	&cmd_tx_vlan_set,
+	&cmd_tx_vlan_set_qinq,
+	&cmd_tx_vlan_reset,
+	&cmd_tx_vlan_set_pvid,
+	&cmd_csum_set,
+	&cmd_csum_show,
+	&cmd_csum_tunnel,
+	&cmd_csum_mac_swap,
+	&cmd_tso_set,
+	&cmd_tso_show,
+	&cmd_tunnel_tso_set,
+	&cmd_tunnel_tso_show,
 #ifdef RTE_LIB_GRO
-	(cmdline_parse_inst_t *)&cmd_gro_enable,
-	(cmdline_parse_inst_t *)&cmd_gro_flush,
-	(cmdline_parse_inst_t *)&cmd_gro_show,
+	&cmd_gro_enable,
+	&cmd_gro_flush,
+	&cmd_gro_show,
 #endif
 #ifdef RTE_LIB_GSO
-	(cmdline_parse_inst_t *)&cmd_gso_enable,
-	(cmdline_parse_inst_t *)&cmd_gso_size,
-	(cmdline_parse_inst_t *)&cmd_gso_show,
+	&cmd_gso_enable,
+	&cmd_gso_size,
+	&cmd_gso_show,
 #endif
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_rx,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_tx,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_hw,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_lw,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_pt,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_xon,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_macfwd,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_set_autoneg,
-	(cmdline_parse_inst_t *)&cmd_link_flow_control_show,
-	(cmdline_parse_inst_t *)&cmd_priority_flow_control_set,
-	(cmdline_parse_inst_t *)&cmd_queue_priority_flow_control_set,
-	(cmdline_parse_inst_t *)&cmd_config_dcb,
-	(cmdline_parse_inst_t *)&cmd_read_rxd_txd,
-	(cmdline_parse_inst_t *)&cmd_stop,
-	(cmdline_parse_inst_t *)&cmd_mac_addr,
-	(cmdline_parse_inst_t *)&cmd_set_fwd_eth_peer,
-	(cmdline_parse_inst_t *)&cmd_set_qmap,
-	(cmdline_parse_inst_t *)&cmd_set_xstats_hide_zero,
-	(cmdline_parse_inst_t *)&cmd_set_record_core_cycles,
-	(cmdline_parse_inst_t *)&cmd_set_record_burst_stats,
-	(cmdline_parse_inst_t *)&cmd_operate_port,
-	(cmdline_parse_inst_t *)&cmd_operate_specific_port,
-	(cmdline_parse_inst_t *)&cmd_operate_attach_port,
-	(cmdline_parse_inst_t *)&cmd_operate_detach_port,
-	(cmdline_parse_inst_t *)&cmd_operate_detach_device,
-	(cmdline_parse_inst_t *)&cmd_set_port_setup_on,
-	(cmdline_parse_inst_t *)&cmd_config_speed_all,
-	(cmdline_parse_inst_t *)&cmd_config_speed_specific,
-	(cmdline_parse_inst_t *)&cmd_config_loopback_all,
-	(cmdline_parse_inst_t *)&cmd_config_loopback_specific,
-	(cmdline_parse_inst_t *)&cmd_config_rx_tx,
-	(cmdline_parse_inst_t *)&cmd_config_mtu,
-	(cmdline_parse_inst_t *)&cmd_config_max_pkt_len,
-	(cmdline_parse_inst_t *)&cmd_config_max_lro_pkt_size,
-	(cmdline_parse_inst_t *)&cmd_config_rx_mode_flag,
-	(cmdline_parse_inst_t *)&cmd_config_rss,
-	(cmdline_parse_inst_t *)&cmd_config_rxtx_ring_size,
-	(cmdline_parse_inst_t *)&cmd_config_rxtx_queue,
-	(cmdline_parse_inst_t *)&cmd_config_deferred_start_rxtx_queue,
-	(cmdline_parse_inst_t *)&cmd_setup_rxtx_queue,
-	(cmdline_parse_inst_t *)&cmd_config_rss_reta,
-	(cmdline_parse_inst_t *)&cmd_showport_reta,
-	(cmdline_parse_inst_t *)&cmd_showport_macs,
-	(cmdline_parse_inst_t *)&cmd_show_port_flow_transfer_proxy,
-	(cmdline_parse_inst_t *)&cmd_config_burst,
-	(cmdline_parse_inst_t *)&cmd_config_thresh,
-	(cmdline_parse_inst_t *)&cmd_config_threshold,
-	(cmdline_parse_inst_t *)&cmd_set_uc_hash_filter,
-	(cmdline_parse_inst_t *)&cmd_set_uc_all_hash_filter,
-	(cmdline_parse_inst_t *)&cmd_vf_mac_addr_filter,
-	(cmdline_parse_inst_t *)&cmd_queue_rate_limit,
-	(cmdline_parse_inst_t *)&cmd_tunnel_udp_config,
-	(cmdline_parse_inst_t *)&cmd_showport_rss_hash,
-	(cmdline_parse_inst_t *)&cmd_showport_rss_hash_key,
-	(cmdline_parse_inst_t *)&cmd_config_rss_hash_key,
-	(cmdline_parse_inst_t *)&cmd_cleanup_txq_mbufs,
-	(cmdline_parse_inst_t *)&cmd_dump,
-	(cmdline_parse_inst_t *)&cmd_dump_one,
-	(cmdline_parse_inst_t *)&cmd_flow,
-	(cmdline_parse_inst_t *)&cmd_show_port_meter_cap,
-	(cmdline_parse_inst_t *)&cmd_add_port_meter_profile_srtcm,
-	(cmdline_parse_inst_t *)&cmd_add_port_meter_profile_trtcm,
-	(cmdline_parse_inst_t *)&cmd_add_port_meter_profile_trtcm_rfc4115,
-	(cmdline_parse_inst_t *)&cmd_del_port_meter_profile,
-	(cmdline_parse_inst_t *)&cmd_create_port_meter,
-	(cmdline_parse_inst_t *)&cmd_enable_port_meter,
-	(cmdline_parse_inst_t *)&cmd_disable_port_meter,
-	(cmdline_parse_inst_t *)&cmd_del_port_meter,
-	(cmdline_parse_inst_t *)&cmd_del_port_meter_policy,
-	(cmdline_parse_inst_t *)&cmd_set_port_meter_profile,
-	(cmdline_parse_inst_t *)&cmd_set_port_meter_dscp_table,
-	(cmdline_parse_inst_t *)&cmd_set_port_meter_vlan_table,
-	(cmdline_parse_inst_t *)&cmd_set_port_meter_in_proto,
-	(cmdline_parse_inst_t *)&cmd_get_port_meter_in_proto,
-	(cmdline_parse_inst_t *)&cmd_get_port_meter_in_proto_prio,
-	(cmdline_parse_inst_t *)&cmd_set_port_meter_stats_mask,
-	(cmdline_parse_inst_t *)&cmd_show_port_meter_stats,
-	(cmdline_parse_inst_t *)&cmd_mcast_addr,
-	(cmdline_parse_inst_t *)&cmd_set_vf_vlan_anti_spoof,
-	(cmdline_parse_inst_t *)&cmd_set_vf_mac_anti_spoof,
-	(cmdline_parse_inst_t *)&cmd_set_vf_vlan_stripq,
-	(cmdline_parse_inst_t *)&cmd_set_vf_vlan_insert,
-	(cmdline_parse_inst_t *)&cmd_set_tx_loopback,
-	(cmdline_parse_inst_t *)&cmd_set_all_queues_drop_en,
-	(cmdline_parse_inst_t *)&cmd_set_vf_traffic,
-	(cmdline_parse_inst_t *)&cmd_set_vf_rxmode,
-	(cmdline_parse_inst_t *)&cmd_vf_rate_limit,
-	(cmdline_parse_inst_t *)&cmd_vf_rxvlan_filter,
-	(cmdline_parse_inst_t *)&cmd_set_vf_mac_addr,
-	(cmdline_parse_inst_t *)&cmd_set_vxlan,
-	(cmdline_parse_inst_t *)&cmd_set_vxlan_tos_ttl,
-	(cmdline_parse_inst_t *)&cmd_set_vxlan_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_nvgre,
-	(cmdline_parse_inst_t *)&cmd_set_nvgre_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_l2_encap,
-	(cmdline_parse_inst_t *)&cmd_set_l2_encap_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_l2_decap,
-	(cmdline_parse_inst_t *)&cmd_set_l2_decap_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_mplsogre_encap,
-	(cmdline_parse_inst_t *)&cmd_set_mplsogre_encap_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_mplsogre_decap,
-	(cmdline_parse_inst_t *)&cmd_set_mplsogre_decap_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_encap,
-	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_encap_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_decap,
-	(cmdline_parse_inst_t *)&cmd_set_mplsoudp_decap_with_vlan,
-	(cmdline_parse_inst_t *)&cmd_set_conntrack_common,
-	(cmdline_parse_inst_t *)&cmd_set_conntrack_dir,
-	(cmdline_parse_inst_t *)&cmd_show_vf_stats,
-	(cmdline_parse_inst_t *)&cmd_clear_vf_stats,
-	(cmdline_parse_inst_t *)&cmd_show_port_supported_ptypes,
-	(cmdline_parse_inst_t *)&cmd_set_port_ptypes,
-	(cmdline_parse_inst_t *)&cmd_show_port_tm_cap,
-	(cmdline_parse_inst_t *)&cmd_show_port_tm_level_cap,
-	(cmdline_parse_inst_t *)&cmd_show_port_tm_node_cap,
-	(cmdline_parse_inst_t *)&cmd_show_port_tm_node_type,
-	(cmdline_parse_inst_t *)&cmd_show_port_tm_node_stats,
-	(cmdline_parse_inst_t *)&cmd_add_port_tm_node_shaper_profile,
-	(cmdline_parse_inst_t *)&cmd_del_port_tm_node_shaper_profile,
-	(cmdline_parse_inst_t *)&cmd_add_port_tm_node_shared_shaper,
-	(cmdline_parse_inst_t *)&cmd_del_port_tm_node_shared_shaper,
-	(cmdline_parse_inst_t *)&cmd_add_port_tm_node_wred_profile,
-	(cmdline_parse_inst_t *)&cmd_del_port_tm_node_wred_profile,
-	(cmdline_parse_inst_t *)&cmd_set_port_tm_node_shaper_profile,
-	(cmdline_parse_inst_t *)&cmd_add_port_tm_nonleaf_node,
-	(cmdline_parse_inst_t *)&cmd_add_port_tm_nonleaf_node_pmode,
-	(cmdline_parse_inst_t *)&cmd_add_port_tm_leaf_node,
-	(cmdline_parse_inst_t *)&cmd_del_port_tm_node,
-	(cmdline_parse_inst_t *)&cmd_set_port_tm_node_parent,
-	(cmdline_parse_inst_t *)&cmd_suspend_port_tm_node,
-	(cmdline_parse_inst_t *)&cmd_resume_port_tm_node,
-	(cmdline_parse_inst_t *)&cmd_port_tm_hierarchy_commit,
-	(cmdline_parse_inst_t *)&cmd_port_tm_mark_ip_ecn,
-	(cmdline_parse_inst_t *)&cmd_port_tm_mark_ip_dscp,
-	(cmdline_parse_inst_t *)&cmd_port_tm_mark_vlan_dei,
-	(cmdline_parse_inst_t *)&cmd_cfg_tunnel_udp_port,
-	(cmdline_parse_inst_t *)&cmd_rx_offload_get_capa,
-	(cmdline_parse_inst_t *)&cmd_rx_offload_get_configuration,
-	(cmdline_parse_inst_t *)&cmd_config_per_port_rx_offload,
-	(cmdline_parse_inst_t *)&cmd_config_per_queue_rx_offload,
-	(cmdline_parse_inst_t *)&cmd_tx_offload_get_capa,
-	(cmdline_parse_inst_t *)&cmd_tx_offload_get_configuration,
-	(cmdline_parse_inst_t *)&cmd_config_per_port_tx_offload,
-	(cmdline_parse_inst_t *)&cmd_config_per_queue_tx_offload,
+	&cmd_link_flow_control_set,
+	&cmd_link_flow_control_set_rx,
+	&cmd_link_flow_control_set_tx,
+	&cmd_link_flow_control_set_hw,
+	&cmd_link_flow_control_set_lw,
+	&cmd_link_flow_control_set_pt,
+	&cmd_link_flow_control_set_xon,
+	&cmd_link_flow_control_set_macfwd,
+	&cmd_link_flow_control_set_autoneg,
+	&cmd_link_flow_control_show,
+	&cmd_priority_flow_control_set,
+	&cmd_queue_priority_flow_control_set,
+	&cmd_config_dcb,
+	&cmd_read_rxd_txd,
+	&cmd_stop,
+	&cmd_mac_addr,
+	&cmd_set_fwd_eth_peer,
+	&cmd_set_qmap,
+	&cmd_set_xstats_hide_zero,
+	&cmd_set_record_core_cycles,
+	&cmd_set_record_burst_stats,
+	&cmd_operate_port,
+	&cmd_operate_specific_port,
+	&cmd_operate_attach_port,
+	&cmd_operate_detach_port,
+	&cmd_operate_detach_device,
+	&cmd_set_port_setup_on,
+	&cmd_config_speed_all,
+	&cmd_config_speed_specific,
+	&cmd_config_speed_lanes_all,
+	&cmd_config_speed_lanes_specific,
+	&cmd_show_speed_lanes,
+	&cmd_config_loopback_all,
+	&cmd_config_loopback_specific,
+	&cmd_config_rx_tx,
+	&cmd_config_mtu,
+	&cmd_config_max_pkt_len,
+	&cmd_config_max_lro_pkt_size,
+	&cmd_config_rx_mode_flag,
+	&cmd_config_rss,
+	&cmd_config_rxtx_ring_size,
+	&cmd_config_rxtx_queue,
+	&cmd_config_deferred_start_rxtx_queue,
+	&cmd_setup_rxtx_queue,
+	&cmd_config_rss_reta,
+	&cmd_showport_reta,
+	&cmd_showport_macs,
+	&cmd_show_port_flow_transfer_proxy,
+	&cmd_config_burst,
+	&cmd_config_thresh,
+	&cmd_config_threshold,
+	&cmd_set_uc_hash_filter,
+	&cmd_set_uc_all_hash_filter,
+	&cmd_vf_mac_addr_filter,
+	&cmd_queue_rate_limit,
+	&cmd_tunnel_udp_config,
+	&cmd_showport_rss_hash,
+	&cmd_showport_rss_hash_key,
+	&cmd_showport_rss_hash_algo,
+	&cmd_config_rss_hash_key,
+	&cmd_config_rss_hash_algo,
+	&cmd_cleanup_txq_mbufs,
+	&cmd_dump,
+	&cmd_dump_one,
+	&cmd_flow,
+	&cmd_show_port_meter_cap,
+	&cmd_add_port_meter_profile_srtcm,
+	&cmd_add_port_meter_profile_trtcm,
+	&cmd_add_port_meter_profile_trtcm_rfc4115,
+	&cmd_del_port_meter_profile,
+	&cmd_create_port_meter,
+	&cmd_enable_port_meter,
+	&cmd_disable_port_meter,
+	&cmd_del_port_meter,
+	&cmd_del_port_meter_policy,
+	&cmd_set_port_meter_profile,
+	&cmd_set_port_meter_dscp_table,
+	&cmd_set_port_meter_vlan_table,
+	&cmd_set_port_meter_in_proto,
+	&cmd_get_port_meter_in_proto,
+	&cmd_get_port_meter_in_proto_prio,
+	&cmd_set_port_meter_stats_mask,
+	&cmd_show_port_meter_stats,
+	&cmd_mcast_addr,
+	&cmd_mcast_addr_flush,
+	&cmd_set_vf_vlan_anti_spoof,
+	&cmd_set_vf_mac_anti_spoof,
+	&cmd_set_vf_vlan_stripq,
+	&cmd_set_vf_vlan_insert,
+	&cmd_set_tx_loopback,
+	&cmd_set_all_queues_drop_en,
+	&cmd_set_vf_traffic,
+	&cmd_set_vf_rxmode,
+	&cmd_vf_rate_limit,
+	&cmd_vf_rxvlan_filter,
+	&cmd_set_vf_mac_addr,
+	&cmd_set_vxlan,
+	&cmd_set_vxlan_tos_ttl,
+	&cmd_set_vxlan_with_vlan,
+	&cmd_set_nvgre,
+	&cmd_set_nvgre_with_vlan,
+	&cmd_set_l2_encap,
+	&cmd_set_l2_encap_with_vlan,
+	&cmd_set_l2_decap,
+	&cmd_set_l2_decap_with_vlan,
+	&cmd_set_mplsogre_encap,
+	&cmd_set_mplsogre_encap_with_vlan,
+	&cmd_set_mplsogre_decap,
+	&cmd_set_mplsogre_decap_with_vlan,
+	&cmd_set_mplsoudp_encap,
+	&cmd_set_mplsoudp_encap_with_vlan,
+	&cmd_set_mplsoudp_decap,
+	&cmd_set_mplsoudp_decap_with_vlan,
+	&cmd_set_conntrack_common,
+	&cmd_set_conntrack_dir,
+	&cmd_show_vf_stats,
+	&cmd_clear_vf_stats,
+	&cmd_show_port_supported_ptypes,
+	&cmd_set_port_ptypes,
+	&cmd_show_port_tm_cap,
+	&cmd_show_port_tm_level_cap,
+	&cmd_show_port_tm_node,
+	&cmd_show_port_tm_node_cap,
+	&cmd_show_port_tm_node_type,
+	&cmd_show_port_tm_node_stats,
+	&cmd_add_port_tm_node_shaper_profile,
+	&cmd_del_port_tm_node_shaper_profile,
+	&cmd_add_port_tm_node_shared_shaper,
+	&cmd_del_port_tm_node_shared_shaper,
+	&cmd_add_port_tm_node_wred_profile,
+	&cmd_del_port_tm_node_wred_profile,
+	&cmd_set_port_tm_node_shaper_profile,
+	&cmd_add_port_tm_nonleaf_node,
+	&cmd_add_port_tm_nonleaf_node_pmode,
+	&cmd_add_port_tm_leaf_node,
+	&cmd_del_port_tm_node,
+	&cmd_set_port_tm_node_parent,
+	&cmd_suspend_port_tm_node,
+	&cmd_resume_port_tm_node,
+	&cmd_port_tm_hierarchy_commit,
+	&cmd_port_tm_mark_ip_ecn,
+	&cmd_port_tm_mark_ip_dscp,
+	&cmd_port_tm_mark_vlan_dei,
+	&cmd_cfg_tunnel_udp_port,
+	&cmd_rx_offload_get_capa,
+	&cmd_rx_offload_get_configuration,
+	&cmd_config_per_port_rx_offload,
+	&cmd_config_all_port_rx_offload,
+	&cmd_config_per_queue_rx_offload,
+	&cmd_tx_offload_get_capa,
+	&cmd_tx_offload_get_configuration,
+	&cmd_config_per_port_tx_offload,
+	&cmd_config_all_port_tx_offload,
+	&cmd_config_per_queue_tx_offload,
 #ifdef RTE_LIB_BPF
-	(cmdline_parse_inst_t *)&cmd_operate_bpf_ld_parse,
-	(cmdline_parse_inst_t *)&cmd_operate_bpf_unld_parse,
+	&cmd_operate_bpf_ld_parse,
+	&cmd_operate_bpf_unld_parse,
 #endif
-	(cmdline_parse_inst_t *)&cmd_config_tx_metadata_specific,
-	(cmdline_parse_inst_t *)&cmd_show_tx_metadata,
-	(cmdline_parse_inst_t *)&cmd_show_rx_tx_desc_status,
-	(cmdline_parse_inst_t *)&cmd_show_rx_queue_desc_used_count,
-	(cmdline_parse_inst_t *)&cmd_set_raw,
-	(cmdline_parse_inst_t *)&cmd_show_set_raw,
-	(cmdline_parse_inst_t *)&cmd_show_set_raw_all,
-	(cmdline_parse_inst_t *)&cmd_config_tx_dynf_specific,
-	(cmdline_parse_inst_t *)&cmd_show_fec_mode,
-	(cmdline_parse_inst_t *)&cmd_set_fec_mode,
-	(cmdline_parse_inst_t *)&cmd_set_rxq_avail_thresh,
-	(cmdline_parse_inst_t *)&cmd_show_capability,
-	(cmdline_parse_inst_t *)&cmd_set_flex_is_pattern,
-	(cmdline_parse_inst_t *)&cmd_set_flex_spec_pattern,
+	&cmd_config_tx_metadata_specific,
+	&cmd_show_tx_metadata,
+	&cmd_show_rx_tx_desc_status,
+	&cmd_show_rx_tx_queue_desc_used_count,
+	&cmd_set_raw,
+	&cmd_show_set_raw,
+	&cmd_show_set_raw_all,
+	&cmd_config_tx_dynf_specific,
+	&cmd_show_fec_mode,
+	&cmd_set_fec_mode,
+	&cmd_set_rxq_avail_thresh,
+	&cmd_show_capability,
+	&cmd_set_flex_is_pattern,
+	&cmd_set_flex_spec_pattern,
+	&cmd_show_port_cman_capa,
+	&cmd_show_port_cman_config,
+	&cmd_set_port_cman_config,
+	&cmd_config_tx_affinity_map,
+	&cmd_set_dev_led,
 	NULL,
 };
 
@@ -12901,7 +13856,18 @@ cmdline_read_from_file(const char *filename)
 {
 	struct cmdline *cl;
 
-	cl = cmdline_file_new(main_ctx, "testpmd> ", filename);
+	/* cmdline_file_new does not produce any output which is not ideal here.
+	 * Much better to show output of the commands, so we open filename directly
+	 * and then pass that to cmdline_new with stdout as the output path.
+	 */
+	int fd = open(filename, O_RDONLY);
+	if (fd < 0) {
+		fprintf(stderr, "Failed to open file %s: %s\n",
+			filename, strerror(errno));
+		return;
+	}
+
+	cl = cmdline_new(main_ctx, "testpmd> ", fd, STDOUT_FILENO);
 	if (cl == NULL) {
 		fprintf(stderr,
 			"Failed to create file based cmdline context: %s\n",
@@ -12917,32 +13883,25 @@ cmdline_read_from_file(const char *filename)
 	printf("Read CLI commands from %s\n", filename);
 }
 
+void
+prompt_exit(void)
+{
+	cmdline_quit(testpmd_cl);
+}
+
 /* prompt function, called from main on MAIN lcore */
 void
 prompt(void)
 {
-	int ret;
-
 	testpmd_cl = cmdline_stdin_new(main_ctx, "testpmd> ");
-	if (testpmd_cl == NULL)
+	if (testpmd_cl == NULL) {
+		fprintf(stderr,
+			"Failed to create stdin based cmdline context\n");
 		return;
-
-	ret = atexit(prompt_exit);
-	if (ret != 0)
-		fprintf(stderr, "Cannot set exit function for cmdline\n");
+	}
 
 	cmdline_interact(testpmd_cl);
-	if (ret != 0)
-		cmdline_stdin_exit(testpmd_cl);
-}
-
-void
-prompt_exit(void)
-{
-	if (testpmd_cl != NULL) {
-		cmdline_quit(testpmd_cl);
-		cmdline_stdin_exit(testpmd_cl);
-	}
+	cmdline_stdin_exit(testpmd_cl);
 }
 
 void

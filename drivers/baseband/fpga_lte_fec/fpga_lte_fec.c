@@ -13,9 +13,7 @@
 #include <rte_pci.h>
 #include <bus_pci_driver.h>
 #include <rte_byteorder.h>
-#ifdef RTE_BBDEV_OFFLOAD_COST
 #include <rte_cycles.h>
-#endif
 
 #include <rte_bbdev.h>
 #include <rte_bbdev_pmd.h>
@@ -27,18 +25,17 @@ RTE_LOG_REGISTER_DEFAULT(fpga_lte_fec_logtype, DEBUG);
 #else
 RTE_LOG_REGISTER_DEFAULT(fpga_lte_fec_logtype, NOTICE);
 #endif
+#define RTE_LOGTYPE_FPGA_LTE_FEC fpga_lte_fec_logtype
 
 /* Helper macro for logging */
-#define rte_bbdev_log(level, fmt, ...) \
-	rte_log(RTE_LOG_ ## level, fpga_lte_fec_logtype, fmt "\n", \
-		##__VA_ARGS__)
+#define rte_bbdev_log(level, ...) \
+	RTE_LOG_LINE(level, FPGA_LTE_FEC, __VA_ARGS__)
 
 #ifdef RTE_LIBRTE_BBDEV_DEBUG
-#define rte_bbdev_log_debug(fmt, ...) \
-		rte_bbdev_log(DEBUG, "fpga_lte_fec: " fmt, \
-		##__VA_ARGS__)
+#define rte_bbdev_log_debug(...) \
+	rte_bbdev_log(DEBUG, __VA_ARGS__)
 #else
-#define rte_bbdev_log_debug(fmt, ...)
+#define rte_bbdev_log_debug(...)
 #endif
 
 /* FPGA LTE FEC driver names */
@@ -446,28 +443,28 @@ print_static_reg_debug_info(void *mmio_base)
 static void
 print_dma_dec_desc_debug_info(union fpga_dma_desc *desc)
 {
-	rte_bbdev_log_debug("DMA response desc %p\n"
-		"\t-- done(%"PRIu32") | iter(%"PRIu32") | crc_pass(%"PRIu32")"
-		" | error (%"PRIu32") | crc_type(%"PRIu32")\n"
-		"\t-- max_iter(%"PRIu32") | bypass_rm(%"PRIu32") | "
-		"irq_en (%"PRIu32") | drop_crc(%"PRIu32") | offset(%"PRIu32")\n"
-		"\t-- k(%"PRIu32") | in_len (%"PRIu16") | op_add(%p)\n"
-		"\t-- cbs_in_op(%"PRIu32") | in_add (0x%08"PRIx32"%08"PRIx32") | "
-		"out_add (0x%08"PRIx32"%08"PRIx32")",
-		desc,
+	rte_bbdev_log_debug("DMA response desc %p",
+		desc);
+	rte_bbdev_log_debug("\t-- done(%"PRIu32") | iter(%"PRIu32") | crc_pass(%"PRIu32")"
+		" | error (%"PRIu32") | crc_type(%"PRIu32")",
 		(uint32_t)desc->dec_req.done,
 		(uint32_t)desc->dec_req.iter,
 		(uint32_t)desc->dec_req.crc_pass,
 		(uint32_t)desc->dec_req.error,
-		(uint32_t)desc->dec_req.crc_type,
+		(uint32_t)desc->dec_req.crc_type);
+	rte_bbdev_log_debug("\t-- max_iter(%"PRIu32") | bypass_rm(%"PRIu32") | "
+		"irq_en (%"PRIu32") | drop_crc(%"PRIu32") | offset(%"PRIu32")",
 		(uint32_t)desc->dec_req.max_iter,
 		(uint32_t)desc->dec_req.bypass_rm,
 		(uint32_t)desc->dec_req.irq_en,
 		(uint32_t)desc->dec_req.drop_crc,
-		(uint32_t)desc->dec_req.offset,
+		(uint32_t)desc->dec_req.offset);
+	rte_bbdev_log_debug("\t-- k(%"PRIu32") | in_len (%"PRIu16") | op_add(%p)",
 		(uint32_t)desc->dec_req.k,
 		(uint16_t)desc->dec_req.in_len,
-		desc->dec_req.op_addr,
+		desc->dec_req.op_addr);
+	rte_bbdev_log_debug("\t-- cbs_in_op(%"PRIu32") | in_add (0x%08"PRIx32"%08"PRIx32") | "
+		"out_add (0x%08"PRIx32"%08"PRIx32")",
 		(uint32_t)desc->dec_req.cbs_in_op,
 		(uint32_t)desc->dec_req.in_addr_hi,
 		(uint32_t)desc->dec_req.in_addr_lw,
@@ -661,6 +658,8 @@ fpga_dev_info_get(struct rte_bbdev *dev,
 	dev_info->num_queues[RTE_BBDEV_OP_TURBO_ENC] = dev_info->max_num_queues / 2;
 	dev_info->num_queues[RTE_BBDEV_OP_LDPC_DEC] = 0;
 	dev_info->num_queues[RTE_BBDEV_OP_LDPC_ENC] = 0;
+	dev_info->num_queues[RTE_BBDEV_OP_FFT] = 0;
+	dev_info->num_queues[RTE_BBDEV_OP_MLDTS] = 0;
 	dev_info->queue_priority[RTE_BBDEV_OP_TURBO_DEC] = 1;
 	dev_info->queue_priority[RTE_BBDEV_OP_TURBO_ENC] = 1;
 }
@@ -1073,28 +1072,20 @@ static inline void
 fpga_dma_enqueue(struct fpga_queue *q, uint16_t num_desc,
 		struct rte_bbdev_stats *queue_stats)
 {
-#ifdef RTE_BBDEV_OFFLOAD_COST
 	uint64_t start_time = 0;
 	queue_stats->acc_offload_cycles = 0;
-#else
-	RTE_SET_USED(queue_stats);
-#endif
 
 	/* Update tail and shadow_tail register */
 	q->tail = (q->tail + num_desc) & q->sw_ring_wrap_mask;
 
 	rte_wmb();
 
-#ifdef RTE_BBDEV_OFFLOAD_COST
 	/* Start time measurement for enqueue function offload. */
 	start_time = rte_rdtsc_precise();
-#endif
 	mmio_write_16(q->shadow_tail_addr, q->tail);
 
-#ifdef RTE_BBDEV_OFFLOAD_COST
 	rte_wmb();
 	queue_stats->acc_offload_cycles += rte_rdtsc_precise() - start_time;
-#endif
 }
 
 /* Calculates number of CBs in processed encoder TB based on 'r' and input

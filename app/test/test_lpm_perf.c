@@ -3,17 +3,6 @@
  * Copyright(c) 2020 Arm Limited
  */
 
-#include "test.h"
-
-#ifdef RTE_EXEC_ENV_WINDOWS
-static int
-test_lpm_perf(void)
-{
-	printf("lpm_perf not supported on Windows, skipping test\n");
-	return TEST_SKIPPED;
-}
-
-#else
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -25,17 +14,20 @@ test_lpm_perf(void)
 #include <rte_malloc.h>
 #include <rte_ip.h>
 #include <rte_lpm.h>
+#include <rte_spinlock.h>
 
+#include "test.h"
 #include "test_xmmt_ops.h"
 
 struct rte_lpm *lpm;
 static struct rte_rcu_qsbr *rv;
 static volatile uint8_t writer_done;
-static volatile uint32_t thr_id;
-static uint64_t gwrite_cycles;
+static volatile RTE_ATOMIC(uint32_t) thr_id;
+static RTE_ATOMIC(uint64_t) gwrite_cycles;
 static uint32_t num_writers;
-/* LPM APIs are not thread safe, use mutex to provide thread safety */
-static pthread_mutex_t lpm_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* LPM APIs are not thread safe, use spinlock */
+static rte_spinlock_t lpm_lock = RTE_SPINLOCK_INITIALIZER;
 
 /* Report quiescent state interval every 1024 lookups. Larger critical
  * sections in reader will result in writer polling multiple times.
@@ -267,7 +259,7 @@ static void generate_random_rule_prefix(uint32_t ip_class, uint8_t depth)
 	/* Only generate rest bits except the most significant
 	 * fixed bits for IP address class
 	 */
-	start = lrand48() & mask;
+	start = rte_rand() & mask;
 	ptr_rule = &large_route_table[num_route_entries];
 	ptr_ldepth_rule = &large_ldepth_route_table[num_ldepth_route_entries];
 	for (k = 0; k < rule_num; k++) {
@@ -296,7 +288,7 @@ static void insert_rule_in_random_pos(uint32_t ip, uint8_t depth)
 	struct route_rule tmp;
 
 	do {
-		pos = lrand48();
+		pos = rte_rand();
 		try_count++;
 	} while ((try_count < 10) && (pos > num_route_entries));
 
@@ -370,7 +362,7 @@ alloc_thread_id(void)
 {
 	uint32_t tmp_thr_id;
 
-	tmp_thr_id = __atomic_fetch_add(&thr_id, 1, __ATOMIC_RELAXED);
+	tmp_thr_id = rte_atomic_fetch_add_explicit(&thr_id, 1, rte_memory_order_relaxed);
 	if (tmp_thr_id >= RTE_MAX_LCORE)
 		printf("Invalid thread id %u\n", tmp_thr_id);
 
@@ -452,8 +444,7 @@ test_lpm_rcu_qsbr_writer(void *arg)
 	for (i = 0; i < RCU_ITERATIONS; i++) {
 		/* Add all the entries */
 		for (j = si; j < ei; j++) {
-			if (num_writers > 1)
-				pthread_mutex_lock(&lpm_mutex);
+			rte_spinlock_lock(&lpm_lock);
 			if (rte_lpm_add(lpm, large_ldepth_route_table[j].ip,
 					large_ldepth_route_table[j].depth,
 					next_hop_add) != 0) {
@@ -461,34 +452,30 @@ test_lpm_rcu_qsbr_writer(void *arg)
 					i, j);
 				goto error;
 			}
-			if (num_writers > 1)
-				pthread_mutex_unlock(&lpm_mutex);
+			rte_spinlock_unlock(&lpm_lock);
 		}
 
 		/* Delete all the entries */
 		for (j = si; j < ei; j++) {
-			if (num_writers > 1)
-				pthread_mutex_lock(&lpm_mutex);
+			rte_spinlock_lock(&lpm_lock);
 			if (rte_lpm_delete(lpm, large_ldepth_route_table[j].ip,
 				large_ldepth_route_table[j].depth) != 0) {
 				printf("Failed to delete iteration %d, route# %d\n",
 					i, j);
 				goto error;
 			}
-			if (num_writers > 1)
-				pthread_mutex_unlock(&lpm_mutex);
+			rte_spinlock_unlock(&lpm_lock);
 		}
 	}
 
 	total_cycles = rte_rdtsc_precise() - begin;
 
-	__atomic_fetch_add(&gwrite_cycles, total_cycles, __ATOMIC_RELAXED);
+	rte_atomic_fetch_add_explicit(&gwrite_cycles, total_cycles, rte_memory_order_relaxed);
 
 	return 0;
 
 error:
-	if (num_writers > 1)
-		pthread_mutex_unlock(&lpm_mutex);
+	rte_spinlock_unlock(&lpm_lock);
 	return -1;
 }
 
@@ -553,9 +540,9 @@ test_lpm_rcu_perf_multi_writer(uint8_t use_rcu)
 			reader_f = test_lpm_reader;
 
 		writer_done = 0;
-		__atomic_store_n(&gwrite_cycles, 0, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&gwrite_cycles, 0, rte_memory_order_relaxed);
 
-		__atomic_store_n(&thr_id, 0, __ATOMIC_SEQ_CST);
+		rte_atomic_store_explicit(&thr_id, 0, rte_memory_order_seq_cst);
 
 		/* Launch reader threads */
 		for (i = j; i < num_cores; i++)
@@ -576,7 +563,7 @@ test_lpm_rcu_perf_multi_writer(uint8_t use_rcu)
 		printf("Total LPM Adds: %d\n", TOTAL_WRITES);
 		printf("Total LPM Deletes: %d\n", TOTAL_WRITES);
 		printf("Average LPM Add/Del: %"PRIu64" cycles\n",
-			__atomic_load_n(&gwrite_cycles, __ATOMIC_RELAXED)
+			rte_atomic_load_explicit(&gwrite_cycles, rte_memory_order_relaxed)
 			/ TOTAL_WRITES);
 
 		writer_done = 1;
@@ -617,8 +604,6 @@ test_lpm_perf(void)
 	int status = 0;
 	uint64_t cache_line_counter = 0;
 	int64_t count = 0;
-
-	rte_srand(rte_rdtsc());
 
 	generate_large_route_rule_table();
 
@@ -773,6 +758,4 @@ test_lpm_perf(void)
 	return 0;
 }
 
-#endif /* !RTE_EXEC_ENV_WINDOWS */
-
-REGISTER_TEST_COMMAND(lpm_perf_autotest, test_lpm_perf);
+REGISTER_PERF_TEST(lpm_perf_autotest, test_lpm_perf);

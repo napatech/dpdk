@@ -1,18 +1,12 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2024 Intel Corporation
  */
 
 #ifndef _IDPF_CONTROLQ_H_
 #define _IDPF_CONTROLQ_H_
 
-#ifdef __KERNEL__
-#include <linux/slab.h>
-#endif
-
-#ifndef __KERNEL__
 #include "idpf_osdep.h"
 #include "idpf_alloc.h"
-#endif
 #include "idpf_controlq_api.h"
 
 /* Maximum buffer lengths for all control queue types */
@@ -26,14 +20,12 @@
 	((u16)((((R)->next_to_clean > (R)->next_to_use) ? 0 : (R)->ring_size) + \
 	       (R)->next_to_clean - (R)->next_to_use - 1))
 
-#ifndef __KERNEL__
 /* Data type manipulation macros. */
 #define IDPF_HI_DWORD(x)	((u32)((((x) >> 16) >> 16) & 0xFFFFFFFF))
 #define IDPF_LO_DWORD(x)	((u32)((x) & 0xFFFFFFFF))
 #define IDPF_HI_WORD(x)		((u16)(((x) >> 16) & 0xFFFF))
 #define IDPF_LO_WORD(x)		((u16)((x) & 0xFFFF))
 
-#endif
 /* Control Queue default settings */
 #define IDPF_CTRL_SQ_CMD_TIMEOUT	250  /* msecs */
 
@@ -97,119 +89,11 @@ struct idpf_ctlq_desc {
 #define IDPF_CTLQ_FLAG_VFC	BIT(IDPF_CTLQ_FLAG_VFC_S)	/* 0x800  */
 #define IDPF_CTLQ_FLAG_BUF	BIT(IDPF_CTLQ_FLAG_BUF_S)	/* 0x1000 */
 
-/* Host ID is a special field that has 3b and not a 1b flag */
-#define IDPF_CTLQ_FLAG_HOST_ID_M MAKE_MASK(0x7000UL, IDPF_CTLQ_FLAG_HOST_ID_S)
-
 struct idpf_mbxq_desc {
 	u8 pad[8];		/* CTLQ flags/opcode/len/retval fields */
 	u32 chnl_opcode;	/* avoid confusion with desc->opcode */
 	u32 chnl_retval;	/* ditto for desc->retval */
 	u32 pf_vf_id;		/* used by CP when sending to PF */
-};
-
-enum idpf_mac_type {
-	IDPF_MAC_UNKNOWN = 0,
-	IDPF_MAC_PF,
-	IDPF_MAC_VF,
-	IDPF_MAC_GENERIC
-};
-
-#define ETH_ALEN 6
-
-struct idpf_mac_info {
-	enum idpf_mac_type type;
-	u8 addr[ETH_ALEN];
-	u8 perm_addr[ETH_ALEN];
-};
-
-#define IDPF_AQ_LINK_UP 0x1
-
-/* PCI bus types */
-enum idpf_bus_type {
-	idpf_bus_type_unknown = 0,
-	idpf_bus_type_pci,
-	idpf_bus_type_pcix,
-	idpf_bus_type_pci_express,
-	idpf_bus_type_reserved
-};
-
-/* PCI bus speeds */
-enum idpf_bus_speed {
-	idpf_bus_speed_unknown	= 0,
-	idpf_bus_speed_33	= 33,
-	idpf_bus_speed_66	= 66,
-	idpf_bus_speed_100	= 100,
-	idpf_bus_speed_120	= 120,
-	idpf_bus_speed_133	= 133,
-	idpf_bus_speed_2500	= 2500,
-	idpf_bus_speed_5000	= 5000,
-	idpf_bus_speed_8000	= 8000,
-	idpf_bus_speed_reserved
-};
-
-/* PCI bus widths */
-enum idpf_bus_width {
-	idpf_bus_width_unknown	= 0,
-	idpf_bus_width_pcie_x1	= 1,
-	idpf_bus_width_pcie_x2	= 2,
-	idpf_bus_width_pcie_x4	= 4,
-	idpf_bus_width_pcie_x8	= 8,
-	idpf_bus_width_32	= 32,
-	idpf_bus_width_64	= 64,
-	idpf_bus_width_reserved
-};
-
-/* Bus parameters */
-struct idpf_bus_info {
-	enum idpf_bus_speed speed;
-	enum idpf_bus_width width;
-	enum idpf_bus_type type;
-
-	u16 func;
-	u16 device;
-	u16 lan_id;
-	u16 bus_id;
-};
-
-/* Function specific capabilities */
-struct idpf_hw_func_caps {
-	u32 num_alloc_vfs;
-	u32 vf_base_id;
-};
-
-/* Define the APF hardware struct to replace other control structs as needed
- * Align to ctlq_hw_info
- */
-struct idpf_hw {
-	/* Some part of BAR0 address space is not mapped by the LAN driver.
-	 * This results in 2 regions of BAR0 to be mapped by LAN driver which
-	 * will have its own base hardware address when mapped.
-	 */
-	u8 *hw_addr;
-	u8 *hw_addr_region2;
-	u64 hw_addr_len;
-	u64 hw_addr_region2_len;
-
-	void *back;
-
-	/* control queue - send and receive */
-	struct idpf_ctlq_info *asq;
-	struct idpf_ctlq_info *arq;
-
-	/* subsystem structs */
-	struct idpf_mac_info mac;
-	struct idpf_bus_info bus;
-	struct idpf_hw_func_caps func_caps;
-
-	/* pci info */
-	u16 device_id;
-	u16 vendor_id;
-	u16 subsystem_device_id;
-	u16 subsystem_vendor_id;
-	u8 revision_id;
-	bool adapter_stopped;
-
-	LIST_HEAD_TYPE(list_head, idpf_ctlq_info) cq_list_head;
 };
 
 int idpf_ctlq_alloc_ring_res(struct idpf_hw *hw,

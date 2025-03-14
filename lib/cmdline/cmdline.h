@@ -8,7 +8,6 @@
 #define _CMDLINE_H_
 
 #include <rte_common.h>
-#include <rte_compat.h>
 
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
@@ -23,6 +22,12 @@
 extern "C" {
 #endif
 
+enum rdline_status {
+	RDLINE_INIT,
+	RDLINE_RUNNING,
+	RDLINE_EXITED
+};
+
 struct cmdline;
 
 struct cmdline *cmdline_new(cmdline_parse_ctx_t *ctx, const char *prompt, int s_in, int s_out);
@@ -33,23 +38,9 @@ void cmdline_printf(const struct cmdline *cl, const char *fmt, ...)
 int cmdline_in(struct cmdline *cl, const char *buf, int size);
 int cmdline_write_char(struct rdline *rdl, char c);
 
-__rte_experimental
 struct rdline *
 cmdline_get_rdline(struct cmdline *cl);
 
-/**
- * This function is nonblocking equivalent of ``cmdline_interact()``. It polls
- * *cl* for one character and interpret it. If return value is *RDLINE_EXITED*
- * it mean that ``cmdline_quit()`` was invoked.
- *
- * @param cl
- *   The command line object.
- *
- * @return
- *   On success return object status - one of *enum rdline_status*.
- *   On error return negative value.
- */
-int cmdline_poll(struct cmdline *cl);
 
 void cmdline_interact(struct cmdline *cl);
 void cmdline_quit(struct cmdline *cl);

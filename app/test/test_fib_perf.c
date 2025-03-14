@@ -12,21 +12,10 @@
 #include <rte_random.h>
 #include <rte_branch_prediction.h>
 #include <rte_ip.h>
+#include <rte_fib.h>
 
 #include "test.h"
 #include "test_xmmt_ops.h"
-
-#ifdef RTE_EXEC_ENV_WINDOWS
-static int
-test_fib_perf(void)
-{
-	printf("fib_perf not supported on Windows, skipping test\n");
-	return TEST_SKIPPED;
-}
-
-#else
-
-#include <rte_fib.h>
 
 #define TEST_FIB_ASSERT(cond) do {				\
 	if (!(cond)) {						\
@@ -246,7 +235,7 @@ static void generate_random_rule_prefix(uint32_t ip_class, uint8_t depth)
 	/* Only generate rest bits except the most significant
 	 * fixed bits for IP address class
 	 */
-	start = lrand48() & mask;
+	start = rte_rand() & mask;
 	ptr_rule = &large_route_table[num_route_entries];
 	for (k = 0; k < rule_num; k++) {
 		ptr_rule->ip = (start << (RTE_FIB_MAX_DEPTH - depth))
@@ -265,7 +254,7 @@ static void insert_rule_in_random_pos(uint32_t ip, uint8_t depth)
 	struct route_rule tmp;
 
 	do {
-		pos = lrand48();
+		pos = rte_rand();
 		try_count++;
 	} while ((try_count < 10) && (pos > num_route_entries));
 
@@ -331,7 +320,7 @@ static int
 test_fib_perf(void)
 {
 	struct rte_fib *fib = NULL;
-	struct rte_fib_conf config;
+	struct rte_fib_conf config = { 0 };
 
 	config.max_routes = 2000000;
 	config.rib_ext_sz = 0;
@@ -344,8 +333,6 @@ test_fib_perf(void)
 	uint32_t next_hop_add = 0xAA;
 	int status = 0;
 	int64_t count = 0;
-
-	rte_srand(rte_rdtsc());
 
 	generate_large_route_rule_table();
 
@@ -420,6 +407,4 @@ test_fib_perf(void)
 	return 0;
 }
 
-#endif /* !RTE_EXEC_ENV_WINDOWS */
-
-REGISTER_TEST_COMMAND(fib_perf_autotest, test_fib_perf);
+REGISTER_PERF_TEST(fib_perf_autotest, test_fib_perf);

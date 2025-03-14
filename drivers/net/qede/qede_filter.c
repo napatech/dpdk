@@ -158,8 +158,7 @@ void qede_fdir_dealloc_resc(struct rte_eth_dev *eth_dev)
 
 	SLIST_FOREACH(tmp, &qdev->arfs_info.arfs_list_head, list) {
 		if (tmp) {
-			if (tmp->mz)
-				rte_memzone_free(tmp->mz);
+			rte_memzone_free(tmp->mz);
 			SLIST_REMOVE(&qdev->arfs_info.arfs_list_head, tmp,
 				     qede_arfs_entry, list);
 			rte_free(tmp);
@@ -535,7 +534,7 @@ qede_udp_dst_port_del(struct rte_eth_dev *eth_dev,
 
 		qdev->vxlan.udp_port = udp_port;
 		/* If the request is to delete UDP port and if the number of
-		 * VXLAN filters have reached 0 then VxLAN offload can be be
+		 * VXLAN filters have reached 0 then VxLAN offload can be
 		 * disabled.
 		 */
 		if (qdev->vxlan.enable && qdev->vxlan.num_filters == 0)
@@ -564,7 +563,7 @@ qede_udp_dst_port_del(struct rte_eth_dev *eth_dev,
 
 		qdev->vxlan.udp_port = udp_port;
 		/* If the request is to delete UDP port and if the number of
-		 * GENEVE filters have reached 0 then GENEVE offload can be be
+		 * GENEVE filters have reached 0 then GENEVE offload can be
 		 * disabled.
 		 */
 		if (qdev->geneve.enable && qdev->geneve.num_filters == 0)
@@ -795,9 +794,9 @@ qede_flow_parse_pattern(__rte_unused struct rte_eth_dev *dev,
 
 				spec = pattern->spec;
 				memcpy(flow->entry.tuple.src_ipv6,
-				       spec->hdr.src_addr, IPV6_ADDR_LEN);
+				       &spec->hdr.src_addr, IPV6_ADDR_LEN);
 				memcpy(flow->entry.tuple.dst_ipv6,
-				       spec->hdr.dst_addr, IPV6_ADDR_LEN);
+				       &spec->hdr.dst_addr, IPV6_ADDR_LEN);
 				flow->entry.tuple.eth_proto =
 					RTE_ETHER_TYPE_IPV6;
 			}

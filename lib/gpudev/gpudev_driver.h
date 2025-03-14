@@ -19,6 +19,10 @@
 #include <rte_compat.h>
 #include "rte_gpudev.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Flags indicate current state of device. */
 enum rte_gpu_state {
 	RTE_GPU_STATE_UNUSED,        /* not initialized */
@@ -65,10 +69,10 @@ struct rte_gpu_mpshared {
 	/* Device info structure. */
 	struct rte_gpu_info info;
 	/* Counter of processes using the device. */
-	uint16_t process_refcnt; /* Updated by this library. */
+	RTE_ATOMIC(uint16_t) process_refcnt; /* Updated by this library. */
 };
 
-struct rte_gpu {
+struct __rte_cache_aligned rte_gpu {
 	/* Backing device. */
 	struct rte_device *device;
 	/* Data shared between processes. */
@@ -81,7 +85,7 @@ struct rte_gpu {
 	enum rte_gpu_state process_state; /* Updated by this library. */
 	/* Driver-specific private data for the running process. */
 	void *process_private;
-} __rte_cache_aligned;
+};
 
 __rte_internal
 struct rte_gpu *rte_gpu_get_by_name(const char *name);
@@ -105,5 +109,9 @@ int rte_gpu_release(struct rte_gpu *dev);
 /* Call registered callbacks. No multi-process event. */
 __rte_internal
 void rte_gpu_notify(struct rte_gpu *dev, enum rte_gpu_event);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RTE_GPUDEV_DRIVER_H */

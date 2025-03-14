@@ -142,16 +142,26 @@ ioat_dev_start(struct rte_dma_dev *dev)
 	ioat->regs->chainaddr = ioat->ring_addr;
 	/* Inform hardware of where to write the status/completions. */
 	ioat->regs->chancmp = ioat->status_addr;
+	/* Ensure channel control is set to abort on error, so we get status writeback. */
+	ioat->regs->chanctrl = IOAT_CHANCTRL_ANY_ERR_ABORT_EN |
+			IOAT_CHANCTRL_ERR_COMPLETION_EN;
 
 	/* Prime the status register to be set to the last element. */
 	ioat->status = ioat->ring_addr + ((ioat->qcfg.nb_desc - 1) * DESC_SZ);
 
-	printf("IOAT.status: %s [0x%"PRIx64"]\n",
+	/* reset all counters */
+	ioat->next_read = 0;
+	ioat->next_write = 0;
+	ioat->last_write = 0;
+	ioat->offset = 0;
+	ioat->failure = 0;
+
+	IOAT_PMD_DEBUG("channel status - %s [0x%"PRIx64"]",
 			chansts_readable[ioat->status & IOAT_CHANSTS_STATUS],
 			ioat->status);
 
 	if ((ioat->regs->chansts & IOAT_CHANSTS_STATUS) == IOAT_CHANSTS_HALTED) {
-		IOAT_PMD_WARN("Device HALTED on start, attempting to recover\n");
+		IOAT_PMD_WARN("Device HALTED on start, attempting to recover");
 		if (__ioat_recover(ioat) != 0) {
 			IOAT_PMD_ERR("Device couldn't be recovered");
 			return -1;
@@ -166,17 +176,28 @@ static int
 ioat_dev_stop(struct rte_dma_dev *dev)
 {
 	struct ioat_dmadev *ioat = dev->fp_obj->dev_private;
+	unsigned int chansts;
 	uint32_t retry = 0;
 
-	ioat->regs->chancmd = IOAT_CHANCMD_SUSPEND;
+	chansts = (unsigned int)(ioat->regs->chansts & IOAT_CHANSTS_STATUS);
+	if (chansts == IOAT_CHANSTS_ACTIVE || chansts == IOAT_CHANSTS_IDLE)
+		ioat->regs->chancmd = IOAT_CHANCMD_SUSPEND;
+	else
+		ioat->regs->chancmd = IOAT_CHANCMD_RESET;
 
 	do {
 		rte_pause();
 		retry++;
-	} while ((ioat->regs->chansts & IOAT_CHANSTS_STATUS) != IOAT_CHANSTS_SUSPENDED
-			&& retry < 200);
+		chansts = (unsigned int)(ioat->regs->chansts & IOAT_CHANSTS_STATUS);
+	} while (chansts != IOAT_CHANSTS_SUSPENDED &&
+			chansts != IOAT_CHANSTS_HALTED && retry < 200);
 
-	return ((ioat->regs->chansts & IOAT_CHANSTS_STATUS) == IOAT_CHANSTS_SUSPENDED) ? 0 : -1;
+	if (chansts == IOAT_CHANSTS_SUSPENDED || chansts == IOAT_CHANSTS_HALTED)
+		return 0;
+
+	IOAT_PMD_WARN("Channel could not be suspended on stop. (chansts = %u [%s])",
+			chansts, chansts_readable[chansts]);
+	return -1;
 }
 
 /* Get device information of a device. */
@@ -448,7 +469,7 @@ ioat_completed(void *dev_private, uint16_t qid __rte_unused, const uint16_t max_
 		ioat->failure = ioat->regs->chanerr;
 		ioat->next_read = read + count + 1;
 		if (__ioat_recover(ioat) != 0) {
-			IOAT_PMD_ERR("Device HALTED and could not be recovered\n");
+			IOAT_PMD_ERR("Device HALTED and could not be recovered");
 			__dev_dump(dev_private, stdout);
 			return 0;
 		}
@@ -494,7 +515,7 @@ ioat_completed_status(void *dev_private, uint16_t qid __rte_unused,
 		count++;
 		ioat->next_read = read + count;
 		if (__ioat_recover(ioat) != 0) {
-			IOAT_PMD_ERR("Device HALTED and could not be recovered\n");
+			IOAT_PMD_ERR("Device HALTED and could not be recovered");
 			__dev_dump(dev_private, stdout);
 			return 0;
 		}
@@ -631,12 +652,12 @@ ioat_dmadev_create(const char *name, struct rte_pci_device *dev)
 
 	/* Do device initialization - reset and set error behaviour. */
 	if (ioat->regs->chancnt != 1)
-		IOAT_PMD_WARN("%s: Channel count == %d\n", __func__,
+		IOAT_PMD_WARN("%s: Channel count == %d", __func__,
 				ioat->regs->chancnt);
 
 	/* Locked by someone else. */
 	if (ioat->regs->chanctrl & IOAT_CHANCTRL_CHANNEL_IN_USE) {
-		IOAT_PMD_WARN("%s: Channel appears locked\n", __func__);
+		IOAT_PMD_WARN("%s: Channel appears locked", __func__);
 		ioat->regs->chanctrl = 0;
 	}
 
@@ -655,7 +676,7 @@ ioat_dmadev_create(const char *name, struct rte_pci_device *dev)
 		rte_delay_ms(1);
 		if (++retry >= 200) {
 			IOAT_PMD_ERR("%s: cannot reset device. CHANCMD=%#"PRIx8
-					", CHANSTS=%#"PRIx64", CHANERR=%#"PRIx32"\n",
+					", CHANSTS=%#"PRIx64", CHANERR=%#"PRIx32,
 					__func__,
 					ioat->regs->chancmd,
 					ioat->regs->chansts,
@@ -664,8 +685,6 @@ ioat_dmadev_create(const char *name, struct rte_pci_device *dev)
 			return -EIO;
 		}
 	}
-	ioat->regs->chanctrl = IOAT_CHANCTRL_ANY_ERR_ABORT_EN |
-			IOAT_CHANCTRL_ERR_COMPLETION_EN;
 
 	dmadev->fp_obj->dev_private = ioat;
 

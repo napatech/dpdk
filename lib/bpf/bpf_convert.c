@@ -23,11 +23,8 @@
 #include <rte_malloc.h>
 #include <rte_errno.h>
 
-/* Workaround name conflicts with libpcap */
-#define bpf_validate(f, len) bpf_validate_libpcap(f, len)
 #include <pcap/pcap.h>
 #include <pcap/bpf.h>
-#undef bpf_validate
 
 #include "bpf_impl.h"
 #include "bpf_def.h"
@@ -229,8 +226,8 @@ static bool convert_bpf_load(const struct bpf_insn *fp,
 	case SKF_AD_OFF + SKF_AD_RANDOM:
 	case SKF_AD_OFF + SKF_AD_ALU_XOR_X:
 		/* Linux has special negative offsets to access meta-data. */
-		RTE_BPF_LOG(ERR,
-			    "rte_bpf_convert: socket offset %d not supported\n",
+		RTE_BPF_LOG_LINE(ERR,
+			    "rte_bpf_convert: socket offset %d not supported",
 			    fp->k - SKF_AD_OFF);
 		return true;
 	default:
@@ -249,7 +246,7 @@ static int bpf_convert_filter(const struct bpf_insn *prog, size_t len,
 	uint8_t bpf_src;
 
 	if (len > BPF_MAXINSNS) {
-		RTE_BPF_LOG(ERR, "%s: cBPF program too long (%zu insns)\n",
+		RTE_BPF_LOG_LINE(ERR, "%s: cBPF program too long (%zu insns)",
 			    __func__, len);
 		return -EINVAL;
 	}
@@ -485,7 +482,7 @@ do_pass:
 
 			/* Unknown instruction. */
 		default:
-			RTE_BPF_LOG(ERR, "%s: Unknown instruction!: %#x\n",
+			RTE_BPF_LOG_LINE(ERR, "%s: Unknown instruction!: %#x",
 				    __func__, fp->code);
 			goto err;
 		}
@@ -529,7 +526,7 @@ rte_bpf_convert(const struct bpf_program *prog)
 	int ret;
 
 	if (prog == NULL) {
-		RTE_BPF_LOG(ERR, "%s: NULL program\n", __func__);
+		RTE_BPF_LOG_LINE(ERR, "%s: NULL program", __func__);
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -537,12 +534,12 @@ rte_bpf_convert(const struct bpf_program *prog)
 	/* 1st pass: calculate the eBPF program length */
 	ret = bpf_convert_filter(prog->bf_insns, prog->bf_len, NULL, &ebpf_len);
 	if (ret < 0) {
-		RTE_BPF_LOG(ERR, "%s: cannot get eBPF length\n", __func__);
+		RTE_BPF_LOG_LINE(ERR, "%s: cannot get eBPF length", __func__);
 		rte_errno = -ret;
 		return NULL;
 	}
 
-	RTE_BPF_LOG(DEBUG, "%s: prog len cBPF=%u -> eBPF=%u\n",
+	RTE_BPF_LOG_LINE(DEBUG, "%s: prog len cBPF=%u -> eBPF=%u",
 		    __func__, prog->bf_len, ebpf_len);
 
 	prm = rte_zmalloc("bpf_filter",
@@ -558,8 +555,8 @@ rte_bpf_convert(const struct bpf_program *prog)
 	/* 2nd pass: remap cBPF to eBPF instructions  */
 	ret = bpf_convert_filter(prog->bf_insns, prog->bf_len, ebpf, &ebpf_len);
 	if (ret < 0) {
-		RTE_BPF_LOG(ERR, "%s: cannot convert cBPF to eBPF\n", __func__);
-		free(prm);
+		RTE_BPF_LOG_LINE(ERR, "%s: cannot convert cBPF to eBPF", __func__);
+		rte_free(prm);
 		rte_errno = -ret;
 		return NULL;
 	}

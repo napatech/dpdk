@@ -52,7 +52,7 @@ ethdev_tel_handle_info(const char *cmd __rte_unused,
 	i_data = rte_tel_data_alloc();
 	if (i_data == NULL)
 		return -ENOMEM;
-	rte_tel_data_start_array(i_data, RTE_TEL_U64_VAL);
+	rte_tel_data_start_array(i_data, RTE_TEL_UINT_VAL);
 
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
 		/* Skip if port is unused */
@@ -65,8 +65,7 @@ ethdev_tel_handle_info(const char *cmd __rte_unused,
 			info = &eth_info.info;
 			dev = cnxk_eth_pmd_priv(eth_dev);
 			if (dev) {
-				info->inl_dev_pf_func =
-					roc_nix_inl_dev_pffunc_get();
+				info->inl_dev_pf_func = roc_idev_nix_inl_dev_pffunc_get();
 				info->pf_func = roc_nix_get_pf_func(&dev->nix);
 				info->max_mac_entries = dev->max_mac_entries;
 				info->dmac_filter_ena = dev->dmac_filter_enable;
@@ -80,8 +79,8 @@ ethdev_tel_handle_info(const char *cmd __rte_unused,
 			}
 
 			for (j = 0; j < ETH_INFO_SZ; j++)
-				rte_tel_data_add_array_u64(i_data,
-							   eth_info.val[j]);
+				rte_tel_data_add_array_uint(i_data,
+							    eth_info.val[j]);
 
 			j++;
 		}

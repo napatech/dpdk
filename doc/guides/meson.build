@@ -7,7 +7,7 @@ if not sphinx.found()
     subdir_done()
 endif
 
-extra_sphinx_args = []
+extra_sphinx_args = ['-a']
 if get_option('werror')
     extra_sphinx_args += '-W'
 endif
@@ -23,8 +23,6 @@ html_guides = custom_target('html_guides',
         build_by_default: get_option('enable_docs'),
         install: get_option('enable_docs'),
         install_dir: htmldir)
-
-install_data(files('custom.css'), install_dir: join_paths(htmldir,'_static', 'css'))
 
 doc_targets += html_guides
 doc_target_names += 'HTML_Guides'

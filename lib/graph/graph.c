@@ -15,30 +15,80 @@
 #include <rte_string_fns.h>
 
 #include "graph_private.h"
+#include "graph_pcap_private.h"
 
 static struct graph_head graph_list = STAILQ_HEAD_INITIALIZER(graph_list);
 static rte_spinlock_t graph_lock = RTE_SPINLOCK_INITIALIZER;
-static rte_graph_t graph_id;
-
-#define GRAPH_ID_CHECK(id) ID_CHECK(id, graph_id)
 
 /* Private functions */
+static struct graph *
+graph_from_id(rte_graph_t id)
+{
+	struct graph *graph;
+	STAILQ_FOREACH(graph, &graph_list, next) {
+		if (graph->id == id)
+			return graph;
+	}
+	rte_errno = EINVAL;
+	return NULL;
+}
+
+static rte_graph_t
+graph_next_free_id(void)
+{
+	struct graph *graph;
+	rte_graph_t id = 0;
+
+	STAILQ_FOREACH(graph, &graph_list, next) {
+		if (id < graph->id)
+			break;
+		id = graph->id + 1;
+	}
+
+	return id;
+}
+
+static void
+graph_insert_ordered(struct graph *graph)
+{
+	struct graph *after, *g;
+
+	after = NULL;
+	STAILQ_FOREACH(g, &graph_list, next) {
+		if (g->id < graph->id)
+			after = g;
+		else if (g->id > graph->id)
+			break;
+	}
+	if (after == NULL) {
+		STAILQ_INSERT_HEAD(&graph_list, graph, next);
+	} else {
+		STAILQ_INSERT_AFTER(&graph_list, after, graph, next);
+	}
+}
+
 struct graph_head *
 graph_list_head_get(void)
 {
 	return &graph_list;
 }
 
+rte_spinlock_t *
+graph_spinlock_get(void)
+{
+	return &graph_lock;
+}
+
 void
 graph_spinlock_lock(void)
 {
-	rte_spinlock_lock(&graph_lock);
+	rte_spinlock_lock(graph_spinlock_get());
 }
 
 void
 graph_spinlock_unlock(void)
 {
-	rte_spinlock_unlock(&graph_lock);
+	rte_spinlock_unlock(graph_spinlock_get());
 }
 
 static int
@@ -228,7 +278,12 @@ graph_mem_fixup_node_ctx(struct rte_graph *graph)
 		node_db = node_from_name(name);
 		if (node_db == NULL)
 			SET_ERR_JMP(ENOLINK, fail, "Node %s not found", name);
-		node->process = node_db->process;
+
+		if (graph->pcap_enable) {
+			node->process = graph_pcap_dispatch;
+			node->original_process = node_db->process;
+		} else
+			node->process = node_db->process;
 	}
 
 	return graph;
@@ -242,7 +297,73 @@ graph_mem_fixup_secondary(struct rte_graph *graph)
 	if (graph == NULL || rte_eal_process_type() == RTE_PROC_PRIMARY)
 		return graph;
 
+	if (graph_pcap_file_open(graph->pcap_filename) || graph_pcap_mp_init())
+		graph_pcap_exit(graph);
+
 	return graph_mem_fixup_node_ctx(graph);
+}
+
+static bool
+graph_src_node_avail(struct graph *graph)
+{
+	struct graph_node *graph_node;
+
+	STAILQ_FOREACH(graph_node, &graph->node_list, next)
+		if ((graph_node->node->flags & RTE_NODE_SOURCE_F) &&
+		    (graph_node->node->lcore_id == RTE_MAX_LCORE ||
+		     graph->lcore_id == graph_node->node->lcore_id))
+			return true;
+
+	return false;
+}
+
+int
+rte_graph_model_mcore_dispatch_core_bind(rte_graph_t id, int lcore)
+{
+	struct graph *graph;
+
+	if (graph_from_id(id) == NULL)
+		goto fail;
+	if (!rte_lcore_is_enabled(lcore))
+		SET_ERR_JMP(ENOLINK, fail, "lcore %d not enabled", lcore);
+
+	STAILQ_FOREACH(graph, &graph_list, next)
+		if (graph->id == id)
+			break;
+
+	if (graph->graph->model != RTE_GRAPH_MODEL_MCORE_DISPATCH)
+		goto fail;
+
+	graph->lcore_id = lcore;
+	graph->graph->dispatch.lcore_id = graph->lcore_id;
+	graph->socket = rte_lcore_to_socket_id(lcore);
+
+	/* check the availability of source node */
+	if (!graph_src_node_avail(graph))
+		graph->graph->head = 0;
+
+	return 0;
+
+fail:
+	return -rte_errno;
+}
+
+void
+rte_graph_model_mcore_dispatch_core_unbind(rte_graph_t id)
+{
+	struct graph *graph;
+
+	if (graph_from_id(id) == NULL)
+		goto fail;
+	STAILQ_FOREACH(graph, &graph_list, next)
+		if (graph->id == id)
+			break;
+
+	graph->lcore_id = RTE_MAX_LCORE;
+	graph->graph->dispatch.lcore_id = RTE_MAX_LCORE;
+
+fail:
+	return;
 }
 
 struct rte_graph *
@@ -323,11 +444,19 @@ rte_graph_create(const char *name, struct rte_graph_param *prm)
 	if (graph_has_isolated_node(graph))
 		goto graph_cleanup;
 
+	/* Initialize pcap config. */
+	graph_pcap_enable(prm->pcap_enable);
+
 	/* Initialize graph object */
 	graph->socket = prm->socket_id;
 	graph->src_node_count = src_node_count;
 	graph->node_count = graph_nodes_count(graph);
-	graph->id = graph_id;
+	graph->id = graph_next_free_id();
+	graph->parent_id = RTE_GRAPH_ID_INVALID;
+	graph->lcore_id = RTE_MAX_LCORE;
+	graph->num_pkt_to_capture = prm->num_pkt_to_capture;
+	if (prm->pcap_filename)
+		rte_strscpy(graph->pcap_filename, prm->pcap_filename, RTE_GRAPH_PCAP_FILE_SZ);
 
 	/* Allocate the Graph fast path memory and populate the data */
 	if (graph_fp_mem_create(graph))
@@ -338,8 +467,7 @@ rte_graph_create(const char *name, struct rte_graph_param *prm)
 		goto graph_mem_destroy;
 
 	/* All good, Lets add the graph to the list */
-	graph_id++;
-	STAILQ_INSERT_TAIL(&graph_list, graph, next);
+	graph_insert_ordered(graph);
 
 	graph_spinlock_unlock();
 	return graph->id;
@@ -367,6 +495,11 @@ rte_graph_destroy(rte_graph_t id)
 	while (graph != NULL) {
 		tmp = STAILQ_NEXT(graph, next);
 		if (graph->id == id) {
+			/* Destroy the schedule work queue if has */
+			if (rte_graph_worker_model_get(graph->graph) ==
+			    RTE_GRAPH_MODEL_MCORE_DISPATCH)
+				graph_sched_wq_destroy(graph);
+
 			/* Call fini() of the all the nodes in the graph */
 			graph_node_fini(graph);
 			/* Destroy graph fast path memory */
@@ -378,7 +511,6 @@ rte_graph_destroy(rte_graph_t id)
 			graph_cleanup(graph);
 			STAILQ_REMOVE(&graph_list, graph, graph, next);
 			free(graph);
-			graph_id--;
 			goto done;
 		}
 		graph = tmp;
@@ -386,6 +518,99 @@ rte_graph_destroy(rte_graph_t id)
 done:
 	graph_spinlock_unlock();
 	return rc;
+}
+
+static rte_graph_t
+graph_clone(struct graph *parent_graph, const char *name, struct rte_graph_param *prm)
+{
+	struct graph_node *graph_node;
+	struct graph *graph;
+
+	graph_spinlock_lock();
+
+	/* Don't allow to clone a node from a cloned graph */
+	if (parent_graph->parent_id != RTE_GRAPH_ID_INVALID)
+		SET_ERR_JMP(EEXIST, fail, "A cloned graph is not allowed to be cloned");
+
+	/* Create graph object */
+	graph = calloc(1, sizeof(*graph));
+	if (graph == NULL)
+		SET_ERR_JMP(ENOMEM, fail, "Failed to calloc cloned graph object");
+
+	/* Naming ceremony of the new graph. name is node->name + "-" + name */
+	if (clone_name(graph->name, parent_graph->name, name))
+		goto free;
+
+	/* Check for existence of duplicate graph */
+	if (rte_graph_from_name(graph->name) != RTE_GRAPH_ID_INVALID)
+		SET_ERR_JMP(EEXIST, free, "Found duplicate graph %s",
+			    graph->name);
+
+	/* Clone nodes from parent graph firstly */
+	STAILQ_INIT(&graph->node_list);
+	STAILQ_FOREACH(graph_node, &parent_graph->node_list, next) {
+		if (graph_node_add(graph, graph_node->node))
+			goto graph_cleanup;
+	}
+
+	/* Just update adjacency list of all nodes in the graph */
+	if (graph_adjacency_list_update(graph))
+		goto graph_cleanup;
+
+	/* Initialize the graph object */
+	graph->src_node_count = parent_graph->src_node_count;
+	graph->node_count = parent_graph->node_count;
+	graph->parent_id = parent_graph->id;
+	graph->lcore_id = parent_graph->lcore_id;
+	graph->socket = parent_graph->socket;
+	graph->id = graph_next_free_id();
+
+	/* Allocate the Graph fast path memory and populate the data */
+	if (graph_fp_mem_create(graph))
+		goto graph_cleanup;
+
+	/* Clone the graph model */
+	graph->graph->model = parent_graph->graph->model;
+
+	/* Create the graph schedule work queue */
+	if (rte_graph_worker_model_get(graph->graph) == RTE_GRAPH_MODEL_MCORE_DISPATCH &&
+	    graph_sched_wq_create(graph, parent_graph, prm))
+		goto graph_mem_destroy;
+
+	/* Call init() of the all the nodes in the graph */
+	if (graph_node_init(graph))
+		goto graph_mem_destroy;
+
+	/* All good, Lets add the graph to the list */
+	graph_insert_ordered(graph);
+
+	graph_spinlock_unlock();
+	return graph->id;
+
+graph_mem_destroy:
+	graph_fp_mem_destroy(graph);
+graph_cleanup:
+	graph_cleanup(graph);
+free:
+	free(graph);
+fail:
+	graph_spinlock_unlock();
+	return RTE_GRAPH_ID_INVALID;
+}
+
+rte_graph_t
+rte_graph_clone(rte_graph_t id, const char *name, struct rte_graph_param *prm)
+{
+	struct graph *graph;
+
+	if (graph_from_id(id) == NULL)
+		goto fail;
+	STAILQ_FOREACH(graph, &graph_list, next)
+		if (graph->id == id)
+			return graph_clone(graph, name, prm);
+
+fail:
+	return RTE_GRAPH_ID_INVALID;
 }
 
 rte_graph_t
@@ -405,7 +630,8 @@ rte_graph_id_to_name(rte_graph_t id)
 {
 	struct graph *graph;
 
-	GRAPH_ID_CHECK(id);
+	if (graph_from_id(id) == NULL)
+		goto fail;
 	STAILQ_FOREACH(graph, &graph_list, next)
 		if (graph->id == id)
 			return graph->name;
@@ -422,7 +648,8 @@ rte_graph_node_get(rte_graph_t gid, uint32_t nid)
 	rte_graph_off_t off;
 	rte_node_t count;
 
-	GRAPH_ID_CHECK(gid);
+	if (graph_from_id(gid) == NULL)
+		goto fail;
 	STAILQ_FOREACH(graph, &graph_list, next)
 		if (graph->id == gid) {
 			rte_graph_foreach_node(count, off, graph->graph,
@@ -492,25 +719,46 @@ __rte_node_stream_alloc_size(struct rte_graph *graph, struct rte_node *node,
 static int
 graph_to_dot(FILE *f, struct graph *graph)
 {
-	const char *src_edge_color = " [color=blue]\n";
-	const char *edge_color = "\n";
 	struct graph_node *graph_node;
 	char *node_name;
 	rte_edge_t i;
 	int rc;
 
-	rc = fprintf(f, "Digraph %s {\n\trankdir=LR;\n", graph->name);
+	rc = fprintf(f, "digraph \"%s\" {\n\trankdir=LR;\n", graph->name);
+	if (rc < 0)
+		goto end;
+
+	rc = fprintf(f, "\tnode [margin=0.02 fontsize=11 fontname=sans];\n");
 	if (rc < 0)
 		goto end;
 
 	STAILQ_FOREACH(graph_node, &graph->node_list, next) {
+		const char *attrs = "";
 		node_name = graph_node->node->name;
+
+		rc = fprintf(f, "\t\"%s\"", node_name);
+		if (rc < 0)
+			goto end;
+		if (graph_node->node->flags & RTE_NODE_SOURCE_F) {
+			attrs = " [color=blue style=bold]";
+			rc = fprintf(f, "%s", attrs);
+			if (rc < 0)
+				goto end;
+		} else if (graph_node->node->nb_edges == 0) {
+			rc = fprintf(f, " [fontcolor=darkorange shape=plain]");
+			if (rc < 0)
+				goto end;
+		}
+		rc = fprintf(f, ";\n");
+		if (rc < 0)
+			goto end;
 		for (i = 0; i < graph_node->node->nb_edges; i++) {
-			rc = fprintf(f, "\t\"%s\"->\"%s\"%s", node_name,
+			const char *node_attrs = attrs;
+			if (graph_node->adjacency_list[i]->node->nb_edges == 0)
+				node_attrs = " [color=darkorange]";
+			rc = fprintf(f, "\t\"%s\" -> \"%s\"%s;\n", node_name,
 				     graph_node->adjacency_list[i]->node->name,
-				     graph_node->node->flags & RTE_NODE_SOURCE_F
-					     ? src_edge_color
-					     : edge_color);
+				     node_attrs);
 			if (rc < 0)
 				goto end;
 		}
@@ -547,7 +795,8 @@ graph_scan_dump(FILE *f, rte_graph_t id, bool all)
 	struct graph *graph;
 
 	RTE_VERIFY(f);
-	GRAPH_ID_CHECK(id);
+	if (graph_from_id(id) == NULL)
+		goto fail;
 
 	STAILQ_FOREACH(graph, &graph_list, next) {
 		if (all == true) {
@@ -576,7 +825,13 @@ rte_graph_list_dump(FILE *f)
 rte_graph_t
 rte_graph_max_count(void)
 {
-	return graph_id;
+	struct graph *graph;
+	rte_graph_t count = 0;
+
+	STAILQ_FOREACH(graph, &graph_list, next)
+		count++;
+
+	return count;
 }
 
 RTE_LOG_REGISTER_DEFAULT(rte_graph_logtype, INFO);

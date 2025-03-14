@@ -55,12 +55,12 @@ Refer to the `documentation <https://www.kernel.org/doc/Documentation/vm/hugetlb
 If the driver requires using physical addresses (PA),
 the executable file must be granted additional capabilities:
 
-* ``SYS_ADMIN`` to read ``/proc/self/pagemaps``
+* ``DAC_READ_SEARCH`` and ``SYS_ADMIN`` to read ``/proc/self/pagemaps``
 * ``IPC_LOCK`` to lock hugepages in memory
 
 .. code-block:: console
 
-   setcap cap_ipc_lock,cap_sys_admin+ep <executable>
+   setcap cap_dac_read_search,cap_ipc_lock,cap_sys_admin+ep <executable>
 
 If physical addresses are not accessible,
 the following message will appear during EAL initialization::
@@ -85,8 +85,7 @@ need to be adjusted in order to ensure normal DPDK operation:
 The above limits can usually be adjusted by editing
 ``/etc/security/limits.conf`` file, and rebooting.
 
-See `Hugepage Mapping <hugepage_mapping>`_
-section to learn how these limits affect EAL.
+See :ref:`Hugepage Mapping <hugepage_mapping>` section to learn how these limits affect EAL.
 
 Device Control
 ~~~~~~~~~~~~~~

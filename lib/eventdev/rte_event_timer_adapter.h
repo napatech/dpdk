@@ -107,13 +107,13 @@
  * All these use cases require high resolution and low time drift.
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 
 #include "rte_eventdev.h"
 #include "rte_eventdev_trace_fp.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * Timer adapter clock source
@@ -212,6 +212,20 @@ typedef int (*rte_event_timer_adapter_port_conf_cb_t)(uint16_t id,
  *
  * This function must be invoked first before any other function in the API.
  *
+ * When this API is used for creating adapter instance,
+ * ``rte_event_dev_config::nb_event_ports`` is automatically incremented,
+ * and the event device is reconfigured with additional event port during
+ * service initialization. This event device reconfigure logic also increments
+ * the ``rte_event_dev_config::nb_single_link_event_port_queues``
+ * parameter if the adapter event port config is of type
+ * ``RTE_EVENT_PORT_CFG_SINGLE_LINK``.
+ *
+ * Application no longer needs to account for
+ * ``rte_event_dev_config::nb_event_ports`` and
+ * ``rte_event_dev_config::nb_single_link_event_port_queues``
+ * parameters required for Timer adapter in event device configuration
+ * when the adapter is created with this API.
+ *
  * @param conf
  *   The event timer adapter configuration structure.
  *
@@ -296,7 +310,6 @@ struct rte_event_timer_adapter_info {
  *
  * @see RTE_EVENT_TIMER_ADAPTER_F_ADJUST_RES,
  *   struct rte_event_timer_adapter_info
- *
  */
 int
 rte_event_timer_adapter_get_info(
@@ -460,8 +473,7 @@ enum rte_event_timer_state {
  * The generic *rte_event_timer* structure to hold the event timer attributes
  * for arm and cancel operations.
  */
-RTE_STD_C11
-struct rte_event_timer {
+struct __rte_cache_aligned rte_event_timer {
 	struct rte_event ev;
 	/**<
 	 * Expiry event attributes.  On successful event timer timeout,
@@ -486,13 +498,13 @@ struct rte_event_timer {
 	 * implementation specific values to share between the arm and cancel
 	 * operations.  The application should not modify this field.
 	 */
-	enum rte_event_timer_state state;
+	RTE_ATOMIC(enum rte_event_timer_state) state;
 	/**< State of the event timer. */
 	uint8_t user_meta[];
 	/**< Memory to store user specific metadata.
 	 * The event timer adapter implementation should not modify this area.
 	 */
-} __rte_cache_aligned;
+};
 
 typedef uint16_t (*rte_event_timer_arm_burst_t)(
 		const struct rte_event_timer_adapter *adapter,
@@ -514,7 +526,7 @@ typedef uint16_t (*rte_event_timer_cancel_burst_t)(
 /**
  * @internal Data structure associated with each event timer adapter.
  */
-struct rte_event_timer_adapter {
+struct __rte_cache_aligned rte_event_timer_adapter {
 	rte_event_timer_arm_burst_t arm_burst;
 	/**< Pointer to driver arm_burst function. */
 	rte_event_timer_arm_tmo_tick_burst_t arm_tmo_tick_burst;
@@ -526,10 +538,9 @@ struct rte_event_timer_adapter {
 	const struct event_timer_adapter_ops *ops;
 	/**< Functions exported by adapter driver */
 
-	RTE_STD_C11
 	uint8_t allocated : 1;
 	/**< Flag to indicate that this adapter has been allocated */
-} __rte_cache_aligned;
+};
 
 #define ADAPTER_VALID_OR_ERR_RET(adapter, retval) do {		\
 	if (adapter == NULL || !adapter->allocated)		\
@@ -582,7 +593,6 @@ struct rte_event_timer_adapter {
  *   - EALREADY A timer was encountered that was already armed
  *
  * @see RTE_EVENT_TIMER_ADAPTER_F_PERIODIC
- *
  */
 static inline uint16_t
 rte_event_timer_arm_burst(const struct rte_event_timer_adapter *adapter,
@@ -677,6 +687,30 @@ rte_event_timer_cancel_burst(const struct rte_event_timer_adapter *adapter,
 		nb_evtims);
 	return adapter->cancel_burst(adapter, evtims, nb_evtims);
 }
+
+/**
+ * Get the number of ticks remaining until event timer expiry.
+ *
+ * @param adapter
+ *   A pointer to an event timer adapter structure
+ * @param evtim
+ *   A pointer to an rte_event_timer structure
+ * @param[out] ticks_remaining
+ *   Pointer to variable into which to write the number of ticks remaining
+ *   until event timer expiry
+ *
+ * @return
+ *   - 0: Success
+ *   - -EINVAL Invalid timer adapter identifier or the event timer is not in
+ *   the armed state or ticks_remaining is NULL
+ *   - -ENOTSUP The timer adapter implementation does not support this API.
+ */
+__rte_experimental
+int
+rte_event_timer_remaining_ticks_get(
+			const struct rte_event_timer_adapter *adapter,
+			const struct rte_event_timer *evtim,
+			uint64_t *ticks_remaining);
 
 #ifdef __cplusplus
 }

@@ -107,99 +107,27 @@ User Cases
 The power management mechanism is used to save power when performing L3 forwarding.
 
 
-Empty Poll API
---------------
+PM QoS
+------
 
-Removal Warning
-~~~~~~~~~~~~~~~
+The ``/sys/devices/system/cpu/cpuX/power/pm_qos_resume_latency_us``
+sysfs interface is used to set and get the resume latency limit
+on the cpuX for userspace.
+Each cpuidle governor in Linux selects which idle state to enter
+based on this CPU resume latency in their idle task.
 
-The experimental empty poll API will be removed from the library
-in a future DPDK release.
-The empty poll mechanism is superseded by the power PMD modes
-i.e. monitor, pause and scale.
+The deeper the idle state, the lower the power consumption,
+but the longer the resume time.
+Some services are latency sensitive and request a low resume time,
+like interrupt packet receiving mode.
 
+Applications can set and get the CPU resume latency with
+``rte_power_qos_set_cpu_resume_latency()``
+and ``rte_power_qos_get_cpu_resume_latency()`` respectively.
+Applications can set a strict resume latency (zero value)
+to lower the resume latency and get better performance
+(instead, the power consumption of platform may increase).
 
-Abstract
-~~~~~~~~
-
-For packet processing workloads such as DPDK polling is continuous.
-This means CPU cores always show 100% busy independent of how much work
-those cores are doing. It is critical to accurately determine how busy
-a core is hugely important for the following reasons:
-
-        * No indication of overload conditions
-        * User does not know how much real load is on a system, resulting
-          in wasted energy as no power management is utilized
-
-Compared to the original l3fwd-power design, instead of going to sleep
-after detecting an empty poll, the new mechanism just lowers the core frequency.
-As a result, the application does not stop polling the device, which leads
-to improved handling of bursts of traffic.
-
-When the system become busy, the empty poll mechanism can also increase the core
-frequency (including turbo) to do best effort for intensive traffic. This gives
-us more flexible and balanced traffic awareness over the standard l3fwd-power
-application.
-
-
-Proposed Solution
-~~~~~~~~~~~~~~~~~
-The proposed solution focuses on how many times empty polls are executed.
-The less the number of empty polls, means current core is busy with processing
-workload, therefore, the higher frequency is needed. The high empty poll number
-indicates the current core not doing any real work therefore, we can lower the
-frequency to safe power.
-
-In the current implementation, each core has 1 empty-poll counter which assume
-1 core is dedicated to 1 queue. This will need to be expanded in the future to
-support multiple queues per core.
-
-Power state definition:
-^^^^^^^^^^^^^^^^^^^^^^^
-
-* LOW:  Not currently used, reserved for future use.
-
-* MED:  the frequency is used to process modest traffic workload.
-
-* HIGH: the frequency is used to process busy traffic workload.
-
-There are two phases to establish the power management system:
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-* Training phase. This phase is used to measure the optimal frequency
-  change thresholds for a given system. The thresholds will differ from
-  system to system due to differences in processor micro-architecture,
-  cache and device configurations.
-  In this phase, the user must ensure that no traffic can enter the
-  system so that counts can be measured for empty polls at low, medium
-  and high frequencies. Each frequency is measured for two seconds.
-  Once the training phase is complete, the threshold numbers are
-  displayed, and normal mode resumes, and traffic can be allowed into
-  the system. These threshold number can be used on the command line
-  when starting the application in normal mode to avoid re-training
-  every time.
-
-* Normal phase. Every 10ms the run-time counters are compared
-  to the supplied threshold values, and the decision will be made
-  whether to move to a different power state (by adjusting the
-  frequency).
-
-API Overview for Empty Poll Power Management
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* **State Init**: initialize the power management system.
-
-* **State Free**: free the resource hold by power management system.
-
-* **Update Empty Poll Counter**: update the empty poll counter.
-
-* **Update Valid Poll Counter**: update the valid poll counter.
-
-* **Set the Frequency Index**: update the power state/frequency mapping.
-
-* **Detect empty poll state change**: empty poll state change detection algorithm then take action.
-
-User Cases
-----------
-The mechanism can applied to any device which is based on polling. e.g. NIC, FPGA.
 
 Ethernet PMD Power Management API
 ---------------------------------
@@ -285,8 +213,8 @@ API Overview for Ethernet PMD Power Management
 * **Set Scaling Max Freq**: Set the maximum frequency (kHz) to be used in Frequency
   Scaling mode.
 
-Intel Uncore API
-----------------
+Uncore API
+----------
 
 Abstract
 ~~~~~~~~
@@ -297,6 +225,9 @@ to achieve high performance: L3 cache, on-die memory controller, etc.
 Significant power savings can be achieved by reducing the uncore frequency
 to its lowest value.
 
+Intel Uncore
+~~~~~~~~~~~~
+
 The Linux kernel provides the driver "intel-uncore-frequency"
 to control the uncore frequency limits for x86 platform.
 The driver is available from kernel version 5.6 and above.
@@ -305,10 +236,23 @@ which was added in 5.6.
 This manipulates the context of MSR 0x620,
 which sets min/max of the uncore for the SKU.
 
-API Overview for Intel Uncore
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+AMD EPYC Uncore
+~~~~~~~~~~~~~~~
 
-Overview of each function in the Intel Uncore API,
+On AMD EPYC platforms, the Host System Management Port (HSMP) kernel module
+facilitates user-level access to HSMP mailboxes,
+which are implemented by the firmware in the System Management Unit (SMU).
+The AMD HSMP driver is available starting from kernel version 5.18.
+Please ensure that ``CONFIG_AMD_HSMP`` is enabled in your kernel configuration.
+
+Additionally, the EPYC System Management Interface In-band Library for Linux
+offers essential API, enabling user-space software
+to effectively manage system functions.
+
+Uncore API Overview
+~~~~~~~~~~~~~~~~~~~
+
+Overview of each function in the Uncore API,
 with explanation of what they do.
 Each function should not be called in the fast path.
 

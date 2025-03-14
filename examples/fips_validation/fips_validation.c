@@ -13,14 +13,6 @@
 
 #include "fips_validation.h"
 
-#define skip_white_spaces(pos)			\
-({						\
-	__typeof__(pos) _p = (pos);		\
-	for ( ; isspace(*_p); _p++)		\
-		;				\
-	_p;					\
-})
-
 static int
 get_file_line(void)
 {
@@ -460,6 +452,8 @@ fips_test_parse_one_json_vector_set(void)
 	/* Vector sets contain the algorithm type, and nothing else we need. */
 	if (strstr(algo_str, "AES-GCM"))
 		info.algo = FIPS_TEST_ALGO_AES_GCM;
+	else if (strstr(algo_str, "AES-CCM"))
+		info.algo = FIPS_TEST_ALGO_AES_CCM;
 	else if (strstr(algo_str, "AES-GMAC"))
 		info.algo = FIPS_TEST_ALGO_AES_GMAC;
 	else if (strstr(algo_str, "HMAC"))
@@ -481,6 +475,8 @@ fips_test_parse_one_json_vector_set(void)
 		info.algo = FIPS_TEST_ALGO_RSA;
 	else if (strstr(algo_str, "ECDSA"))
 		info.algo = FIPS_TEST_ALGO_ECDSA;
+	else if (strstr(algo_str, "EDDSA"))
+		info.algo = FIPS_TEST_ALGO_EDDSA;
 	else
 		return -EINVAL;
 
@@ -543,15 +539,28 @@ fips_test_parse_one_json_case(void)
 
 	for (i = 0; info.callbacks[i].key != NULL; i++) {
 		param = json_object_get(json_info.json_test_case, info.callbacks[i].key);
-		if (param) {
-			strcpy(info.one_line_text, json_string_value(param));
-			ret = info.callbacks[i].cb(
-				info.callbacks[i].key, info.one_line_text,
-				info.callbacks[i].val
-			);
-			if (ret < 0)
-				return ret;
+		if (!param)
+			continue;
+
+		switch (json_typeof(param)) {
+		case JSON_STRING:
+			snprintf(info.one_line_text, MAX_LINE_CHAR, "%s",
+					 json_string_value(param));
+			break;
+
+		case JSON_INTEGER:
+			snprintf(info.one_line_text, MAX_LINE_CHAR, "%"JSON_INTEGER_FORMAT,
+					 json_integer_value(param));
+			break;
+
+		default:
+			return -EINVAL;
 		}
+
+		ret = info.callbacks[i].cb(info.callbacks[i].key, info.one_line_text,
+				info.callbacks[i].val);
+		if (ret < 0)
+			return ret;
 	}
 
 	return 0;
@@ -564,13 +573,13 @@ parser_read_uint64_hex(uint64_t *value, const char *p)
 	char *next;
 	uint64_t val;
 
-	p = skip_white_spaces(p);
+	p = rte_str_skip_leading_spaces(p);
 
 	val = strtoul(p, &next, 16);
 	if (p == next)
 		return -EINVAL;
 
-	p = skip_white_spaces(next);
+	p = rte_str_skip_leading_spaces(next);
 	if (*p != '\0')
 		return -EINVAL;
 
@@ -744,7 +753,7 @@ parser_read_uint64(uint64_t *value, const char *p)
 	char *next;
 	uint64_t val;
 
-	p = skip_white_spaces(p);
+	p = rte_str_skip_leading_spaces(p);
 	if (!isdigit(*p))
 		return -EINVAL;
 
@@ -770,7 +779,7 @@ parser_read_uint64(uint64_t *value, const char *p)
 		break;
 	}
 
-	p = skip_white_spaces(p);
+	p = rte_str_skip_leading_spaces(p);
 	if (*p != '\0')
 		return -EINVAL;
 

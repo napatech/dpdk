@@ -18,7 +18,8 @@
 
 #define IAVF_AQ_LEN               32
 #define IAVF_AQ_BUF_SZ            4096
-#define IAVF_RESET_WAIT_CNT       500
+#define IAVF_RESET_WAIT_CNT       2000
+#define IAVF_RESET_DETECTED_CNT   500
 #define IAVF_BUF_SIZE_MIN         1024
 #define IAVF_FRAME_SIZE_MAX       9728
 #define IAVF_QUEUE_BASE_ADDR_UNIT 128
@@ -31,7 +32,7 @@
 
 #define IAVF_NUM_MACADDR_MAX      64
 
-#define IAVF_DEV_WATCHDOG_PERIOD     0
+#define IAVF_DEV_WATCHDOG_PERIOD     2000 /* microseconds, set 0 to disable*/
 
 #define IAVF_DEFAULT_RX_PTHRESH      8
 #define IAVF_DEFAULT_RX_HTHRESH      8
@@ -113,9 +114,14 @@ struct iavf_ipsec_crypto_stats {
 	} ierrors;
 };
 
+struct iavf_mbuf_stats {
+	uint64_t tx_pkt_errors;
+};
+
 struct iavf_eth_xstats {
 	struct virtchnl_eth_stats eth_stats;
 	struct iavf_ipsec_crypto_stats ips_stats;
+	struct iavf_mbuf_stats mbuf_stats;
 };
 
 /* Structure that defines a VSI, associated with a adapter. */
@@ -232,8 +238,8 @@ struct iavf_info {
 	struct virtchnl_vlan_caps vlan_v2_caps;
 	uint64_t supported_rxdid;
 	uint8_t *proto_xtr; /* proto xtr type for all queues */
-	volatile enum virtchnl_ops pend_cmd; /* pending command not finished */
-	uint32_t pend_cmd_count;
+	volatile RTE_ATOMIC(enum virtchnl_ops) pend_cmd; /* pending command not finished */
+	RTE_ATOMIC(uint32_t) pend_cmd_count;
 	int cmd_retval; /* return value of the cmd response from PF */
 	uint8_t *aq_resp; /* buffer to store the adminq response from PF */
 
@@ -262,6 +268,7 @@ struct iavf_info {
 	struct iavf_qv_map *qv_map; /* queue vector mapping */
 	struct iavf_flow_list flow_list;
 	rte_spinlock_t flow_ops_lock;
+	rte_spinlock_t aq_lock;
 	struct iavf_parser_list rss_parser_list;
 	struct iavf_parser_list dist_parser_list;
 	struct iavf_parser_list ipsec_crypto_parser_list;
@@ -275,6 +282,8 @@ struct iavf_info {
 	struct iavf_tm_conf tm_conf;
 
 	struct rte_eth_dev *eth_dev;
+
+	bool in_reset_recovery;
 
 	uint32_t ptp_caps;
 	rte_spinlock_t phc_time_aq_lock;
@@ -303,9 +312,57 @@ struct iavf_devargs {
 	uint8_t proto_xtr_dflt;
 	uint8_t proto_xtr[IAVF_MAX_QUEUE_NUM];
 	uint16_t quanta_size;
+	uint32_t watchdog_period;
+	int auto_reset;
+	int no_poll_on_link_down;
+	uint64_t mbuf_check;
 };
 
 struct iavf_security_ctx;
+
+enum iavf_rx_burst_type {
+	IAVF_RX_DEFAULT,
+	IAVF_RX_FLEX_RXD,
+	IAVF_RX_BULK_ALLOC,
+	IAVF_RX_SCATTERED,
+	IAVF_RX_SCATTERED_FLEX_RXD,
+	IAVF_RX_SSE,
+	IAVF_RX_AVX2,
+	IAVF_RX_AVX2_OFFLOAD,
+	IAVF_RX_SSE_FLEX_RXD,
+	IAVF_RX_AVX2_FLEX_RXD,
+	IAVF_RX_AVX2_FLEX_RXD_OFFLOAD,
+	IAVF_RX_SSE_SCATTERED,
+	IAVF_RX_AVX2_SCATTERED,
+	IAVF_RX_AVX2_SCATTERED_OFFLOAD,
+	IAVF_RX_SSE_SCATTERED_FLEX_RXD,
+	IAVF_RX_AVX2_SCATTERED_FLEX_RXD,
+	IAVF_RX_AVX2_SCATTERED_FLEX_RXD_OFFLOAD,
+	IAVF_RX_AVX512,
+	IAVF_RX_AVX512_OFFLOAD,
+	IAVF_RX_AVX512_FLEX_RXD,
+	IAVF_RX_AVX512_FLEX_RXD_OFFLOAD,
+	IAVF_RX_AVX512_SCATTERED,
+	IAVF_RX_AVX512_SCATTERED_OFFLOAD,
+	IAVF_RX_AVX512_SCATTERED_FLEX_RXD,
+	IAVF_RX_AVX512_SCATTERED_FLEX_RXD_OFFLOAD,
+};
+
+enum iavf_tx_burst_type {
+	IAVF_TX_DEFAULT,
+	IAVF_TX_SSE,
+	IAVF_TX_AVX2,
+	IAVF_TX_AVX2_OFFLOAD,
+	IAVF_TX_AVX512,
+	IAVF_TX_AVX512_OFFLOAD,
+	IAVF_TX_AVX512_CTX,
+	IAVF_TX_AVX512_CTX_OFFLOAD,
+};
+
+#define IAVF_MBUF_CHECK_F_TX_MBUF        (1ULL << 0)
+#define IAVF_MBUF_CHECK_F_TX_SIZE        (1ULL << 1)
+#define IAVF_MBUF_CHECK_F_TX_SEGMENT     (1ULL << 2)
+#define IAVF_MBUF_CHECK_F_TX_OFFLOAD     (1ULL << 3)
 
 /* Structure to store private data for each VF instance. */
 struct iavf_adapter {
@@ -318,9 +375,12 @@ struct iavf_adapter {
 	/* For vector PMD */
 	bool rx_vec_allowed;
 	bool tx_vec_allowed;
-	uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE] __rte_cache_min_aligned;
+	alignas(RTE_CACHE_LINE_MIN_SIZE) uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE];
 	bool stopped;
 	bool closed;
+	bool no_poll;
+	enum iavf_rx_burst_type rx_burst_type;
+	enum iavf_tx_burst_type tx_burst_type;
 	uint16_t fdir_ref_cnt;
 	struct iavf_devargs devargs;
 };
@@ -396,13 +456,13 @@ static inline int
 _atomic_set_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
 {
 	enum virtchnl_ops op_unk = VIRTCHNL_OP_UNKNOWN;
-	int ret = __atomic_compare_exchange(&vf->pend_cmd, &op_unk, &ops,
-			0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE);
+	int ret = rte_atomic_compare_exchange_strong_explicit(&vf->pend_cmd, &op_unk, ops,
+			rte_memory_order_acquire, rte_memory_order_acquire);
 
 	if (!ret)
 		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
 
-	__atomic_store_n(&vf->pend_cmd_count, 1, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&vf->pend_cmd_count, 1, rte_memory_order_relaxed);
 
 	return !ret;
 }
@@ -412,18 +472,21 @@ static inline int
 _atomic_set_async_response_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
 {
 	enum virtchnl_ops op_unk = VIRTCHNL_OP_UNKNOWN;
-	int ret = __atomic_compare_exchange(&vf->pend_cmd, &op_unk, &ops,
-			0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE);
+	int ret = rte_atomic_compare_exchange_strong_explicit(&vf->pend_cmd, &op_unk, ops,
+			rte_memory_order_acquire, rte_memory_order_acquire);
 
 	if (!ret)
 		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
 
-	__atomic_store_n(&vf->pend_cmd_count, 2, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&vf->pend_cmd_count, 2, rte_memory_order_relaxed);
 
 	return !ret;
 }
 int iavf_check_api_version(struct iavf_adapter *adapter);
 int iavf_get_vf_resource(struct iavf_adapter *adapter);
+void iavf_dev_event_post(struct rte_eth_dev *dev,
+		enum rte_eth_event_type event,
+		void *param, size_t param_alloc_size);
 void iavf_dev_event_handler_fini(void);
 int iavf_dev_event_handler_init(void);
 void iavf_handle_virtchnl_msg(struct rte_eth_dev *dev);
@@ -497,4 +560,8 @@ int iavf_flow_unsub(struct iavf_adapter *adapter,
 		    struct iavf_fsub_conf *filter);
 int iavf_flow_sub_check(struct iavf_adapter *adapter,
 			struct iavf_fsub_conf *filter);
+void iavf_dev_watchdog_enable(struct iavf_adapter *adapter);
+void iavf_dev_watchdog_disable(struct iavf_adapter *adapter);
+void iavf_handle_hw_reset(struct rte_eth_dev *dev);
+void iavf_set_no_poll(struct iavf_adapter *adapter, bool link_change);
 #endif /* _IAVF_ETHDEV_H_ */

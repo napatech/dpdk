@@ -9,6 +9,7 @@
 #include <rte_crypto.h>
 #include <rte_debug.h>
 #include <rte_event_crypto_adapter.h>
+#include <rte_event_dma_adapter.h>
 #include <rte_eventdev.h>
 #include <rte_service.h>
 
@@ -42,14 +43,18 @@ enum evt_prod_type {
 	EVT_PROD_TYPE_ETH_RX_ADPTR,  /* Producer type Eth Rx Adapter. */
 	EVT_PROD_TYPE_EVENT_TIMER_ADPTR,  /* Producer type Timer Adapter. */
 	EVT_PROD_TYPE_EVENT_CRYPTO_ADPTR,  /* Producer type Crypto Adapter. */
+	EVT_PROD_TYPE_EVENT_DMA_ADPTR,  /* Producer type DMA Adapter. */
 	EVT_PROD_TYPE_MAX,
 };
 
 struct evt_options {
 #define EVT_TEST_NAME_MAX_LEN     32
+#define EVT_CRYPTO_MAX_KEY_SIZE   256
+#define EVT_CRYPTO_MAX_IV_SIZE    16
 	char test_name[EVT_TEST_NAME_MAX_LEN];
 	bool plcores[RTE_MAX_LCORE];
 	bool wlcores[RTE_MAX_LCORE];
+	bool crypto_cipher_bit_mode;
 	int pool_sz;
 	int socket_id;
 	int nb_stages;
@@ -59,17 +64,21 @@ struct evt_options {
 	uint8_t nb_timer_adptrs;
 	uint8_t timdev_use_burst;
 	uint8_t per_port_pool;
+	uint8_t preschedule;
+	uint8_t preschedule_opted;
 	uint8_t sched_type_list[EVT_MAX_STAGES];
 	uint16_t mbuf_sz;
 	uint16_t wkr_deq_dep;
 	uint16_t vector_size;
 	uint16_t eth_queues;
+	uint16_t crypto_cipher_iv_sz;
 	uint32_t nb_flows;
 	uint32_t tx_first;
 	uint16_t tx_pkt_sz;
 	uint32_t max_pkt_sz;
 	uint32_t prod_enq_burst_sz;
 	uint32_t deq_tmo_nsec;
+	uint32_t crypto_cipher_key_sz;
 	uint32_t q_priority:1;
 	uint32_t fwd_latency:1;
 	uint32_t ena_vector : 1;
@@ -81,8 +90,11 @@ struct evt_options {
 	uint64_t timer_tick_nsec;
 	uint64_t optm_timer_tick_nsec;
 	enum evt_prod_type prod_type;
+	enum rte_event_dma_adapter_mode dma_adptr_mode;
 	enum rte_event_crypto_adapter_mode crypto_adptr_mode;
 	enum rte_crypto_op_type crypto_op_type;
+	enum rte_crypto_cipher_algorithm crypto_cipher_alg;
+	uint8_t crypto_cipher_key[EVT_CRYPTO_MAX_KEY_SIZE];
 };
 
 static inline bool
@@ -174,6 +186,30 @@ evt_configure_eventdev(struct evt_options *opt, uint8_t nb_queues,
 		return ret;
 	}
 
+	if (opt->preschedule_opted && opt->preschedule) {
+		switch (opt->preschedule) {
+		case RTE_EVENT_PRESCHEDULE_ADAPTIVE:
+			if (!(info.event_dev_cap & RTE_EVENT_DEV_CAP_EVENT_PRESCHEDULE_ADAPTIVE)) {
+				evt_err("Preschedule type %d not supported", opt->preschedule);
+				return -EINVAL;
+			}
+			break;
+		case RTE_EVENT_PRESCHEDULE:
+			if (!(info.event_dev_cap & RTE_EVENT_DEV_CAP_EVENT_PRESCHEDULE)) {
+				evt_err("Preschedule type %d not supported", opt->preschedule);
+				return -EINVAL;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (!opt->preschedule_opted) {
+		if (info.event_dev_cap & RTE_EVENT_DEV_CAP_EVENT_PRESCHEDULE_ADAPTIVE)
+			opt->preschedule = RTE_EVENT_PRESCHEDULE_ADAPTIVE;
+	}
+
 	if (opt->deq_tmo_nsec) {
 		if (opt->deq_tmo_nsec < info.min_dequeue_timeout_ns) {
 			opt->deq_tmo_nsec = info.min_dequeue_timeout_ns;
@@ -188,16 +224,15 @@ evt_configure_eventdev(struct evt_options *opt, uint8_t nb_queues,
 	}
 
 	const struct rte_event_dev_config config = {
-			.dequeue_timeout_ns = opt->deq_tmo_nsec,
-			.nb_event_queues = nb_queues,
-			.nb_event_ports = nb_ports,
-			.nb_single_link_event_port_queues = 0,
-			.nb_events_limit  = info.max_num_events,
-			.nb_event_queue_flows = opt->nb_flows,
-			.nb_event_port_dequeue_depth =
-				info.max_event_port_dequeue_depth,
-			.nb_event_port_enqueue_depth =
-				info.max_event_port_enqueue_depth,
+		.dequeue_timeout_ns = opt->deq_tmo_nsec,
+		.nb_event_queues = nb_queues,
+		.nb_event_ports = nb_ports,
+		.nb_single_link_event_port_queues = 0,
+		.nb_events_limit = info.max_num_events,
+		.nb_event_queue_flows = opt->nb_flows,
+		.nb_event_port_dequeue_depth = info.max_event_port_dequeue_depth,
+		.nb_event_port_enqueue_depth = info.max_event_port_enqueue_depth,
+		.preschedule_type = opt->preschedule,
 	};
 
 	return rte_event_dev_configure(opt->dev_id, &config);

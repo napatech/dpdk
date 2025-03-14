@@ -239,9 +239,8 @@ virtio_crypto_send_command(struct virtqueue *vq,
 		vq->vq_free_cnt++;
 	}
 
-	VIRTIO_CRYPTO_INIT_LOG_DBG("vq->vq_free_cnt=%d\n"
-			"vq->vq_desc_head_idx=%d",
-			vq->vq_free_cnt, vq->vq_desc_head_idx);
+	VIRTIO_CRYPTO_INIT_LOG_DBG("vq->vq_free_cnt=%d", vq->vq_free_cnt);
+	VIRTIO_CRYPTO_INIT_LOG_DBG("vq->vq_desc_head_idx=%d", vq->vq_desc_head_idx);
 
 	/* get the result */
 	if (input->status != VIRTIO_CRYPTO_OK) {
@@ -591,7 +590,7 @@ virtio_crypto_qp_setup(struct rte_cryptodev *dev, uint16_t queue_pair_id,
 			qp_conf->nb_descriptors, socket_id, &vq);
 	if (ret < 0) {
 		VIRTIO_CRYPTO_INIT_LOG_ERR(
-			"virtio crypto data queue initialization failed\n");
+			"virtio crypto data queue initialization failed");
 		return ret;
 	}
 
@@ -1057,9 +1056,8 @@ virtio_crypto_sym_clear_session(
 		return;
 	}
 
-	VIRTIO_CRYPTO_INIT_LOG_DBG("vq->vq_free_cnt=%d\n"
-			"vq->vq_desc_head_idx=%d",
-			vq->vq_free_cnt, vq->vq_desc_head_idx);
+	VIRTIO_CRYPTO_INIT_LOG_DBG("vq->vq_free_cnt=%d", vq->vq_free_cnt);
+	VIRTIO_CRYPTO_INIT_LOG_DBG("vq->vq_desc_head_idx=%d", vq->vq_desc_head_idx);
 
 	VIRTIO_CRYPTO_SESSION_LOG_INFO("Close session %"PRIu64" successfully ",
 			session->session_id);

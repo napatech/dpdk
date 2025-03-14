@@ -23,7 +23,7 @@ Get only the required kernel modules for a given driver:
 Get only the required kernel modules for a given device:
 
   %(prog)s dpdk-testpmd | \
-  jq '.[] | select(.devices[] | .vendor_id == "15b3" and .device_id == "1013").kmod'
+  jq '.[] | select(.pci_ids[]? | .vendor == "15b3" and .device == "1013").kmod'
 """
 
 import argparse
@@ -214,7 +214,7 @@ def find_strings(buf: bytes, prefix: str) -> Iterator[str]:
                 # end of string
                 s = view[start:i].tobytes().decode("ascii")
                 if s.startswith(prefix):
-                    yield s[len(prefix) :]
+                    yield s[len(prefix):]
             # There can be byte sequences where a non-printable byte
             # follows a printable one. Ignore that.
             start = None

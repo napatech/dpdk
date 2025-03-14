@@ -722,7 +722,7 @@ ipn3ke_tm_node_capabilities_get(struct rte_eth_dev *dev,
 }
 
 static int
-ipn3ke_tm_shaper_parame_trans(struct rte_tm_shaper_params *profile,
+ipn3ke_tm_shaper_parame_trans(const struct rte_tm_shaper_params *profile,
 	struct ipn3ke_tm_shaper_profile *local_profile,
 	const struct ipn3ke_tm_shaper_params_range_type *ref_data)
 {
@@ -747,7 +747,7 @@ ipn3ke_tm_shaper_parame_trans(struct rte_tm_shaper_params *profile,
 
 static int
 ipn3ke_tm_shaper_profile_add(struct rte_eth_dev *dev,
-	uint32_t shaper_profile_id, struct rte_tm_shaper_params *profile,
+	uint32_t shaper_profile_id, const struct rte_tm_shaper_params *profile,
 	struct rte_tm_error *error)
 {
 	struct ipn3ke_hw *hw = IPN3KE_DEV_PRIVATE_TO_HW(dev);
@@ -848,7 +848,7 @@ ipn3ke_tm_shaper_profile_delete(struct rte_eth_dev *dev,
 
 static int
 ipn3ke_tm_tdrop_profile_check(__rte_unused struct rte_eth_dev *dev,
-	uint32_t tdrop_profile_id, struct rte_tm_wred_params *profile,
+	uint32_t tdrop_profile_id, const struct rte_tm_wred_params *profile,
 	struct rte_tm_error *error)
 {
 	enum rte_color color;
@@ -931,7 +931,7 @@ ipn3ke_hw_tm_tdrop_wr(struct ipn3ke_hw *hw,
 /* Traffic manager TDROP profile add */
 static int
 ipn3ke_tm_tdrop_profile_add(struct rte_eth_dev *dev,
-	uint32_t tdrop_profile_id, struct rte_tm_wred_params *profile,
+	uint32_t tdrop_profile_id, const struct rte_tm_wred_params *profile,
 	struct rte_tm_error *error)
 {
 	struct ipn3ke_hw *hw = IPN3KE_DEV_PRIVATE_TO_HW(dev);
@@ -1010,7 +1010,7 @@ ipn3ke_tm_tdrop_profile_delete(struct rte_eth_dev *dev,
 static int
 ipn3ke_tm_node_add_check_parameter(uint32_t tm_id,
 	uint32_t node_id, uint32_t parent_node_id, uint32_t priority,
-	uint32_t weight, uint32_t level_id, struct rte_tm_node_params *params,
+	uint32_t weight, uint32_t level_id, const struct rte_tm_node_params *params,
 	struct rte_tm_error *error)
 {
 	uint32_t level_of_node_id;
@@ -1168,7 +1168,7 @@ ipn3ke_tm_node_add_check_mount(uint32_t tm_id,
 static int
 ipn3ke_tm_node_add(struct rte_eth_dev *dev,
 	uint32_t node_id, uint32_t parent_node_id, uint32_t priority,
-	uint32_t weight, uint32_t level_id, struct rte_tm_node_params *params,
+	uint32_t weight, uint32_t level_id, const struct rte_tm_node_params *params,
 	struct rte_tm_error *error)
 {
 	struct ipn3ke_hw *hw = IPN3KE_DEV_PRIVATE_TO_HW(dev);
@@ -1934,10 +1934,10 @@ ipn3ke_tm_show(struct rte_eth_dev *dev)
 
 	tm_id = tm->tm_id;
 
-	IPN3KE_AFU_PMD_DEBUG("***HQoS Tree(%d)***\n", tm_id);
+	IPN3KE_AFU_PMD_DEBUG("***HQoS Tree(%d)***", tm_id);
 
 	port_n = tm->h.port_node;
-	IPN3KE_AFU_PMD_DEBUG("Port: (%d|%s)\n", port_n->node_index,
+	IPN3KE_AFU_PMD_DEBUG("Port: (%d|%s)", port_n->node_index,
 				str_state[port_n->node_state]);
 
 	vt_nl = &tm->h.port_node->children_node_list;
@@ -1951,7 +1951,6 @@ ipn3ke_tm_show(struct rte_eth_dev *dev)
 					cos_n->node_index,
 					str_state[cos_n->node_state]);
 		}
-		IPN3KE_AFU_PMD_DEBUG("\n");
 	}
 }
 
@@ -1969,14 +1968,13 @@ ipn3ke_tm_show_commmit(struct rte_eth_dev *dev)
 
 	tm_id = tm->tm_id;
 
-	IPN3KE_AFU_PMD_DEBUG("***Commit Tree(%d)***\n", tm_id);
+	IPN3KE_AFU_PMD_DEBUG("***Commit Tree(%d)***", tm_id);
 	n = tm->h.port_commit_node;
 	IPN3KE_AFU_PMD_DEBUG("Port: ");
 	if (n)
 		IPN3KE_AFU_PMD_DEBUG("(%d|%s)",
 			n->node_index,
 			str_state[n->node_state]);
-	IPN3KE_AFU_PMD_DEBUG("\n");
 
 	nl = &tm->h.vt_commit_node_list;
 	IPN3KE_AFU_PMD_DEBUG("VT  : ");
@@ -1985,7 +1983,6 @@ ipn3ke_tm_show_commmit(struct rte_eth_dev *dev)
 				n->node_index,
 				str_state[n->node_state]);
 	}
-	IPN3KE_AFU_PMD_DEBUG("\n");
 
 	nl = &tm->h.cos_commit_node_list;
 	IPN3KE_AFU_PMD_DEBUG("COS : ");
@@ -1994,7 +1991,6 @@ ipn3ke_tm_show_commmit(struct rte_eth_dev *dev)
 				n->node_index,
 				str_state[n->node_state]);
 	}
-	IPN3KE_AFU_PMD_DEBUG("\n");
 }
 
 /* Traffic manager hierarchy commit */

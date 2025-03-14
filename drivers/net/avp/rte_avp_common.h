@@ -8,7 +8,6 @@
 
 #ifdef __KERNEL__
 #include <linux/if.h>
-#define RTE_STD_C11
 #else
 #include <stdint.h>
 #include <rte_common.h>
@@ -76,7 +75,6 @@ struct rte_avp_device_config {
  */
 struct rte_avp_request {
 	uint32_t req_id; /**< Request id */
-	RTE_STD_C11
 	union {
 		uint32_t new_mtu; /**< New MTU */
 		uint8_t if_up;	/**< 1: interface up, 0: interface down */
@@ -102,7 +100,7 @@ struct rte_avp_fifo {
 /*
  * AVP packet buffer header used to define the exchange of packet data.
  */
-struct rte_avp_desc {
+struct __rte_cache_aligned rte_avp_desc {
 	uint64_t pad0;
 	void *pkt_mbuf; /**< Reference to packet mbuf */
 	uint8_t pad1[14];
@@ -116,7 +114,7 @@ struct rte_avp_desc {
 	uint32_t pad3;
 	uint16_t vlan_tci; /**< VLAN Tag Control Identifier (CPU order). */
 	uint32_t pad4;
-} __rte_packed __rte_cache_aligned;
+} __rte_packed;
 
 
 /**{ AVP device features */

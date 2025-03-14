@@ -82,8 +82,8 @@ typedef enum i40e_status_code i40e_status;
 
 #define FIELD_SIZEOF(t, f) (sizeof(((t*)0)->f))
 
-#define DEBUGOUT(S)        PMD_DRV_LOG_RAW(DEBUG, S)
-#define DEBUGOUT1(S, A...) PMD_DRV_LOG_RAW(DEBUG, S, ##A)
+#define DEBUGOUT(S, ...) RTE_LOG(DEBUG, I40E_DRIVER, "%s(): " S, __func__, ## __VA_ARGS__)
+#define DEBUGOUT1 DEBUGOUT
 
 #define DEBUGFUNC(F) DEBUGOUT(F "\n")
 #define DEBUGOUT2 DEBUGOUT1
@@ -94,7 +94,7 @@ typedef enum i40e_status_code i40e_status;
 #define i40e_debug(h, m, s, ...)                                \
 do {                                                            \
 	if (((m) & (h)->debug_mask))                            \
-		PMD_DRV_LOG_RAW(DEBUG, "i40e %02x.%x " s,       \
+		DEBUGOUT("i40e %02x.%x " s,			\
 			(h)->bus.device, (h)->bus.func,         \
 					##__VA_ARGS__);         \
 } while (0)
@@ -215,10 +215,10 @@ struct i40e_spinlock {
 	rte_spinlock_t spinlock;
 };
 
-#define i40e_init_spinlock(_sp) i40e_init_spinlock_d(_sp)
-#define i40e_acquire_spinlock(_sp) i40e_acquire_spinlock_d(_sp)
-#define i40e_release_spinlock(_sp) i40e_release_spinlock_d(_sp)
-#define i40e_destroy_spinlock(_sp) i40e_destroy_spinlock_d(_sp)
+#define i40e_init_spinlock(sp) rte_spinlock_init(&(sp)->spinlock)
+#define i40e_acquire_spinlock(sp) rte_spinlock_lock(&(sp)->spinlock)
+#define i40e_release_spinlock(sp) rte_spinlock_unlock(&(sp)->spinlock)
+#define i40e_destroy_spinlock(sp) RTE_SET_USED(sp)
 
 #define I40E_NTOHS(a) rte_be_to_cpu_16(a)
 #define I40E_NTOHL(a) rte_be_to_cpu_32(a)

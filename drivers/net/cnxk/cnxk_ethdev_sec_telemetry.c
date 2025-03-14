@@ -53,10 +53,10 @@ copy_inb_sa_9k(struct rte_tel_data *d, uint32_t i, void *sa)
 	rte_tel_data_add_dict_string(d, str, strw0);
 
 	snprintf(str, sizeof(str), "insa_esnh_%u", i);
-	rte_tel_data_add_dict_u64(d, str, in_sa->common_sa.seq_t.th);
+	rte_tel_data_add_dict_uint(d, str, in_sa->common_sa.seq_t.th);
 
 	snprintf(str, sizeof(str), "insa_esnl_%u", i);
-	rte_tel_data_add_dict_u64(d, str, in_sa->common_sa.seq_t.tl);
+	rte_tel_data_add_dict_uint(d, str, in_sa->common_sa.seq_t.tl);
 
 	return 0;
 }
@@ -94,15 +94,15 @@ copy_outb_sa_10k(struct rte_tel_data *d, uint32_t i, void *sa)
 		return -ENOMEM;
 	}
 
-	rte_tel_data_start_array(outer_hdr, RTE_TEL_U64_VAL);
+	rte_tel_data_start_array(outer_hdr, RTE_TEL_UINT_VAL);
 
 	for (j = 0; j < RTE_DIM(out_sa->outer_hdr.ipv6.src_addr); j++)
-		rte_tel_data_add_array_u64(outer_hdr,
-					   out_sa->outer_hdr.ipv6.src_addr[j]);
+		rte_tel_data_add_array_uint(outer_hdr,
+					    out_sa->outer_hdr.ipv6.src_addr[j]);
 
 	for (j = 0; j < RTE_DIM(out_sa->outer_hdr.ipv6.dst_addr); j++)
-		rte_tel_data_add_array_u64(outer_hdr,
-					   out_sa->outer_hdr.ipv6.dst_addr[j]);
+		rte_tel_data_add_array_uint(outer_hdr,
+					    out_sa->outer_hdr.ipv6.dst_addr[j]);
 
 	snprintf(str, sizeof(str), "outsa_outer_hdr_%u", i);
 	rte_tel_data_add_dict_container(d, str, outer_hdr, 0);
@@ -167,15 +167,15 @@ copy_inb_sa_10k(struct rte_tel_data *d, uint32_t i, void *sa)
 		return -ENOMEM;
 	}
 
-	rte_tel_data_start_array(outer_hdr, RTE_TEL_U64_VAL);
+	rte_tel_data_start_array(outer_hdr, RTE_TEL_UINT_VAL);
 
 	for (j = 0; j < RTE_DIM(in_sa->outer_hdr.ipv6.src_addr); j++)
-		rte_tel_data_add_array_u64(outer_hdr,
-					   in_sa->outer_hdr.ipv6.src_addr[j]);
+		rte_tel_data_add_array_uint(outer_hdr,
+					    in_sa->outer_hdr.ipv6.src_addr[j]);
 
 	for (j = 0; j < RTE_DIM(in_sa->outer_hdr.ipv6.dst_addr); j++)
-		rte_tel_data_add_array_u64(outer_hdr,
-					   in_sa->outer_hdr.ipv6.dst_addr[j]);
+		rte_tel_data_add_array_uint(outer_hdr,
+					    in_sa->outer_hdr.ipv6.dst_addr[j]);
 
 	snprintf(str, sizeof(str), "insa_outer_hdr_%u", i);
 	rte_tel_data_add_dict_container(d, str, outer_hdr, 0);
@@ -207,17 +207,121 @@ copy_inb_sa_10k(struct rte_tel_data *d, uint32_t i, void *sa)
 	return 0;
 }
 
+/* n_vals is the number of params to be parsed. */
+static int
+parse_params(const char *params, uint32_t *vals, size_t n_vals)
+{
+	char dlim[2] = ",";
+	char *params_args;
+	size_t count = 0;
+	char *token;
+
+	if (vals == NULL || params == NULL || strlen(params) == 0)
+		return -1;
+
+	/* strtok expects char * and param is const char *. Hence on using
+	 * params as "const char *" compiler throws warning.
+	 */
+	params_args = strdup(params);
+	if (params_args == NULL)
+		return -1;
+
+	token = strtok(params_args, dlim);
+	while (token && isdigit(*token) && count < n_vals) {
+		vals[count++] = strtoul(token, NULL, 10);
+		token = strtok(NULL, dlim);
+	}
+
+	free(params_args);
+
+	if (count < n_vals)
+		return -1;
+
+	return 0;
+}
+
+static int
+ethdev_sec_tel_handle_sa_info(const char *cmd __rte_unused, const char *params,
+			      struct rte_tel_data *d)
+{
+	struct cnxk_eth_sec_sess *eth_sec, *tvar;
+	struct rte_eth_dev *eth_dev;
+	struct cnxk_eth_dev *dev;
+	uint32_t port_id, sa_idx;
+	uint32_t vals[2] = {0};
+	uint32_t i;
+	int ret;
+
+	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
+		return -EINVAL;
+
+	if (parse_params(params, vals, RTE_DIM(vals)) < 0)
+		return -EINVAL;
+
+	port_id = vals[0];
+	sa_idx = vals[1];
+
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		plt_err("Invalid port id %u", port_id);
+		return -EINVAL;
+	}
+
+	eth_dev = &rte_eth_devices[port_id];
+	if (!eth_dev) {
+		plt_err("Ethdev not available");
+		return -EINVAL;
+	}
+	dev = cnxk_eth_pmd_priv(eth_dev);
+
+	rte_tel_data_start_dict(d);
+
+	i = 0;
+	if (dev->tx_offloads & RTE_ETH_TX_OFFLOAD_SECURITY) {
+		tvar = NULL;
+		RTE_TAILQ_FOREACH_SAFE(eth_sec, &dev->outb.list, entry, tvar) {
+			if (eth_sec->sa_idx == sa_idx) {
+				rte_tel_data_add_dict_int(d, "outb_sa", 1);
+				if (roc_model_is_cn10k())
+					ret = copy_outb_sa_10k(d, i, eth_sec->sa);
+				else
+					ret = copy_outb_sa_9k(d, i, eth_sec->sa);
+				if (ret < 0)
+					return ret;
+				break;
+			}
+		}
+	}
+
+	i = 0;
+	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY) {
+		tvar = NULL;
+		RTE_TAILQ_FOREACH_SAFE(eth_sec, &dev->inb.list, entry, tvar) {
+			if (eth_sec->sa_idx == sa_idx) {
+				rte_tel_data_add_dict_int(d, "inb_sa", 1);
+				if (roc_model_is_cn10k())
+					ret = copy_inb_sa_10k(d, i, eth_sec->sa);
+				else
+					ret = copy_inb_sa_9k(d, i, eth_sec->sa);
+				if (ret < 0)
+					return ret;
+				break;
+			}
+		}
+	}
+	return 0;
+}
+
 static int
 ethdev_sec_tel_handle_info(const char *cmd __rte_unused, const char *params,
 			   struct rte_tel_data *d)
 {
+	uint32_t min_outb_sa = UINT32_MAX, max_outb_sa = 0;
+	uint32_t min_inb_sa = UINT32_MAX, max_inb_sa = 0;
 	struct cnxk_eth_sec_sess *eth_sec, *tvar;
 	struct rte_eth_dev *eth_dev;
 	struct cnxk_eth_dev *dev;
 	uint16_t port_id;
 	char *end_p;
-	uint32_t i;
-	int ret;
 
 	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
 		return -EINVAL;
@@ -246,32 +350,36 @@ ethdev_sec_tel_handle_info(const char *cmd __rte_unused, const char *params,
 
 	rte_tel_data_add_dict_int(d, "nb_outb_sa", dev->outb.nb_sess);
 
-	i = 0;
+	if (!dev->outb.nb_sess)
+		min_outb_sa = 0;
+
 	if (dev->tx_offloads & RTE_ETH_TX_OFFLOAD_SECURITY) {
 		tvar = NULL;
 		RTE_TAILQ_FOREACH_SAFE(eth_sec, &dev->outb.list, entry, tvar) {
-			if (roc_model_is_cn10k())
-				ret = copy_outb_sa_10k(d, i++, eth_sec->sa);
-			else
-				ret = copy_outb_sa_9k(d, i++, eth_sec->sa);
-			if (ret < 0)
-				return ret;
+			if (eth_sec->sa_idx < min_outb_sa)
+				min_outb_sa = eth_sec->sa_idx;
+			if (eth_sec->sa_idx > max_outb_sa)
+				max_outb_sa = eth_sec->sa_idx;
 		}
+		rte_tel_data_add_dict_int(d, "min_outb_sa", min_outb_sa);
+		rte_tel_data_add_dict_int(d, "max_outb_sa", max_outb_sa);
 	}
 
 	rte_tel_data_add_dict_int(d, "nb_inb_sa", dev->inb.nb_sess);
 
-	i = 0;
+	if (!dev->inb.nb_sess)
+		min_inb_sa = 0;
+
 	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY) {
 		tvar = NULL;
 		RTE_TAILQ_FOREACH_SAFE(eth_sec, &dev->inb.list, entry, tvar) {
-			if (roc_model_is_cn10k())
-				ret = copy_inb_sa_10k(d, i++, eth_sec->sa);
-			else
-				ret = copy_inb_sa_9k(d, i++, eth_sec->sa);
-			if (ret < 0)
-				return ret;
+			if (eth_sec->sa_idx < min_inb_sa)
+				min_inb_sa = eth_sec->sa_idx;
+			if (eth_sec->sa_idx > max_inb_sa)
+				max_inb_sa = eth_sec->sa_idx;
 		}
+		rte_tel_data_add_dict_int(d, "min_inb_sa", min_inb_sa);
+		rte_tel_data_add_dict_int(d, "max_inb_sa", max_inb_sa);
 	}
 
 	return 0;
@@ -281,5 +389,8 @@ RTE_INIT(cnxk_ipsec_init_telemetry)
 {
 	rte_telemetry_register_cmd("/cnxk/ipsec/info",
 				   ethdev_sec_tel_handle_info,
-				   "Returns ipsec info. Parameters: port id");
+				   "Returns number of SA's and Max and Min SA. Parameters: port id");
+	rte_telemetry_register_cmd("/cnxk/ipsec/sa_info",
+				   ethdev_sec_tel_handle_sa_info,
+				   "Returns ipsec info. Parameters: port id & sa_idx");
 }

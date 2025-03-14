@@ -85,9 +85,24 @@ __rte_node_register(const struct rte_node_register *reg)
 		goto fail;
 	}
 
+	if (reg->xstats) {
+		sz = sizeof(*reg->xstats) + (reg->xstats->nb_xstats * RTE_NODE_XSTAT_DESC_SIZE);
+		node->xstats = calloc(1, sz);
+		if (node->xstats == NULL) {
+			rte_errno = ENOMEM;
+			goto free;
+		}
+
+		node->xstats->nb_xstats = reg->xstats->nb_xstats;
+		for (i = 0; i < reg->xstats->nb_xstats; i++)
+			if (rte_strscpy(node->xstats->xstat_desc[i], reg->xstats->xstat_desc[i],
+					RTE_NODE_XSTAT_DESC_SIZE) < 0)
+				goto free_xstat;
+	}
+
 	/* Initialize the node */
 	if (rte_strscpy(node->name, reg->name, RTE_NODE_NAMESIZE) < 0)
-		goto free;
+		goto free_xstat;
 	node->flags = reg->flags;
 	node->process = reg->process;
 	node->init = reg->init;
@@ -97,9 +112,10 @@ __rte_node_register(const struct rte_node_register *reg)
 	for (i = 0; i < reg->nb_edges; i++) {
 		if (rte_strscpy(node->next_nodes[i], reg->next_nodes[i],
 				RTE_NODE_NAMESIZE) < 0)
-			goto free;
+			goto free_xstat;
 	}
 
+	node->lcore_id = RTE_MAX_LCORE;
 	node->id = node_id++;
 
 	/* Add the node at tail */
@@ -107,35 +123,13 @@ __rte_node_register(const struct rte_node_register *reg)
 	graph_spinlock_unlock();
 
 	return node->id;
+free_xstat:
+	free(node->xstats);
 free:
 	free(node);
 fail:
 	graph_spinlock_unlock();
 	return RTE_NODE_ID_INVALID;
-}
-
-static int
-clone_name(struct rte_node_register *reg, struct node *node, const char *name)
-{
-	ssize_t sz, rc;
-
-#define SZ RTE_NODE_NAMESIZE
-	rc = rte_strscpy(reg->name, node->name, SZ);
-	if (rc < 0)
-		goto fail;
-	sz = rc;
-	rc = rte_strscpy(reg->name + sz, "-", RTE_MAX((int16_t)(SZ - sz), 0));
-	if (rc < 0)
-		goto fail;
-	sz += rc;
-	sz = rte_strscpy(reg->name + sz, name, RTE_MAX((int16_t)(SZ - sz), 0));
-	if (sz < 0)
-		goto fail;
-
-	return 0;
-fail:
-	rte_errno = E2BIG;
-	return -rte_errno;
 }
 
 static rte_node_t
@@ -157,6 +151,20 @@ node_clone(struct node *node, const char *name)
 		goto fail;
 	}
 
+	if (node->xstats) {
+		reg->xstats = calloc(1, sizeof(*node->xstats) +
+				     (node->xstats->nb_xstats * RTE_NODE_XSTAT_DESC_SIZE));
+		if (reg->xstats == NULL) {
+			rte_errno = ENOMEM;
+			goto free;
+		}
+
+		for (i = 0; i < node->xstats->nb_xstats; i++)
+			if (rte_strscpy(reg->xstats->xstat_desc[i], node->xstats->xstat_desc[i],
+					RTE_NODE_XSTAT_DESC_SIZE) < 0)
+				goto free_xstat;
+	}
+
 	/* Clone the source node */
 	reg->flags = node->flags;
 	reg->process = node->process;
@@ -169,10 +177,12 @@ node_clone(struct node *node, const char *name)
 		reg->next_nodes[i] = node->next_nodes[i];
 
 	/* Naming ceremony of the new node. name is node->name + "-" + name */
-	if (clone_name(reg, node, name))
-		goto free;
+	if (clone_name(reg->name, node->name, name))
+		goto free_xstat;
 
 	rc = __rte_node_register(reg);
+free_xstat:
+	free(reg->xstats);
 free:
 	free(reg);
 fail:
@@ -300,16 +310,16 @@ rte_node_edge_shrink(rte_node_t id, rte_edge_t size)
 		if (node->id == id) {
 			if (node->nb_edges < size) {
 				rte_errno = E2BIG;
-				goto fail;
+			} else {
+				node->nb_edges = size;
+				rc = size;
 			}
-			node->nb_edges = size;
-			rc = size;
 			break;
 		}
 	}
 
-fail:
 	graph_spinlock_unlock();
+fail:
 	return rc;
 }
 

@@ -20,13 +20,6 @@
 #include "base/i40e_type.h"
 #include "base/virtchnl.h"
 
-/**
- * _i=0...143,
- * counters 0-127 are for the 128 VFs,
- * counters 128-143 are for the 16 PFs
- */
-#define I40E_GL_RXERR1_H(_i)	(0x00318004 + ((_i) * 8))
-
 #define I40E_AQ_LEN               32
 #define I40E_AQ_BUF_SZ            4096
 /* Number of queues per TC should be one of 1, 2, 4, 8, 16, 32, 64 */
@@ -48,6 +41,9 @@
 #define I40E_MAX_VF               128
 /*flag of no loopback*/
 #define I40E_AQ_LB_MODE_NONE	  0x0
+#define I40E_AQ_LB_MODE_EN	  0x01
+#define I40E_AQ_LB_MAC		  0x01
+#define I40E_AQ_LB_MAC_LOCAL_X722 0x04
 /*
  * vlan_id is a 12 bit number.
  * The VFTA array is actually a 4096 bit array, 128 of 32bit elements.
@@ -275,6 +271,7 @@ enum i40e_flxpld_layer_idx {
 #define I40E_DEFAULT_DCB_APP_PRIO   3
 
 #define I40E_FDIR_PRG_PKT_CNT       128
+#define I40E_FDIR_ID_BIT_SHIFT	    13
 
 /*
  * Struct to store flow created.
@@ -1105,6 +1102,10 @@ struct i40e_vf_msg_cfg {
 	uint32_t ignore_second;
 };
 
+struct i40e_mbuf_stats {
+	uint64_t tx_pkt_errors;
+};
+
 /*
  * Structure to store private data specific for PF instance.
  */
@@ -1119,8 +1120,7 @@ struct i40e_pf {
 
 	struct i40e_hw_port_stats stats_offset;
 	struct i40e_hw_port_stats stats;
-	u64 rx_err1;	/* rxerr1 */
-	u64 rx_err1_offset;
+	struct i40e_mbuf_stats mbuf_stats;
 
 	/* internal packet statistics, it should be excluded from the total */
 	struct i40e_eth_stats internal_stats_offset;
@@ -1221,6 +1221,11 @@ struct i40e_vsi_vlan_pvid_info {
 #define I40E_MAX_PKT_TYPE  256
 #define I40E_FLOW_TYPE_MAX 64
 
+#define I40E_MBUF_CHECK_F_TX_MBUF        (1ULL << 0)
+#define I40E_MBUF_CHECK_F_TX_SIZE        (1ULL << 1)
+#define I40E_MBUF_CHECK_F_TX_SEGMENT     (1ULL << 2)
+#define I40E_MBUF_CHECK_F_TX_OFFLOAD     (1ULL << 3)
+
 /*
  * Structure to store private data for each PF/VF instance.
  */
@@ -1237,15 +1242,19 @@ struct i40e_adapter {
 	bool tx_simple_allowed;
 	bool tx_vec_allowed;
 
+	uint64_t mbuf_check; /* mbuf check flags. */
+	uint16_t max_pkt_len; /* Maximum packet length */
+	eth_tx_burst_t tx_pkt_burst;
+
 	/* For PTP */
 	struct rte_timecounter systime_tc;
 	struct rte_timecounter rx_tstamp_tc;
 	struct rte_timecounter tx_tstamp_tc;
 
 	/* ptype mapping table */
-	uint32_t ptype_tbl[I40E_MAX_PKT_TYPE] __rte_cache_min_aligned;
+	alignas(RTE_CACHE_LINE_MIN_SIZE) uint32_t ptype_tbl[I40E_MAX_PKT_TYPE];
 	/* flow type to pctype mapping table */
-	uint64_t pctypes_tbl[I40E_FLOW_TYPE_MAX] __rte_cache_min_aligned;
+	alignas(RTE_CACHE_LINE_MIN_SIZE) uint64_t pctypes_tbl[I40E_FLOW_TYPE_MAX];
 	uint64_t flow_types_mask;
 	uint64_t pctypes_mask;
 
@@ -1352,6 +1361,8 @@ void i40e_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	struct rte_eth_rxq_info *qinfo);
 void i40e_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	struct rte_eth_txq_info *qinfo);
+void i40e_recycle_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
+	struct rte_eth_recycle_rxq_info *recycle_rxq_info);
 int i40e_rx_burst_mode_get(struct rte_eth_dev *dev, uint16_t queue_id,
 			   struct rte_eth_burst_mode *mode);
 int i40e_tx_burst_mode_get(struct rte_eth_dev *dev, uint16_t queue_id,
@@ -1427,6 +1438,7 @@ int i40e_pf_calc_configured_queues_num(struct i40e_pf *pf);
 int i40e_pf_reset_rss_reta(struct i40e_pf *pf);
 int i40e_pf_reset_rss_key(struct i40e_pf *pf);
 int i40e_pf_config_rss(struct i40e_pf *pf);
+int i40e_pf_set_source_prune(struct i40e_pf *pf, int on);
 int i40e_set_rss_key(struct i40e_vsi *vsi, uint8_t *key, uint8_t key_len);
 int i40e_set_rss_lut(struct i40e_vsi *vsi, uint8_t *lut, uint16_t lut_size);
 int i40e_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params);
@@ -1488,7 +1500,7 @@ i40e_align_floor(int n)
 {
 	if (n == 0)
 		return 0;
-	return 1 << (sizeof(n) * CHAR_BIT - 1 - __builtin_clz(n));
+	return 1 << (sizeof(n) * CHAR_BIT - 1 - rte_clz32(n));
 }
 
 static inline uint16_t
@@ -1497,7 +1509,7 @@ i40e_calc_itr_interval(bool is_pf, bool is_multi_drv)
 	uint16_t interval = 0;
 
 	if (is_multi_drv) {
-		interval = I40E_QUEUE_ITR_INTERVAL_MAX;
+		interval = I40E_QUEUE_ITR_INTERVAL_DEFAULT;
 	} else {
 		if (is_pf)
 			interval = I40E_QUEUE_ITR_INTERVAL_DEFAULT;

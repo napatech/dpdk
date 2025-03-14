@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2023 Intel Corporation
  */
 
 #include "idpf_controlq.h"
@@ -9,11 +9,10 @@
  * @cq: pointer to the specific control queue
  * @q_create_info: structs containing info for each queue to be initialized
  */
-static void
-idpf_ctlq_setup_regs(struct idpf_ctlq_info *cq,
-		     struct idpf_ctlq_create_info *q_create_info)
+static void idpf_ctlq_setup_regs(struct idpf_ctlq_info *cq,
+				 struct idpf_ctlq_create_info *q_create_info)
 {
-	/* set head and tail registers in our local struct */
+	/* set control queue registers in our local struct */
 	cq->reg.head = q_create_info->reg.head;
 	cq->reg.tail = q_create_info->reg.tail;
 	cq->reg.len = q_create_info->reg.len;
@@ -62,7 +61,7 @@ static void idpf_ctlq_init_regs(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
  */
 static void idpf_ctlq_init_rxq_bufs(struct idpf_ctlq_info *cq)
 {
-	int i = 0;
+	int i;
 
 	for (i = 0; i < cq->ring_size; i++) {
 		struct idpf_ctlq_desc *desc = IDPF_CTLQ_DESC(cq, i);
@@ -75,7 +74,7 @@ static void idpf_ctlq_init_rxq_bufs(struct idpf_ctlq_info *cq)
 		desc->flags =
 			CPU_TO_LE16(IDPF_CTLQ_FLAG_BUF | IDPF_CTLQ_FLAG_RD);
 		desc->opcode = 0;
-		desc->datalen = (__le16)CPU_TO_LE16(bi->size);
+		desc->datalen = CPU_TO_LE16(bi->size);
 		desc->ret_val = 0;
 		desc->cookie_high = 0;
 		desc->cookie_low = 0;
@@ -99,9 +98,6 @@ static void idpf_ctlq_shutdown(struct idpf_hw *hw, struct idpf_ctlq_info *cq)
 {
 	idpf_acquire_lock(&cq->cq_lock);
 
-	if (!cq->ring_size)
-		goto shutdown_sq_out;
-
 #ifdef SIMICS_BUILD
 	wr32(hw, cq->reg.head, 0);
 	wr32(hw, cq->reg.tail, 0);
@@ -116,7 +112,6 @@ static void idpf_ctlq_shutdown(struct idpf_hw *hw, struct idpf_ctlq_info *cq)
 	/* Set ring_size to 0 to indicate uninitialized queue */
 	cq->ring_size = 0;
 
-shutdown_sq_out:
 	idpf_release_lock(&cq->cq_lock);
 	idpf_destroy_lock(&cq->cq_lock);
 }
@@ -137,77 +132,76 @@ int idpf_ctlq_add(struct idpf_hw *hw,
 		  struct idpf_ctlq_create_info *qinfo,
 		  struct idpf_ctlq_info **cq_out)
 {
+	struct idpf_ctlq_info *cq;
 	bool is_rxq = false;
-	int status = 0;
+	int err;
 
 	if (!qinfo->len || !qinfo->buf_size ||
 	    qinfo->len > IDPF_CTLQ_MAX_RING_SIZE ||
 	    qinfo->buf_size > IDPF_CTLQ_MAX_BUF_LEN)
 		return -EINVAL;
 
-	*cq_out = (struct idpf_ctlq_info *)
-		idpf_calloc(hw, 1, sizeof(struct idpf_ctlq_info));
-	if (!(*cq_out))
+	cq = (struct idpf_ctlq_info *)
+	     idpf_calloc(hw, 1, sizeof(struct idpf_ctlq_info));
+	if (!cq)
 		return -ENOMEM;
 
-	(*cq_out)->cq_type = qinfo->type;
-	(*cq_out)->q_id = qinfo->id;
-	(*cq_out)->buf_size = qinfo->buf_size;
-	(*cq_out)->ring_size = qinfo->len;
+	cq->cq_type = qinfo->type;
+	cq->q_id = qinfo->id;
+	cq->buf_size = qinfo->buf_size;
+	cq->ring_size = qinfo->len;
 
-	(*cq_out)->next_to_use = 0;
-	(*cq_out)->next_to_clean = 0;
-	(*cq_out)->next_to_post = (*cq_out)->ring_size - 1;
+	cq->next_to_use = 0;
+	cq->next_to_clean = 0;
+	cq->next_to_post = cq->ring_size - 1;
 
 	switch (qinfo->type) {
 	case IDPF_CTLQ_TYPE_MAILBOX_RX:
 		is_rxq = true;
-#ifdef __KERNEL__
-		fallthrough;
-#else
 		/* fallthrough */
-#endif /* __KERNEL__ */
 	case IDPF_CTLQ_TYPE_MAILBOX_TX:
-		status = idpf_ctlq_alloc_ring_res(hw, *cq_out);
+		err = idpf_ctlq_alloc_ring_res(hw, cq);
 		break;
 	default:
-		status = -EINVAL;
+		err = -EINVAL;
 		break;
 	}
 
-	if (status)
+	if (err)
 		goto init_free_q;
 
 	if (is_rxq) {
-		idpf_ctlq_init_rxq_bufs(*cq_out);
+		idpf_ctlq_init_rxq_bufs(cq);
 	} else {
 		/* Allocate the array of msg pointers for TX queues */
-		(*cq_out)->bi.tx_msg = (struct idpf_ctlq_msg **)
+		cq->bi.tx_msg = (struct idpf_ctlq_msg **)
 			idpf_calloc(hw, qinfo->len,
 				    sizeof(struct idpf_ctlq_msg *));
-		if (!(*cq_out)->bi.tx_msg) {
-			status = -ENOMEM;
+		if (!cq->bi.tx_msg) {
+			err = -ENOMEM;
 			goto init_dealloc_q_mem;
 		}
 	}
 
-	idpf_ctlq_setup_regs(*cq_out, qinfo);
+	idpf_ctlq_setup_regs(cq, qinfo);
 
-	idpf_ctlq_init_regs(hw, *cq_out, is_rxq);
+	idpf_ctlq_init_regs(hw, cq, is_rxq);
 
-	idpf_init_lock(&(*cq_out)->cq_lock);
+	idpf_init_lock(&(cq->cq_lock));
 
-	LIST_INSERT_HEAD(&hw->cq_list_head, (*cq_out), cq_list);
+	LIST_INSERT_HEAD(&hw->cq_list_head, cq, cq_list);
 
-	return status;
+	*cq_out = cq;
+	return 0;
 
 init_dealloc_q_mem:
 	/* free ring buffers and the ring itself */
-	idpf_ctlq_dealloc_ring_res(hw, *cq_out);
+	idpf_ctlq_dealloc_ring_res(hw, cq);
 init_free_q:
-	idpf_free(hw, *cq_out);
+	idpf_free(hw, cq);
+	cq = NULL;
 
-	return status;
+	return err;
 }
 
 /**
@@ -238,43 +232,40 @@ int idpf_ctlq_init(struct idpf_hw *hw, u8 num_q,
 		   struct idpf_ctlq_create_info *q_info)
 {
 	struct idpf_ctlq_info *cq = NULL, *tmp = NULL;
-	int ret_code = 0;
-	int i = 0;
+	int err;
+	int i;
 
 	LIST_INIT(&hw->cq_list_head);
 
 	for (i = 0; i < num_q; i++) {
 		struct idpf_ctlq_create_info *qinfo = q_info + i;
 
-		ret_code = idpf_ctlq_add(hw, qinfo, &cq);
-		if (ret_code)
+		err = idpf_ctlq_add(hw, qinfo, &cq);
+		if (err)
 			goto init_destroy_qs;
 	}
 
-	return ret_code;
+	return 0;
 
 init_destroy_qs:
 	LIST_FOR_EACH_ENTRY_SAFE(cq, tmp, &hw->cq_list_head,
 				 idpf_ctlq_info, cq_list)
 		idpf_ctlq_remove(hw, cq);
 
-	return ret_code;
+	return err;
 }
 
 /**
  * idpf_ctlq_deinit - destroy all control queues
  * @hw: pointer to hw struct
  */
-int idpf_ctlq_deinit(struct idpf_hw *hw)
+void idpf_ctlq_deinit(struct idpf_hw *hw)
 {
 	struct idpf_ctlq_info *cq = NULL, *tmp = NULL;
-	int ret_code = 0;
 
 	LIST_FOR_EACH_ENTRY_SAFE(cq, tmp, &hw->cq_list_head,
 				 idpf_ctlq_info, cq_list)
 		idpf_ctlq_remove(hw, cq);
-
-	return ret_code;
 }
 
 /**
@@ -288,14 +279,16 @@ int idpf_ctlq_deinit(struct idpf_hw *hw)
  * send routine via the q_msg struct / control queue specific data struct.
  * The control queue will hold a reference to each send message until
  * the completion for that message has been cleaned.
+ * Since all q_msgs being sent are store in native endianness, these values
+ * must be converted to LE before being written to the hw descriptor.
  */
 int idpf_ctlq_send(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
 		   u16 num_q_msg, struct idpf_ctlq_msg q_msg[])
 {
 	struct idpf_ctlq_desc *desc;
-	int num_desc_avail = 0;
-	int status = 0;
-	int i = 0;
+	int num_desc_avail;
+	int err = 0;
+	int i;
 
 	if (!cq || !cq->ring_size)
 		return -ENOBUFS;
@@ -305,24 +298,20 @@ int idpf_ctlq_send(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
 	/* Ensure there are enough descriptors to send all messages */
 	num_desc_avail = IDPF_CTLQ_DESC_UNUSED(cq);
 	if (num_desc_avail == 0 || num_desc_avail < num_q_msg) {
-		status = -ENOSPC;
-		goto sq_send_command_out;
+		err = -ENOSPC;
+		goto err_unlock;
 	}
 
 	for (i = 0; i < num_q_msg; i++) {
 		struct idpf_ctlq_msg *msg = &q_msg[i];
-		u64 msg_cookie;
 
 		desc = IDPF_CTLQ_DESC(cq, cq->next_to_use);
 
 		desc->opcode = CPU_TO_LE16(msg->opcode);
 		desc->pfid_vfid = CPU_TO_LE16(msg->func_id);
 
-		msg_cookie = *(u64 *)&msg->cookie;
-		desc->cookie_high =
-			CPU_TO_LE32(IDPF_HI_DWORD(msg_cookie));
-		desc->cookie_low =
-			CPU_TO_LE32(IDPF_LO_DWORD(msg_cookie));
+		desc->cookie_high = CPU_TO_LE32(msg->cookie.mbx.chnl_opcode);
+		desc->cookie_low = CPU_TO_LE32(msg->cookie.mbx.chnl_retval);
 
 		desc->flags = CPU_TO_LE16((msg->host_id & IDPF_HOST_ID_MASK) <<
 					  IDPF_CTLQ_FLAG_HOST_ID_S);
@@ -381,10 +370,103 @@ int idpf_ctlq_send(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
 
 	wr32(hw, cq->reg.tail, cq->next_to_use);
 
-sq_send_command_out:
+err_unlock:
 	idpf_release_lock(&cq->cq_lock);
 
-	return status;
+	return err;
+}
+
+/**
+ * __idpf_ctlq_clean_sq - helper function to reclaim descriptors on HW write
+ * back for the requested queue
+ * @cq: pointer to the specific Control queue
+ * @clean_count: (input|output) number of descriptors to clean as input, and
+ * number of descriptors actually cleaned as output
+ * @msg_status: (output) pointer to msg pointer array to be populated; needs
+ * to be allocated by caller
+ * @force: (input) clean descriptors which were not done yet. Use with caution
+ * in kernel mode only
+ *
+ * Returns an array of message pointers associated with the cleaned
+ * descriptors. The pointers are to the original ctlq_msgs sent on the cleaned
+ * descriptors.  The status will be returned for each; any messages that failed
+ * to send will have a non-zero status. The caller is expected to free original
+ * ctlq_msgs and free or reuse the DMA buffers.
+ */
+static int __idpf_ctlq_clean_sq(struct idpf_ctlq_info *cq, u16 *clean_count,
+				struct idpf_ctlq_msg *msg_status[], bool force)
+{
+	struct idpf_ctlq_desc *desc;
+	u16 i, num_to_clean;
+	u16 ntc, desc_err;
+
+	if (!cq || !cq->ring_size)
+		return -ENOBUFS;
+
+	if (*clean_count == 0)
+		return 0;
+	if (*clean_count > cq->ring_size)
+		return -EINVAL;
+
+	idpf_acquire_lock(&cq->cq_lock);
+
+	ntc = cq->next_to_clean;
+
+	num_to_clean = *clean_count;
+
+	for (i = 0; i < num_to_clean; i++) {
+		/* Fetch next descriptor and check if marked as done */
+		desc = IDPF_CTLQ_DESC(cq, ntc);
+		if (!force && !(LE16_TO_CPU(desc->flags) & IDPF_CTLQ_FLAG_DD))
+			break;
+
+		/* strip off FW internal code */
+		desc_err = LE16_TO_CPU(desc->ret_val) & 0xff;
+
+		msg_status[i] = cq->bi.tx_msg[ntc];
+		if (!msg_status[i])
+			break;
+		msg_status[i]->status = desc_err;
+
+		cq->bi.tx_msg[ntc] = NULL;
+
+		/* Zero out any stale data */
+		idpf_memset(desc, 0, sizeof(*desc), IDPF_DMA_MEM);
+
+		ntc++;
+		if (ntc == cq->ring_size)
+			ntc = 0;
+	}
+
+	cq->next_to_clean = ntc;
+
+	idpf_release_lock(&cq->cq_lock);
+
+	/* Return number of descriptors actually cleaned */
+	*clean_count = i;
+
+	return 0;
+}
+
+/**
+ * idpf_ctlq_clean_sq_force - reclaim all descriptors on HW write back for the
+ * requested queue. Use only in kernel mode.
+ * @cq: pointer to the specific Control queue
+ * @clean_count: (input|output) number of descriptors to clean as input, and
+ * number of descriptors actually cleaned as output
+ * @msg_status: (output) pointer to msg pointer array to be populated; needs
+ * to be allocated by caller
+ *
+ * Returns an array of message pointers associated with the cleaned
+ * descriptors. The pointers are to the original ctlq_msgs sent on the cleaned
+ * descriptors.  The status will be returned for each; any messages that failed
+ * to send will have a non-zero status. The caller is expected to free original
+ * ctlq_msgs and free or reuse the DMA buffers.
+ */
+int idpf_ctlq_clean_sq_force(struct idpf_ctlq_info *cq, u16 *clean_count,
+			     struct idpf_ctlq_msg *msg_status[])
+{
+	return __idpf_ctlq_clean_sq(cq, clean_count, msg_status, true);
 }
 
 /**
@@ -405,58 +487,7 @@ sq_send_command_out:
 int idpf_ctlq_clean_sq(struct idpf_ctlq_info *cq, u16 *clean_count,
 		       struct idpf_ctlq_msg *msg_status[])
 {
-	struct idpf_ctlq_desc *desc;
-	u16 i = 0, num_to_clean;
-	u16 ntc, desc_err;
-	int ret = 0;
-
-	if (!cq || !cq->ring_size)
-		return -ENOBUFS;
-
-	if (*clean_count == 0)
-		return 0;
-	if (*clean_count > cq->ring_size)
-		return -EINVAL;
-
-	idpf_acquire_lock(&cq->cq_lock);
-
-	ntc = cq->next_to_clean;
-
-	num_to_clean = *clean_count;
-
-	for (i = 0; i < num_to_clean; i++) {
-		/* Fetch next descriptor and check if marked as done */
-		desc = IDPF_CTLQ_DESC(cq, ntc);
-		if (!(LE16_TO_CPU(desc->flags) & IDPF_CTLQ_FLAG_DD))
-			break;
-
-		desc_err = LE16_TO_CPU(desc->ret_val);
-		if (desc_err) {
-			/* strip off FW internal code */
-			desc_err &= 0xff;
-		}
-
-		msg_status[i] = cq->bi.tx_msg[ntc];
-		msg_status[i]->status = desc_err;
-
-		cq->bi.tx_msg[ntc] = NULL;
-
-		/* Zero out any stale data */
-		idpf_memset(desc, 0, sizeof(*desc), IDPF_DMA_MEM);
-
-		ntc++;
-		if (ntc == cq->ring_size)
-			ntc = 0;
-	}
-
-	cq->next_to_clean = ntc;
-
-	idpf_release_lock(&cq->cq_lock);
-
-	/* Return number of descriptors actually cleaned */
-	*clean_count = i;
-
-	return ret;
+	return __idpf_ctlq_clean_sq(cq, clean_count, msg_status, false);
 }
 
 /**
@@ -481,7 +512,6 @@ int idpf_ctlq_post_rx_buffs(struct idpf_hw *hw, struct idpf_ctlq_info *cq,
 	u16 ntp = cq->next_to_post;
 	bool buffs_avail = false;
 	u16 tbp = ntp + 1;
-	int status = 0;
 	int i = 0;
 
 	if (*buff_count > cq->ring_size)
@@ -574,6 +604,8 @@ post_buffs_out:
 			/* Wrap to end of end ring since current ntp is 0 */
 			cq->next_to_post = cq->ring_size - 1;
 
+		idpf_wmb();
+
 		wr32(hw, cq->reg.tail, cq->next_to_post);
 	}
 
@@ -582,7 +614,7 @@ post_buffs_out:
 	/* return the number of buffers that were not posted */
 	*buff_count = *buff_count - i;
 
-	return status;
+	return 0;
 }
 
 /**
@@ -601,8 +633,8 @@ int idpf_ctlq_recv(struct idpf_ctlq_info *cq, u16 *num_q_msg,
 {
 	u16 num_to_clean, ntc, ret_val, flags;
 	struct idpf_ctlq_desc *desc;
-	int ret_code = 0;
-	u16 i = 0;
+	int err = 0;
+	u16 i;
 
 	if (!cq || !cq->ring_size)
 		return -ENOBUFS;
@@ -620,8 +652,6 @@ int idpf_ctlq_recv(struct idpf_ctlq_info *cq, u16 *num_q_msg,
 	num_to_clean = *num_q_msg;
 
 	for (i = 0; i < num_to_clean; i++) {
-		u64 msg_cookie;
-
 		/* Fetch next descriptor and check if marked as done */
 		desc = IDPF_CTLQ_DESC(cq, ntc);
 		flags = LE16_TO_CPU(desc->flags);
@@ -637,12 +667,10 @@ int idpf_ctlq_recv(struct idpf_ctlq_info *cq, u16 *num_q_msg,
 				      IDPF_CTLQ_FLAG_FTYPE_S;
 
 		if (flags & IDPF_CTLQ_FLAG_ERR)
-			ret_code = -EBADMSG;
+			err = -EBADMSG;
 
-		msg_cookie = (u64)LE32_TO_CPU(desc->cookie_high) << 32;
-		msg_cookie |= (u64)LE32_TO_CPU(desc->cookie_low);
-		idpf_memcpy(&q_msg[i].cookie, &msg_cookie, sizeof(u64),
-			    IDPF_NONDMA_TO_NONDMA);
+		q_msg[i].cookie.mbx.chnl_opcode = LE32_TO_CPU(desc->cookie_high);
+		q_msg[i].cookie.mbx.chnl_retval = LE32_TO_CPU(desc->cookie_low);
 
 		q_msg[i].opcode = LE16_TO_CPU(desc->opcode);
 		q_msg[i].data_len = LE16_TO_CPU(desc->datalen);
@@ -685,7 +713,7 @@ int idpf_ctlq_recv(struct idpf_ctlq_info *cq, u16 *num_q_msg,
 
 	*num_q_msg = i;
 	if (*num_q_msg == 0)
-		ret_code = -ENOMSG;
+		err = -ENOMSG;
 
-	return ret_code;
+	return err;
 }

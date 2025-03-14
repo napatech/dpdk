@@ -10,17 +10,6 @@
 #include <rte_cycles.h>
 #include <rte_hexdump.h>
 #include <rte_ip.h>
-
-#ifdef RTE_EXEC_ENV_WINDOWS
-static int
-test_ipfrag(void)
-{
-	printf("ipfrag not supported on Windows, skipping test\n");
-	return TEST_SKIPPED;
-}
-
-#else
-
 #include <rte_ip_frag.h>
 #include <rte_mbuf.h>
 #include <rte_random.h>
@@ -249,8 +238,8 @@ v6_allocate_packet_of(struct rte_mbuf *b, int fill, size_t s, uint8_t ttl,
 	hdr->proto = proto;
 	hdr->hop_limits = ttl;
 
-	memset(hdr->src_addr, 0x08, sizeof(hdr->src_addr));
-	memset(hdr->dst_addr, 0x04, sizeof(hdr->src_addr));
+	memset(&hdr->src_addr, 0x08, sizeof(hdr->src_addr));
+	memset(&hdr->dst_addr, 0x04, sizeof(hdr->src_addr));
 }
 
 static inline void
@@ -520,6 +509,5 @@ test_ipfrag(void)
 	return unit_test_suite_runner(&ipfrag_testsuite);
 }
 
-#endif /* !RTE_EXEC_ENV_WINDOWS */
 
-REGISTER_TEST_COMMAND(ipfrag_autotest, test_ipfrag);
+REGISTER_FAST_TEST(ipfrag_autotest, false, true, test_ipfrag);

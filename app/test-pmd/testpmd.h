@@ -34,6 +34,7 @@
 #define RTE_PORT_HANDLING       (uint16_t)3
 
 extern uint8_t cl_quit;
+extern volatile uint8_t f_quit;
 
 /*
  * It is used to allocate the memory for hash key.
@@ -83,7 +84,7 @@ extern uint8_t cl_quit;
 /* Maximum number of pools supported per Rx queue */
 #define MAX_MEMPOOL 8
 
-typedef uint8_t  lcoreid_t;
+typedef uint32_t lcoreid_t;
 typedef uint16_t portid_t;
 typedef uint16_t queueid_t;
 typedef uint16_t streamid_t;
@@ -109,11 +110,31 @@ enum {
 enum {
 	QUEUE_JOB_TYPE_FLOW_CREATE,
 	QUEUE_JOB_TYPE_FLOW_DESTROY,
+	QUEUE_JOB_TYPE_FLOW_TRANSFER,
+	QUEUE_JOB_TYPE_FLOW_UPDATE,
 	QUEUE_JOB_TYPE_ACTION_CREATE,
 	QUEUE_JOB_TYPE_ACTION_DESTROY,
 	QUEUE_JOB_TYPE_ACTION_UPDATE,
 	QUEUE_JOB_TYPE_ACTION_QUERY,
 };
+
+enum noisy_fwd_mode {
+	NOISY_FWD_MODE_IO,
+	NOISY_FWD_MODE_MAC,
+	NOISY_FWD_MODE_MACSWAP,
+	NOISY_FWD_MODE_5TSWAP,
+	NOISY_FWD_MODE_MAX,
+};
+
+/**
+ * Command line arguments parser sets `hairpin_multiport_mode` to True
+ * if explicit hairpin map configuration mode was used.
+ */
+extern bool hairpin_multiport_mode;
+
+/** Hairpin maps list. */
+struct hairpin_map;
+extern void hairpin_add_multiport_map(struct hairpin_map *map);
 
 /**
  * The data structure associated with RX and TX packet burst statistics
@@ -174,10 +195,12 @@ struct fwd_stream {
 #ifdef RTE_LIB_GRO
 	unsigned int gro_times;	/**< GRO operation times */
 #endif
-	uint64_t     core_cycles; /**< used for RX and TX processing */
+	uint64_t busy_cycles; /**< used with --record-core-cycles */
 	struct pkt_burst_stats rx_burst_stats;
 	struct pkt_burst_stats tx_burst_stats;
 	struct fwd_lcore *lcore; /**< Lcore being scheduled. */
+	/**< Rx queue information for recycling mbufs */
+	struct rte_eth_recycle_rxq_info recycle_rxq_info;
 };
 
 /**
@@ -207,7 +230,7 @@ struct port_table {
 	uint32_t id; /**< Table ID. */
 	uint32_t nb_pattern_templates; /**< Number of pattern templates. */
 	uint32_t nb_actions_templates; /**< Number of actions templates. */
-	struct rte_flow_attr flow_attr; /**< Flow attributes. */
+	struct rte_flow_template_table_attr attr; /**< Table attributes. */
 	struct rte_flow_template_table *table; /**< PMD opaque template object */
 };
 
@@ -215,7 +238,9 @@ struct port_table {
 struct port_flow {
 	struct port_flow *next; /**< Next flow in list. */
 	struct port_flow *tmp; /**< Temporary linking. */
-	uint32_t id; /**< Flow rule ID. */
+	uint64_t id; /**< Flow rule ID. */
+	uint64_t user_id; /**< User rule ID. */
+	struct port_table *table; /**< Flow table. */
 	struct rte_flow *flow; /**< Opaque flow object returned by PMD. */
 	struct rte_flow_conv_rule rule; /**< Saved flow rule description. */
 	enum age_action_context_type age_type; /**< Age action context type. */
@@ -227,7 +252,12 @@ struct port_indirect_action {
 	struct port_indirect_action *next; /**< Next flow in list. */
 	uint32_t id; /**< Indirect action ID. */
 	enum rte_flow_action_type type; /**< Action type. */
-	struct rte_flow_action_handle *handle;	/**< Indirect action handle. */
+	union {
+		struct rte_flow_action_handle *handle;
+		/**< Indirect action handle. */
+		struct rte_flow_action_list_handle *list_handle;
+		/**< Indirect action list handle*/
+	};
 	enum age_action_context_type age_type; /**< Age action context type. */
 };
 
@@ -236,6 +266,7 @@ union port_action_query {
 	struct rte_flow_query_count count;
 	struct rte_flow_query_age age;
 	struct rte_flow_action_conntrack ct;
+	struct rte_flow_query_quota quota;
 };
 
 /* Descriptor for queue job. */
@@ -319,7 +350,7 @@ struct rte_port {
 	uint32_t                mc_addr_nb; /**< nb. of addr. in mc_addr_pool */
 	queueid_t               queue_nb; /**< nb. of queues for flow rules */
 	uint32_t                queue_sz; /**< size of a queue for flow rules */
-	uint8_t                 slave_flag : 1, /**< bonding slave port */
+	uint8_t                 member_flag : 1, /**< bonding member port */
 				bond_flag : 1, /**< port is bond device */
 				fwd_mac_swap : 1, /**< swap packet MAC before forward */
 				update_conf : 1; /**< need to update bonding device configuration */
@@ -360,6 +391,7 @@ struct fwd_lcore {
 	streamid_t stream_nb;    /**< number of streams in "fwd_streams" */
 	lcoreid_t  cpuid_idx;    /**< index of logical core in CPU id table */
 	volatile char stopped;   /**< stop forwarding when set */
+	uint64_t total_cycles;   /**< used with --record-core-cycles */
 };
 
 /*
@@ -380,7 +412,7 @@ struct fwd_lcore {
 typedef int (*port_fwd_begin_t)(portid_t pi);
 typedef void (*port_fwd_end_t)(portid_t pi);
 typedef void (*stream_init_t)(struct fwd_stream *fs);
-typedef void (*packet_fwd_t)(struct fwd_stream *fs);
+typedef bool (*packet_fwd_t)(struct fwd_stream *fs);
 
 struct fwd_engine {
 	const char       *fwd_mode_name; /**< Forwarding mode name. */
@@ -388,7 +420,10 @@ struct fwd_engine {
 	port_fwd_end_t   port_fwd_end;   /**< NULL if nothing special to do. */
 	stream_init_t    stream_init;    /**< NULL if nothing special to do. */
 	packet_fwd_t     packet_fwd;     /**< Mandatory. */
+	const char       *status;        /**< NULL if nothing to display. */
 };
+
+void common_fwd_stream_init(struct fwd_stream *fs);
 
 #define FLEX_ITEM_MAX_SAMPLES_NUM 16
 #define FLEX_ITEM_MAX_LINKS_NUM 16
@@ -427,6 +462,7 @@ extern struct fwd_engine csum_fwd_engine;
 extern struct fwd_engine icmp_echo_engine;
 extern struct fwd_engine noisy_vnf_engine;
 extern struct fwd_engine five_tuple_swap_fwd_engine;
+extern struct fwd_engine recycle_mbufs_engine;
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
 #endif
@@ -476,6 +512,7 @@ extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
 extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
 extern uint8_t flow_isolate_all; /**< set by "--flow-isolate-all */
+extern uint8_t no_flow_flush; /**< set by "--disable-flow-flush" parameter */
 extern uint8_t  mp_alloc_type;
 /**< set by "--mp-anon" or "--mp-alloc" parameter */
 extern uint32_t eth_link_speed;
@@ -549,6 +586,8 @@ extern int8_t rx_drop_en;
 extern int16_t tx_free_thresh;
 extern int16_t tx_rs_thresh;
 
+extern enum noisy_fwd_mode noisy_fwd_mode;
+extern const char * const noisy_fwd_mode_desc[];
 extern uint16_t noisy_tx_sw_bufsz;
 extern uint16_t noisy_tx_sw_buf_flush_time;
 extern uint64_t noisy_lkup_mem_sz;
@@ -683,8 +722,8 @@ struct vxlan_encap_conf {
 	rte_be16_t udp_dst;
 	rte_be32_t ipv4_src;
 	rte_be32_t ipv4_dst;
-	uint8_t ipv6_src[16];
-	uint8_t ipv6_dst[16];
+	struct rte_ipv6_addr ipv6_src;
+	struct rte_ipv6_addr ipv6_dst;
 	rte_be16_t vlan_tci;
 	uint8_t ip_tos;
 	uint8_t ip_ttl;
@@ -701,8 +740,8 @@ struct nvgre_encap_conf {
 	uint8_t tni[3];
 	rte_be32_t ipv4_src;
 	rte_be32_t ipv4_dst;
-	uint8_t ipv6_src[16];
-	uint8_t ipv6_dst[16];
+	struct rte_ipv6_addr ipv6_src;
+	struct rte_ipv6_addr ipv6_dst;
 	rte_be16_t vlan_tci;
 	uint8_t eth_src[RTE_ETHER_ADDR_LEN];
 	uint8_t eth_dst[RTE_ETHER_ADDR_LEN];
@@ -733,8 +772,8 @@ struct mplsogre_encap_conf {
 	uint8_t label[3];
 	rte_be32_t ipv4_src;
 	rte_be32_t ipv4_dst;
-	uint8_t ipv6_src[16];
-	uint8_t ipv6_dst[16];
+	struct rte_ipv6_addr ipv6_src;
+	struct rte_ipv6_addr ipv6_dst;
 	rte_be16_t vlan_tci;
 	uint8_t eth_src[RTE_ETHER_ADDR_LEN];
 	uint8_t eth_dst[RTE_ETHER_ADDR_LEN];
@@ -757,8 +796,8 @@ struct mplsoudp_encap_conf {
 	rte_be16_t udp_dst;
 	rte_be32_t ipv4_src;
 	rte_be32_t ipv4_dst;
-	uint8_t ipv6_src[16];
-	uint8_t ipv6_dst[16];
+	struct rte_ipv6_addr ipv6_src;
+	struct rte_ipv6_addr ipv6_dst;
 	rte_be16_t vlan_tci;
 	uint8_t eth_src[RTE_ETHER_ADDR_LEN];
 	uint8_t eth_dst[RTE_ETHER_ADDR_LEN];
@@ -785,26 +824,32 @@ is_proc_primary(void)
 	return rte_eal_process_type() == RTE_PROC_PRIMARY;
 }
 
-static inline unsigned int
-lcore_num(void)
+static inline struct fwd_lcore *
+lcore_to_fwd_lcore(uint16_t lcore_id)
 {
 	unsigned int i;
 
-	for (i = 0; i < RTE_MAX_LCORE; ++i)
-		if (fwd_lcores_cpuids[i] == rte_lcore_id())
-			return i;
+	for (i = 0; i < cur_fwd_config.nb_fwd_lcores; ++i) {
+		if (fwd_lcores_cpuids[i] == lcore_id)
+			return fwd_lcores[i];
+	}
 
-	rte_panic("lcore_id of current thread not found in fwd_lcores_cpuids\n");
+	return NULL;
 }
-
-void
-parse_fwd_portlist(const char *port);
 
 static inline struct fwd_lcore *
 current_fwd_lcore(void)
 {
-	return fwd_lcores[lcore_num()];
+	struct fwd_lcore *fc = lcore_to_fwd_lcore(rte_lcore_id());
+
+	if (fc == NULL)
+		rte_panic("lcore_id of current thread not found in fwd_lcores_cpuids\n");
+
+	return fc;
 }
+
+void
+parse_fwd_portlist(const char *port);
 
 /* Mbuf Pools */
 static inline void
@@ -828,32 +873,47 @@ mbuf_pool_find(unsigned int sock_id, uint16_t idx)
 	return rte_mempool_lookup((const char *)pool_name);
 }
 
-static inline void
-get_start_cycles(uint64_t *start_tsc)
+static inline uint16_t
+common_fwd_stream_receive(struct fwd_stream *fs, struct rte_mbuf **burst,
+	unsigned int nb_pkts)
 {
-	if (record_core_cycles)
-		*start_tsc = rte_rdtsc();
-}
+	uint16_t nb_rx;
 
-static inline void
-get_end_cycles(struct fwd_stream *fs, uint64_t start_tsc)
-{
-	if (record_core_cycles)
-		fs->core_cycles += rte_rdtsc() - start_tsc;
-}
-
-static inline void
-inc_rx_burst_stats(struct fwd_stream *fs, uint16_t nb_rx)
-{
+	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, burst, nb_pkts);
 	if (record_burst_stats)
 		fs->rx_burst_stats.pkt_burst_spread[nb_rx]++;
+	fs->rx_packets += nb_rx;
+	return nb_rx;
 }
 
-static inline void
-inc_tx_burst_stats(struct fwd_stream *fs, uint16_t nb_tx)
+static inline uint16_t
+common_fwd_stream_transmit(struct fwd_stream *fs, struct rte_mbuf **burst,
+	unsigned int nb_pkts)
 {
+	uint16_t nb_tx;
+	uint32_t retry;
+
+	nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, burst, nb_pkts);
+	/*
+	 * Retry if necessary
+	 */
+	if (unlikely(nb_tx < nb_pkts) && fs->retry_enabled) {
+		retry = 0;
+		while (nb_tx < nb_pkts && retry++ < burst_tx_retry_num) {
+			rte_delay_us(burst_tx_delay_time);
+			nb_tx += rte_eth_tx_burst(fs->tx_port, fs->tx_queue,
+				&burst[nb_tx], nb_pkts - nb_tx);
+		}
+	}
+	fs->tx_packets += nb_tx;
 	if (record_burst_stats)
 		fs->tx_burst_stats.pkt_burst_spread[nb_tx]++;
+	if (unlikely(nb_tx < nb_pkts)) {
+		fs->fwd_dropped += (nb_pkts - nb_tx);
+		rte_pktmbuf_free_bulk(&burst[nb_tx], nb_pkts - nb_tx);
+	}
+
+	return nb_tx;
 }
 
 /* Prototypes */
@@ -877,6 +937,8 @@ void device_infos_display(const char *identifier);
 void port_infos_display(portid_t port_id);
 void port_summary_display(portid_t port_id);
 void port_eeprom_display(portid_t port_id);
+void port_eeprom_set(portid_t port_id, uint32_t magic, uint32_t offset,
+		     uint32_t length, uint8_t *value);
 void port_module_eeprom_display(portid_t port_id);
 void port_summary_header_display(void);
 void rx_queue_infos_display(portid_t port_idi, uint16_t queue_id);
@@ -892,9 +954,10 @@ int init_fwd_streams(void);
 void update_fwd_ports(portid_t new_pid);
 
 void set_fwd_eth_peer(portid_t port_id, char *peer_addr);
+void set_dev_led(portid_t port_id, bool active);
 
 void port_mtu_set(portid_t port_id, uint16_t mtu);
-int port_action_handle_create(portid_t port_id, uint32_t id,
+int port_action_handle_create(portid_t port_id, uint32_t id, bool indirect_list,
 			      const struct rte_flow_indir_action_conf *conf,
 			      const struct rte_flow_action *action);
 int port_action_handle_destroy(portid_t port_id,
@@ -904,6 +967,10 @@ struct rte_flow_action_handle *port_action_handle_get_by_id(portid_t port_id,
 							    uint32_t id);
 int port_action_handle_update(portid_t port_id, uint32_t id,
 			      const struct rte_flow_action *action);
+void
+port_action_handle_query_update(portid_t port_id, uint32_t id,
+				enum rte_flow_query_update_mode qu_mode,
+				const struct rte_flow_action *action);
 int port_flow_get_info(portid_t port_id);
 int port_flow_configure(portid_t port_id,
 			const struct rte_flow_port_attr *port_attr,
@@ -928,16 +995,27 @@ int port_flow_template_table_create(portid_t port_id, uint32_t id,
 		   uint32_t nb_actions_templates, uint32_t *actions_templates);
 int port_flow_template_table_destroy(portid_t port_id,
 			    uint32_t n, const uint32_t *table);
+int port_queue_flow_update_resized(portid_t port_id, queueid_t queue_id,
+				   bool postpone, uint32_t flow_id);
 int port_flow_template_table_flush(portid_t port_id);
+int port_flow_template_table_resize_complete(portid_t port_id, uint32_t table_id);
+int port_flow_template_table_resize(portid_t port_id,
+				    uint32_t table_id, uint32_t flows_num);
+int port_queue_group_set_miss_actions(portid_t port_id, const struct rte_flow_attr *attr,
+				      const struct rte_flow_action *actions);
 int port_queue_flow_create(portid_t port_id, queueid_t queue_id,
-			   bool postpone, uint32_t table_id,
+			   bool postpone, uint32_t table_id, uint32_t rule_idx,
 			   uint32_t pattern_idx, uint32_t actions_idx,
 			   const struct rte_flow_item *pattern,
 			   const struct rte_flow_action *actions);
 int port_queue_flow_destroy(portid_t port_id, queueid_t queue_id,
-			    bool postpone, uint32_t n, const uint32_t *rule);
+			    bool postpone, uint32_t n, const uint64_t *rule);
+int port_queue_flow_update(portid_t port_id, queueid_t queue_id,
+			   bool postpone, uint32_t rule_idx, uint32_t actions_idx,
+			   const struct rte_flow_action *actions);
 int port_queue_action_handle_create(portid_t port_id, uint32_t queue_id,
 			bool postpone, uint32_t id,
+			bool indirect_list,
 			const struct rte_flow_indir_action_conf *conf,
 			const struct rte_flow_action *action);
 int port_queue_action_handle_destroy(portid_t port_id,
@@ -948,8 +1026,19 @@ int port_queue_action_handle_update(portid_t port_id, uint32_t queue_id,
 				    const struct rte_flow_action *action);
 int port_queue_action_handle_query(portid_t port_id, uint32_t queue_id,
 				   bool postpone, uint32_t id);
+void
+port_queue_action_handle_query_update(portid_t port_id,
+				      uint32_t queue_id, bool postpone,
+				      uint32_t id,
+				      enum rte_flow_query_update_mode qu_mode,
+				      const struct rte_flow_action *action);
 int port_queue_flow_push(portid_t port_id, queueid_t queue_id);
 int port_queue_flow_pull(portid_t port_id, queueid_t queue_id);
+int port_flow_hash_calc(portid_t port_id, uint32_t table_id,
+			uint8_t pattern_template_index, const struct rte_flow_item pattern[]);
+int port_flow_hash_calc_encap(portid_t port_id,
+			      enum rte_flow_encap_hash_field encap_hash_field,
+			      const struct rte_flow_item pattern[]);
 void port_queue_flow_aged(portid_t port_id, uint32_t queue_id, uint8_t destroy);
 int port_flow_validate(portid_t port_id,
 		       const struct rte_flow_attr *attr,
@@ -960,17 +1049,22 @@ int port_flow_create(portid_t port_id,
 		     const struct rte_flow_attr *attr,
 		     const struct rte_flow_item *pattern,
 		     const struct rte_flow_action *actions,
-		     const struct tunnel_ops *tunnel_ops);
+		     const struct tunnel_ops *tunnel_ops,
+		     uintptr_t user_id);
 int port_action_handle_query(portid_t port_id, uint32_t id);
 void update_age_action_context(const struct rte_flow_action *actions,
 		     struct port_flow *pf);
 int mcast_addr_pool_destroy(portid_t port_id);
-int port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule);
+int port_flow_destroy(portid_t port_id, uint32_t n, const uint64_t *rule,
+		      bool is_user_id);
+int port_flow_update(portid_t port_id, uint32_t rule,
+		     const struct rte_flow_action *actions, bool is_user_id);
 int port_flow_flush(portid_t port_id);
 int port_flow_dump(portid_t port_id, bool dump_all,
-			uint32_t rule, const char *file_name);
-int port_flow_query(portid_t port_id, uint32_t rule,
-		    const struct rte_flow_action *action);
+			uint64_t rule, const char *file_name,
+			bool is_user_id);
+int port_flow_query(portid_t port_id, uint64_t rule,
+		    const struct rte_flow_action *action, bool is_user_id);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
 void port_flow_aged(portid_t port_id, uint8_t destroy);
 const char *port_flow_tunnel_type(struct rte_flow_tunnel *tunnel);
@@ -1045,9 +1139,9 @@ void stop_packet_forwarding(void);
 void dev_set_link_up(portid_t pid);
 void dev_set_link_down(portid_t pid);
 void init_port_config(void);
-void set_port_slave_flag(portid_t slave_pid);
-void clear_port_slave_flag(portid_t slave_pid);
-uint8_t port_is_bonding_slave(portid_t slave_pid);
+void set_port_member_flag(portid_t member_pid);
+void clear_port_member_flag(portid_t member_pid);
+uint8_t port_is_bonding_member(portid_t member_pid);
 
 int init_port_dcb_config(portid_t pid, enum dcb_mode_enable dcb_mode,
 		     enum rte_eth_nb_tcs num_tcs,
@@ -1084,7 +1178,7 @@ int set_vf_rate_limit(portid_t port_id, uint16_t vf, uint32_t rate,
 int set_rxq_avail_thresh(portid_t port_id, uint16_t queue_id,
 			 uint8_t avail_thresh);
 
-void port_rss_hash_conf_show(portid_t port_id, int show_rss_key);
+void port_rss_hash_conf_show(portid_t port_id, int show_rss_key, int show_rss_algo);
 void port_rss_hash_key_update(portid_t port_id, char rss_type[],
 			      uint8_t *hash_key, uint8_t hash_key_len);
 int rx_queue_id_is_invalid(queueid_t rxq_id);
@@ -1114,6 +1208,7 @@ void show_mcast_macs(portid_t port_id);
 /* Functions to manage the set of filtered Multicast MAC addresses */
 void mcast_addr_add(portid_t port_id, struct rte_ether_addr *mc_addr);
 void mcast_addr_remove(portid_t port_id, struct rte_ether_addr *mc_addr);
+void mcast_addr_flush(portid_t port_id);
 void port_dcb_info_display(portid_t port_id);
 
 uint8_t *open_file(const char *file_path, uint32_t *size);
@@ -1170,6 +1265,10 @@ extern int flow_parse(const char *src, void *result, unsigned int size,
 		      struct rte_flow_attr **attr,
 		      struct rte_flow_item **pattern,
 		      struct rte_flow_action **actions);
+int setup_hairpin_queues(portid_t pi, portid_t p_pi, uint16_t cnt_pi);
+int hairpin_bind(uint16_t cfg_pi, portid_t *pl, portid_t *peer_pl);
+void hairpin_map_usage(void);
+int parse_hairpin_map(const char *hpmap);
 
 uint64_t str_to_rsstypes(const char *str);
 const char *rsstypes_to_str(uint64_t rss_type);

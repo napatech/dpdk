@@ -77,6 +77,7 @@ int ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 	uint16_t vf_num;
 	uint8_t nb_queue;
 	int ret = 0;
+	size_t i;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -122,7 +123,8 @@ int ixgbe_pf_host_init(struct rte_eth_dev *eth_dev)
 	ixgbe_vf_perm_addr_gen(eth_dev, vf_num);
 
 	/* init_mailbox_params */
-	hw->mbx.ops.init_params(hw);
+	for (i = 0; i < vf_num; i++)
+		hw->mbx.ops[i].init_params(hw);
 
 	/* set mb interrupt mask */
 	ixgbe_mb_intr_setup(eth_dev);
@@ -171,14 +173,14 @@ ixgbe_add_tx_flow_control_drop_filter(struct rte_eth_dev *eth_dev)
 	struct ixgbe_ethertype_filter ethertype_filter;
 
 	if (!hw->mac.ops.set_ethertype_anti_spoofing) {
-		PMD_DRV_LOG(INFO, "ether type anti-spoofing is not supported.\n");
+		PMD_DRV_LOG(INFO, "ether type anti-spoofing is not supported.");
 		return;
 	}
 
 	i = ixgbe_ethertype_filter_lookup(filter_info,
 					  IXGBE_ETHERTYPE_FLOW_CTRL);
 	if (i >= 0) {
-		PMD_DRV_LOG(ERR, "A ether type filter entity for flow control already exists!\n");
+		PMD_DRV_LOG(ERR, "A ether type filter entity for flow control already exists!");
 		return;
 	}
 
@@ -191,7 +193,7 @@ ixgbe_add_tx_flow_control_drop_filter(struct rte_eth_dev *eth_dev)
 	i = ixgbe_ethertype_filter_insert(filter_info,
 					  &ethertype_filter);
 	if (i < 0) {
-		PMD_DRV_LOG(ERR, "Cannot find an unused ether type filter entity for flow control.\n");
+		PMD_DRV_LOG(ERR, "Cannot find an unused ether type filter entity for flow control.");
 		return;
 	}
 
@@ -422,7 +424,7 @@ ixgbe_disable_vf_mc_promisc(struct rte_eth_dev *dev, uint32_t vf)
 
 	vmolr = IXGBE_READ_REG(hw, IXGBE_VMOLR(vf));
 
-	PMD_DRV_LOG(INFO, "VF %u: disabling multicast promiscuous\n", vf);
+	PMD_DRV_LOG(INFO, "VF %u: disabling multicast promiscuous", vf);
 
 	vmolr &= ~IXGBE_VMOLR_MPE;
 
@@ -448,8 +450,8 @@ ixgbe_vf_reset(struct rte_eth_dev *dev, uint16_t vf, uint32_t *msgbuf)
 	/* Disable multicast promiscuous at reset */
 	ixgbe_disable_vf_mc_promisc(dev, vf);
 
-	/* reply to reset with ack and vf mac address */
-	msgbuf[0] = IXGBE_VF_RESET | IXGBE_VT_MSGTYPE_ACK;
+	/* reply to reset with success and vf mac address */
+	msgbuf[0] = IXGBE_VF_RESET | IXGBE_VT_MSGTYPE_SUCCESS;
 	rte_memcpy(new_mac, vf_mac, RTE_ETHER_ADDR_LEN);
 	/*
 	 * Piggyback the multicast filter type so VF can compute the
@@ -628,7 +630,7 @@ ixgbe_negotiate_vf_api(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 		break;
 	}
 
-	PMD_DRV_LOG(ERR, "Negotiate invalid api version %u from VF %d\n",
+	PMD_DRV_LOG(ERR, "Negotiate invalid api version %u from VF %d",
 		api_version, vf);
 
 	return -1;
@@ -677,7 +679,7 @@ ixgbe_get_vf_queues(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 	case RTE_ETH_MQ_TX_NONE:
 	case RTE_ETH_MQ_TX_DCB:
 		PMD_DRV_LOG(ERR, "PF must work with virtualization for VF %u"
-			", but its tx mode = %d\n", vf,
+			", but its tx mode = %d", vf,
 			eth_conf->txmode.mq_mode);
 		return -1;
 
@@ -711,7 +713,7 @@ ixgbe_get_vf_queues(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 		break;
 
 	default:
-		PMD_DRV_LOG(ERR, "PF work with invalid mode = %d\n",
+		PMD_DRV_LOG(ERR, "PF work with invalid mode = %d",
 			eth_conf->txmode.mq_mode);
 		return -1;
 	}
@@ -767,7 +769,7 @@ ixgbe_set_vf_mc_promisc(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 		if (!(fctrl & IXGBE_FCTRL_UPE)) {
 			/* VF promisc requires PF in promisc */
 			PMD_DRV_LOG(ERR,
-			       "Enabling VF promisc requires PF in promisc\n");
+			       "Enabling VF promisc requires PF in promisc");
 			return -1;
 		}
 
@@ -804,7 +806,7 @@ ixgbe_set_vf_macvlan_msg(struct rte_eth_dev *dev, uint32_t vf, uint32_t *msgbuf)
 	if (index) {
 		if (!rte_is_valid_assigned_ether_addr(
 			(struct rte_ether_addr *)new_mac)) {
-			PMD_DRV_LOG(ERR, "set invalid mac vf:%d\n", vf);
+			PMD_DRV_LOG(ERR, "set invalid mac vf:%d", vf);
 			return -1;
 		}
 
@@ -840,7 +842,7 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 	}
 
 	/* do nothing with the message already been processed */
-	if (msgbuf[0] & (IXGBE_VT_MSGTYPE_ACK | IXGBE_VT_MSGTYPE_NACK))
+	if (msgbuf[0] & (IXGBE_VT_MSGTYPE_SUCCESS | IXGBE_VT_MSGTYPE_FAILURE))
 		return retval;
 
 	/* flush the ack before we write any messages back */
@@ -919,9 +921,9 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 
 	/* response the VF according to the message process result */
 	if (retval)
-		msgbuf[0] |= IXGBE_VT_MSGTYPE_NACK;
+		msgbuf[0] |= IXGBE_VT_MSGTYPE_FAILURE;
 	else
-		msgbuf[0] |= IXGBE_VT_MSGTYPE_ACK;
+		msgbuf[0] |= IXGBE_VT_MSGTYPE_SUCCESS;
 
 	msgbuf[0] |= IXGBE_VT_MSGTYPE_CTS;
 
@@ -933,7 +935,7 @@ ixgbe_rcv_msg_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 static inline void
 ixgbe_rcv_ack_from_vf(struct rte_eth_dev *dev, uint16_t vf)
 {
-	uint32_t msg = IXGBE_VT_MSGTYPE_NACK;
+	uint32_t msg = IXGBE_VT_MSGTYPE_FAILURE;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ixgbe_vf_info *vfinfo =

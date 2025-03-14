@@ -46,6 +46,7 @@ enum fips_test_algorithms {
 		FIPS_TEST_ALGO_SHA,
 		FIPS_TEST_ALGO_RSA,
 		FIPS_TEST_ALGO_ECDSA,
+		FIPS_TEST_ALGO_EDDSA,
 		FIPS_TEST_ALGO_MAX
 };
 
@@ -106,6 +107,12 @@ struct fips_test_vector {
 		struct fips_val s;
 		struct fips_val k;
 	} ecdsa;
+	struct {
+		struct fips_val pkey;
+		struct fips_val q;
+		struct fips_val ctx;
+		struct fips_val sign;
+	} eddsa;
 
 	struct fips_val pt;
 	struct fips_val ct;
@@ -163,7 +170,8 @@ enum fips_ccm_test_types {
 enum fips_sha_test_types {
 	SHA_KAT = 0,
 	SHA_AFT,
-	SHA_MCT
+	SHA_MCT,
+	SHAKE_VOT
 };
 
 enum fips_rsa_test_types {
@@ -174,6 +182,11 @@ enum fips_rsa_test_types {
 
 enum fips_ecdsa_test_types {
 	ECDSA_AFT = 0,
+};
+
+enum fips_eddsa_test_types {
+	EDDSA_AFT = 0,
+	EDDSA_BFT
 };
 
 struct aesavs_interim_data {
@@ -205,6 +218,8 @@ struct sha_interim_data {
 	/* keep algo always on top as it is also used in asym digest */
 	enum rte_crypto_auth_algorithm algo;
 	enum fips_sha_test_types test_type;
+	uint8_t min_outlen;
+	uint8_t md_blocks;
 };
 
 struct gcm_interim_data {
@@ -238,13 +253,20 @@ struct ecdsa_interim_data {
 	uint8_t pubkey_gen;
 };
 
+struct eddsa_interim_data {
+	enum rte_crypto_curve_id curve_id;
+	uint8_t curve_len;
+	uint8_t pubkey_gen;
+	bool prehash;
+};
+
 #ifdef USE_JANSSON
 /*
  * Maximum length of buffer to hold any json string.
  * Esp, in asym op, modulo bits decide char buffer size.
  * max = (modulo / 4)
  */
-#define FIPS_TEST_JSON_BUF_LEN (4096 / 4)
+#define FIPS_TEST_JSON_BUF_LEN ((4096 / 4) + 1)
 
 struct fips_test_json_info {
 	/* Information used for reading from json */
@@ -285,6 +307,7 @@ struct fips_test_interim_info {
 		struct xts_interim_data xts_data;
 		struct rsa_interim_data rsa_data;
 		struct ecdsa_interim_data ecdsa_data;
+		struct eddsa_interim_data eddsa_data;
 	} interim_info;
 
 	enum fips_test_op op;
@@ -336,6 +359,9 @@ int
 parse_test_gcm_json_init(void);
 
 int
+parse_test_ccm_json_init(void);
+
+int
 parse_test_hmac_json_init(void);
 
 int
@@ -367,6 +393,9 @@ parse_test_rsa_json_init(void);
 
 int
 parse_test_ecdsa_json_init(void);
+
+int
+parse_test_eddsa_json_init(void);
 
 int
 fips_test_randomize_message(struct fips_val *msg, struct fips_val *rand);

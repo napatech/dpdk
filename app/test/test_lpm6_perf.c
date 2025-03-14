@@ -2,17 +2,6 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
-#include "test.h"
-
-#ifdef RTE_EXEC_ENV_WINDOWS
-static int
-test_lpm6_perf(void)
-{
-	printf("lpm6_perf not supported on Windows, skipping test\n");
-	return TEST_SKIPPED;
-}
-
-#else
 
 #include <stdio.h>
 #include <stdint.h>
@@ -24,6 +13,7 @@ test_lpm6_perf(void)
 #include <rte_memory.h>
 #include <rte_lpm6.h>
 
+#include "test.h"
 #include "test_lpm6_data.h"
 
 #define TEST_LPM_ASSERT(cond) do {                                            \
@@ -76,8 +66,6 @@ test_lpm6_perf(void)
 	config.number_tbl8s = NUMBER_TBL8S;
 	config.flags = 0;
 
-	rte_srand(rte_rdtsc());
-
 	printf("No. routes = %u\n", (unsigned) NUM_ROUTE_ENTRIES);
 
 	print_route_distribution(large_route_table, (uint32_t) NUM_ROUTE_ENTRIES);
@@ -94,7 +82,7 @@ test_lpm6_perf(void)
 	begin = rte_rdtsc();
 
 	for (i = 0; i < NUM_ROUTE_ENTRIES; i++) {
-		if (rte_lpm6_add(lpm, large_route_table[i].ip,
+		if (rte_lpm6_add(lpm, &large_route_table[i].ip,
 				large_route_table[i].depth, next_hop_add) == 0)
 			status++;
 	}
@@ -113,7 +101,7 @@ test_lpm6_perf(void)
 		begin = rte_rdtsc();
 
 		for (j = 0; j < NUM_IPS_ENTRIES; j ++) {
-			if (rte_lpm6_lookup(lpm, large_ips_table[j].ip,
+			if (rte_lpm6_lookup(lpm, &large_ips_table[j].ip,
 					&next_hop_return) != 0)
 				count++;
 		}
@@ -129,11 +117,11 @@ test_lpm6_perf(void)
 	total_time = 0;
 	count = 0;
 
-	uint8_t ip_batch[NUM_IPS_ENTRIES][16];
+	struct rte_ipv6_addr ip_batch[NUM_IPS_ENTRIES];
 	int32_t next_hops[NUM_IPS_ENTRIES];
 
 	for (i = 0; i < NUM_IPS_ENTRIES; i++)
-		memcpy(ip_batch[i], large_ips_table[i].ip, 16);
+		ip_batch[i] = large_ips_table[i].ip;
 
 	for (i = 0; i < ITERATIONS; i ++) {
 
@@ -156,7 +144,7 @@ test_lpm6_perf(void)
 
 	for (i = 0; i < NUM_ROUTE_ENTRIES; i++) {
 		/* rte_lpm_delete(lpm, ip, depth) */
-		status += rte_lpm6_delete(lpm, large_route_table[i].ip,
+		status += rte_lpm6_delete(lpm, &large_route_table[i].ip,
 				large_route_table[i].depth);
 	}
 
@@ -171,6 +159,4 @@ test_lpm6_perf(void)
 	return 0;
 }
 
-#endif /* !RTE_EXEC_ENV_WINDOWS */
-
-REGISTER_TEST_COMMAND(lpm6_perf_autotest, test_lpm6_perf);
+REGISTER_PERF_TEST(lpm6_perf_autotest, test_lpm6_perf);

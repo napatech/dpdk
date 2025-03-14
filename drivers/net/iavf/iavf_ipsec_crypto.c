@@ -2,6 +2,8 @@
  * Copyright(c) 2020 Intel Corporation
  */
 
+#include <stdalign.h>
+
 #include <rte_cryptodev.h>
 #include <rte_ethdev.h>
 #include <rte_security_driver.h>
@@ -98,13 +100,13 @@ iavf_ipsec_crypto_session_size_get(void *device __rte_unused)
 }
 
 static const struct rte_cryptodev_symmetric_capability *
-get_capability(struct iavf_security_ctx *iavf_sctx,
+get_capability(struct iavf_security_ctx *iavf_sctx __rte_unused,
 	uint32_t algo, uint32_t type)
 {
 	const struct rte_cryptodev_capabilities *capability;
 	int i = 0;
 
-	capability = &iavf_sctx->crypto_capabilities[i];
+	capability = &iavf_crypto_capabilities[i];
 
 	while (capability->op != RTE_CRYPTO_OP_TYPE_UNDEFINED) {
 		if (capability->op == RTE_CRYPTO_OP_TYPE_SYMMETRIC &&
@@ -508,8 +510,7 @@ iavf_ipsec_crypto_security_association_add(struct iavf_adapter *adapter,
 		*((uint32_t *)sa_cfg->dst_addr)	=
 			htonl(conf->ipsec.tunnel.ipv4.dst_ip.s_addr);
 	} else {
-		uint32_t *v6_dst_addr =
-			(uint32_t *)conf->ipsec.tunnel.ipv6.dst_addr.s6_addr;
+		uint32_t *v6_dst_addr = (uint32_t *)&conf->ipsec.tunnel.ipv6.dst_addr;
 
 		sa_cfg->virtchnl_ip_type = VIRTCHNL_IPV6;
 
@@ -828,6 +829,7 @@ iavf_ipsec_crypto_sa_update_esn(struct iavf_adapter *adapter,
 	/* set request params */
 	request->ipsec_data.sa_update->sa_index = sess->sa.hw_idx;
 	request->ipsec_data.sa_update->esn_hi = sess->esn.hi;
+	request->ipsec_data.sa_update->esn_low = sess->esn.low;
 
 	/* send virtual channel request to add SA to hardware database */
 	rc = iavf_ipsec_crypto_request(adapter,
@@ -1229,7 +1231,8 @@ enum rte_crypto_auth_algorithm auth_maptbl[] = {
 
 static void
 update_auth_capabilities(struct rte_cryptodev_capabilities *scap,
-		struct virtchnl_algo_cap *acap)
+		struct virtchnl_algo_cap *acap,
+		const struct rte_cryptodev_symmetric_capability *symcap)
 {
 	struct rte_cryptodev_symmetric_capability *capability = &scap->sym;
 
@@ -1247,6 +1250,17 @@ update_auth_capabilities(struct rte_cryptodev_capabilities *scap,
 	capability->auth.digest_size.min = acap->min_digest_size;
 	capability->auth.digest_size.max = acap->max_digest_size;
 	capability->auth.digest_size.increment = acap->inc_digest_size;
+
+	if (symcap) {
+		capability->auth.iv_size.min = symcap->auth.iv_size.min;
+		capability->auth.iv_size.max = symcap->auth.iv_size.max;
+		capability->auth.iv_size.increment =
+				symcap->auth.iv_size.increment;
+	} else {
+		capability->auth.iv_size.min = 0;
+		capability->auth.iv_size.max = 65535;
+		capability->auth.iv_size.increment = 1;
+	}
 }
 
 enum rte_crypto_cipher_algorithm cipher_maptbl[] = {
@@ -1259,7 +1273,8 @@ enum rte_crypto_cipher_algorithm cipher_maptbl[] = {
 
 static void
 update_cipher_capabilities(struct rte_cryptodev_capabilities *scap,
-	struct virtchnl_algo_cap *acap)
+	struct virtchnl_algo_cap *acap,
+	const struct rte_cryptodev_symmetric_capability *symcap)
 {
 	struct rte_cryptodev_symmetric_capability *capability = &scap->sym;
 
@@ -1275,9 +1290,17 @@ update_cipher_capabilities(struct rte_cryptodev_capabilities *scap,
 	capability->cipher.key_size.max = acap->max_key_size;
 	capability->cipher.key_size.increment = acap->inc_key_size;
 
-	capability->cipher.iv_size.min = acap->min_iv_size;
-	capability->cipher.iv_size.max = acap->max_iv_size;
-	capability->cipher.iv_size.increment = acap->inc_iv_size;
+	if (symcap) {
+		capability->cipher.iv_size.min = symcap->cipher.iv_size.min;
+		capability->cipher.iv_size.max = symcap->cipher.iv_size.max;
+		capability->cipher.iv_size.increment =
+				symcap->cipher.iv_size.increment;
+
+	} else {
+		capability->cipher.iv_size.min = 0;
+		capability->cipher.iv_size.max = 65535;
+		capability->cipher.iv_size.increment = 1;
+	}
 }
 
 enum rte_crypto_aead_algorithm aead_maptbl[] = {
@@ -1289,7 +1312,8 @@ enum rte_crypto_aead_algorithm aead_maptbl[] = {
 
 static void
 update_aead_capabilities(struct rte_cryptodev_capabilities *scap,
-	struct virtchnl_algo_cap *acap)
+	struct virtchnl_algo_cap *acap,
+	const struct rte_cryptodev_symmetric_capability *symcap __rte_unused)
 {
 	struct rte_cryptodev_symmetric_capability *capability = &scap->sym;
 
@@ -1305,13 +1329,14 @@ update_aead_capabilities(struct rte_cryptodev_capabilities *scap,
 	capability->aead.key_size.max = acap->max_key_size;
 	capability->aead.key_size.increment = acap->inc_key_size;
 
-	capability->aead.aad_size.min = acap->min_aad_size;
-	capability->aead.aad_size.max = acap->max_aad_size;
-	capability->aead.aad_size.increment = acap->inc_aad_size;
+	/* remove constrains for aead and iv length */
+	capability->aead.aad_size.min = 0;
+	capability->aead.aad_size.max = 65535;
+	capability->aead.aad_size.increment = 1;
 
-	capability->aead.iv_size.min = acap->min_iv_size;
-	capability->aead.iv_size.max = acap->max_iv_size;
-	capability->aead.iv_size.increment = acap->inc_iv_size;
+	capability->aead.iv_size.min = 0;
+	capability->aead.iv_size.max = 65535;
+	capability->aead.iv_size.increment = 1;
 
 	capability->aead.digest_size.min = acap->min_digest_size;
 	capability->aead.digest_size.max = acap->max_digest_size;
@@ -1327,6 +1352,7 @@ iavf_ipsec_crypto_set_security_capabililites(struct iavf_security_ctx
 		*iavf_sctx, struct virtchnl_ipsec_cap *vch_cap)
 {
 	struct rte_cryptodev_capabilities *capabilities;
+	const struct rte_cryptodev_symmetric_capability *symcap;
 	int i, j, number_of_capabilities = 0, ci = 0;
 
 	/* Count the total number of crypto algorithms supported */
@@ -1353,16 +1379,25 @@ iavf_ipsec_crypto_set_security_capabililites(struct iavf_security_ctx
 		for (j = 0; j < vch_cap->cap[i].algo_cap_num; j++, ci++) {
 			switch (vch_cap->cap[i].crypto_type) {
 			case VIRTCHNL_AUTH:
+				symcap = get_auth_capability(iavf_sctx,
+					capabilities[ci].sym.auth.algo);
 				update_auth_capabilities(&capabilities[ci],
-					&vch_cap->cap[i].algo_cap_list[j]);
+					&vch_cap->cap[i].algo_cap_list[j],
+					symcap);
 				break;
 			case VIRTCHNL_CIPHER:
+				symcap = get_cipher_capability(iavf_sctx,
+					capabilities[ci].sym.cipher.algo);
 				update_cipher_capabilities(&capabilities[ci],
-					&vch_cap->cap[i].algo_cap_list[j]);
+					&vch_cap->cap[i].algo_cap_list[j],
+					symcap);
 				break;
 			case VIRTCHNL_AEAD:
+				symcap = get_aead_capability(iavf_sctx,
+					capabilities[ci].sym.aead.algo);
 				update_aead_capabilities(&capabilities[ci],
-					&vch_cap->cap[i].algo_cap_list[j]);
+					&vch_cap->cap[i].algo_cap_list[j],
+					symcap);
 				break;
 			default:
 				capabilities[ci].op =
@@ -1484,8 +1519,11 @@ iavf_security_ctx_create(struct iavf_adapter *adapter)
 	if (adapter->security_ctx == NULL) {
 		adapter->security_ctx = rte_malloc("iavf_security_ctx",
 				sizeof(struct iavf_security_ctx), 0);
-		if (adapter->security_ctx == NULL)
+		if (adapter->security_ctx == NULL) {
+			rte_free(adapter->vf.eth_dev->security_ctx);
+			adapter->vf.eth_dev->security_ctx = NULL;
 			return -ENOMEM;
+		}
 	}
 
 	return 0;
@@ -1498,7 +1536,7 @@ iavf_security_init(struct iavf_adapter *adapter)
 	struct rte_mbuf_dynfield pkt_md_dynfield = {
 		.name = "iavf_ipsec_crypto_pkt_metadata",
 		.size = sizeof(struct iavf_ipsec_crypto_pkt_metadata),
-		.align = __alignof__(struct iavf_ipsec_crypto_pkt_metadata)
+		.align = alignof(struct iavf_ipsec_crypto_pkt_metadata)
 	};
 	struct virtchnl_ipsec_cap capabilities;
 	int rc;
@@ -1682,9 +1720,9 @@ parse_eth_item(const struct rte_flow_item_eth *item,
 		struct rte_ether_hdr *eth)
 {
 	memcpy(eth->src_addr.addr_bytes,
-			item->src.addr_bytes, sizeof(eth->src_addr));
+			item->hdr.src_addr.addr_bytes, sizeof(eth->src_addr));
 	memcpy(eth->dst_addr.addr_bytes,
-			item->dst.addr_bytes, sizeof(eth->dst_addr));
+			item->hdr.dst_addr.addr_bytes, sizeof(eth->dst_addr));
 }
 
 static void
@@ -1699,8 +1737,8 @@ static void
 parse_ipv6_item(const struct rte_flow_item_ipv6 *item,
 		struct rte_ipv6_hdr *ipv6)
 {
-	memcpy(ipv6->src_addr, item->hdr.src_addr, 16);
-	memcpy(ipv6->dst_addr, item->hdr.dst_addr, 16);
+	ipv6->src_addr = item->hdr.src_addr;
+	ipv6->dst_addr = item->hdr.dst_addr;
 }
 
 static void
@@ -1865,7 +1903,7 @@ iavf_ipsec_flow_create(struct iavf_adapter *ad,
 			ipsec_flow->spi,
 			0,
 			0,
-			ipsec_flow->ipv6_hdr.dst_addr,
+			ipsec_flow->ipv6_hdr.dst_addr.a,
 			0,
 			ipsec_flow->is_udp,
 			ipsec_flow->udp_hdr.dst_port);

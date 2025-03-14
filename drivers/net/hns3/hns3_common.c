@@ -10,6 +10,7 @@
 #include "hns3_logs.h"
 #include "hns3_regs.h"
 #include "hns3_rxtx.h"
+#include "hns3_dcb.h"
 #include "hns3_common.h"
 
 int
@@ -58,6 +59,7 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 	info->max_tx_queues = hw->tqps_num;
 	info->max_rx_pktlen = HNS3_MAX_FRAME_LEN; /* CRC included */
 	info->min_rx_bufsize = HNS3_MIN_BD_BUF_SIZE;
+	info->max_rx_bufsize = HNS3_MAX_BD_BUF_SIZE;
 	info->max_mtu = info->max_rx_pktlen - HNS3_ETH_OVERHEAD;
 	info->max_lro_pkt_size = HNS3_MAX_LRO_SIZE;
 	info->rx_offload_capa = (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
@@ -69,8 +71,7 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 RTE_ETH_RX_OFFLOAD_SCATTER |
 				 RTE_ETH_RX_OFFLOAD_VLAN_STRIP |
 				 RTE_ETH_RX_OFFLOAD_VLAN_FILTER |
-				 RTE_ETH_RX_OFFLOAD_RSS_HASH |
-				 RTE_ETH_RX_OFFLOAD_TCP_LRO);
+				 RTE_ETH_RX_OFFLOAD_RSS_HASH);
 	info->tx_offload_capa = (RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
 				 RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
 				 RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
@@ -84,19 +85,22 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE |
 				 RTE_ETH_TX_OFFLOAD_VLAN_INSERT);
 
-	if (!hw->port_base_vlan_cfg.state)
+	if (!hns->is_vf && !hw->port_base_vlan_cfg.state)
 		info->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_QINQ_INSERT;
 
 	if (hns3_dev_get_support(hw, OUTER_UDP_CKSUM))
 		info->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM;
 
+	info->dev_capa = RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP |
+			 RTE_ETH_DEV_CAPA_FLOW_SHARED_OBJECT_KEEP;
 	if (hns3_dev_get_support(hw, INDEP_TXRX))
-		info->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
-				 RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
-	info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
+		info->dev_capa |= RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
+				  RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP;
 
 	if (hns3_dev_get_support(hw, PTP))
 		info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+	if (hns3_dev_get_support(hw, GRO))
+		info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TCP_LRO;
 
 	info->rx_desc_lim = (struct rte_eth_desc_lim) {
 		.nb_max = HNS3_MAX_RING_DESC,
@@ -128,8 +132,12 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 	};
 
 	info->reta_size = hw->rss_ind_tbl_size;
-	info->hash_key_size = HNS3_RSS_KEY_SIZE;
+	info->hash_key_size = hw->rss_key_size;
 	info->flow_type_rss_offloads = HNS3_ETH_RSS_SUPPORT;
+	info->rss_algo_capa = RTE_ETH_HASH_ALGO_CAPA_MASK(DEFAULT) |
+			      RTE_ETH_HASH_ALGO_CAPA_MASK(TOEPLITZ) |
+			      RTE_ETH_HASH_ALGO_CAPA_MASK(SIMPLE_XOR) |
+			      RTE_ETH_HASH_ALGO_CAPA_MASK(SYMMETRIC_TOEPLITZ);
 
 	info->default_rxportconf.burst_size = HNS3_DEFAULT_PORT_CONF_BURST_SIZE;
 	info->default_txportconf.burst_size = HNS3_DEFAULT_PORT_CONF_BURST_SIZE;
@@ -160,6 +168,9 @@ hns3_parse_io_hint_func(const char *key, const char *value, void *extra_args)
 	uint32_t hint = HNS3_IO_FUNC_HINT_NONE;
 
 	RTE_SET_USED(key);
+
+	if (value == NULL || extra_args == NULL)
+		return 0;
 
 	if (strcmp(value, "vec") == 0)
 		hint = HNS3_IO_FUNC_HINT_VEC;
@@ -201,6 +212,9 @@ hns3_parse_dev_caps_mask(const char *key, const char *value, void *extra_args)
 
 	RTE_SET_USED(key);
 
+	if (value == NULL || extra_args == NULL)
+		return 0;
+
 	val = strtoull(value, NULL, HNS3_CONVERT_TO_HEXADECIMAL);
 	*(uint64_t *)extra_args = val;
 
@@ -210,9 +224,12 @@ hns3_parse_dev_caps_mask(const char *key, const char *value, void *extra_args)
 static int
 hns3_parse_mbx_time_limit(const char *key, const char *value, void *extra_args)
 {
-	uint32_t val;
+	uint64_t val;
 
 	RTE_SET_USED(key);
+
+	if (value == NULL || extra_args == NULL)
+		return 0;
 
 	val = strtoul(value, NULL, HNS3_CONVERT_TO_DECIMAL);
 
@@ -223,6 +240,73 @@ hns3_parse_mbx_time_limit(const char *key, const char *value, void *extra_args)
 	 */
 	if (val > HNS3_MBX_DEF_TIME_LIMIT_MS && val <= UINT16_MAX)
 		*(uint16_t *)extra_args = val;
+
+	return 0;
+}
+
+static int
+hns3_parse_vlan_match_mode(const char *key, const char *value, void *args)
+{
+	uint8_t mode;
+
+	RTE_SET_USED(key);
+
+	if (value == NULL) {
+		PMD_INIT_LOG(WARNING, "no value for key:\"%s\"", key);
+		return -1;
+	}
+
+	if (strcmp(value, "strict") == 0) {
+		mode = HNS3_FDIR_VLAN_STRICT_MATCH;
+	} else if (strcmp(value, "nostrict") == 0) {
+		mode = HNS3_FDIR_VLAN_NOSTRICT_MATCH;
+	} else {
+		PMD_INIT_LOG(WARNING, "invalid value:\"%s\" for key:\"%s\", "
+			"value must be 'strict' or 'nostrict'",
+			value, key);
+		return -1;
+	}
+
+	*(uint8_t *)args = mode;
+
+	return 0;
+}
+
+static int
+hns3_parse_fdir_tuple_config(const char *key, const char *value, void *args)
+{
+	enum hns3_fdir_tuple_config tuple_cfg;
+
+	tuple_cfg = hns3_parse_tuple_config(value);
+	if (tuple_cfg == HNS3_FDIR_TUPLE_CONFIG_DEFAULT ||
+	    tuple_cfg == HNS3_FDIR_TUPLE_CONFIG_BUTT) {
+		PMD_INIT_LOG(WARNING, "invalid value:\"%s\" for key:\"%s\"",
+			     value, key);
+		return -1;
+	}
+
+	*(enum hns3_fdir_tuple_config *)args = tuple_cfg;
+
+	return 0;
+}
+
+static int
+hns3_parse_fdir_index_config(const char *key, const char *value, void *args)
+{
+	enum hns3_fdir_index_config cfg;
+
+	if (strcmp(value, "hash") == 0) {
+		cfg  = HNS3_FDIR_INDEX_CONFIG_HASH;
+	} else if (strcmp(value, "priority") == 0) {
+		cfg  = HNS3_FDIR_INDEX_CONFIG_PRIORITY;
+	} else {
+		PMD_INIT_LOG(WARNING, "invalid value:\"%s\" for key:\"%s\", "
+			"value must be 'hash' or 'priority'",
+			value, key);
+		return -1;
+	}
+
+	*(enum hns3_fdir_index_config *)args = cfg;
 
 	return 0;
 }
@@ -243,6 +327,8 @@ hns3_parse_devargs(struct rte_eth_dev *dev)
 	hns->tx_func_hint = HNS3_IO_FUNC_HINT_NONE;
 	hns->dev_caps_mask = 0;
 	hns->mbx_time_limit_ms = HNS3_MBX_DEF_TIME_LIMIT_MS;
+	if (!hns->is_vf)
+		hns->pf.fdir.vlan_match_mode = HNS3_FDIR_VLAN_STRICT_MATCH;
 
 	if (dev->device->devargs == NULL)
 		return;
@@ -259,6 +345,20 @@ hns3_parse_devargs(struct rte_eth_dev *dev)
 			   &hns3_parse_dev_caps_mask, &dev_caps_mask);
 	(void)rte_kvargs_process(kvlist, HNS3_DEVARG_MBX_TIME_LIMIT_MS,
 			   &hns3_parse_mbx_time_limit, &mbx_time_limit_ms);
+	if (!hns->is_vf) {
+		(void)rte_kvargs_process(kvlist,
+					 HNS3_DEVARG_FDIR_VLAN_MATCH_MODE,
+					 &hns3_parse_vlan_match_mode,
+					 &hns->pf.fdir.vlan_match_mode);
+		(void)rte_kvargs_process(kvlist,
+					 HNS3_DEVARG_FDIR_TUPLE_CONFIG,
+					 &hns3_parse_fdir_tuple_config,
+					 &hns->pf.fdir.tuple_cfg);
+		(void)rte_kvargs_process(kvlist,
+					 HNS3_DEVARG_FDIR_INDEX_CONFIG,
+					 &hns3_parse_fdir_index_config,
+					 &hns->pf.fdir.index_cfg);
+	}
 
 	rte_kvargs_free(kvlist);
 
@@ -340,7 +440,7 @@ hns3_set_mc_addr_chk_param(struct hns3_hw *hw,
 		hns3_err(hw, "failed to set mc mac addr, nb_mc_addr(%u) "
 			 "invalid. valid range: 0~%d",
 			 nb_mc_addr, HNS3_MC_MACADDR_NUM);
-		return -EINVAL;
+		return -ENOSPC;
 	}
 
 	/* Check if input mac addresses are valid */
@@ -398,12 +498,22 @@ hns3_set_mc_mac_addr_list(struct rte_eth_dev *dev,
 			  uint32_t nb_mc_addr)
 {
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
 	struct rte_ether_addr *addr;
 	int cur_addr_num;
 	int set_addr_num;
 	int num;
 	int ret;
 	int i;
+
+	if (mc_addr_set == NULL || nb_mc_addr == 0) {
+		rte_spinlock_lock(&hw->lock);
+		ret = hns3_configure_all_mc_mac_addr(hns, true);
+		if (ret == 0)
+			hw->mc_addrs_num = 0;
+		rte_spinlock_unlock(&hw->lock);
+		return ret;
+	}
 
 	/* Check if input parameters are valid */
 	ret = hns3_set_mc_addr_chk_param(hw, mc_addr_set, nb_mc_addr);
@@ -844,4 +954,88 @@ hns3_get_pci_revision_id(struct hns3_hw *hw, uint8_t *revision_id)
 	*revision_id = revision;
 
 	return 0;
+}
+
+void
+hns3_set_default_dev_specifications(struct hns3_hw *hw)
+{
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+
+	hw->max_non_tso_bd_num = HNS3_MAX_NON_TSO_BD_PER_PKT;
+	hw->rss_ind_tbl_size = HNS3_RSS_IND_TBL_SIZE;
+	hw->rss_key_size = HNS3_RSS_KEY_SIZE;
+	hw->intr.int_ql_max = HNS3_INTR_QL_NONE;
+
+	if (hns->is_vf)
+		return;
+
+	hw->max_tm_rate = HNS3_ETHER_MAX_RATE;
+}
+
+static void
+hns3_parse_dev_specifications(struct hns3_hw *hw, struct hns3_cmd_desc *desc)
+{
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+	struct hns3_dev_specs_0_cmd *req0;
+	struct hns3_dev_specs_1_cmd *req1;
+
+	req0 = (struct hns3_dev_specs_0_cmd *)desc[0].data;
+	req1 = (struct hns3_dev_specs_1_cmd *)desc[1].data;
+
+	hw->max_non_tso_bd_num = req0->max_non_tso_bd_num;
+	hw->rss_ind_tbl_size = rte_le_to_cpu_16(req0->rss_ind_tbl_size);
+	hw->rss_key_size = rte_le_to_cpu_16(req0->rss_key_size);
+	hw->intr.int_ql_max = rte_le_to_cpu_16(req0->intr_ql_max);
+	hw->min_tx_pkt_len = req1->min_tx_pkt_len;
+
+	if (hns->is_vf)
+		return;
+
+	hw->max_tm_rate = rte_le_to_cpu_32(req0->max_tm_rate);
+}
+
+static int
+hns3_check_dev_specifications(struct hns3_hw *hw)
+{
+	if (hw->rss_ind_tbl_size == 0 ||
+	    hw->rss_ind_tbl_size > HNS3_RSS_IND_TBL_SIZE_MAX) {
+		hns3_err(hw, "the indirection table size obtained (%u) is invalid, and should not be zero or exceed the maximum(%u)",
+			 hw->rss_ind_tbl_size, HNS3_RSS_IND_TBL_SIZE_MAX);
+		return -EINVAL;
+	}
+
+	if (hw->rss_key_size == 0 || hw->rss_key_size > HNS3_RSS_KEY_SIZE_MAX) {
+		hns3_err(hw, "the RSS key size obtained (%u) is invalid, and should not be zero or exceed the maximum(%u)",
+			 hw->rss_key_size, HNS3_RSS_KEY_SIZE_MAX);
+		return -EINVAL;
+	}
+
+	if (hw->rss_key_size > HNS3_RSS_KEY_SIZE)
+		hns3_warn(hw, "the RSS key size obtained (%u) is greater than the default key size (%u)",
+			  hw->rss_key_size, HNS3_RSS_KEY_SIZE);
+
+	return 0;
+}
+
+int
+hns3_query_dev_specifications(struct hns3_hw *hw)
+{
+	struct hns3_cmd_desc desc[HNS3_QUERY_DEV_SPECS_BD_NUM];
+	int ret;
+	int i;
+
+	for (i = 0; i < HNS3_QUERY_DEV_SPECS_BD_NUM - 1; i++) {
+		hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_QUERY_DEV_SPECS,
+					  true);
+		desc[i].flag |= rte_cpu_to_le_16(HNS3_CMD_FLAG_NEXT);
+	}
+	hns3_cmd_setup_basic_desc(&desc[i], HNS3_OPC_QUERY_DEV_SPECS, true);
+
+	ret = hns3_cmd_send(hw, desc, HNS3_QUERY_DEV_SPECS_BD_NUM);
+	if (ret)
+		return ret;
+
+	hns3_parse_dev_specifications(hw, desc);
+
+	return hns3_check_dev_specifications(hw);
 }

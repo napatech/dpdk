@@ -241,27 +241,6 @@ ipv4_addr_dump(const char *what, uint32_t be_ipv4_addr)
 	printf("%s", buf);
 }
 
-static uint16_t
-ipv4_hdr_cksum(struct rte_ipv4_hdr *ip_h)
-{
-	uint16_t *v16_h;
-	uint32_t ip_cksum;
-
-	/*
-	 * Compute the sum of successive 16-bit words of the IPv4 header,
-	 * skipping the checksum field of the header.
-	 */
-	v16_h = (unaligned_uint16_t *) ip_h;
-	ip_cksum = v16_h[0] + v16_h[1] + v16_h[2] + v16_h[3] +
-		v16_h[4] + v16_h[6] + v16_h[7] + v16_h[8] + v16_h[9];
-
-	/* reduce 32 bit checksum to 16 bits and complement it */
-	ip_cksum = (ip_cksum & 0xffff) + (ip_cksum >> 16);
-	ip_cksum = (ip_cksum & 0xffff) + (ip_cksum >> 16);
-	ip_cksum = (~ip_cksum) & 0x0000FFFF;
-	return (ip_cksum == 0) ? 0xFFFF : (uint16_t) ip_cksum;
-}
-
 #define is_multicast_ipv4_addr(ipv4_addr) \
 	(((rte_be_to_cpu_32((ipv4_addr)) >> 24) & 0x000000FF) == 0xE0)
 
@@ -269,7 +248,7 @@ ipv4_hdr_cksum(struct rte_ipv4_hdr *ip_h)
  * Receive a burst of packets, lookup for ICMP echo requests, and, if any,
  * send back ICMP echo replies.
  */
-static void
+static bool
 reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 {
 	struct rte_mbuf *pkts_burst[MAX_PKT_BURST];
@@ -280,10 +259,8 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 	struct rte_ipv4_hdr *ip_h;
 	struct rte_icmp_hdr *icmp_h;
 	struct rte_ether_addr eth_addr;
-	uint32_t retry;
 	uint32_t ip_addr;
 	uint16_t nb_rx;
-	uint16_t nb_tx;
 	uint16_t nb_replies;
 	uint16_t eth_type;
 	uint16_t vlan_id;
@@ -292,20 +269,14 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 	uint32_t cksum;
 	uint8_t  i;
 	int l2_len;
-	uint64_t start_tsc = 0;
-
-	get_start_cycles(&start_tsc);
 
 	/*
 	 * First, receive a burst of packets.
 	 */
-	nb_rx = rte_eth_rx_burst(fs->rx_port, fs->rx_queue, pkts_burst,
-				 nb_pkt_per_burst);
-	inc_rx_burst_stats(fs, nb_rx);
+	nb_rx = common_fwd_stream_receive(fs, pkts_burst, nb_pkt_per_burst);
 	if (unlikely(nb_rx == 0))
-		return;
+		return false;
 
-	fs->rx_packets += nb_rx;
 	nb_replies = 0;
 	for (i = 0; i < nb_rx; i++) {
 		if (likely(i < nb_rx - 1))
@@ -424,7 +395,7 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 		icmp_h = (struct rte_icmp_hdr *) ((char *)ip_h +
 					      sizeof(struct rte_ipv4_hdr));
 		if (! ((ip_h->next_proto_id == IPPROTO_ICMP) &&
-		       (icmp_h->icmp_type == RTE_IP_ICMP_ECHO_REQUEST) &&
+		       (icmp_h->icmp_type == RTE_ICMP_TYPE_ECHO_REQUEST) &&
 		       (icmp_h->icmp_code == 0))) {
 			rte_pktmbuf_free(pkt);
 			continue;
@@ -448,7 +419,7 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 		 *     - switch the request IP source and destination
 		 *       addresses in the reply IP header,
 		 *     - keep the IP header checksum unchanged.
-		 * - set RTE_IP_ICMP_ECHO_REPLY in ICMP header.
+		 * - set RTE_ICMP_TYPE_ECHO_REPLY in ICMP header.
 		 * ICMP checksum is computed by assuming it is valid in the
 		 * echo request and not verified.
 		 */
@@ -466,15 +437,15 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 				ip_src = (ip_src & 0xFFFFFFFC) | 0x00000001;
 			ip_h->src_addr = rte_cpu_to_be_32(ip_src);
 			ip_h->dst_addr = ip_addr;
-			ip_h->hdr_checksum = ipv4_hdr_cksum(ip_h);
+			ip_h->hdr_checksum = rte_ipv4_cksum_simple(ip_h);
 		} else {
 			ip_h->src_addr = ip_h->dst_addr;
 			ip_h->dst_addr = ip_addr;
 		}
-		icmp_h->icmp_type = RTE_IP_ICMP_ECHO_REPLY;
+		icmp_h->icmp_type = RTE_ICMP_TYPE_ECHO_REPLY;
 		cksum = ~icmp_h->icmp_cksum & 0xffff;
-		cksum += ~RTE_BE16(RTE_IP_ICMP_ECHO_REQUEST << 8) & 0xffff;
-		cksum += RTE_BE16(RTE_IP_ICMP_ECHO_REPLY << 8);
+		cksum += ~RTE_BE16(RTE_ICMP_TYPE_ECHO_REQUEST << 8) & 0xffff;
+		cksum += RTE_BE16(RTE_ICMP_TYPE_ECHO_REPLY << 8);
 		cksum = (cksum & 0xffff) + (cksum >> 16);
 		cksum = (cksum & 0xffff) + (cksum >> 16);
 		icmp_h->icmp_cksum = ~cksum;
@@ -482,52 +453,14 @@ reply_to_icmp_echo_rqsts(struct fwd_stream *fs)
 	}
 
 	/* Send back ICMP echo replies, if any. */
-	if (nb_replies > 0) {
-		nb_tx = rte_eth_tx_burst(fs->tx_port, fs->tx_queue, pkts_burst,
-					 nb_replies);
-		/*
-		 * Retry if necessary
-		 */
-		if (unlikely(nb_tx < nb_replies) && fs->retry_enabled) {
-			retry = 0;
-			while (nb_tx < nb_replies &&
-					retry++ < burst_tx_retry_num) {
-				rte_delay_us(burst_tx_delay_time);
-				nb_tx += rte_eth_tx_burst(fs->tx_port,
-						fs->tx_queue,
-						&pkts_burst[nb_tx],
-						nb_replies - nb_tx);
-			}
-		}
-		fs->tx_packets += nb_tx;
-		inc_tx_burst_stats(fs, nb_tx);
-		if (unlikely(nb_tx < nb_replies)) {
-			fs->fwd_dropped += (nb_replies - nb_tx);
-			do {
-				rte_pktmbuf_free(pkts_burst[nb_tx]);
-			} while (++nb_tx < nb_replies);
-		}
-	}
+	if (nb_replies > 0)
+		common_fwd_stream_transmit(fs, pkts_burst, nb_replies);
 
-	get_end_cycles(fs, start_tsc);
-}
-
-static void
-icmpecho_stream_init(struct fwd_stream *fs)
-{
-	bool rx_stopped, tx_stopped;
-
-	rx_stopped = ports[fs->rx_port].rxq[fs->rx_queue].state ==
-						RTE_ETH_QUEUE_STATE_STOPPED;
-	tx_stopped = ports[fs->tx_port].txq[fs->tx_queue].state ==
-						RTE_ETH_QUEUE_STATE_STOPPED;
-	fs->disabled = rx_stopped || tx_stopped;
+	return true;
 }
 
 struct fwd_engine icmp_echo_engine = {
 	.fwd_mode_name  = "icmpecho",
-	.port_fwd_begin = NULL,
-	.port_fwd_end   = NULL,
-	.stream_init    = icmpecho_stream_init,
+	.stream_init    = common_fwd_stream_init,
 	.packet_fwd     = reply_to_icmp_echo_rqsts,
 };

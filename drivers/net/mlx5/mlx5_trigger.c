@@ -20,6 +20,8 @@
 #include "mlx5_utils.h"
 #include "rte_pmd_mlx5.h"
 
+static void mlx5_traffic_disable_legacy(struct rte_eth_dev *dev);
+
 /**
  * Stop traffic on Tx queues.
  *
@@ -226,17 +228,17 @@ mlx5_rxq_start(struct rte_eth_dev *dev)
 		if (rxq == NULL)
 			continue;
 		rxq_ctrl = rxq->ctrl;
-		if (!rxq_ctrl->started) {
+		if (!rxq_ctrl->started)
 			if (mlx5_rxq_ctrl_prepare(dev, rxq_ctrl, i) < 0)
 				goto error;
-			LIST_INSERT_HEAD(&priv->rxqsobj, rxq_ctrl->obj, next);
-		}
 		ret = priv->obj_ops.rxq_obj_new(rxq);
 		if (ret) {
 			mlx5_free(rxq_ctrl->obj);
 			rxq_ctrl->obj = NULL;
 			goto error;
 		}
+		if (!rxq_ctrl->started)
+			LIST_INSERT_HEAD(&priv->rxqsobj, rxq_ctrl->obj, next);
 		rxq_ctrl->started = true;
 	}
 	return 0;
@@ -346,8 +348,8 @@ mlx5_hairpin_auto_bind(struct rte_eth_dev *dev)
 		ret = mlx5_devx_cmd_modify_sq(sq, &sq_attr);
 		if (ret)
 			goto error;
-		rq_attr.state = MLX5_SQC_STATE_RDY;
-		rq_attr.rq_state = MLX5_SQC_STATE_RST;
+		rq_attr.state = MLX5_RQC_STATE_RDY;
+		rq_attr.rq_state = MLX5_RQC_STATE_RST;
 		rq_attr.hairpin_peer_sq = sq->id;
 		rq_attr.hairpin_peer_vhca =
 				priv->sh->cdev->config.hca_attr.vhca_id;
@@ -601,8 +603,8 @@ mlx5_hairpin_queue_peer_bind(struct rte_eth_dev *dev, uint16_t cur_queue,
 				" mismatch", dev->data->port_id, cur_queue);
 			return -rte_errno;
 		}
-		rq_attr.state = MLX5_SQC_STATE_RDY;
-		rq_attr.rq_state = MLX5_SQC_STATE_RST;
+		rq_attr.state = MLX5_RQC_STATE_RDY;
+		rq_attr.rq_state = MLX5_RQC_STATE_RST;
 		rq_attr.hairpin_peer_sq = peer_info->qp_id;
 		rq_attr.hairpin_peer_vhca = peer_info->vhca_id;
 		ret = mlx5_devx_cmd_modify_rq(rxq_ctrl->obj->rq, &rq_attr);
@@ -666,7 +668,7 @@ mlx5_hairpin_queue_peer_unbind(struct rte_eth_dev *dev, uint16_t cur_queue,
 			return -rte_errno;
 		}
 		sq_attr.state = MLX5_SQC_STATE_RST;
-		sq_attr.sq_state = MLX5_SQC_STATE_RST;
+		sq_attr.sq_state = MLX5_SQC_STATE_RDY;
 		ret = mlx5_devx_cmd_modify_sq(txq_ctrl->obj->sq, &sq_attr);
 		if (ret == 0)
 			txq_ctrl->hairpin_status = 0;
@@ -700,8 +702,8 @@ mlx5_hairpin_queue_peer_unbind(struct rte_eth_dev *dev, uint16_t cur_queue,
 				dev->data->port_id, cur_queue);
 			return -rte_errno;
 		}
-		rq_attr.state = MLX5_SQC_STATE_RST;
-		rq_attr.rq_state = MLX5_SQC_STATE_RST;
+		rq_attr.state = MLX5_RQC_STATE_RST;
+		rq_attr.rq_state = MLX5_RQC_STATE_RDY;
 		ret = mlx5_devx_cmd_modify_rq(rxq_ctrl->obj->rq, &rq_attr);
 		if (ret == 0)
 			rxq->hairpin_status = 0;
@@ -845,6 +847,11 @@ error:
 		txq_ctrl = mlx5_txq_get(dev, i);
 		if (txq_ctrl == NULL)
 			continue;
+		if (!txq_ctrl->is_hairpin ||
+		    txq_ctrl->hairpin_conf.peers[0].port != rx_port) {
+			mlx5_txq_release(dev, i);
+			continue;
+		}
 		rx_queue = txq_ctrl->hairpin_conf.peers[0].queue;
 		rte_eth_hairpin_queue_peer_unbind(rx_port, rx_queue, 0);
 		mlx5_hairpin_queue_peer_unbind(dev, i, 1);
@@ -896,11 +903,11 @@ mlx5_hairpin_unbind_single_port(struct rte_eth_dev *dev, uint16_t rx_port)
 		}
 		/* Indeed, only the first used queue needs to be checked. */
 		if (txq_ctrl->hairpin_conf.manual_bind == 0) {
+			mlx5_txq_release(dev, i);
 			if (cur_port != rx_port) {
 				rte_errno = EINVAL;
 				DRV_LOG(ERR, "port %u and port %u are in"
 					" auto-bind mode", cur_port, rx_port);
-				mlx5_txq_release(dev, i);
 				return -rte_errno;
 			} else {
 				return 0;
@@ -1153,6 +1160,18 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 	DRV_LOG(DEBUG, "port %u starting device", dev->data->port_id);
 #ifdef HAVE_MLX5_HWS_SUPPORT
 	if (priv->sh->config.dv_flow_en == 2) {
+		struct rte_flow_error error = { 0, };
+
+		/*If previous configuration does not exist. */
+		if (!(priv->dr_ctx)) {
+			ret = flow_hw_init(dev, &error);
+			if (ret) {
+				DRV_LOG(ERR, "Failed to start port %u %s: %s",
+					dev->data->port_id, dev->data->name,
+					error.message);
+				return ret;
+			}
+		}
 		/* If there is no E-Switch, then there are no start/stop order limitations. */
 		if (!priv->sh->config.dv_esw_en)
 			goto continue_dev_start;
@@ -1282,8 +1301,8 @@ continue_dev_start:
 			dev->data->port_id);
 		goto error;
 	}
-	/* Set a mask and offset of dynamic metadata flows into Rx queues. */
-	mlx5_flow_rxq_dynf_metadata_set(dev);
+	/* Set dynamic fields and flags into Rx queues. */
+	mlx5_flow_rxq_dynf_set(dev);
 	/* Set flags and context to convert Rx timestamps. */
 	mlx5_rxq_timestamp_set(dev);
 	/* Set a mask and offset of scheduling on timestamp into Tx queues. */
@@ -1435,12 +1454,7 @@ continue_dev_stop:
 	mlx5_mp_os_req_stop_rxtx(dev);
 	rte_delay_us_sleep(1000 * priv->rxqs_n);
 	DRV_LOG(DEBUG, "port %u stopping device", dev->data->port_id);
-	if (priv->sh->config.dv_flow_en == 2) {
-		if (!__atomic_load_n(&priv->hws_mark_refcnt, __ATOMIC_RELAXED))
-			flow_hw_rxq_flag_set(dev, false);
-	} else {
-		mlx5_flow_stop_default(dev);
-	}
+	mlx5_flow_stop_default(dev);
 	/* Control flows for default traffic can be removed firstly. */
 	mlx5_traffic_disable(dev);
 	/* All RX queue flags will be cleared in the flush interface. */
@@ -1493,14 +1507,16 @@ mlx5_traffic_enable_hws(struct rte_eth_dev *dev)
 		if (!txq)
 			continue;
 		queue = mlx5_txq_get_sqn(txq);
-		if ((priv->representor || priv->master) && config->dv_esw_en) {
-			if (mlx5_flow_hw_esw_create_sq_miss_flow(dev, queue)) {
+		if ((priv->representor || priv->master) &&
+		    config->dv_esw_en &&
+		    config->fdb_def_rule) {
+			if (mlx5_flow_hw_esw_create_sq_miss_flow(dev, queue, false)) {
 				mlx5_txq_release(dev, i);
 				goto error;
 			}
 		}
 		if (config->dv_esw_en && config->repr_matching) {
-			if (mlx5_flow_hw_tx_repr_matching_flow(dev, queue)) {
+			if (mlx5_flow_hw_tx_repr_matching_flow(dev, queue, false)) {
 				mlx5_txq_release(dev, i);
 				goto error;
 			}
@@ -1519,6 +1535,9 @@ mlx5_traffic_enable_hws(struct rte_eth_dev *dev)
 	}
 	if (priv->isolated)
 		return 0;
+	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0 && priv->master)
+		if (mlx5_flow_hw_lacp_rx_flow(dev))
+			goto error;
 	if (dev->data->promiscuous)
 		flags |= MLX5_CTRL_PROMISCUOUS;
 	if (dev->data->all_multicast)
@@ -1552,23 +1571,23 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_flow_item_eth bcast = {
-		.dst.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
 	};
 	struct rte_flow_item_eth ipv6_multi_spec = {
-		.dst.addr_bytes = "\x33\x33\x00\x00\x00\x00",
+		.hdr.dst_addr.addr_bytes = { 0x33, 0x33, 0x00, 0x00, 0x00, 0x00 },
 	};
 	struct rte_flow_item_eth ipv6_multi_mask = {
-		.dst.addr_bytes = "\xff\xff\x00\x00\x00\x00",
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0x00, 0x00, 0x00, 0x00 },
 	};
 	struct rte_flow_item_eth unicast = {
-		.src.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+		.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 	};
 	struct rte_flow_item_eth unicast_mask = {
-		.dst.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
 	};
 	const unsigned int vlan_filter_n = priv->vlan_filter_n;
 	const struct rte_ether_addr cmp = {
-		.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+		.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 	};
 	unsigned int i;
 	unsigned int j;
@@ -1624,22 +1643,22 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 		DRV_LOG(INFO, "port %u FDB default rule is disabled",
 			dev->data->port_id);
 	}
-	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0) {
+	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0 && priv->master) {
 		ret = mlx5_flow_lacp_miss(dev);
 		if (ret)
 			DRV_LOG(INFO, "port %u LACP rule cannot be created - "
 				"forward LACP to kernel.", dev->data->port_id);
 		else
-			DRV_LOG(INFO, "LACP traffic will be missed in port %u."
-				, dev->data->port_id);
+			DRV_LOG(INFO, "LACP traffic will be missed in port %u.",
+				dev->data->port_id);
 	}
 	if (priv->isolated)
 		return 0;
 	if (dev->data->promiscuous) {
 		struct rte_flow_item_eth promisc = {
-			.dst.addr_bytes = "\x00\x00\x00\x00\x00\x00",
-			.src.addr_bytes = "\x00\x00\x00\x00\x00\x00",
-			.type = 0,
+			.hdr.dst_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.ether_type = 0,
 		};
 
 		ret = mlx5_ctrl_flow(dev, &promisc, &promisc);
@@ -1648,9 +1667,9 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 	}
 	if (dev->data->all_multicast) {
 		struct rte_flow_item_eth multicast = {
-			.dst.addr_bytes = "\x01\x00\x00\x00\x00\x00",
-			.src.addr_bytes = "\x00\x00\x00\x00\x00\x00",
-			.type = 0,
+			.hdr.dst_addr.addr_bytes = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.ether_type = 0,
 		};
 
 		ret = mlx5_ctrl_flow(dev, &multicast, &multicast);
@@ -1662,7 +1681,7 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 			uint16_t vlan = priv->vlan_filter[i];
 
 			struct rte_flow_item_vlan vlan_spec = {
-				.tci = rte_cpu_to_be_16(vlan),
+				.hdr.vlan_tci = rte_cpu_to_be_16(vlan),
 			};
 			struct rte_flow_item_vlan vlan_mask =
 				rte_flow_item_vlan_mask;
@@ -1697,14 +1716,14 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 
 		if (!memcmp(mac, &cmp, sizeof(*mac)))
 			continue;
-		memcpy(&unicast.dst.addr_bytes,
+		memcpy(&unicast.hdr.dst_addr.addr_bytes,
 		       mac->addr_bytes,
 		       RTE_ETHER_ADDR_LEN);
 		for (j = 0; j != vlan_filter_n; ++j) {
 			uint16_t vlan = priv->vlan_filter[j];
 
 			struct rte_flow_item_vlan vlan_spec = {
-				.tci = rte_cpu_to_be_16(vlan),
+				.hdr.vlan_tci = rte_cpu_to_be_16(vlan),
 			};
 			struct rte_flow_item_vlan vlan_mask =
 				rte_flow_item_vlan_mask;
@@ -1725,11 +1744,31 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 	return 0;
 error:
 	ret = rte_errno; /* Save rte_errno before cleanup. */
-	mlx5_flow_list_flush(dev, MLX5_FLOW_TYPE_CTL, false);
+	mlx5_traffic_disable_legacy(dev);
 	rte_errno = ret; /* Restore rte_errno. */
 	return -rte_errno;
 }
 
+static void
+mlx5_traffic_disable_legacy(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_ctrl_flow_entry *entry;
+	struct mlx5_ctrl_flow_entry *tmp;
+
+	/*
+	 * Free registered control flow rules first,
+	 * to free the memory allocated for list entries
+	 */
+	entry = LIST_FIRST(&priv->hw_ctrl_flows);
+	while (entry != NULL) {
+		tmp = LIST_NEXT(entry, next);
+		mlx5_legacy_ctrl_flow_destroy(dev, entry);
+		entry = tmp;
+	}
+
+	mlx5_flow_list_flush(dev, MLX5_FLOW_TYPE_CTL, false);
+}
 
 /**
  * Disable traffic flows configured by control plane
@@ -1747,7 +1786,7 @@ mlx5_traffic_disable(struct rte_eth_dev *dev)
 		mlx5_flow_hw_flush_ctrl_flows(dev);
 	else
 #endif
-		mlx5_flow_list_flush(dev, MLX5_FLOW_TYPE_CTL, false);
+		mlx5_traffic_disable_legacy(dev);
 }
 
 /**
@@ -1769,5 +1808,241 @@ mlx5_traffic_restart(struct rte_eth_dev *dev)
 #endif
 		return mlx5_traffic_enable(dev);
 	}
+	return 0;
+}
+
+static bool
+mac_flows_update_needed(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (!dev->data->dev_started)
+		return false;
+	if (dev->data->promiscuous)
+		return false;
+	if (priv->isolated)
+		return false;
+
+	return true;
+}
+
+static int
+traffic_dmac_create(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (priv->sh->config.dv_flow_en == 2)
+		return mlx5_flow_hw_ctrl_flow_dmac(dev, addr);
+	else
+		return mlx5_legacy_dmac_flow_create(dev, addr);
+}
+
+static int
+traffic_dmac_destroy(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (priv->sh->config.dv_flow_en == 2)
+		return mlx5_flow_hw_ctrl_flow_dmac_destroy(dev, addr);
+	else
+		return mlx5_legacy_dmac_flow_destroy(dev, addr);
+}
+
+static int
+traffic_dmac_vlan_create(struct rte_eth_dev *dev,
+			 const struct rte_ether_addr *addr,
+			 const uint16_t vid)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (priv->sh->config.dv_flow_en == 2)
+		return mlx5_flow_hw_ctrl_flow_dmac_vlan(dev, addr, vid);
+	else
+		return mlx5_legacy_dmac_vlan_flow_create(dev, addr, vid);
+}
+
+static int
+traffic_dmac_vlan_destroy(struct rte_eth_dev *dev,
+			 const struct rte_ether_addr *addr,
+			 const uint16_t vid)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (priv->sh->config.dv_flow_en == 2)
+		return mlx5_flow_hw_ctrl_flow_dmac_vlan_destroy(dev, addr, vid);
+	else
+		return mlx5_legacy_dmac_vlan_flow_destroy(dev, addr, vid);
+}
+
+/**
+ * Adjust Rx control flow rules to allow traffic on provided MAC address.
+ */
+int
+mlx5_traffic_mac_add(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (!mac_flows_update_needed(dev))
+		return 0;
+
+	if (priv->vlan_filter_n > 0) {
+		unsigned int i;
+
+		for (i = 0; i < priv->vlan_filter_n; ++i) {
+			uint16_t vlan = priv->vlan_filter[i];
+			int ret;
+
+			if (mlx5_ctrl_flow_uc_dmac_vlan_exists(dev, addr, vlan))
+				continue;
+
+			ret = traffic_dmac_vlan_create(dev, addr, vlan);
+			if (ret != 0)
+				return ret;
+		}
+
+		return 0;
+	}
+
+	if (mlx5_ctrl_flow_uc_dmac_exists(dev, addr))
+		return 0;
+
+	return traffic_dmac_create(dev, addr);
+}
+
+/**
+ * Adjust Rx control flow rules to disallow traffic with removed MAC address.
+ */
+int
+mlx5_traffic_mac_remove(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (!mac_flows_update_needed(dev))
+		return 0;
+
+	if (priv->vlan_filter_n > 0) {
+		unsigned int i;
+
+		for (i = 0; i < priv->vlan_filter_n; ++i) {
+			uint16_t vlan = priv->vlan_filter[i];
+			int ret;
+
+			if (!mlx5_ctrl_flow_uc_dmac_vlan_exists(dev, addr, vlan))
+				continue;
+
+			ret = traffic_dmac_vlan_destroy(dev, addr, vlan);
+			if (ret != 0)
+				return ret;
+		}
+
+		return 0;
+	}
+
+	if (!mlx5_ctrl_flow_uc_dmac_exists(dev, addr))
+		return 0;
+
+	return traffic_dmac_destroy(dev, addr);
+}
+
+/**
+ * Adjust Rx control flow rules to allow traffic on provided VLAN.
+ *
+ * Assumptions:
+ * - Called when VLAN is added.
+ * - At least one VLAN is enabled before function call.
+ *
+ * This functions assumes that VLAN is new and was not included in
+ * Rx control flow rules set up before calling it.
+ */
+int
+mlx5_traffic_vlan_add(struct rte_eth_dev *dev, const uint16_t vid)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	unsigned int i;
+	int ret;
+
+	if (!mac_flows_update_needed(dev))
+		return 0;
+
+	/* Add all unicast DMAC flow rules with new VLAN attached. */
+	for (i = 0; i != MLX5_MAX_MAC_ADDRESSES; ++i) {
+		struct rte_ether_addr *mac = &dev->data->mac_addrs[i];
+
+		if (rte_is_zero_ether_addr(mac))
+			continue;
+
+		ret = traffic_dmac_vlan_create(dev, mac, vid);
+		if (ret != 0)
+			return ret;
+	}
+
+	if (priv->vlan_filter_n == 1) {
+		/*
+		 * Adding first VLAN. Need to remove unicast DMAC rules before adding new rules.
+		 * Removing after creating VLAN rules so that traffic "gap" is not introduced.
+		 */
+
+		for (i = 0; i != MLX5_MAX_MAC_ADDRESSES; ++i) {
+			struct rte_ether_addr *mac = &dev->data->mac_addrs[i];
+
+			if (rte_is_zero_ether_addr(mac))
+				continue;
+
+			ret = traffic_dmac_destroy(dev, mac);
+			if (ret != 0)
+				return ret;
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * Adjust Rx control flow rules to disallow traffic with removed VLAN.
+ *
+ * Assumptions:
+ *
+ * - VLAN was really removed.
+ */
+int
+mlx5_traffic_vlan_remove(struct rte_eth_dev *dev, const uint16_t vid)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	unsigned int i;
+	int ret;
+
+	if (!mac_flows_update_needed(dev))
+		return 0;
+
+	if (priv->vlan_filter_n == 0) {
+		/*
+		 * If there are no VLANs as a result, unicast DMAC flow rules must be recreated.
+		 * Recreating first to ensure no traffic "gap".
+		 */
+
+		for (i = 0; i != MLX5_MAX_MAC_ADDRESSES; ++i) {
+			struct rte_ether_addr *mac = &dev->data->mac_addrs[i];
+
+			if (rte_is_zero_ether_addr(mac))
+				continue;
+
+			ret = traffic_dmac_create(dev, mac);
+			if (ret != 0)
+				return ret;
+		}
+	}
+
+	/* Remove all unicast DMAC flow rules with this VLAN. */
+	for (i = 0; i != MLX5_MAX_MAC_ADDRESSES; ++i) {
+		struct rte_ether_addr *mac = &dev->data->mac_addrs[i];
+
+		if (rte_is_zero_ether_addr(mac))
+			continue;
+
+		ret = traffic_dmac_vlan_destroy(dev, mac, vid);
+		if (ret != 0)
+			return ret;
+	}
+
 	return 0;
 }

@@ -11,7 +11,6 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <syslog.h>
 #include <getopt.h>
 #include <sys/file.h>
 #include <stddef.h>
@@ -26,6 +25,7 @@
 #include <rte_memory.h>
 #include <rte_launch.h>
 #include <rte_eal.h>
+#include <rte_eal_memconfig.h>
 #include <rte_errno.h>
 #include <rte_per_lcore.h>
 #include <rte_lcore.h>
@@ -46,12 +46,14 @@
 
 #include "eal_private.h"
 #include "eal_thread.h"
+#include "eal_lcore_var.h"
 #include "eal_internal_cfg.h"
 #include "eal_filesystem.h"
 #include "eal_hugepages.h"
 #include "eal_options.h"
 #include "eal_memcfg.h"
 #include "eal_trace.h"
+#include "log_internal.h"
 
 #define MEMSIZE_IF_NO_HUGE_PAGE (64ULL * 1024ULL * 1024ULL)
 
@@ -116,7 +118,7 @@ rte_eal_config_create(void)
 	if (mem_cfg_fd < 0){
 		mem_cfg_fd = open(pathname, O_RDWR | O_CREAT, 0600);
 		if (mem_cfg_fd < 0) {
-			RTE_LOG(ERR, EAL, "Cannot open '%s' for rte_mem_config\n",
+			EAL_LOG(ERR, "Cannot open '%s' for rte_mem_config",
 				pathname);
 			return -1;
 		}
@@ -126,7 +128,7 @@ rte_eal_config_create(void)
 	if (retval < 0){
 		close(mem_cfg_fd);
 		mem_cfg_fd = -1;
-		RTE_LOG(ERR, EAL, "Cannot resize '%s' for rte_mem_config\n",
+		EAL_LOG(ERR, "Cannot resize '%s' for rte_mem_config",
 			pathname);
 		return -1;
 	}
@@ -135,8 +137,8 @@ rte_eal_config_create(void)
 	if (retval < 0){
 		close(mem_cfg_fd);
 		mem_cfg_fd = -1;
-		RTE_LOG(ERR, EAL, "Cannot create lock on '%s'. Is another primary "
-			"process running?\n", pathname);
+		EAL_LOG(ERR, "Cannot create lock on '%s'. Is another primary "
+			"process running?", pathname);
 		return -1;
 	}
 
@@ -144,7 +146,7 @@ rte_eal_config_create(void)
 	rte_mem_cfg_addr = eal_get_virtual_area(rte_mem_cfg_addr,
 			&cfg_len_aligned, page_sz, 0, 0);
 	if (rte_mem_cfg_addr == NULL) {
-		RTE_LOG(ERR, EAL, "Cannot mmap memory for rte_config\n");
+		EAL_LOG(ERR, "Cannot mmap memory for rte_config");
 		close(mem_cfg_fd);
 		mem_cfg_fd = -1;
 		return -1;
@@ -155,7 +157,7 @@ rte_eal_config_create(void)
 			cfg_len_aligned, PROT_READ | PROT_WRITE,
 			MAP_SHARED | MAP_FIXED, mem_cfg_fd, 0);
 	if (mapped_mem_cfg_addr == MAP_FAILED) {
-		RTE_LOG(ERR, EAL, "Cannot remap memory for rte_config\n");
+		EAL_LOG(ERR, "Cannot remap memory for rte_config");
 		munmap(rte_mem_cfg_addr, cfg_len);
 		close(mem_cfg_fd);
 		mem_cfg_fd = -1;
@@ -189,7 +191,7 @@ rte_eal_config_attach(void)
 	if (mem_cfg_fd < 0){
 		mem_cfg_fd = open(pathname, O_RDWR);
 		if (mem_cfg_fd < 0) {
-			RTE_LOG(ERR, EAL, "Cannot open '%s' for rte_mem_config\n",
+			EAL_LOG(ERR, "Cannot open '%s' for rte_mem_config",
 				pathname);
 			return -1;
 		}
@@ -201,7 +203,7 @@ rte_eal_config_attach(void)
 	if (rte_mem_cfg_addr == MAP_FAILED) {
 		close(mem_cfg_fd);
 		mem_cfg_fd = -1;
-		RTE_LOG(ERR, EAL, "Cannot mmap memory for rte_config! error %i (%s)\n",
+		EAL_LOG(ERR, "Cannot mmap memory for rte_config! error %i (%s)",
 			errno, strerror(errno));
 		return -1;
 	}
@@ -241,14 +243,14 @@ rte_eal_config_reattach(void)
 	if (mem_config == MAP_FAILED || mem_config != rte_mem_cfg_addr) {
 		if (mem_config != MAP_FAILED) {
 			/* errno is stale, don't use */
-			RTE_LOG(ERR, EAL, "Cannot mmap memory for rte_config at [%p], got [%p]"
+			EAL_LOG(ERR, "Cannot mmap memory for rte_config at [%p], got [%p]"
 					  " - please use '--" OPT_BASE_VIRTADDR
-					  "' option\n",
+					  "' option",
 				rte_mem_cfg_addr, mem_config);
 			munmap(mem_config, sizeof(struct rte_mem_config));
 			return -1;
 		}
-		RTE_LOG(ERR, EAL, "Cannot mmap memory for rte_config! error %i (%s)\n",
+		EAL_LOG(ERR, "Cannot mmap memory for rte_config! error %i (%s)",
 			errno, strerror(errno));
 		return -1;
 	}
@@ -279,7 +281,7 @@ eal_proc_type_detect(void)
 			ptype = RTE_PROC_SECONDARY;
 	}
 
-	RTE_LOG(INFO, EAL, "Auto-detected process type: %s\n",
+	EAL_LOG(INFO, "Auto-detected process type: %s",
 			ptype == RTE_PROC_PRIMARY ? "PRIMARY" : "SECONDARY");
 
 	return ptype;
@@ -306,20 +308,20 @@ rte_config_init(void)
 			return -1;
 		eal_mcfg_wait_complete();
 		if (eal_mcfg_check_version() < 0) {
-			RTE_LOG(ERR, EAL, "Primary and secondary process DPDK version mismatch\n");
+			EAL_LOG(ERR, "Primary and secondary process DPDK version mismatch");
 			return -1;
 		}
 		if (rte_eal_config_reattach() < 0)
 			return -1;
 		if (!__rte_mp_enable()) {
-			RTE_LOG(ERR, EAL, "Primary process refused secondary attachment\n");
+			EAL_LOG(ERR, "Primary process refused secondary attachment");
 			return -1;
 		}
 		eal_mcfg_update_internal();
 		break;
 	case RTE_PROC_AUTO:
 	case RTE_PROC_INVALID:
-		RTE_LOG(ERR, EAL, "Invalid process type %d\n",
+		EAL_LOG(ERR, "Invalid process type %d",
 			config->process_type);
 		return -1;
 	}
@@ -362,48 +364,6 @@ eal_get_hugepage_mem_size(void)
 	return (size < SIZE_MAX) ? (size_t)(size) : SIZE_MAX;
 }
 
-/* Parse the arguments for --log-level only */
-static void
-eal_log_level_parse(int argc, char **argv)
-{
-	int opt;
-	char **argvopt;
-	int option_index;
-	const int old_optind = optind;
-	const int old_optopt = optopt;
-	const int old_optreset = optreset;
-	char * const old_optarg = optarg;
-	struct internal_config *internal_conf =
-		eal_get_internal_configuration();
-
-	argvopt = argv;
-	optind = 1;
-	optreset = 1;
-
-	while ((opt = getopt_long(argc, argvopt, eal_short_options,
-				  eal_long_options, &option_index)) != EOF) {
-
-		int ret;
-
-		/* getopt is not happy, stop right now */
-		if (opt == '?')
-			break;
-
-		ret = (opt == OPT_LOG_LEVEL_NUM) ?
-		    eal_parse_common_option(opt, optarg, internal_conf) : 0;
-
-		/* common parser is not happy */
-		if (ret < 0)
-			break;
-	}
-
-	/* restore getopt lib */
-	optind = old_optind;
-	optopt = old_optopt;
-	optreset = old_optreset;
-	optarg = old_optarg;
-}
-
 /* Parse the argument given in the command line of the application */
 static int
 eal_parse_args(int argc, char **argv)
@@ -433,8 +393,8 @@ eal_parse_args(int argc, char **argv)
 			goto out;
 		}
 
-		/* eal_log_level_parse() already handled this option */
-		if (opt == OPT_LOG_LEVEL_NUM)
+		/* eal_parse_log_options() already handled this option */
+		if (eal_option_is_log(opt))
 			continue;
 
 		ret = eal_parse_common_option(opt, optarg, internal_conf);
@@ -453,7 +413,7 @@ eal_parse_args(int argc, char **argv)
 		{
 			char *ops_name = strdup(optarg);
 			if (ops_name == NULL)
-				RTE_LOG(ERR, EAL, "Could not store mbuf pool ops name\n");
+				EAL_LOG(ERR, "Could not store mbuf pool ops name");
 			else {
 				/* free old ops name */
 				free(internal_conf->user_mbuf_pool_ops_name);
@@ -463,21 +423,21 @@ eal_parse_args(int argc, char **argv)
 			}
 			break;
 		}
-		case 'h':
+		case OPT_HELP_NUM:
 			eal_usage(prgname);
 			exit(EXIT_SUCCESS);
 		default:
 			if (opt < OPT_LONG_MIN_NUM && isprint(opt)) {
-				RTE_LOG(ERR, EAL, "Option %c is not supported "
-					"on FreeBSD\n", opt);
+				EAL_LOG(ERR, "Option %c is not supported "
+					"on FreeBSD", opt);
 			} else if (opt >= OPT_LONG_MIN_NUM &&
 				   opt < OPT_LONG_MAX_NUM) {
-				RTE_LOG(ERR, EAL, "Option %s is not supported "
-					"on FreeBSD\n",
+				EAL_LOG(ERR, "Option %s is not supported "
+					"on FreeBSD",
 					eal_long_options[option_index].name);
 			} else {
-				RTE_LOG(ERR, EAL, "Option %d is not supported "
-					"on FreeBSD\n", opt);
+				EAL_LOG(ERR, "Option %d is not supported "
+					"on FreeBSD", opt);
 			}
 			eal_usage(prgname);
 			ret = -1;
@@ -488,11 +448,11 @@ eal_parse_args(int argc, char **argv)
 	/* create runtime data directory. In no_shconf mode, skip any errors */
 	if (eal_create_runtime_dir() < 0) {
 		if (internal_conf->no_shconf == 0) {
-			RTE_LOG(ERR, EAL, "Cannot create runtime directory\n");
+			EAL_LOG(ERR, "Cannot create runtime directory");
 			ret = -1;
 			goto out;
 		} else
-			RTE_LOG(WARNING, EAL, "No DPDK runtime directory created\n");
+			EAL_LOG(WARNING, "No DPDK runtime directory created");
 	}
 
 	if (eal_adjust_config(internal_conf) != 0) {
@@ -544,7 +504,7 @@ eal_check_mem_on_local_socket(void)
 	socket_id = rte_lcore_to_socket_id(config->main_lcore);
 
 	if (rte_memseg_list_walk(check_socket, &socket_id) == 0)
-		RTE_LOG(WARNING, EAL, "WARNING: Main core has no memory on local socket!\n");
+		EAL_LOG(WARNING, "WARNING: Main core has no memory on local socket!");
 }
 
 
@@ -570,8 +530,7 @@ rte_eal_iopl_init(void)
 
 static void rte_eal_init_alert(const char *msg)
 {
-	fprintf(stderr, "EAL: FATAL: %s\n", msg);
-	RTE_LOG(ERR, EAL, "%s\n", msg);
+	EAL_LOG(ALERT, "%s", msg);
 }
 
 /* Launch threads, called at application init(). */
@@ -582,12 +541,21 @@ rte_eal_init(int argc, char **argv)
 	static uint32_t run_once;
 	uint32_t has_run = 0;
 	char cpuset[RTE_CPU_AFFINITY_STR_LEN];
-	char thread_name[RTE_MAX_THREAD_NAME_LEN];
+	char thread_name[RTE_THREAD_NAME_SIZE];
 	const struct rte_config *config = rte_eal_get_configuration();
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 	bool has_phys_addr;
 	enum rte_iova_mode iova_mode;
+
+	/* setup log as early as possible */
+	if (eal_parse_log_options(argc, argv) < 0) {
+		rte_eal_init_alert("invalid log arguments.");
+		rte_errno = EINVAL;
+		return -1;
+	}
+
+	eal_log_init(getprogname());
 
 	/* checks if the machine is adequate */
 	if (!rte_cpu_is_supported()) {
@@ -596,8 +564,15 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
-	if (!__atomic_compare_exchange_n(&run_once, &has_run, 1, 0,
-					__ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+	/* verify if DPDK supported on architecture MMU */
+	if (!eal_mmu_supported()) {
+		rte_eal_init_alert("unsupported MMU type.");
+		rte_errno = ENOTSUP;
+		return -1;
+	}
+
+	if (!rte_atomic_compare_exchange_strong_explicit(&run_once, &has_run, 1,
+					rte_memory_order_relaxed, rte_memory_order_relaxed)) {
 		rte_eal_init_alert("already called initialization.");
 		rte_errno = EALREADY;
 		return -1;
@@ -607,9 +582,6 @@ rte_eal_init(int argc, char **argv)
 
 	/* clone argv to report out later in telemetry */
 	eal_save_args(argc, argv);
-
-	/* set log level as early as possible */
-	eal_log_level_parse(argc, argv);
 
 	if (rte_eal_cpu_init() < 0) {
 		rte_eal_init_alert("Cannot detect lcores.");
@@ -621,34 +593,35 @@ rte_eal_init(int argc, char **argv)
 	if (fctret < 0) {
 		rte_eal_init_alert("Invalid 'command line' arguments.");
 		rte_errno = EINVAL;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&run_once, 0, rte_memory_order_relaxed);
 		return -1;
 	}
 
 	/* FreeBSD always uses legacy memory model */
 	internal_conf->legacy_mem = true;
 	if (internal_conf->in_memory) {
-		RTE_LOG(WARNING, EAL, "Warning: ignoring unsupported flag, '%s'\n", OPT_IN_MEMORY);
+		EAL_LOG(WARNING, "Warning: ignoring unsupported flag, '%s'",
+			OPT_IN_MEMORY);
 		internal_conf->in_memory = false;
 	}
 
 	if (eal_plugins_init() < 0) {
 		rte_eal_init_alert("Cannot init plugins");
 		rte_errno = EINVAL;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&run_once, 0, rte_memory_order_relaxed);
 		return -1;
 	}
 
 	if (eal_trace_init() < 0) {
 		rte_eal_init_alert("Cannot init trace");
 		rte_errno = EFAULT;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&run_once, 0, rte_memory_order_relaxed);
 		return -1;
 	}
 
 	if (eal_option_device_parse()) {
 		rte_errno = ENODEV;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&run_once, 0, rte_memory_order_relaxed);
 		return -1;
 	}
 
@@ -682,7 +655,7 @@ rte_eal_init(int argc, char **argv)
 	if (rte_bus_scan()) {
 		rte_eal_init_alert("Cannot scan the buses for devices");
 		rte_errno = ENODEV;
-		__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&run_once, 0, rte_memory_order_relaxed);
 		return -1;
 	}
 
@@ -693,24 +666,38 @@ rte_eal_init(int argc, char **argv)
 	 */
 	has_phys_addr = internal_conf->no_hugetlbfs == 0;
 	iova_mode = internal_conf->iova_mode;
+	if (iova_mode == RTE_IOVA_DC) {
+		EAL_LOG(DEBUG, "Specific IOVA mode is not requested, autodetecting");
+		if (has_phys_addr) {
+			EAL_LOG(DEBUG, "Selecting IOVA mode according to bus requests");
+			iova_mode = rte_bus_get_iommu_class();
+			if (iova_mode == RTE_IOVA_DC) {
+				if (!RTE_IOVA_IN_MBUF) {
+					iova_mode = RTE_IOVA_VA;
+					EAL_LOG(DEBUG, "IOVA as VA mode is forced by build option.");
+				} else	{
+					iova_mode = RTE_IOVA_PA;
+				}
+			}
+		} else {
+			iova_mode = RTE_IOVA_VA;
+		}
+	}
+
 	if (iova_mode == RTE_IOVA_PA && !has_phys_addr) {
 		rte_eal_init_alert("Cannot use IOVA as 'PA' since physical addresses are not available");
 		rte_errno = EINVAL;
 		return -1;
 	}
-	if (iova_mode == RTE_IOVA_DC) {
-		RTE_LOG(DEBUG, EAL, "Specific IOVA mode is not requested, autodetecting\n");
-		if (has_phys_addr) {
-			RTE_LOG(DEBUG, EAL, "Selecting IOVA mode according to bus requests\n");
-			iova_mode = rte_bus_get_iommu_class();
-			if (iova_mode == RTE_IOVA_DC)
-				iova_mode = RTE_IOVA_PA;
-		} else {
-			iova_mode = RTE_IOVA_VA;
-		}
+
+	if (iova_mode == RTE_IOVA_PA && !RTE_IOVA_IN_MBUF) {
+		rte_eal_init_alert("Cannot use IOVA as 'PA' as it is disabled during build");
+		rte_errno = EINVAL;
+		return -1;
 	}
+
 	rte_eal_get_configuration()->iova_mode = iova_mode;
-	RTE_LOG(INFO, EAL, "Selected IOVA mode '%s'\n",
+	EAL_LOG(INFO, "Selected IOVA mode '%s'",
 		rte_eal_iova_mode() == RTE_IOVA_PA ? "PA" : "VA");
 
 	if (internal_conf->no_hugetlbfs == 0) {
@@ -721,7 +708,7 @@ rte_eal_init(int argc, char **argv)
 		if (ret < 0) {
 			rte_eal_init_alert("Cannot get hugepage information.");
 			rte_errno = EACCES;
-			__atomic_store_n(&run_once, 0, __ATOMIC_RELAXED);
+			rte_atomic_store_explicit(&run_once, 0, rte_memory_order_relaxed);
 			return -1;
 		}
 	}
@@ -736,11 +723,11 @@ rte_eal_init(int argc, char **argv)
 	if (internal_conf->vmware_tsc_map == 1) {
 #ifdef RTE_LIBRTE_EAL_VMWARE_TSC_MAP_SUPPORT
 		rte_cycles_vmware_tsc_map = 1;
-		RTE_LOG (DEBUG, EAL, "Using VMWARE TSC MAP, "
-				"you must have monitor_control.pseudo_perfctr = TRUE\n");
+		EAL_LOG(DEBUG, "Using VMWARE TSC MAP, "
+				"you must have monitor_control.pseudo_perfctr = TRUE");
 #else
-		RTE_LOG (WARNING, EAL, "Ignoring --vmware-tsc-map because "
-				"RTE_LIBRTE_EAL_VMWARE_TSC_MAP_SUPPORT is not set\n");
+		EAL_LOG(WARNING, "Ignoring --vmware-tsc-map because "
+				"RTE_LIBRTE_EAL_VMWARE_TSC_MAP_SUPPORT is not set");
 #endif
 	}
 
@@ -754,13 +741,25 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 
+	rte_mcfg_mem_read_lock();
+
 	if (rte_eal_memory_init() < 0) {
+		rte_mcfg_mem_read_unlock();
 		rte_eal_init_alert("Cannot init memory");
 		rte_errno = ENOMEM;
 		return -1;
 	}
 
 	if (rte_eal_malloc_heap_init() < 0) {
+		rte_mcfg_mem_read_unlock();
+		rte_eal_init_alert("Cannot init malloc heap");
+		rte_errno = ENODEV;
+		return -1;
+	}
+
+	rte_mcfg_mem_read_unlock();
+
+	if (rte_eal_malloc_heap_populate() < 0) {
 		rte_eal_init_alert("Cannot init malloc heap");
 		rte_errno = ENODEV;
 		return -1;
@@ -780,7 +779,7 @@ rte_eal_init(int argc, char **argv)
 
 	eal_check_mem_on_local_socket();
 
-	if (pthread_setaffinity_np(pthread_self(), sizeof(rte_cpuset_t),
+	if (rte_thread_set_affinity_by_id(rte_thread_self(),
 			&lcore_config[config->main_lcore].cpuset) != 0) {
 		rte_eal_init_alert("Cannot set affinity");
 		rte_errno = EINVAL;
@@ -791,7 +790,7 @@ rte_eal_init(int argc, char **argv)
 
 	ret = eal_thread_dump_current_affinity(cpuset, sizeof(cpuset));
 
-	RTE_LOG(DEBUG, EAL, "Main lcore %u is ready (tid=%zx;cpuset=[%s%s])\n",
+	EAL_LOG(DEBUG, "Main lcore %u is ready (tid=%zx;cpuset=[%s%s])",
 		config->main_lcore, (uintptr_t)pthread_self(), cpuset,
 		ret == 0 ? "" : "...");
 
@@ -809,18 +808,18 @@ rte_eal_init(int argc, char **argv)
 		lcore_config[i].state = WAIT;
 
 		/* create a thread for each lcore */
-		ret = pthread_create(&lcore_config[i].thread_id, NULL,
+		ret = rte_thread_create(&lcore_config[i].thread_id, NULL,
 				     eal_thread_loop, (void *)(uintptr_t)i);
 		if (ret != 0)
 			rte_panic("Cannot create thread\n");
 
 		/* Set thread_name for aid in debugging. */
 		snprintf(thread_name, sizeof(thread_name),
-				"rte-worker-%d", i);
-		rte_thread_setname(lcore_config[i].thread_id, thread_name);
+				"dpdk-worker%d", i);
+		rte_thread_set_name(lcore_config[i].thread_id, thread_name);
 
-		ret = pthread_setaffinity_np(lcore_config[i].thread_id,
-			sizeof(rte_cpuset_t), &lcore_config[i].cpuset);
+		ret = rte_thread_set_affinity_by_id(lcore_config[i].thread_id,
+			&lcore_config[i].cpuset);
 		if (ret != 0)
 			rte_panic("Cannot set affinity\n");
 	}
@@ -871,13 +870,9 @@ rte_eal_init(int argc, char **argv)
 		return -1;
 	}
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY && !internal_conf->no_telemetry) {
-		int tlog = rte_log_register_type_and_pick_level(
-				"lib.telemetry", RTE_LOG_WARNING);
-		if (tlog < 0)
-			tlog = RTE_LOGTYPE_EAL;
 		if (rte_telemetry_init(rte_eal_get_runtime_dir(),
 				rte_version(),
-				&internal_conf->ctrl_cpuset, rte_log, tlog) != 0)
+				&internal_conf->ctrl_cpuset) != 0)
 			return -1;
 	}
 
@@ -889,6 +884,16 @@ rte_eal_init(int argc, char **argv)
 int
 rte_eal_cleanup(void)
 {
+	static uint32_t run_once;
+	uint32_t has_run = 0;
+
+	if (!rte_atomic_compare_exchange_strong_explicit(&run_once, &has_run, 1,
+			rte_memory_order_relaxed, rte_memory_order_relaxed)) {
+		EAL_LOG(WARNING, "Already called cleanup");
+		rte_errno = EALREADY;
+		return -1;
+	}
+
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 	rte_service_finalize();
@@ -896,10 +901,11 @@ rte_eal_cleanup(void)
 	eal_bus_cleanup();
 	rte_trace_save();
 	eal_trace_fini();
+	rte_eal_alarm_cleanup();
 	/* after this point, any DPDK pointers will become dangling */
 	rte_eal_memory_detach();
-	rte_eal_alarm_cleanup();
 	eal_cleanup_config(internal_conf);
+	eal_lcore_var_cleanup();
 	return 0;
 }
 

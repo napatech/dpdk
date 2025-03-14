@@ -51,10 +51,10 @@ static const struct softnic_conn_params conn_params_default = {
 };
 
 RTE_LOG_REGISTER_DEFAULT(pmd_softnic_logtype, NOTICE);
+#define RTE_LOGTYPE_PMD_SOFTNIC pmd_softnic_logtype
 
-#define PMD_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, pmd_softnic_logtype, \
-		"%s(): " fmt "\n", __func__, ##args)
+#define PMD_LOG(level, ...) \
+	RTE_LOG_LINE_PREFIX(level, PMD_SOFTNIC, "%s(): ", __func__, __VA_ARGS__)
 
 static int
 pmd_dev_infos_get(struct rte_eth_dev *dev __rte_unused,
@@ -134,6 +134,7 @@ pmd_dev_start(struct rte_eth_dev *dev)
 {
 	struct pmd_internals *p = dev->data->dev_private;
 	int status;
+	uint16_t i;
 
 	/* Firmware */
 	status = softnic_cli_script_process(p,
@@ -146,6 +147,11 @@ pmd_dev_start(struct rte_eth_dev *dev)
 	/* Link UP */
 	dev->data->dev_link.link_status = RTE_ETH_LINK_UP;
 
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+
 	return 0;
 }
 
@@ -153,6 +159,7 @@ static int
 pmd_dev_stop(struct rte_eth_dev *dev)
 {
 	struct pmd_internals *p = dev->data->dev_private;
+	uint16_t i;
 
 	/* Link DOWN */
 	dev->data->dev_link.link_status = RTE_ETH_LINK_DOWN;
@@ -162,6 +169,11 @@ pmd_dev_stop(struct rte_eth_dev *dev)
 	softnic_pipeline_free(p);
 	softnic_softnic_swq_free_keep_rxq_txq(p);
 	softnic_mempool_free(p);
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	return 0;
 }

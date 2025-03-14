@@ -254,62 +254,30 @@ _ice_recv_raw_pkts_vec_avx2(struct ice_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 			 _mm256_loadu_si256((void *)&sw_ring[i + 4]));
 #endif
 
-		__m256i raw_desc0_1, raw_desc2_3, raw_desc4_5, raw_desc6_7;
-#ifdef RTE_LIBRTE_ICE_16BYTE_RX_DESC
-		/* for AVX we need alignment otherwise loads are not atomic */
-		if (avx_aligned) {
-			/* load in descriptors, 2 at a time, in reverse order */
-			raw_desc6_7 = _mm256_load_si256((void *)(rxdp + 6));
-			rte_compiler_barrier();
-			raw_desc4_5 = _mm256_load_si256((void *)(rxdp + 4));
-			rte_compiler_barrier();
-			raw_desc2_3 = _mm256_load_si256((void *)(rxdp + 2));
-			rte_compiler_barrier();
-			raw_desc0_1 = _mm256_load_si256((void *)(rxdp + 0));
-		} else
-#endif
-		{
-			const __m128i raw_desc7 =
-				_mm_load_si128((void *)(rxdp + 7));
-			rte_compiler_barrier();
-			const __m128i raw_desc6 =
-				_mm_load_si128((void *)(rxdp + 6));
-			rte_compiler_barrier();
-			const __m128i raw_desc5 =
-				_mm_load_si128((void *)(rxdp + 5));
-			rte_compiler_barrier();
-			const __m128i raw_desc4 =
-				_mm_load_si128((void *)(rxdp + 4));
-			rte_compiler_barrier();
-			const __m128i raw_desc3 =
-				_mm_load_si128((void *)(rxdp + 3));
-			rte_compiler_barrier();
-			const __m128i raw_desc2 =
-				_mm_load_si128((void *)(rxdp + 2));
-			rte_compiler_barrier();
-			const __m128i raw_desc1 =
-				_mm_load_si128((void *)(rxdp + 1));
-			rte_compiler_barrier();
-			const __m128i raw_desc0 =
-				_mm_load_si128((void *)(rxdp + 0));
+		const __m128i raw_desc7 = _mm_load_si128((void *)(rxdp + 7));
+		rte_compiler_barrier();
+		const __m128i raw_desc6 = _mm_load_si128((void *)(rxdp + 6));
+		rte_compiler_barrier();
+		const __m128i raw_desc5 = _mm_load_si128((void *)(rxdp + 5));
+		rte_compiler_barrier();
+		const __m128i raw_desc4 = _mm_load_si128((void *)(rxdp + 4));
+		rte_compiler_barrier();
+		const __m128i raw_desc3 = _mm_load_si128((void *)(rxdp + 3));
+		rte_compiler_barrier();
+		const __m128i raw_desc2 = _mm_load_si128((void *)(rxdp + 2));
+		rte_compiler_barrier();
+		const __m128i raw_desc1 = _mm_load_si128((void *)(rxdp + 1));
+		rte_compiler_barrier();
+		const __m128i raw_desc0 = _mm_load_si128((void *)(rxdp + 0));
 
-			raw_desc6_7 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc6),
-					 raw_desc7, 1);
-			raw_desc4_5 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc4),
-					 raw_desc5, 1);
-			raw_desc2_3 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc2),
-					 raw_desc3, 1);
-			raw_desc0_1 =
-				_mm256_inserti128_si256
-					(_mm256_castsi128_si256(raw_desc0),
-					 raw_desc1, 1);
-		}
+		const __m256i raw_desc6_7 =
+			_mm256_inserti128_si256(_mm256_castsi128_si256(raw_desc6), raw_desc7, 1);
+		const __m256i raw_desc4_5 =
+			_mm256_inserti128_si256(_mm256_castsi128_si256(raw_desc4), raw_desc5, 1);
+		const __m256i raw_desc2_3 =
+			_mm256_inserti128_si256(_mm256_castsi128_si256(raw_desc2), raw_desc3, 1);
+		const __m256i raw_desc0_1 =
+			_mm256_inserti128_si256(_mm256_castsi128_si256(raw_desc0), raw_desc1, 1);
 
 		if (split_packet) {
 			int j;
@@ -678,11 +646,11 @@ _ice_recv_raw_pkts_vec_avx2(struct ice_rx_queue *rxq, struct rte_mbuf **rx_pkts,
 		status0_7 = _mm256_packs_epi32(status0_7,
 					       _mm256_setzero_si256());
 
-		uint64_t burst = __builtin_popcountll
+		uint64_t burst = rte_popcount64
 					(_mm_cvtsi128_si64
 						(_mm256_extracti128_si256
 							(status0_7, 1)));
-		burst += __builtin_popcountll
+		burst += rte_popcount64
 				(_mm_cvtsi128_si64
 					(_mm256_castsi256_si128(status0_7)));
 		received += burst;
@@ -821,8 +789,7 @@ ice_vtx1(volatile struct ice_tx_desc *txdp,
 	if (offload)
 		ice_txd_enable_offload(pkt, &high_qw);
 
-	__m128i descriptor = _mm_set_epi64x(high_qw,
-				pkt->buf_iova + pkt->data_off);
+	__m128i descriptor = _mm_set_epi64x(high_qw, rte_pktmbuf_iova(pkt));
 	_mm_store_si128((__m128i *)txdp, descriptor);
 }
 
@@ -868,16 +835,12 @@ ice_vtx(volatile struct ice_tx_desc *txdp,
 
 		__m256i desc2_3 =
 			_mm256_set_epi64x
-				(hi_qw3,
-				 pkt[3]->buf_iova + pkt[3]->data_off,
-				 hi_qw2,
-				 pkt[2]->buf_iova + pkt[2]->data_off);
+				(hi_qw3, rte_pktmbuf_iova(pkt[3]),
+				 hi_qw2, rte_pktmbuf_iova(pkt[2]));
 		__m256i desc0_1 =
 			_mm256_set_epi64x
-				(hi_qw1,
-				 pkt[1]->buf_iova + pkt[1]->data_off,
-				 hi_qw0,
-				 pkt[0]->buf_iova + pkt[0]->data_off);
+				(hi_qw1, rte_pktmbuf_iova(pkt[1]),
+				 hi_qw0, rte_pktmbuf_iova(pkt[0]));
 		_mm256_store_si256((void *)(txdp + 2), desc2_3);
 		_mm256_store_si256((void *)txdp, desc0_1);
 	}

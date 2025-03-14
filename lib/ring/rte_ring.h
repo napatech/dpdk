@@ -32,15 +32,14 @@
  * Note: the ring implementation is not preemptible. Refer to Programmer's
  * guide/Environment Abstraction Layer/Multiple pthread/Known Issues/rte_ring
  * for more information.
- *
  */
+
+#include <rte_ring_core.h>
+#include <rte_ring_elem.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <rte_ring_core.h>
-#include <rte_ring_elem.h>
 
 /**
  * Calculate the memory size needed for a ring

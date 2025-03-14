@@ -7,6 +7,7 @@ cflags += '-Wno-deprecated-declarations'
 sources = files(
         '5tswap.c',
         'cmdline.c',
+        'cmdline_cman.c',
         'cmdline_flow.c',
         'cmdline_mtr.c',
         'cmdline_tm.c',
@@ -14,6 +15,7 @@ sources = files(
         'config.c',
         'csumonly.c',
         'flowgen.c',
+        'hairpin.c',
         'icmpecho.c',
         'ieee1588fwd.c',
         'iofwd.c',
@@ -21,6 +23,7 @@ sources = files(
         'macswap.c',
         'noisy_vnf.c',
         'parameters.c',
+        'recycle_mbufs.c',
         'rxonly.c',
         'shared_rxq_fwd.c',
         'testpmd.c',
