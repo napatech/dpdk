@@ -1433,8 +1433,6 @@ static int eth_dev_close(struct rte_eth_dev *dev)
   dev->data->dev_private = NULL;
   dev->data->mac_addrs = NULL;
 
-  rte_eth_dev_release_port(dev);
-
   deviceCount--;
   if (deviceCount == 0 && _libnt != NULL) {
     PMD_NTACC_LOG(DEBUG, "Closing dyn lib\n");
