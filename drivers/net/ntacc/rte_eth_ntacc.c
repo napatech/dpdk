@@ -2652,8 +2652,13 @@ static int eth_promiscuous_disable(struct rte_eth_dev *dev)
 }
 
 
-static const uint32_t *_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
+static const uint32_t *_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused,
+                                                 size_t *no_of_elements)
 {
+  if (no_of_elements == NULL) {
+    return NULL;
+  }
+
   static const uint32_t ptypes[] = {
     RTE_PTYPE_INNER_L2_ETHER,
     RTE_PTYPE_L2_ETHER,
@@ -2679,6 +2684,9 @@ static const uint32_t *_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_u
     RTE_PTYPE_TUNNEL_IP,
     RTE_PTYPE_UNKNOWN
   };
+
+  *no_of_elements = sizeof ptypes / sizeof *ptypes - 1;
+
   return ptypes;
 }
 
