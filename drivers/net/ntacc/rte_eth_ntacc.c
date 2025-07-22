@@ -63,7 +63,7 @@
 /**
 * Napatech version
 */
-#define NT_VER "2.10"
+#define NT_VER "2.11"
 
 int ntacc_logtype;
 
@@ -93,6 +93,8 @@ struct supportedDriver_s supportedDriver = {3, 11, 0};
 #define PCI_DEVICE_ID_NT200A02 0x01C5
 #define PCI_DEVICE_ID_NT100A01 0x1E5
 #define PCI_DEVICE_ID_NT50B01  0x1D5
+#define PCI_DEVICE_ID_NT400D11 0x0215
+#define PCI_DEVICE_ID_NT400D13 0x0295
 
 #define PCI_VENDOR_ID_INTEL          0x8086
 #define PCIE_DEVICE_ID_PF_DSC_1_X    0x09C4
@@ -1501,6 +1503,12 @@ static int eth_link_update(struct rte_eth_dev *dev,
     break;
   case NT_LINK_SPEED_100G:
     dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_100G;
+    break;
+  case NT_LINK_SPEED_200G:
+    dev->data->dev_link.link_speed = RTE_ETH_SPEED_NUM_200G;
+    break;
+  default:
+    _log_nt_errors(status, "Unsupported lonk speed", __func__);
     break;
   }
   rte_free(pInfo);
@@ -2974,6 +2982,12 @@ static int rte_pmd_init_internals(struct rte_pci_device *dev,
     case NT_LINK_SPEED_100G:
       pmd_link.link_speed = RTE_ETH_SPEED_NUM_100G;
       break;
+    case NT_LINK_SPEED_200G:
+      pmd_link.link_speed = RTE_ETH_SPEED_NUM_200G;
+      break;
+    default:
+      PMD_NTACC_LOG(ERR, "DPDK Port: %u - Unsupported link speed %u\n", eth_dev->data->port_id, pInfo->u.port_v7.data.speed);
+      break;
     }
 
     memcpy(&eth_addr[internals->port].addr_bytes, &pInfo->u.port_v7.data.macAddress, sizeof(eth_addr[internals->port].addr_bytes));
@@ -3366,6 +3380,12 @@ static const struct rte_pci_id ntacc_pci_id_map[] = {
   },
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT50B01)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT400D11)
+  },
+  {
+    RTE_PCI_DEVICE(PCI_VENDOR_ID_NAPATECH,PCI_DEVICE_ID_NT400D13)
   },
   {
     RTE_PCI_DEVICE(PCI_VENDOR_ID_INTEL,PCIE_DEVICE_ID_PF_DSC_1_X) // Intel AFU adapter
