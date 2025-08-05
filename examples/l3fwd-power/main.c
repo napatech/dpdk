@@ -282,21 +282,21 @@ static struct rte_mempool * pktmbuf_pool[NB_SOCKETS];
 #define DEFAULT_HASH_FUNC       rte_jhash
 #endif
 
-struct ipv4_5tuple {
+struct __rte_packed_begin ipv4_5tuple {
 	uint32_t ip_dst;
 	uint32_t ip_src;
 	uint16_t port_dst;
 	uint16_t port_src;
 	uint8_t  proto;
-} __rte_packed;
+} __rte_packed_end;
 
-struct ipv6_5tuple {
+struct __rte_packed_begin ipv6_5tuple {
 	uint8_t  ip_dst[IPV6_ADDR_LEN];
 	uint8_t  ip_src[IPV6_ADDR_LEN];
 	uint16_t port_dst;
 	uint16_t port_src;
 	uint8_t  proto;
-} __rte_packed;
+} __rte_packed_end;
 
 struct ipv4_l3fwd_route {
 	struct ipv4_5tuple key;
@@ -1412,8 +1412,8 @@ check_lcore_params(void)
 							"mask\n", lcore);
 			return -1;
 		}
-		if ((socketid = rte_lcore_to_socket_id(lcore) != 0) &&
-							(numa_on == 0)) {
+		socketid = rte_lcore_to_socket_id(lcore);
+		if (socketid != 0 && numa_on == 0) {
 			printf("warning: lcore %u is on socket %d with numa "
 						"off\n", lcore, socketid);
 		}

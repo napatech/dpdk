@@ -5,7 +5,7 @@
 #include "../r8169_ethdev.h"
 #include "../r8169_hw.h"
 #include "../r8169_phy.h"
-#include "rtl8125b_mcu.h"
+#include "rtl8125b.h"
 
 /* For RTL8125B, CFG_METHOD_50,51 */
 
@@ -285,7 +285,7 @@ rtl_hw_phy_config_8125b_1(struct rtl_hw *hw)
 	rtl_set_eth_phy_ocp_bit(hw, 0xA438, BIT_12);
 }
 
-static void
+void
 rtl_hw_phy_config_8125b_2(struct rtl_hw *hw)
 {
 	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_11);
@@ -336,6 +336,10 @@ rtl_hw_phy_config_8125b_2(struct rtl_hw *hw)
 					  (BIT_13 | BIT_10 | BIT_9 | BIT_8),
 					  (BIT_15 | BIT_14 | BIT_12 | BIT_11));
 
+	rtl_mdio_direct_write_phy_ocp(hw, 0xB87C, 0x8015);
+	rtl_set_eth_phy_ocp_bit(hw, 0xB87E, BIT_8);
+	rtl_mdio_direct_read_phy_ocp(hw, 0xB906);
+
 	rtl_set_eth_phy_ocp_bit(hw, 0xA424, BIT_3);
 }
 
@@ -358,10 +362,9 @@ hw_mac_mcu_config_8125b(struct rtl_hw *hw)
 	if (hw->NotWrMcuPatchCode)
 		return;
 
+	rtl_hw_disable_mac_mcu_bps(hw);
+
 	switch (hw->mcfg) {
-	case CFG_METHOD_50:
-		rtl_set_mac_mcu_8125b_1(hw);
-		break;
 	case CFG_METHOD_51:
 		rtl_set_mac_mcu_8125b_2(hw);
 		break;

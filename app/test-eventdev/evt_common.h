@@ -18,16 +18,16 @@
 #define CLGRN  "\x1b[32m"
 #define CLYEL  "\x1b[33m"
 
-#define evt_err(fmt, args...) \
-	fprintf(stderr, CLRED"error: %s() "fmt CLNRM "\n", __func__, ## args)
+#define evt_err(fmt, ...) \
+	fprintf(stderr, CLRED"error: %s() "fmt CLNRM "\n", __func__, ## __VA_ARGS__)
 
-#define evt_info(fmt, args...) \
-	fprintf(stdout, CLYEL""fmt CLNRM "\n", ## args)
+#define evt_info(fmt, ...) \
+	fprintf(stdout, CLYEL""fmt CLNRM "\n", ## __VA_ARGS__)
 
 #define EVT_STR_FMT 20
 
-#define evt_dump(str, fmt, val...) \
-	printf("\t%-*s : "fmt"\n", EVT_STR_FMT, str, ## val)
+#define evt_dump(str, fmt, ...) \
+	printf("\t%-*s : "fmt"\n", EVT_STR_FMT, str, ## __VA_ARGS__)
 
 #define evt_dump_begin(str) printf("\t%-*s : {", EVT_STR_FMT, str)
 
@@ -39,11 +39,12 @@
 
 enum evt_prod_type {
 	EVT_PROD_TYPE_NONE,
-	EVT_PROD_TYPE_SYNT,          /* Producer type Synthetic i.e. CPU. */
-	EVT_PROD_TYPE_ETH_RX_ADPTR,  /* Producer type Eth Rx Adapter. */
+	EVT_PROD_TYPE_SYNT,		  /* Producer type Synthetic i.e. CPU. */
+	EVT_PROD_TYPE_ETH_RX_ADPTR,	  /* Producer type Eth Rx Adapter. */
 	EVT_PROD_TYPE_EVENT_TIMER_ADPTR,  /* Producer type Timer Adapter. */
-	EVT_PROD_TYPE_EVENT_CRYPTO_ADPTR,  /* Producer type Crypto Adapter. */
-	EVT_PROD_TYPE_EVENT_DMA_ADPTR,  /* Producer type DMA Adapter. */
+	EVT_PROD_TYPE_EVENT_CRYPTO_ADPTR, /* Producer type Crypto Adapter. */
+	EVT_PROD_TYPE_EVENT_DMA_ADPTR,	  /* Producer type DMA Adapter. */
+	EVT_PROD_TYPE_EVENT_VECTOR_ADPTR, /* Producer type Vector adapter. */
 	EVT_PROD_TYPE_MAX,
 };
 
@@ -136,6 +137,15 @@ evt_has_flow_id(uint8_t dev_id)
 	rte_event_dev_info_get(dev_id, &dev_info);
 	return (dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_CARRY_FLOW_ID) ?
 			true : false;
+}
+
+static inline bool
+evt_is_maintenance_free(uint8_t dev_id)
+{
+	struct rte_event_dev_info dev_info;
+
+	rte_event_dev_info_get(dev_id, &dev_info);
+	return dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_MAINTENANCE_FREE;
 }
 
 static inline int

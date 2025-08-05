@@ -16,6 +16,7 @@
 #include <sys/syscall.h>
 #include <sys/ioctl.h>
 
+#include <eal_export.h>
 #include <rte_string_fns.h>
 #include <rte_byteorder.h>
 #include <rte_common.h>
@@ -1089,11 +1090,6 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		return -rte_errno;
 	}
 
-	/* Rx deferred start is not supported */
-	if (rx_conf->rx_deferred_start) {
-		DPAA_PMD_ERR("%p:Rx deferred start not supported", (void *)dev);
-		return -EINVAL;
-	}
 	rxq->nb_desc = UINT16_MAX;
 	rxq->offloads = rx_conf->offloads;
 
@@ -1299,6 +1295,7 @@ int dpaa_eth_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(dpaa_eth_eventq_attach)
 int
 dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
 		int eth_rx_queue_id,
@@ -1364,6 +1361,7 @@ dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
 	return ret;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(dpaa_eth_eventq_detach)
 int
 dpaa_eth_eventq_detach(const struct rte_eth_dev *dev,
 		int eth_rx_queue_id)
@@ -1399,11 +1397,6 @@ int dpaa_eth_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 
 	PMD_INIT_FUNC_TRACE();
 
-	/* Tx deferred start is not supported */
-	if (tx_conf->tx_deferred_start) {
-		DPAA_PMD_ERR("%p:Tx deferred start not supported", (void *)dev);
-		return -EINVAL;
-	}
 	txq->nb_desc = UINT16_MAX;
 	txq->offloads = tx_conf->offloads;
 
@@ -1810,6 +1803,7 @@ is_dpaa_supported(struct rte_eth_dev *dev)
 	return is_device_supported(dev, &rte_dpaa_pmd);
 }
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa_set_tx_loopback)
 int
 rte_pmd_dpaa_set_tx_loopback(uint16_t port, uint8_t on)
 {

@@ -90,6 +90,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	const struct sfc_adapter_priv *sap = sfc_adapter_priv_by_eth_dev(dev);
 	struct sfc_adapter_shared *sas = sfc_adapter_shared_by_eth_dev(dev);
 	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
 	struct sfc_rss *rss = &sas->rss;
 	struct sfc_mae *mae = &sa->mae;
 
@@ -98,7 +99,7 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	dev_info->max_mtu = EFX_MAC_SDU_MAX;
 
-	dev_info->max_rx_pktlen = EFX_MAC_PDU_MAX;
+	dev_info->max_rx_pktlen = encp->enc_mac_pdu_max;
 
 	dev_info->max_vfs = sa->sriov.num_vfs;
 
@@ -116,6 +117,8 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_50G;
 	if (sa->port.phy_adv_cap_mask & (1u << EFX_PHY_CAP_100000FDX))
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_100G;
+	if (sa->port.phy_adv_cap_mask & (1u << EFX_PHY_CAP_200000FDX))
+		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_200G;
 
 	dev_info->max_rx_queues = sa->rxq_max;
 	dev_info->max_tx_queues = sa->txq_max;
@@ -285,6 +288,150 @@ sfc_dev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 		sfc_notice(sa, "Link status is %s",
 			   current_link.link_status ? "UP" : "DOWN");
 
+	return ret;
+}
+
+static int
+sfc_dev_speed_lanes_get(struct rte_eth_dev *dev, uint32_t *lane_countp)
+{
+	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
+	struct sfc_port *port;
+	int rc = 0;
+
+	if (lane_countp == NULL)
+		return -EINVAL;
+
+	sfc_adapter_lock(sa);
+	port = &sa->port;
+
+	if (sa->state != SFC_ETHDEV_STARTED) {
+		/* The API wants 'active' lanes, so it is safe to indicate 0. */
+		*lane_countp = 0;
+		goto unlock;
+	}
+
+	if (port->phy_lane_count_active == EFX_PHY_LANE_COUNT_DEFAULT) {
+		rc = ENOTSUP;
+		goto unlock;
+	}
+
+	*lane_countp = port->phy_lane_count_active;
+
+unlock:
+	sfc_adapter_unlock(sa);
+	return -rc;
+}
+
+static int
+sfc_dev_speed_lanes_set(struct rte_eth_dev *dev, uint32_t lane_count)
+{
+	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
+	int rc = 0;
+
+	sfc_adapter_lock(sa);
+
+	if (sa->state == SFC_ETHDEV_STARTED) {
+		rc = EBUSY;
+		goto unlock;
+	}
+
+	if (lane_count == 0) {
+		rc = EINVAL;
+		goto unlock;
+	}
+
+	sa->port.phy_lane_count_req = lane_count;
+
+unlock:
+	sfc_adapter_unlock(sa);
+	return -rc;
+}
+
+static int
+sfc_dev_speed_lane_cap_handle(const efx_nic_cfg_t *encp,
+			      efx_link_mode_t link_mode,
+			      unsigned int *nb_caps_to_fillp,
+			      struct rte_eth_speed_lanes_capa **capp)
+{
+	uint32_t lane_counts = encp->enc_phy_lane_counts[link_mode].ed_u32[0];
+	struct rte_eth_speed_lanes_capa *cap = *capp;
+	uint32_t speed;
+
+	if (lane_counts == 0) {
+		/*
+		 * The mask of supported lane counts for this link mode is
+		 * empty. Do not waste output entries for such link modes.
+		 */
+		return 0;
+	}
+
+	switch (link_mode) {
+	case EFX_LINK_1000FDX:
+		speed = RTE_ETH_SPEED_NUM_1G;
+		break;
+	case EFX_LINK_10000FDX:
+		speed = RTE_ETH_SPEED_NUM_10G;
+		break;
+	case EFX_LINK_25000FDX:
+		speed = RTE_ETH_SPEED_NUM_25G;
+		break;
+	case EFX_LINK_40000FDX:
+		speed = RTE_ETH_SPEED_NUM_40G;
+		break;
+	case EFX_LINK_50000FDX:
+		speed = RTE_ETH_SPEED_NUM_50G;
+		break;
+	case EFX_LINK_100000FDX:
+		speed = RTE_ETH_SPEED_NUM_100G;
+		break;
+	case EFX_LINK_200000FDX:
+		speed = RTE_ETH_SPEED_NUM_200G;
+		break;
+	default:
+		/* No lane counts for this link mode. */
+		return 0;
+	}
+
+	if (*nb_caps_to_fillp == 0) {
+		if (cap == NULL) {
+			/* Dry run. Indicate that an entry is available. */
+			return 1;
+		}
+
+		/* We have run out of space in the user output buffer. */
+		return 0;
+	}
+
+	cap->capa = lane_counts;
+	cap->speed = speed;
+
+	--(*nb_caps_to_fillp);
+	++(*capp);
+	return 1;
+}
+
+static int
+sfc_dev_speed_lanes_get_capa(struct rte_eth_dev *dev,
+			     struct rte_eth_speed_lanes_capa *caps,
+			     unsigned int nb_caps)
+{
+	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	efx_link_mode_t i;
+	int ret = 0;
+
+	sfc_adapter_lock(sa);
+
+	if (sa->state < SFC_ETHDEV_INITIALIZED) {
+		ret = -ENODEV;
+		goto unlock;
+	}
+
+	for (i = 0; i < EFX_LINK_NMODES; ++i)
+		ret += sfc_dev_speed_lane_cap_handle(encp, i, &nb_caps, &caps);
+
+unlock:
+	sfc_adapter_unlock(sa);
 	return ret;
 }
 
@@ -1112,23 +1259,24 @@ static int
 sfc_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 {
 	struct sfc_adapter *sa = sfc_adapter_by_eth_dev(dev);
-	size_t pdu = EFX_MAC_PDU(mtu);
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
+	size_t pdu = efx_mac_pdu_from_sdu(sa->nic, mtu);
 	size_t old_pdu;
 	int rc;
 
 	sfc_log_init(sa, "mtu=%u", mtu);
 
 	rc = EINVAL;
-	if (pdu < EFX_MAC_PDU_MIN) {
+	if (pdu < encp->enc_mac_pdu_min) {
 		sfc_err(sa, "too small MTU %u (PDU size %u less than min %u)",
 			(unsigned int)mtu, (unsigned int)pdu,
-			EFX_MAC_PDU_MIN);
+			encp->enc_mac_pdu_min);
 		goto fail_inval;
 	}
-	if (pdu > EFX_MAC_PDU_MAX) {
+	if (pdu > encp->enc_mac_pdu_max) {
 		sfc_err(sa, "too big MTU %u (PDU size %u greater than max %u)",
 			(unsigned int)mtu, (unsigned int)pdu,
-			(unsigned int)EFX_MAC_PDU_MAX);
+			encp->enc_mac_pdu_max);
 		goto fail_inval;
 	}
 
@@ -2440,6 +2588,19 @@ sfc_fec_get_capa_speed_to_fec(uint32_t supported_caps,
 		}
 		num++;
 	}
+	if (supported_caps & (1u << EFX_PHY_CAP_200000FDX)) {
+		if (speed_fec_capa != NULL) {
+			speed_fec_capa[num].speed = RTE_ETH_SPEED_NUM_200G;
+			speed_fec_capa[num].capa =
+				RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC) |
+				RTE_ETH_FEC_MODE_CAPA_MASK(AUTO);
+			if (rs) {
+				speed_fec_capa[num].capa |=
+					RTE_ETH_FEC_MODE_CAPA_MASK(RS);
+			}
+		}
+		num++;
+	}
 
 	return num;
 }
@@ -2722,6 +2883,14 @@ adapter_unlock:
 	return -rc;
 }
 
+static uint64_t
+sfc_get_restore_flags(__rte_unused struct rte_eth_dev *dev,
+		      __rte_unused enum rte_eth_dev_operation op)
+{
+	/* sfc PMD does not require any configuration restore */
+	return 0;
+}
+
 static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.dev_configure			= sfc_dev_configure,
 	.dev_start			= sfc_dev_start,
@@ -2734,6 +2903,9 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.allmulticast_enable		= sfc_dev_allmulti_enable,
 	.allmulticast_disable		= sfc_dev_allmulti_disable,
 	.link_update			= sfc_dev_link_update,
+	.speed_lanes_get		= sfc_dev_speed_lanes_get,
+	.speed_lanes_set		= sfc_dev_speed_lanes_set,
+	.speed_lanes_get_capa		= sfc_dev_speed_lanes_get_capa,
 	.stats_get			= sfc_stats_get,
 	.stats_reset			= sfc_stats_reset,
 	.xstats_get			= sfc_xstats_get,
@@ -2774,6 +2946,7 @@ static const struct eth_dev_ops sfc_eth_dev_ops = {
 	.fec_get_capability		= sfc_fec_get_capability,
 	.fec_get			= sfc_fec_get,
 	.fec_set			= sfc_fec_set,
+	.get_restore_flags		= sfc_get_restore_flags,
 };
 
 struct sfc_ethdev_init_data {
@@ -2820,6 +2993,7 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 	case EFX_FAMILY_HUNTINGTON:
 	case EFX_FAMILY_MEDFORD:
 	case EFX_FAMILY_MEDFORD2:
+	case EFX_FAMILY_MEDFORD4:
 		avail_caps |= SFC_DP_HW_FW_CAP_EF10;
 		avail_caps |= SFC_DP_HW_FW_CAP_RX_EFX;
 		avail_caps |= SFC_DP_HW_FW_CAP_TX_EFX;
@@ -3240,6 +3414,8 @@ sfc_eth_dev_init(struct rte_eth_dev *dev, void *init_params)
 	if (rc != 0)
 		goto fail_nic_dma_attach;
 
+	sa->link_ev_need_poll = encp->enc_link_ev_need_poll;
+
 	sfc_adapter_unlock(sa);
 
 	sfc_log_init(sa, "done");
@@ -3292,6 +3468,10 @@ static const struct rte_pci_id pci_id_sfc_efx_map[] = {
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD_VF) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD2) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD2_VF) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD4) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD4_VF) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD4_NO_LL) },
+	{ RTE_PCI_DEVICE(EFX_PCI_VENID_SFC, EFX_PCI_DEVID_MEDFORD4_NO_LL_VF) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_XILINX, EFX_PCI_DEVID_RIVERHEAD) },
 	{ RTE_PCI_DEVICE(EFX_PCI_VENID_XILINX, EFX_PCI_DEVID_RIVERHEAD_VF) },
 	{ .vendor_id = 0 /* sentinel */ }
@@ -3364,6 +3544,7 @@ sfc_eth_dev_create_repr(struct sfc_adapter *sa,
 			uint16_t repr_port,
 			enum rte_eth_representor_type type)
 {
+	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
 	struct sfc_repr_entity_info entity;
 	efx_mport_sel_t mport_sel;
 	int rc;
@@ -3400,7 +3581,7 @@ sfc_eth_dev_create_repr(struct sfc_adapter *sa,
 	entity.vf = repr_port;
 
 	rc = sfc_repr_create(sa->eth_dev, &entity, sa->mae.switch_domain_id,
-			     &mport_sel);
+			     encp->enc_mac_pdu_max, &mport_sel);
 	if (rc != 0) {
 		sfc_err(sa,
 			"failed to create representor for controller %u port %u repr_port %u: %s",

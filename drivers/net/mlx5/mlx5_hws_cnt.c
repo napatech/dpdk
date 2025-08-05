@@ -22,12 +22,17 @@
 #define HWS_CNT_CACHE_THRESHOLD_DEFAULT 254
 #define HWS_CNT_ALLOC_FACTOR_DEFAULT 20
 
-static void
+static int
 __hws_cnt_id_load(struct mlx5_hws_cnt_pool *cpool)
 {
 	uint32_t cnt_num = mlx5_hws_cnt_pool_get_size(cpool);
 	uint32_t iidx;
+	cnt_id_t *cnt_arr = NULL;
 
+	cnt_arr = mlx5_malloc(MLX5_MEM_ANY | MLX5_MEM_ZERO,
+			      cnt_num * sizeof(cnt_id_t), 0, SOCKET_ID_ANY);
+	if (cnt_arr == NULL)
+		return -ENOMEM;
 	/*
 	 * Counter ID order is important for tracking the max number of in used
 	 * counter for querying, which means counter internal index order must
@@ -38,10 +43,12 @@ __hws_cnt_id_load(struct mlx5_hws_cnt_pool *cpool)
 	 */
 	for (iidx = 0; iidx < cnt_num; iidx++) {
 		cnt_id_t cnt_id  = mlx5_hws_cnt_id_gen(cpool, iidx);
-
-		rte_ring_enqueue_elem(cpool->free_list, &cnt_id,
-				sizeof(cnt_id));
+		cnt_arr[iidx] = cnt_id;
 	}
+	rte_ring_enqueue_bulk_elem(cpool->free_list, cnt_arr,
+				   sizeof(cnt_id_t), cnt_num, NULL);
+	mlx5_free(cnt_arr);
+	return 0;
 }
 
 static void
@@ -666,8 +673,13 @@ mlx5_hws_cnt_pool_action_create(struct mlx5_priv *priv,
 	uint32_t flags;
 
 	flags = MLX5DR_ACTION_FLAG_HWS_RX | MLX5DR_ACTION_FLAG_HWS_TX;
-	if (priv->sh->config.dv_esw_en && priv->master)
-		flags |= MLX5DR_ACTION_FLAG_HWS_FDB;
+	if (priv->sh->config.dv_esw_en && priv->master) {
+		flags |= (is_unified_fdb(priv) ?
+				(MLX5DR_ACTION_FLAG_HWS_FDB_RX |
+				 MLX5DR_ACTION_FLAG_HWS_FDB_TX |
+				 MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED) :
+				MLX5DR_ACTION_FLAG_HWS_FDB);
+	}
 	for (idx = 0; idx < hpool->dcs_mng.batch_total; idx++) {
 		struct mlx5_hws_cnt_dcs *hdcs = &hpool->dcs_mng.dcs[idx];
 		struct mlx5_hws_cnt_dcs *dcs = &cpool->dcs_mng.dcs[idx];
@@ -699,8 +711,11 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 	size_t sz;
 
 	mp_name = mlx5_malloc(MLX5_MEM_ZERO, RTE_MEMZONE_NAMESIZE, 0, SOCKET_ID_ANY);
-	if (mp_name == NULL)
+	if (mp_name == NULL) {
+		ret = rte_flow_error_set(error, ENOMEM, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+					 "failed to allocate counter pool name prefix");
 		goto error;
+	}
 	snprintf(mp_name, RTE_MEMZONE_NAMESIZE, "MLX5_HWS_CNT_P_%x", dev->data->port_id);
 	pcfg.name = mp_name;
 	pcfg.request_num = nb_counters;
@@ -708,8 +723,10 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 	if (chost) {
 		pcfg.host_cpool = chost;
 		cpool = mlx5_hws_cnt_pool_init(priv->sh, &pcfg, &cparam, error);
-		if (cpool == NULL)
+		if (cpool == NULL) {
+			ret = -rte_errno;
 			goto error;
+		}
 		ret = mlx5_hws_cnt_pool_action_create(priv, cpool);
 		if (ret != 0) {
 			rte_flow_error_set(error, -ret,
@@ -719,28 +736,28 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 		}
 		goto success;
 	}
-	/* init cnt service if not. */
-	if (priv->sh->cnt_svc == NULL) {
-		ret = mlx5_hws_cnt_svc_init(priv->sh, error);
-		if (ret)
-			return ret;
-	}
 	cparam.fetch_sz = HWS_CNT_CACHE_FETCH_DEFAULT;
 	cparam.preload_sz = HWS_CNT_CACHE_PRELOAD_DEFAULT;
 	cparam.q_num = nb_queue;
 	cparam.threshold = HWS_CNT_CACHE_THRESHOLD_DEFAULT;
 	cparam.size = HWS_CNT_CACHE_SZ_DEFAULT;
 	cpool = mlx5_hws_cnt_pool_init(priv->sh, &pcfg, &cparam, error);
-	if (cpool == NULL)
+	if (cpool == NULL) {
+		ret = -rte_errno;
 		goto error;
+	}
 	ret = mlx5_hws_cnt_pool_dcs_alloc(priv->sh, cpool, error);
 	if (ret != 0)
 		goto error;
 	sz = RTE_ALIGN_CEIL(mlx5_hws_cnt_pool_get_size(cpool), 4);
 	cpool->raw_mng = mlx5_hws_cnt_raw_data_alloc(priv->sh, sz, error);
-	if (cpool->raw_mng == NULL)
+	if (cpool->raw_mng == NULL) {
+		ret = -rte_errno;
 		goto error;
-	__hws_cnt_id_load(cpool);
+	}
+	ret = __hws_cnt_id_load(cpool);
+	if (ret != 0)
+		goto error;
 	/*
 	 * Bump query gen right after pool create so the
 	 * pre-loaded counters can be used directly
@@ -755,6 +772,12 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 				   NULL, "failed to allocate counter actions");
 		goto error;
 	}
+	/* init cnt service if not. */
+	if (priv->sh->cnt_svc == NULL) {
+		ret = mlx5_hws_cnt_svc_init(priv->sh, error);
+		if (ret)
+			goto error;
+	}
 	priv->sh->cnt_svc->refcnt++;
 	cpool->priv = priv;
 	rte_spinlock_lock(&priv->sh->cpool_lock);
@@ -767,6 +790,7 @@ error:
 	MLX5_ASSERT(ret);
 	mlx5_hws_cnt_pool_destroy(priv->sh, cpool);
 	priv->hws_cpool = NULL;
+	mlx5_free(mp_name);
 	return ret;
 }
 
@@ -786,7 +810,7 @@ mlx5_hws_cnt_pool_destroy(struct mlx5_dev_ctx_shared *sh,
 		LIST_REMOVE(cpool, next);
 	rte_spinlock_unlock(&sh->cpool_lock);
 	if (cpool->cfg.host_cpool == NULL) {
-		if (--sh->cnt_svc->refcnt == 0)
+		if (sh->cnt_svc && --sh->cnt_svc->refcnt == 0)
 			mlx5_hws_cnt_svc_deinit(sh);
 	}
 	mlx5_hws_cnt_pool_action_destroy(cpool);

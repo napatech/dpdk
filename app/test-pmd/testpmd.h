@@ -498,6 +498,8 @@ enum dcb_mode_enable
 };
 
 extern uint8_t xstats_hide_zero; /**< Hide zero values for xstats display */
+extern uint8_t xstats_hide_disabled; /**< Hide disabled xstat for xstats display */
+extern uint8_t xstats_show_state; /**< Show xstat state in xstats display */
 
 /* globals used for configuration */
 extern uint8_t record_core_cycles; /**< Enables measurement of CPU cycles */
@@ -508,6 +510,7 @@ extern uint8_t  interactive;
 extern uint8_t  auto_start;
 extern uint8_t  tx_first;
 extern char cmdline_filename[PATH_MAX]; /**< offline commands file */
+extern bool echo_cmdline_file;  /** unset if cmdline-file-noecho is used */
 extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
 extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
@@ -933,6 +936,7 @@ void nic_stats_display(portid_t port_id);
 void nic_stats_clear(portid_t port_id);
 void nic_xstats_display(portid_t port_id);
 void nic_xstats_clear(portid_t port_id);
+void nic_xstats_set_counter(portid_t port_id, char *counter_name, int on);
 void device_infos_display(const char *identifier);
 void port_infos_display(portid_t port_id);
 void port_summary_display(portid_t port_id);
@@ -1111,6 +1115,8 @@ void tx_vlan_pvid_set(portid_t port_id, uint16_t vlan_id, int on);
 void set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_value);
 
 void set_xstats_hide_zero(uint8_t on_off);
+void set_xstats_show_state(uint8_t on_off);
+void set_xstats_hide_disabled(uint8_t on_off);
 
 void set_record_core_cycles(uint8_t on_off);
 void set_record_burst_stats(uint8_t on_off);
@@ -1145,7 +1151,10 @@ uint8_t port_is_bonding_member(portid_t member_pid);
 
 int init_port_dcb_config(portid_t pid, enum dcb_mode_enable dcb_mode,
 		     enum rte_eth_nb_tcs num_tcs,
-		     uint8_t pfc_en);
+		     uint8_t pfc_en,
+		     uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES],
+		     uint8_t prio_tc_en,
+		     uint8_t keep_qnum);
 int start_port(portid_t pid);
 void stop_port(portid_t pid);
 void close_port(portid_t pid);
@@ -1292,26 +1301,10 @@ RTE_INIT(__##c) \
 	testpmd_add_driver_commands(&c); \
 }
 
-/*
- * Work-around of a compilation error with ICC on invocations of the
- * rte_be_to_cpu_16() function.
- */
-#ifdef __GCC__
 #define RTE_BE_TO_CPU_16(be_16_v)  rte_be_to_cpu_16((be_16_v))
 #define RTE_CPU_TO_BE_16(cpu_16_v) rte_cpu_to_be_16((cpu_16_v))
-#else
-#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
-#define RTE_BE_TO_CPU_16(be_16_v)  (be_16_v)
-#define RTE_CPU_TO_BE_16(cpu_16_v) (cpu_16_v)
-#else
-#define RTE_BE_TO_CPU_16(be_16_v) \
-	(uint16_t) ((((be_16_v) & 0xFF) << 8) | ((be_16_v) >> 8))
-#define RTE_CPU_TO_BE_16(cpu_16_v) \
-	(uint16_t) ((((cpu_16_v) & 0xFF) << 8) | ((cpu_16_v) >> 8))
-#endif
-#endif /* __GCC__ */
 
-#define TESTPMD_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, testpmd_logtype, "testpmd: " fmt, ## args)
+#define TESTPMD_LOG(level, fmt, ...) \
+	rte_log(RTE_LOG_ ## level, testpmd_logtype, "testpmd: " fmt, ## __VA_ARGS__)
 
 #endif /* _TESTPMD_H_ */

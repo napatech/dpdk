@@ -3,11 +3,13 @@
 # Copyright(c) 2010-2014 Intel Corporation
 #
 
-import sys
-import os
-import subprocess
 import argparse
+import grp
+import os
 import platform
+import pwd
+import subprocess
+import sys
 
 from glob import glob
 from os.path import exists, basename
@@ -62,6 +64,10 @@ intel_ioat_icx = {'Class': '08', 'Vendor': '8086', 'Device': '0b00',
                   'SVendor': None, 'SDevice': None}
 intel_idxd_spr = {'Class': '08', 'Vendor': '8086', 'Device': '0b25',
                   'SVendor': None, 'SDevice': None}
+intel_idxd_gnrd = {'Class': '08', 'Vendor': '8086', 'Device': '11fb',
+                  'SVendor': None, 'SDevice': None}
+intel_idxd_dmr = {'Class': '08', 'Vendor': '8086', 'Device': '1212',
+                  'SVendor': None, 'SDevice': None}
 intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
                  'SVendor': None, 'SDevice': None}
 intel_ntb_icx = {'Class': '06', 'Vendor': '8086', 'Device': '347e',
@@ -84,7 +90,8 @@ network_devices = [network_class, cavium_pkx, avp_vnic, ifpga_class]
 baseband_devices = [acceleration_class]
 crypto_devices = [encryption_class, intel_processor_class]
 dma_devices = [cnxk_dma, hisilicon_dma,
-               intel_idxd_spr, intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx,
+               intel_idxd_gnrd, intel_idxd_dmr, intel_idxd_spr,
+               intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx,
                odm_dma]
 eventdev_devices = [cavium_sso, cavium_tim, intel_dlb, cnxk_sso]
 mempool_devices = [cavium_fpa, cnxk_npa]
@@ -108,6 +115,8 @@ b_flag = None
 status_flag = False
 force_flag = False
 noiommu_flag = False
+vfio_uid = -1
+vfio_gid = -1
 args = []
 
 
@@ -539,6 +548,19 @@ def bind_all(dev_list, driver, force=False):
 
     for d in dev_list:
         bind_one(d, driver, force)
+        # if we're binding to vfio-pci, set the IOMMU user/group ownership if one was specified
+        if driver == "vfio-pci" and (vfio_uid != -1 or vfio_gid != -1):
+            # find IOMMU group for a particular PCI device
+            iommu_grp_base_path = os.path.join("/sys/bus/pci/devices", d, "iommu_group")
+            # extract the IOMMU group number
+            iommu_grp = os.path.basename(os.readlink(iommu_grp_base_path))
+            # find VFIO device correspondiong to this IOMMU group
+            dev_path = os.path.join("/dev/vfio", iommu_grp)
+            # set ownership
+            try:
+                os.chown(dev_path, vfio_uid, vfio_gid)
+            except OSError as err:
+                sys.exit(f"Error: failed to set IOMMU group ownership for {d}: {err}")
 
     # For kernels < 3.15 when binding devices to a generic driver
     # (i.e. one that doesn't have a PCI ID table) using new_id, some devices
@@ -694,6 +716,8 @@ def parse_args():
     global force_flag
     global noiommu_flag
     global args
+    global vfio_uid
+    global vfio_gid
 
     parser = argparse.ArgumentParser(
         description='Utility to bind and unbind devices from Linux kernel',
@@ -744,6 +768,20 @@ To bind 0000:02:00.0 and 0000:02:00.1 to the ixgbe kernel driver
         action='store_true',
         help="If IOMMU is not available, enable no IOMMU mode for VFIO drivers")
     parser.add_argument(
+        "-U",
+        "--uid",
+        help="For VFIO, specify the UID to set IOMMU group ownership",
+        type=lambda u: pwd.getpwnam(u).pw_uid,
+        default=-1,
+    )
+    parser.add_argument(
+        "-G",
+        "--gid",
+        help="For VFIO, specify the GID to set IOMMU group ownership",
+        type=lambda g: grp.getgrnam(g).gr_gid,
+        default=-1,
+    )
+    parser.add_argument(
         '--force',
         action='store_true',
         help="""
@@ -775,6 +813,8 @@ For devices bound to Linux kernel drivers, they may be referred to by interface 
         b_flag = opt.bind
     elif opt.unbind:
         b_flag = "none"
+    vfio_uid = opt.uid
+    vfio_gid = opt.gid
     args = opt.devices
 
     if not b_flag and not status_flag:

@@ -45,6 +45,7 @@
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
 #include <cmdline_parse_num.h>
+#include <cmdline_parse_bool.h>
 #include <cmdline_parse_string.h>
 #include <cmdline_parse_ipaddr.h>
 #include <cmdline_parse_etheraddr.h>
@@ -3446,20 +3447,176 @@ struct cmd_config_dcb {
 	cmdline_fixed_string_t vt_en;
 	uint8_t num_tcs;
 	cmdline_fixed_string_t pfc;
-	cmdline_fixed_string_t pfc_en;
+	cmdline_multi_string_t token_str;
 };
+
+static int
+parse_dcb_token_prio_tc(char *param_str[], int param_num,
+			uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES],
+			uint8_t *prio_tc_en)
+{
+	unsigned long prio, tc;
+	int prio_tc_maps = 0;
+	char *param, *end;
+	int i;
+
+	for (i = 0; i < param_num; i++) {
+		param = param_str[i];
+		prio = strtoul(param, &end, 10);
+		if (prio >= RTE_ETH_DCB_NUM_USER_PRIORITIES) {
+			fprintf(stderr, "Bad Argument: invalid PRIO %lu\n", prio);
+			return -1;
+		}
+		if ((*end != ':') || (strlen(end + 1) == 0)) {
+			fprintf(stderr, "Bad Argument: invalid PRIO:TC format %s\n", param);
+			return -1;
+		}
+		tc = strtoul(end + 1, &end, 10);
+		if (tc >= RTE_ETH_8_TCS) {
+			fprintf(stderr, "Bad Argument: invalid TC %lu\n", tc);
+			return -1;
+		}
+		if (*end != '\0') {
+			fprintf(stderr, "Bad Argument: invalid PRIO:TC format %s\n", param);
+			return -1;
+		}
+		prio_tc[prio] = tc;
+		prio_tc_maps++;
+	} while (0);
+
+	if (prio_tc_maps == 0) {
+		fprintf(stderr, "Bad Argument: no PRIO:TC provided\n");
+		return -1;
+	}
+	*prio_tc_en = 1;
+
+	return 0;
+}
+
+#define DCB_TOKEN_PRIO_TC	"prio-tc"
+#define DCB_TOKEN_KEEP_QNUM	"keep-qnum"
+
+static int
+parse_dcb_token_find(char *split_str[], int split_num, int *param_num)
+{
+	int i;
+
+	if (strcmp(split_str[0], DCB_TOKEN_KEEP_QNUM) == 0) {
+		*param_num = 0;
+		return 0;
+	}
+
+	if (strcmp(split_str[0], DCB_TOKEN_PRIO_TC) != 0) {
+		fprintf(stderr, "Bad Argument: unknown token %s\n", split_str[0]);
+		return -EINVAL;
+	}
+
+	for (i = 1; i < split_num; i++) {
+		if ((strcmp(split_str[i], DCB_TOKEN_PRIO_TC) != 0) &&
+		    (strcmp(split_str[i], DCB_TOKEN_KEEP_QNUM) != 0))
+			continue;
+		/* find another optional parameter, then exit. */
+		break;
+	}
+
+	*param_num = i - 1;
+
+	return 0;
+}
+
+static int
+parse_dcb_token_value(char *token_str,
+		      uint8_t *pfc_en,
+		      uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES],
+		      uint8_t *prio_tc_en,
+		      uint8_t *keep_qnum)
+{
+#define MAX_TOKEN_NUM	128
+	char *split_str[MAX_TOKEN_NUM];
+	int param_num, start, ret;
+	int split_num = 0;
+	char *token;
+
+	/* split multiple token to split str. */
+	do {
+		token = strtok_r(token_str, " \f\n\r\t\v", &token_str);
+		if (token == NULL)
+			break;
+		if (split_num >= MAX_TOKEN_NUM) {
+			fprintf(stderr, "Bad Argument: too much argument\n");
+			return -1;
+		}
+		split_str[split_num++] = token;
+	} while (1);
+
+	/* parse fixed parameter "pfc-en" first. */
+	token = split_str[0];
+	if (strcmp(token, "on") == 0)
+		*pfc_en = 1;
+	else if (strcmp(token, "off") == 0)
+		*pfc_en = 0;
+	else {
+		fprintf(stderr, "Bad Argument: pfc-en must be on or off\n");
+		return -EINVAL;
+	}
+
+	if (split_num == 1)
+		return 0;
+
+	/* start parse optional parameter. */
+	start = 1;
+	do {
+		param_num = 0;
+		ret = parse_dcb_token_find(&split_str[start], split_num - start, &param_num);
+		if (ret != 0)
+			return ret;
+
+		token = split_str[start];
+		if (strcmp(token, DCB_TOKEN_PRIO_TC) == 0) {
+			if (*prio_tc_en == 1) {
+				fprintf(stderr, "Bad Argument: detect multiple %s token\n",
+					DCB_TOKEN_PRIO_TC);
+				return -1;
+			}
+			ret = parse_dcb_token_prio_tc(&split_str[start + 1], param_num, prio_tc,
+						      prio_tc_en);
+			if (ret != 0)
+				return ret;
+		} else {
+			/* this must be keep-qnum. */
+			if (*keep_qnum == 1) {
+				fprintf(stderr, "Bad Argument: detect multiple %s token\n",
+					DCB_TOKEN_KEEP_QNUM);
+				return -1;
+			}
+			*keep_qnum = 1;
+		}
+
+		start += param_num + 1;
+		if (start >= split_num)
+			break;
+	} while (1);
+
+	return 0;
+}
 
 static void
 cmd_config_dcb_parsed(void *parsed_result,
                         __rte_unused struct cmdline *cl,
                         __rte_unused void *data)
 {
+	uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES] = {0};
 	struct cmd_config_dcb *res = parsed_result;
 	struct rte_eth_dcb_info dcb_info;
 	portid_t port_id = res->port_id;
+	uint8_t prio_tc_en = 0;
+	uint8_t keep_qnum = 0;
 	struct rte_port *port;
-	uint8_t pfc_en;
+	uint8_t pfc_en = 0;
 	int ret;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
 
 	port = &ports[port_id];
 	/** Check if the port is not started **/
@@ -3468,9 +3625,9 @@ cmd_config_dcb_parsed(void *parsed_result,
 		return;
 	}
 
-	if ((res->num_tcs != RTE_ETH_4_TCS) && (res->num_tcs != RTE_ETH_8_TCS)) {
+	if (res->num_tcs < 1 || res->num_tcs > RTE_ETH_8_TCS) {
 		fprintf(stderr,
-			"The invalid number of traffic class, only 4 or 8 allowed.\n");
+			"The invalid number of traffic class, only 1~8 allowed.\n");
 		return;
 	}
 
@@ -3487,20 +3644,19 @@ cmd_config_dcb_parsed(void *parsed_result,
 		return;
 	}
 
-	if (!strncmp(res->pfc_en, "on", 2))
-		pfc_en = 1;
-	else
-		pfc_en = 0;
+	ret = parse_dcb_token_value(res->token_str, &pfc_en, prio_tc, &prio_tc_en, &keep_qnum);
+	if (ret != 0)
+		return;
 
 	/* DCB in VT mode */
 	if (!strncmp(res->vt_en, "on", 2))
 		ret = init_port_dcb_config(port_id, DCB_VT_ENABLED,
 				(enum rte_eth_nb_tcs)res->num_tcs,
-				pfc_en);
+				pfc_en, prio_tc, prio_tc_en, keep_qnum);
 	else
 		ret = init_port_dcb_config(port_id, DCB_ENABLED,
 				(enum rte_eth_nb_tcs)res->num_tcs,
-				pfc_en);
+				pfc_en, prio_tc, prio_tc_en, keep_qnum);
 	if (ret != 0) {
 		fprintf(stderr, "Cannot initialize network ports.\n");
 		return;
@@ -3527,13 +3683,17 @@ static cmdline_parse_token_num_t cmd_config_dcb_num_tcs =
 	TOKEN_NUM_INITIALIZER(struct cmd_config_dcb, num_tcs, RTE_UINT8);
 static cmdline_parse_token_string_t cmd_config_dcb_pfc =
         TOKEN_STRING_INITIALIZER(struct cmd_config_dcb, pfc, "pfc");
-static cmdline_parse_token_string_t cmd_config_dcb_pfc_en =
-        TOKEN_STRING_INITIALIZER(struct cmd_config_dcb, pfc_en, "on#off");
+static cmdline_parse_token_string_t cmd_config_dcb_token_str =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_dcb, token_str, TOKEN_STRING_MULTI);
 
 static cmdline_parse_inst_t cmd_config_dcb = {
 	.f = cmd_config_dcb_parsed,
 	.data = NULL,
-	.help_str = "port config <port-id> dcb vt on|off <num_tcs> pfc on|off",
+	.help_str = "port config <port-id> dcb vt on|off <num_tcs> pfc on|off prio-tc PRIO-MAP keep-qnum\n"
+		    "where PRIO-MAP: [ PRIO-MAP ] PRIO-MAPPING\n"
+		    "	   PRIO-MAPPING := PRIO:TC\n"
+		    "	   PRIO: { 0 .. 7 }\n"
+		    "	   TC: { 0 .. 7 }",
 	.tokens = {
 		(void *)&cmd_config_dcb_port,
 		(void *)&cmd_config_dcb_config,
@@ -3543,7 +3703,7 @@ static cmdline_parse_inst_t cmd_config_dcb = {
 		(void *)&cmd_config_dcb_vt_en,
 		(void *)&cmd_config_dcb_num_tcs,
 		(void *)&cmd_config_dcb_pfc,
-		(void *)&cmd_config_dcb_pfc_en,
+		(void *)&cmd_config_dcb_token_str,
                 NULL,
         },
 };
@@ -6663,6 +6823,9 @@ cmd_priority_flow_ctrl_set_parsed(void *parsed_result,
 	int rx_fc_enable, tx_fc_enable;
 	int ret;
 
+	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
+		return;
+
 	/*
 	 * Rx on/off, flow control is enabled/disabled on RX side. This can indicate
 	 * the RTE_ETH_FC_TX_PAUSE, Transmit pause frame at the Rx side.
@@ -7960,6 +8123,127 @@ static cmdline_parse_inst_t cmd_set_xstats_hide_zero = {
 	},
 };
 
+/* *** SET OPTION TO DISPLAY XSTAT STATE *** */
+struct cmd_set_xstats_show_state_result {
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t name;
+	uint8_t on_off;
+};
+static void
+cmd_set_xstats_show_state_parsed(void *parsed_result,
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
+{
+	struct cmd_set_xstats_show_state_result *res = parsed_result;
+	set_xstats_show_state(res->on_off);
+}
+
+static cmdline_parse_token_string_t cmd_set_xstats_show_state_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_xstats_show_state_result,
+				 keyword, "set");
+static cmdline_parse_token_string_t cmd_set_xstats_show_state_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_xstats_show_state_result,
+				 name, "xstats-show-state");
+static cmdline_parse_token_bool_t cmd_set_xstats_show_state_on_off =
+	TOKEN_BOOL_INITIALIZER(struct cmd_set_xstats_show_state_result,
+				 on_off);
+
+static cmdline_parse_inst_t cmd_set_xstats_show_state = {
+	.f = cmd_set_xstats_show_state_parsed,
+	.data = NULL,
+	.help_str = "set xstats-show-state on|off",
+	.tokens = {
+		(void *)&cmd_set_xstats_show_state_keyword,
+		(void *)&cmd_set_xstats_show_state_name,
+		(void *)&cmd_set_xstats_show_state_on_off,
+		NULL,
+	},
+};
+
+/* *** SET OPTION TO HIDE DISABLED XSTAT FOR XSTATS DISPLAY *** */
+struct cmd_set_xstats_hide_disabled_result {
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t name;
+	uint8_t on_off;
+};
+
+static void
+cmd_set_xstats_hide_disabled_parsed(void *parsed_result,
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
+{
+	struct cmd_set_xstats_hide_disabled_result *res = parsed_result;
+	set_xstats_hide_disabled(res->on_off);
+}
+
+static cmdline_parse_token_string_t cmd_set_xstats_hide_disabled_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_xstats_hide_disabled_result,
+				 keyword, "set");
+static cmdline_parse_token_string_t cmd_set_xstats_hide_disabled_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_xstats_hide_disabled_result,
+				 name, "xstats-hide-disabled");
+static cmdline_parse_token_bool_t cmd_set_xstats_hide_disabled_on_off =
+	TOKEN_BOOL_INITIALIZER(struct cmd_set_xstats_hide_disabled_result,
+				 on_off);
+
+static cmdline_parse_inst_t cmd_set_xstats_hide_disabled = {
+	.f = cmd_set_xstats_hide_disabled_parsed,
+	.data = NULL,
+	.help_str = "set xstats-hide-disabled on|off",
+	.tokens = {
+		(void *)&cmd_set_xstats_hide_disabled_keyword,
+		(void *)&cmd_set_xstats_hide_disabled_name,
+		(void *)&cmd_set_xstats_hide_disabled_on_off,
+		NULL,
+	},
+};
+
+/* *** enable/disable counter by name *** */
+struct cmd_operate_set_counter_result {
+	cmdline_fixed_string_t port;
+	portid_t port_id;
+	cmdline_fixed_string_t what;
+	cmdline_multi_string_t counter_name;
+};
+
+static void
+cmd_operate_set_counter_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_operate_set_counter_result *res = parsed_result;
+	uint16_t on_off = strcmp(res->what, "enable") ? 0 : 1;
+
+	if ((strcmp(res->port, "port") == 0))
+		nic_xstats_set_counter(res->port_id, res->counter_name, on_off);
+}
+
+static cmdline_parse_token_string_t cmd_operate_set_counter_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_operate_set_counter_result,
+			port, "port");
+static cmdline_parse_token_num_t cmd_operate_set_counter_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_operate_set_counter_result,
+			port_id, RTE_UINT16);
+static cmdline_parse_token_string_t cmd_operate_set_counter_what =
+	TOKEN_STRING_INITIALIZER(struct cmd_operate_set_counter_result,
+				 what, "enable#disable");
+static cmdline_parse_token_string_t cmd_operate_set_counter_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_operate_set_counter_result,
+			counter_name, TOKEN_STRING_MULTI);
+
+static cmdline_parse_inst_t cmd_operate_set_counter = {
+	.f = cmd_operate_set_counter_parsed,
+	.data = NULL,
+	.help_str = "port (port_id) enable|disable <counter_name>",
+	.tokens = {
+		(void *)&cmd_operate_set_counter_port,
+		(void *)&cmd_operate_set_counter_port_id,
+		(void *)&cmd_operate_set_counter_what,
+		(void *)&cmd_operate_set_counter_name,
+		NULL,
+	},
+};
+
 /* *** SET OPTION TO ENABLE MEASUREMENT OF CPU CYCLES *** */
 struct cmd_set_record_core_cycles_result {
 	cmdline_fixed_string_t keyword;
@@ -8890,6 +9174,12 @@ static void cmd_dump_parsed(void *parsed_result,
 
 static cmdline_parse_token_string_t cmd_dump_dump =
 	TOKEN_STRING_INITIALIZER(struct cmd_dump_result, dump,
+		"" /* defined at init */);
+
+static void
+cmd_dump_init(void)
+{
+	cmd_dump_dump.string_data.str =
 		"dump_physmem#"
 		"dump_memzone#"
 		"dump_socket_mem#"
@@ -8901,7 +9191,8 @@ static cmdline_parse_token_string_t cmd_dump_dump =
 #ifndef RTE_EXEC_ENV_WINDOWS
 		"dump_trace#"
 #endif
-		"dump_log_types");
+		"dump_log_types";
+}
 
 static cmdline_parse_inst_t cmd_dump = {
 	.f = cmd_dump_parsed,  /* function to call */
@@ -11505,7 +11796,7 @@ cmd_rx_offload_get_configuration_parsed(
 	struct cmd_rx_offload_get_configuration_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
 	portid_t port_id = res->port_id;
-	struct rte_port *port = &ports[port_id];
+	struct rte_port *port;
 	struct rte_eth_conf dev_conf;
 	uint64_t port_offloads;
 	uint64_t queue_offloads;
@@ -11513,11 +11804,12 @@ cmd_rx_offload_get_configuration_parsed(
 	int q;
 	int ret;
 
-	printf("Rx Offloading Configuration of port %d :\n", port_id);
-
 	ret = eth_dev_conf_get_print_err(port_id, &dev_conf);
 	if (ret != 0)
 		return;
+
+	port = &ports[port_id];
+	printf("Rx Offloading Configuration of port %d :\n", port_id);
 
 	port_offloads = dev_conf.rxmode.offloads;
 	printf("  Port :");
@@ -11619,22 +11911,23 @@ static void
 config_port_rx_offload(portid_t port_id, char *name, bool on)
 {
 	struct rte_eth_dev_info dev_info;
-	struct rte_port *port = &ports[port_id];
+	struct rte_port *port;
 	uint16_t nb_rx_queues;
 	uint64_t offload;
 	int q;
 	int ret;
 
+	ret = eth_dev_info_get_print_err(port_id, &dev_info);
+	if (ret != 0)
+		return;
+
+	port = &ports[port_id];
 	if (port->port_status != RTE_PORT_STOPPED) {
 		fprintf(stderr,
 			"Error: Can't config offload when Port %d is not stopped\n",
 			port_id);
 		return;
 	}
-
-	ret = eth_dev_info_get_print_err(port_id, &dev_info);
-	if (ret != 0)
-		return;
 
 	if (!strcmp(name, "all")) {
 		offload = dev_info.rx_offload_capa;
@@ -11821,20 +12114,21 @@ cmd_config_per_queue_rx_offload_parsed(void *parsed_result,
 	struct rte_eth_dev_info dev_info;
 	portid_t port_id = res->port_id;
 	uint16_t queue_id = res->queue_id;
-	struct rte_port *port = &ports[port_id];
+	struct rte_port *port;
 	uint64_t offload;
 	int ret;
 
+	ret = eth_dev_info_get_print_err(port_id, &dev_info);
+	if (ret != 0)
+		return;
+
+	port = &ports[port_id];
 	if (port->port_status != RTE_PORT_STOPPED) {
 		fprintf(stderr,
 			"Error: Can't config offload when Port %d is not stopped\n",
 			port_id);
 		return;
 	}
-
-	ret = eth_dev_info_get_print_err(port_id, &dev_info);
-	if (ret != 0)
-		return;
 
 	if (queue_id >= dev_info.nb_rx_queues) {
 		fprintf(stderr,
@@ -12023,7 +12317,7 @@ cmd_tx_offload_get_configuration_parsed(
 	struct cmd_tx_offload_get_configuration_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
 	portid_t port_id = res->port_id;
-	struct rte_port *port = &ports[port_id];
+	struct rte_port *port;
 	struct rte_eth_conf dev_conf;
 	uint64_t port_offloads;
 	uint64_t queue_offloads;
@@ -12031,12 +12325,12 @@ cmd_tx_offload_get_configuration_parsed(
 	int q;
 	int ret;
 
-	printf("Tx Offloading Configuration of port %d :\n", port_id);
-
 	ret = eth_dev_conf_get_print_err(port_id, &dev_conf);
 	if (ret != 0)
 		return;
 
+	printf("Tx Offloading Configuration of port %d :\n", port_id);
+	port = &ports[port_id];
 	port_offloads = dev_conf.txmode.offloads;
 	printf("  Port :");
 	print_tx_offloads(port_offloads);
@@ -12141,22 +12435,23 @@ static void
 config_port_tx_offload(portid_t port_id, char *name, bool on)
 {
 	struct rte_eth_dev_info dev_info;
-	struct rte_port *port = &ports[port_id];
+	struct rte_port *port;
 	uint16_t nb_tx_queues;
 	uint64_t offload;
 	int q;
 	int ret;
 
+	ret = eth_dev_info_get_print_err(port_id, &dev_info);
+	if (ret != 0)
+		return;
+
+	port = &ports[port_id];
 	if (port->port_status != RTE_PORT_STOPPED) {
 		fprintf(stderr,
 			"Error: Can't config offload when Port %d is not stopped\n",
 			port_id);
 		return;
 	}
-
-	ret = eth_dev_info_get_print_err(port_id, &dev_info);
-	if (ret != 0)
-		return;
 
 	if (!strcmp(name, "all")) {
 		offload = dev_info.tx_offload_capa;
@@ -12347,20 +12642,21 @@ cmd_config_per_queue_tx_offload_parsed(void *parsed_result,
 	struct rte_eth_dev_info dev_info;
 	portid_t port_id = res->port_id;
 	uint16_t queue_id = res->queue_id;
-	struct rte_port *port = &ports[port_id];
+	struct rte_port *port;
 	uint64_t offload;
 	int ret;
 
+	ret = eth_dev_info_get_print_err(port_id, &dev_info);
+	if (ret != 0)
+		return;
+
+	port = &ports[port_id];
 	if (port->port_status != RTE_PORT_STOPPED) {
 		fprintf(stderr,
 			"Error: Can't config offload when Port %d is not stopped\n",
 			port_id);
 		return;
 	}
-
-	ret = eth_dev_info_get_print_err(port_id, &dev_info);
-	if (ret != 0)
-		return;
 
 	if (queue_id >= dev_info.nb_tx_queues) {
 		fprintf(stderr,
@@ -12510,11 +12806,11 @@ cmd_config_dynf_specific_parsed(void *parsed_result,
 	}
 	old_port_flags = ports[res->port_id].mbuf_dynf;
 	if (!strcmp(res->value, "set")) {
-		ports[res->port_id].mbuf_dynf |= 1UL << flag;
+		ports[res->port_id].mbuf_dynf |= RTE_BIT64(flag);
 		if (old_port_flags == 0)
 			add_tx_dynf_callback(res->port_id);
 	} else {
-		ports[res->port_id].mbuf_dynf &= ~(1UL << flag);
+		ports[res->port_id].mbuf_dynf &= ~RTE_BIT64(flag);
 		if (ports[res->port_id].mbuf_dynf == 0)
 			remove_tx_dynf_callback(res->port_id);
 	}
@@ -13274,7 +13570,7 @@ cmd_set_port_ptypes_parsed(
 		return;
 	}
 
-	uint32_t ptypes[ret];
+	uint32_t *ptypes = alloca(sizeof(uint32_t) * ret);
 
 	ret = rte_eth_dev_set_ptypes(port_id, ptype_mask, ptypes, ret);
 	if (ret < 0) {
@@ -13648,6 +13944,9 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_set_fwd_eth_peer,
 	&cmd_set_qmap,
 	&cmd_set_xstats_hide_zero,
+	&cmd_set_xstats_show_state,
+	&cmd_set_xstats_hide_disabled,
+	&cmd_operate_set_counter,
 	&cmd_set_record_core_cycles,
 	&cmd_set_record_burst_stats,
 	&cmd_operate_port,
@@ -13825,6 +14124,7 @@ init_cmdline(void)
 	/* initialize non-constant commands */
 	cmd_set_fwd_mode_init();
 	cmd_set_fwd_retry_mode_init();
+	cmd_dump_init();
 
 	count = 0;
 	for (i = 0; builtin_ctx[i] != NULL; i++)
@@ -13855,24 +14155,29 @@ void
 cmdline_read_from_file(const char *filename)
 {
 	struct cmdline *cl;
+	int fd = -1;
 
-	/* cmdline_file_new does not produce any output which is not ideal here.
-	 * Much better to show output of the commands, so we open filename directly
+	/* cmdline_file_new does not produce any output
+	 * so when echoing is requested we open filename directly
 	 * and then pass that to cmdline_new with stdout as the output path.
 	 */
-	int fd = open(filename, O_RDONLY);
-	if (fd < 0) {
-		fprintf(stderr, "Failed to open file %s: %s\n",
-			filename, strerror(errno));
-		return;
-	}
+	if (!echo_cmdline_file) {
+		cl = cmdline_file_new(main_ctx, "testpmd> ", filename);
+	} else {
+		fd = open(filename, O_RDONLY);
+		if (fd < 0) {
+			fprintf(stderr, "Failed to open file %s: %s\n",
+				filename, strerror(errno));
+			return;
+		}
 
-	cl = cmdline_new(main_ctx, "testpmd> ", fd, STDOUT_FILENO);
+		cl = cmdline_new(main_ctx, "testpmd> ", fd, STDOUT_FILENO);
+	}
 	if (cl == NULL) {
 		fprintf(stderr,
 			"Failed to create file based cmdline context: %s\n",
 			filename);
-		return;
+		goto end;
 	}
 
 	cmdline_interact(cl);
@@ -13881,6 +14186,10 @@ cmdline_read_from_file(const char *filename)
 	cmdline_free(cl);
 
 	printf("Read CLI commands from %s\n", filename);
+
+end:
+	if (fd >= 0)
+		close(fd);
 }
 
 void

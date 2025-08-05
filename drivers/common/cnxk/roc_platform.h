@@ -97,7 +97,8 @@
 
 #define __plt_cache_aligned __rte_cache_aligned
 #define __plt_always_inline __rte_always_inline
-#define __plt_packed	    __rte_packed
+#define __plt_packed_begin  __rte_packed_begin
+#define __plt_packed_end    __rte_packed_end
 #define __plt_unused	    __rte_unused
 #define __roc_api	    __rte_internal
 #define plt_iova_t	    rte_iova_t
@@ -259,6 +260,7 @@ plt_thread_is_valid(plt_thread_t thr)
 #define plt_tel_data_add_dict_string rte_tel_data_add_dict_string
 #define plt_tel_data_add_dict_u64    rte_tel_data_add_dict_uint
 #define plt_telemetry_register_cmd   rte_telemetry_register_cmd
+#define __plt_atomic __rte_atomic
 
 /* Log */
 extern int cnxk_logtype_base;
@@ -348,6 +350,13 @@ extern int cnxk_logtype_esw;
 	.subsystem_device_id = (subsystem_dev),                        \
 }
 #endif
+
+int plt_irq_register(struct plt_intr_handle *intr_handle, plt_intr_callback_fn cb, void *data,
+		     unsigned int vec);
+void plt_irq_unregister(struct plt_intr_handle *intr_handle, plt_intr_callback_fn cb, void *data,
+			unsigned int vec);
+int plt_irq_reconfigure(struct plt_intr_handle *intr_handle, uint16_t max_intr);
+int plt_irq_disable(struct plt_intr_handle *intr_handle);
 
 /* Device memory does not support unaligned access, instruct compiler to
  * not optimize the memory access when working with mailbox memory.

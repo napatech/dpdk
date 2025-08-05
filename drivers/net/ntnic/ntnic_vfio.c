@@ -68,7 +68,6 @@ nt_vfio_setup(struct rte_pci_device *dev)
 
 	vfio->dev_fd = -1;
 	vfio->group_fd = -1;
-	vfio->container_fd = -1;
 	vfio->iova_addr = START_VF_IOVA;
 
 	rte_pci_device_name(&dev->addr, devname, RTE_DEV_NAME_MAX_LEN);
@@ -211,9 +210,6 @@ nt_vfio_dma_unmap(int vf_num, void *virt_addr, uint64_t iova_addr, uint64_t size
 		NT_LOG(ERR, NTNIC, "VFIO UNMAP: VF number %d invalid", vf_num);
 		return -1;
 	}
-
-	if (vfio->container_fd == -1)
-		return 0;
 
 	int res = rte_vfio_container_dma_unmap(vfio->container_fd, gp_virt_base, iova_addr, size);
 

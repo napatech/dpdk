@@ -41,6 +41,7 @@
 /* Hardware index widths. */
 #define MLX5_CQ_INDEX_WIDTH 24
 #define MLX5_WQ_INDEX_WIDTH 16
+#define MLX5_WQ_INDEX_MAX (1u << (MLX5_WQ_INDEX_WIDTH - 1))
 
 /* WQE Segment sizes in bytes. */
 #define MLX5_WSEG_SIZE 16u
@@ -275,6 +276,9 @@
 #define MLX5_ERROR_CQE_SYNDROME_OFFSET 52
 #endif
 
+/* Firmware error code for allocating the maximum number of queue counters */
+#define MLX5_Q_COUNTERS_LIMIT_REACHED 0x587239
+
 /* The completion mode offset in the WQE control segment line 2. */
 #define MLX5_COMP_MODE_OFFSET 2
 
@@ -323,12 +327,12 @@ enum mlx5_mpw_mode {
 };
 
 /* WQE Control segment. */
-struct __rte_aligned(MLX5_WSEG_SIZE) mlx5_wqe_cseg {
+struct __rte_aligned(MLX5_WSEG_SIZE) __rte_packed_begin mlx5_wqe_cseg {
 	uint32_t opcode;
 	uint32_t sq_ds;
 	uint32_t flags;
 	uint32_t misc;
-} __rte_packed;
+} __rte_packed_end;
 
 /*
  * WQE CSEG opcode field size is 32 bits, divided:
@@ -340,21 +344,21 @@ struct __rte_aligned(MLX5_WSEG_SIZE) mlx5_wqe_cseg {
 #define WQE_CSEG_WQE_INDEX_OFFSET	 8
 
 /* Header of data segment. Minimal size Data Segment */
-struct mlx5_wqe_dseg {
+struct __rte_packed_begin mlx5_wqe_dseg {
 	uint32_t bcount;
 	union {
 		uint8_t inline_data[MLX5_DSEG_MIN_INLINE_SIZE];
-		struct {
+		struct __rte_packed_begin {
 			uint32_t lkey;
 			uint64_t pbuf;
-		} __rte_packed;
+		} __rte_packed_end;
 	};
-} __rte_packed;
+} __rte_packed_end;
 
 /* Subset of struct WQE Ethernet Segment. */
-struct mlx5_wqe_eseg {
+struct __rte_packed_begin mlx5_wqe_eseg {
 	union {
-		struct {
+		struct __rte_packed_begin {
 			uint32_t swp_offs;
 			uint8_t	cs_flags;
 			uint8_t	swp_flags;
@@ -365,34 +369,34 @@ struct mlx5_wqe_eseg {
 				uint16_t inline_data;
 				uint16_t vlan_tag;
 			};
-		} __rte_packed;
-		struct {
+		} __rte_packed_end;
+		struct __rte_packed_begin {
 			uint32_t offsets;
 			uint32_t flags;
 			uint32_t flow_metadata;
 			uint32_t inline_hdr;
-		} __rte_packed;
+		} __rte_packed_end;
 	};
-} __rte_packed;
+} __rte_packed_end;
 
-struct mlx5_wqe_qseg {
+struct __rte_packed_begin mlx5_wqe_qseg {
 	uint32_t reserved0;
 	uint32_t reserved1;
 	uint32_t max_index;
 	uint32_t qpn_cqn;
-} __rte_packed;
+} __rte_packed_end;
 
-struct mlx5_wqe_wseg {
+struct __rte_packed_begin mlx5_wqe_wseg {
 	uint32_t operation;
 	uint32_t lkey;
 	uint32_t va_high;
 	uint32_t va_low;
 	uint64_t value;
 	uint64_t mask;
-} __rte_packed;
+} __rte_packed_end;
 
 /* The title WQEBB, header of WQE. */
-struct mlx5_wqe {
+struct __rte_packed_begin mlx5_wqe {
 	union {
 		struct mlx5_wqe_cseg cseg;
 		uint32_t ctrl[4];
@@ -402,7 +406,7 @@ struct mlx5_wqe {
 		struct mlx5_wqe_dseg dseg[2];
 		uint8_t data[MLX5_ESEG_EXTRA_DATA_SIZE];
 	};
-} __rte_packed;
+} __rte_packed_end;
 
 /* WQE for Multi-Packet RQ. */
 struct mlx5_wqe_mprq {
@@ -464,10 +468,10 @@ struct mlx5_cqe {
 	uint8_t lro_num_seg;
 	union {
 		uint8_t user_index_bytes[3];
-		struct {
+		struct __rte_packed_begin {
 			uint8_t user_index_hi;
 			uint16_t user_index_low;
-		} __rte_packed;
+		} __rte_packed_end;
 	};
 	uint32_t flow_table_metadata;
 	uint8_t rsvd4[4];
@@ -487,11 +491,11 @@ struct mlx5_cqe_ts {
 	uint8_t op_own;
 };
 
-struct mlx5_wqe_rseg {
+struct __rte_packed_begin mlx5_wqe_rseg {
 	uint64_t raddr;
 	uint32_t rkey;
 	uint32_t reserved;
-} __rte_packed;
+} __rte_packed_end;
 
 #define MLX5_UMRC_IF_OFFSET 31u
 #define MLX5_UMRC_KO_OFFSET 16u
@@ -506,14 +510,14 @@ struct mlx5_wqe_rseg {
 #define MLX5_UMR_KLM_NUM_ALIGN \
 	(MLX5_UMR_KLM_PTR_ALIGN / sizeof(struct mlx5_klm))
 
-struct mlx5_wqe_umr_cseg {
+struct __rte_packed_begin mlx5_wqe_umr_cseg {
 	uint32_t if_cf_toe_cq_res;
 	uint32_t ko_to_bs;
 	uint64_t mkey_mask;
 	uint32_t rsvd1[8];
-} __rte_packed;
+} __rte_packed_end;
 
-struct mlx5_wqe_mkey_cseg {
+struct __rte_packed_begin mlx5_wqe_mkey_cseg {
 	uint32_t fr_res_af_sf;
 	uint32_t qpn_mkey;
 	uint32_t reserved2;
@@ -525,7 +529,7 @@ struct mlx5_wqe_mkey_cseg {
 	uint32_t translations_octword_size;
 	uint32_t res4_lps;
 	uint32_t reserved;
-} __rte_packed;
+} __rte_packed_end;
 
 enum {
 	MLX5_BSF_SIZE_16B = 0x0,
@@ -576,7 +580,7 @@ enum {
 #define MLX5_CRYPTO_MMO_TYPE_OFFSET 24
 #define MLX5_CRYPTO_MMO_OP_OFFSET 20
 
-struct mlx5_wqe_umr_bsf_seg {
+struct __rte_packed_begin mlx5_wqe_umr_bsf_seg {
 	/*
 	 * bs_bpt_eo_es contains:
 	 * bs	bsf_size		2 bits at MLX5_BSF_SIZE_OFFSET
@@ -603,13 +607,13 @@ struct mlx5_wqe_umr_bsf_seg {
 	uint32_t reserved1;
 	uint64_t keytag;
 	uint32_t reserved2[4];
-} __rte_packed;
+} __rte_packed_end;
 
 #ifdef PEDANTIC
 #pragma GCC diagnostic ignored "-Wpedantic"
 #endif
 
-struct mlx5_umr_wqe {
+struct __rte_packed_begin mlx5_umr_wqe {
 	struct mlx5_wqe_cseg ctr;
 	struct mlx5_wqe_umr_cseg ucseg;
 	struct mlx5_wqe_mkey_cseg mkc;
@@ -617,24 +621,24 @@ struct mlx5_umr_wqe {
 		struct mlx5_wqe_dseg kseg[0];
 		struct mlx5_wqe_umr_bsf_seg bsf[0];
 	};
-} __rte_packed;
+} __rte_packed_end;
 
-struct mlx5_rdma_write_wqe {
+struct __rte_packed_begin mlx5_rdma_write_wqe {
 	struct mlx5_wqe_cseg ctr;
 	struct mlx5_wqe_rseg rseg;
 	struct mlx5_wqe_dseg dseg[];
-} __rte_packed;
+} __rte_packed_end;
 
-struct mlx5_wqe_send_en_seg {
+struct __rte_packed_begin mlx5_wqe_send_en_seg {
 	uint32_t reserve[2];
 	uint32_t sqnpc;
 	uint32_t qpn;
-} __rte_packed;
+} __rte_packed_end;
 
-struct mlx5_wqe_send_en_wqe {
+struct __rte_packed_begin mlx5_wqe_send_en_wqe {
 	struct mlx5_wqe_cseg ctr;
 	struct mlx5_wqe_send_en_seg sseg;
-} __rte_packed;
+} __rte_packed_end;
 
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-Wpedantic"
@@ -677,7 +681,7 @@ struct mlx5_wqe_metadata_seg {
 	uint64_t addr;
 };
 
-struct mlx5_gga_wqe {
+struct __rte_packed_begin mlx5_gga_wqe {
 	uint32_t opcode;
 	uint32_t sq_ds;
 	uint32_t flags;
@@ -687,40 +691,40 @@ struct mlx5_gga_wqe {
 	uint64_t opaque_vaddr;
 	struct mlx5_wqe_dseg gather;
 	struct mlx5_wqe_dseg scatter;
-} __rte_packed;
+} __rte_packed_end;
 
 union mlx5_gga_compress_opaque {
-	struct {
+	struct __rte_packed_begin {
 		uint32_t syndrome;
 		uint32_t reserved0;
 		uint32_t scattered_length;
 		union {
-			struct {
+			struct __rte_packed_begin {
 				uint32_t reserved1[5];
 				uint32_t crc32;
 				uint32_t adler32;
-			} v1 __rte_packed;
-			struct {
+			} v1 __rte_packed_end;
+			struct __rte_packed_begin {
 				uint32_t crc32;
 				uint32_t adler32;
 				uint32_t crc32c;
 				uint32_t xxh32;
-			} v2 __rte_packed;
+			} v2 __rte_packed_end;
 		};
-	} __rte_packed;
+	} __rte_packed_end;
 	uint32_t data[64];
 };
 
 union mlx5_gga_crypto_opaque {
-	struct {
+	struct __rte_packed_begin {
 		uint32_t syndrome;
 		uint32_t reserved0[2];
-		struct {
+		struct __rte_packed_begin {
 			uint32_t iv[3];
 			uint32_t tag_size;
 			uint32_t aad_size;
-		} cp __rte_packed;
-	} __rte_packed;
+		} cp __rte_packed_end;
+	} __rte_packed_end;
 	uint8_t data[64];
 };
 
@@ -931,7 +935,7 @@ mlx5_regc_value(uint8_t regc_ix)
 
 /* Modification sub command. */
 struct mlx5_modification_cmd {
-	union {
+	union __rte_packed_begin {
 		uint32_t data0;
 		struct {
 			unsigned int length:5;
@@ -941,8 +945,8 @@ struct mlx5_modification_cmd {
 			unsigned int field:12;
 			unsigned int action_type:4;
 		};
-	} __rte_packed;
-	union {
+	} __rte_packed_end;
+	union __rte_packed_begin {
 		uint32_t data1;
 		uint8_t data[4];
 		struct {
@@ -952,7 +956,7 @@ struct mlx5_modification_cmd {
 			unsigned int dst_field:12;
 			unsigned int rsvd4:4;
 		};
-	} __rte_packed;
+	} __rte_packed_end;
 };
 
 typedef uint64_t u64;
@@ -2463,7 +2467,8 @@ struct mlx5_ifc_wqe_based_flow_table_cap_bits {
 	u8 reserved_at_60[0x8];
 	u8 max_header_modify_pattern_length[0x8];
 	u8 ste_format[0x10];
-	u8 stc_action_type[0x80];
+	u8 stc_action_type_63_0[0x40];
+	u8 stc_action_type_127_64[0x40];
 	u8 header_insert_type[0x10];
 	u8 header_remove_type[0x10];
 	u8 trivial_match_definer[0x20];
@@ -2475,7 +2480,9 @@ struct mlx5_ifc_wqe_based_flow_table_cap_bits {
 	u8 ste_format_gen_wqe[0x10];
 	u8 linear_match_definer_reg_c3[0x20];
 	u8 fdb_jump_to_tir_stc[0x1];
-	u8 reserved_at_1c1[0x1f];
+	u8 reserved_at_1c1[0x1];
+	u8 fdb_unified_en[0x1];
+	u8 reserved_at_1c3[0x1d];
 };
 
 union mlx5_ifc_hca_cap_union_bits {
@@ -3538,6 +3545,11 @@ enum mlx5_ifc_rtc_reparse_mode {
 	MLX5_IFC_RTC_REPARSE_BY_STC = 0x2,
 };
 
+enum mlx5_ifc_stc_action_type_bit_index {
+	MLX5_IFC_STC_ACTION_TYPE_BIT_64_INDEX = 64,
+	MLX5_IFC_STC_ACTION_TYPE_JUMP_FLOW_TABLE_FDB_RX_BIT_INDEX = 71,
+};
+
 #define MLX5_IFC_RTC_LINEAR_LOOKUP_TBL_LOG_MAX 16
 
 struct mlx5_ifc_rtc_bits {
@@ -3616,6 +3628,7 @@ enum mlx5_ifc_stc_action_type {
 	MLX5_IFC_STC_ACTION_TYPE_ALLOW = 0x84,
 	MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_VPORT = 0x85,
 	MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_UPLINK = 0x86,
+	MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_FLOW_TABLE_FDB_RX = 0x87,
 };
 
 enum mlx5_ifc_stc_reparse_mode {
@@ -4191,7 +4204,7 @@ enum mlx5_aso_op {
 #define MLX5_ASO_CSEG_READ_ENABLE 1
 
 /* ASO WQE CTRL segment. */
-struct mlx5_aso_cseg {
+struct __rte_packed_begin mlx5_aso_cseg {
 	uint32_t va_h;
 	uint32_t va_l_r;
 	uint32_t lkey;
@@ -4202,12 +4215,12 @@ struct mlx5_aso_cseg {
 	uint32_t condition_1_mask;
 	uint64_t bitwise_data;
 	uint64_t data_mask;
-} __rte_packed;
+} __rte_packed_end;
 
 #define MLX5_MTR_MAX_TOKEN_VALUE INT32_MAX
 
 /* A meter data segment - 2 per ASO WQE. */
-struct mlx5_aso_mtr_dseg {
+struct __rte_packed_begin mlx5_aso_mtr_dseg {
 	uint32_t v_bo_sc_bbog_mm;
 	/*
 	 * bit 31: valid, 30: bucket overflow, 28-29: start color,
@@ -4227,7 +4240,7 @@ struct mlx5_aso_mtr_dseg {
 	 */
 	uint32_t e_tokens;
 	uint64_t timestamp;
-} __rte_packed;
+} __rte_packed_end;
 
 #define ASO_DSEG_VALID_OFFSET 31
 #define ASO_DSEG_BO_OFFSET 30
@@ -4248,19 +4261,19 @@ struct mlx5_aso_mtr_dseg {
 #define MLX5_ASO_MTRS_PER_POOL 128
 
 /* ASO WQE data segment. */
-struct mlx5_aso_dseg {
+struct __rte_packed_begin mlx5_aso_dseg {
 	union {
 		uint8_t data[MLX5_ASO_WQE_DSEG_SIZE];
 		struct mlx5_aso_mtr_dseg mtrs[MLX5_ASO_METERS_PER_WQE];
 	};
-} __rte_packed;
+} __rte_packed_end;
 
 /* ASO WQE. */
-struct mlx5_aso_wqe {
+struct __rte_packed_begin mlx5_aso_wqe {
 	struct mlx5_wqe_cseg general_cseg;
 	struct mlx5_aso_cseg aso_cseg;
 	struct mlx5_aso_dseg aso_dseg;
-} __rte_packed;
+} __rte_packed_end;
 
 enum {
 	MLX5_EVENT_TYPE_OBJECT_CHANGE = 0x27,
@@ -5117,6 +5130,7 @@ enum {
 	FS_FT_FDB = 0x4,
 	FS_FT_FDB_RX = 0xa,
 	FS_FT_FDB_TX = 0xb,
+	FS_FT_FDB_UNIFIED = 0xc,
 };
 
 struct mlx5_ifc_flow_table_context_bits {
@@ -5218,6 +5232,7 @@ enum mlx5_flow_destination_type {
 	MLX5_FLOW_DESTINATION_TYPE_VPORT = 0x0,
 	MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE = 0x1,
 	MLX5_FLOW_DESTINATION_TYPE_TIR = 0x2,
+	MLX5_FLOW_DESTINATION_TYPE_NOP = 0xb,
 };
 
 enum mlx5_flow_context_action {

@@ -106,7 +106,8 @@ int hw_mod_flm_alloc(struct flow_api_backend_s *be)
 
 	switch (_VER_) {
 	case 25:
-		if (!callocate_mod((struct common_func_s *)&be->flm, 38, &be->flm.v25.control, 1,
+		if (!nthw_callocate_mod((struct common_func_s *)&be->flm, 38,
+				&be->flm.v25.control, 1,
 				sizeof(struct flm_v25_control_s), &be->flm.v25.status, 1,
 				sizeof(struct flm_v25_status_s), &be->flm.v25.load_bin, 1,
 				sizeof(struct flm_v25_load_bin_s), &be->flm.v25.load_pps, 1,
@@ -175,7 +176,7 @@ void hw_mod_flm_free(struct flow_api_backend_s *be)
 int hw_mod_flm_reset(struct flow_api_backend_s *be)
 {
 	/* Zero entire cache area */
-	zero_module_cache((struct common_func_s *)(&be->flm));
+	nthw_zero_module_cache((struct common_func_s *)(&be->flm));
 
 	NT_LOG(DBG, FILTER, "INIT FLM");
 	hw_mod_flm_control_set(be, HW_FLM_CONTROL_SPLIT_SDRAM_USAGE, 0x10);
@@ -833,9 +834,6 @@ int hw_mod_flm_stat_get(struct flow_api_backend_s *be, enum hw_flm_e field, uint
 			break;
 
 		default: {
-			if (_VER_ < 18)
-				return UNSUP_FIELD;
-
 			switch (field) {
 			case HW_FLM_STAT_STA_DONE:
 				*value = be->flm.v25.sta_done->cnt;
@@ -969,16 +967,22 @@ int hw_mod_flm_inf_sta_data_update_get(struct flow_api_backend_s *be, enum hw_fl
  *
  * (T[7:3] != 0) ? ((8 + T[2:0]) shift-left (T[7:3] - 1)) : T[2:0]
  *
- * The maximum allowed value is 0xEF (127 years).
+ * The maximum allowed value is 0xEF (137 years).
  *
  * Note that this represents a lower bound on the timeout, depending on the flow
  * scanner interval and overall load, the timeout can be substantially longer.
  */
 uint32_t hw_mod_flm_scrub_timeout_decode(uint32_t t_enc)
 {
-	uint8_t t_bits_2_0 = t_enc & 0x07;
-	uint8_t t_bits_7_3 = (t_enc >> 3) & 0x1F;
-	return t_bits_7_3 != 0 ? ((8 + t_bits_2_0) << (t_bits_7_3 - 1)) : t_bits_2_0;
+	uint32_t t_bits_2_0 = t_enc & 0x07;
+	uint32_t t_bits_7_3 = (t_enc >> 3) & 0x1F;
+	uint32_t t_dec = t_bits_7_3 != 0 ? ((8U + t_bits_2_0) << (t_bits_7_3 - 1U))
+		: t_bits_2_0;
+	/* convert internal FPGA scrub time unit into seconds, i.e. 2^30/1e9 is
+	 * approx 1.074 sec per internal unit
+	 */
+	uint64_t t_sec = (uint64_t)t_dec * 1074UL / 1000UL;
+	return t_sec > UINT32_MAX ? UINT32_MAX : (uint32_t)t_sec;
 }
 
 uint32_t hw_mod_flm_scrub_timeout_encode(uint32_t t)

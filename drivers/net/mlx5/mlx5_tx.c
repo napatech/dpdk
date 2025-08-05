@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <eal_export.h>
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
 #include <rte_prefetch.h>
@@ -108,12 +109,12 @@ mlx5_tx_error_cqe_handle(struct mlx5_txq_data *__rte_restrict txq,
 						    (const void *)((uintptr_t)
 						    txq->cqes),
 						    sizeof(struct mlx5_error_cqe) *
-						    (1 << txq->cqe_n));
+						    (size_t)RTE_BIT32(txq->cqe_n));
 			mlx5_dump_debug_information(name, "MLX5 Error SQ:",
 						    (const void *)((uintptr_t)
 						    txq->wqes),
 						    MLX5_WQE_SIZE *
-						    (1 << txq->wqe_n));
+						    (size_t)RTE_BIT32(txq->wqe_n));
 			txq_ctrl->dump_file_n++;
 		}
 		if (!seen)
@@ -628,8 +629,8 @@ mlx5_select_tx_function(struct rte_eth_dev *dev)
 		}
 		if (tmp == diff) {
 			tmp = txoff_func[i].olx ^ txoff_func[m].olx;
-			if (__builtin_ffsl(txoff_func[i].olx & ~tmp) <
-			    __builtin_ffsl(txoff_func[m].olx & ~tmp)) {
+			if (rte_ffs32(txoff_func[i].olx & ~tmp) <
+			    rte_ffs32(txoff_func[m].olx & ~tmp)) {
 				/* Lighter not requested offload. */
 				m = i;
 			}
@@ -776,6 +777,7 @@ mlx5_tx_burst_mode_get(struct rte_eth_dev *dev,
  *   0 for success, non-zero value depending on failure.
  *
  */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_txq_dump_contexts, 24.07)
 int rte_pmd_mlx5_txq_dump_contexts(uint16_t port_id, uint16_t queue_id, const char *filename)
 {
 	struct rte_eth_dev *dev;

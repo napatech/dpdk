@@ -5,8 +5,6 @@ if is_ms_compiler
     subdir_done()
 endif
 
-fs = import('fs')
-
 # Defines the order of dependencies evaluation
 subdirs = [
         'common',
@@ -17,6 +15,7 @@ subdirs = [
         'common/nitrox',  # depends on bus.
         'common/qat',     # depends on bus.
         'common/sfc_efx', # depends on bus.
+        'common/zsda',    # depends on bus.
         'mempool',        # depends on common and bus.
         'dma',            # depends on common and bus.
         'net',            # depends on common, bus, mempool
@@ -47,7 +46,7 @@ enable_drivers = run_command(list_dir_globs, enable_drivers, check: true).stdout
 require_drivers = true
 if enable_drivers.length() == 0
     require_drivers = false
-    enable_drivers = run_command(list_dir_globs, '*/*', check: true).stdout().split()
+    enable_drivers = run_command(list_dir_globs, '*/*,*/*/*', check: true).stdout().split()
 endif
 
 # these drivers must always be enabled, otherwise the build breaks
@@ -125,6 +124,8 @@ foreach subpath:subdirs
         name = drv
         annotate_locks = true
         sources = []
+        sources_avx2 = []
+        sources_avx512 = []
         headers = []
         driver_sdk_headers = [] # public headers included by drivers
         objs = []
@@ -142,6 +143,16 @@ foreach subpath:subdirs
         pkgconfig_extra_libs = []
         testpmd_sources = []
         require_iova_in_mbuf = true
+        # for handling base code files which may need extra cflags
+        base_sources = []
+        base_cflags = []
+
+        if fs.is_dir(drv_path / 'base')
+            includes += include_directories(drv_path / 'base')
+        endif
+        if name.contains('/')
+            name = name.split('/')[1]
+        endif
 
         if not enable_drivers.contains(drv_path)
             build = false
@@ -209,6 +220,20 @@ foreach subpath:subdirs
             continue
         endif
 
+        # not all drivers base code is lock annotation safe, so do base code builds before
+        # adding on the lock annotation flags. NOTE: If no custom cflags, the lock annotation
+        # checks will be done though.
+        if base_cflags != []
+            base_lib = static_library(lib_name + '_base_lib',
+                    base_sources,
+                    dependencies: static_deps,
+                    include_directories: includes,
+                    c_args: cflags + base_cflags)
+            objs += base_lib.extract_objects(base_sources)
+        else
+            sources += base_sources
+        endif
+
         enabled_drivers += name
         lib_name = '_'.join(['rte', class, name])
         cflags += '-DRTE_LOG_DEFAULT_LOGTYPE=' + '.'.join([log_prefix, name])
@@ -230,6 +255,27 @@ foreach subpath:subdirs
             dpdk_includes += include_directories(drv_path)
         endif
 
+        # handle avx2 and avx512 source files
+        if arch_subdir == 'x86'
+            if sources_avx2.length() > 0
+                avx2_lib = static_library(lib_name + '_avx2_lib',
+                        sources_avx2,
+                        dependencies: static_deps,
+                        include_directories: includes,
+                        c_args: [cflags, cc_avx2_flags])
+                objs += avx2_lib.extract_objects(sources_avx2)
+            endif
+            if sources_avx512.length() > 0 and cc_has_avx512
+                cflags += '-DCC_AVX512_SUPPORT'
+                avx512_lib = static_library(lib_name + '_avx512_lib',
+                        sources_avx512,
+                        dependencies: static_deps,
+                        include_directories: includes,
+                        c_args: [cflags, cc_avx512_flags])
+                objs += avx512_lib.extract_objects(sources_avx512)
+            endif
+        endif
+
         # generate pmdinfo sources by building a temporary
         # lib and then running pmdinfogen on the contents of
         # that lib. The final lib reuses the object files and
@@ -240,14 +286,14 @@ foreach subpath:subdirs
                 dependencies: static_deps,
                 c_args: cflags)
         objs += tmp_lib.extract_all_objects(recursive: true)
-        sources = custom_target(out_filename,
-                command: [pmdinfo, tmp_lib.full_path(), '@OUTPUT@', pmdinfogen],
+        sources_pmd_info = custom_target(out_filename,
+                command: [pmdinfo, '@PRIVATE_DIR@', tmp_lib.full_path(), '@OUTPUT@', pmdinfogen],
                 output: out_filename,
                 depends: [tmp_lib])
 
         # now build the static driver
         static_lib = static_library(lib_name,
-                sources,
+                sources_pmd_info,
                 objects: objs,
                 include_directories: includes,
                 dependencies: static_deps,
@@ -255,50 +301,42 @@ foreach subpath:subdirs
                 install: true)
 
         # now build the shared driver
-        version_map = '@0@/@1@/version.map'.format(meson.current_source_dir(), drv_path)
-
-        lk_deps = []
-        lk_args = []
-        if not fs.is_file(version_map)
-            version_map = '@0@/version.map'.format(meson.current_source_dir())
-            lk_deps += [version_map]
+        if is_ms_linker
+            link_mode = 'mslinker'
+        elif is_windows
+            link_mode = 'mingw'
         else
-            lk_deps += [version_map]
-            if not is_windows and developer_mode
-                # on unix systems check the output of the
-                # check-symbols.sh script, using it as a
-                # dependency of the .so build
-                lk_deps += custom_target(lib_name + '.sym_chk',
-                        command: [check_symbols, version_map, '@INPUT@'],
-                        capture: true,
-                        input: static_lib,
-                        output: lib_name + '.sym_chk')
-            endif
+            link_mode = 'gnu'
+        endif
+        version_map = custom_target(lib_name + '_map',
+                command: [gen_version_map, '--linker', link_mode,
+                          '--abi-version', abi_version_file, '--output', '@OUTPUT@',
+                          '--source', '@INPUT@'],
+                input: sources + sources_avx2 + sources_avx512,
+                output: '_'.join([class, name, 'exports.map']))
+        lk_deps = [version_map]
+
+        if is_ms_linker and is_ms_compiler
+            lk_args = ['/def:' + version_map.full_path()]
+        elif is_ms_linker
+            lk_args = ['-Wl,/def:' + version_map.full_path()]
+        else
+            lk_args = ['-Wl,--version-script=' + version_map.full_path()]
         endif
 
-        if is_windows
-            if is_ms_linker
-                def_file = custom_target(lib_name + '_def',
-                        command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],
-                        input: version_map,
-                        output: '@0@_exports.def'.format(lib_name))
-                lk_deps += [def_file]
-
-                lk_args = ['-Wl,/def:' + def_file.full_path()]
-            else
-                mingw_map = custom_target(lib_name + '_mingw',
-                        command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],
-                        input: version_map,
-                        output: '@0@_mingw.map'.format(lib_name))
-                lk_deps += [mingw_map]
-
-                lk_args = ['-Wl,--version-script=' + mingw_map.full_path()]
-            endif
-        else
-            lk_args = ['-Wl,--version-script=' + version_map]
+        if not is_windows and developer_mode
+            # on unix systems check the output of the
+            # check-symbols.sh script, using it as a
+            # dependency of the .so build
+            lk_deps += custom_target(lib_name + '.sym_chk',
+                    command: [check_symbols, version_map.full_path(), '@INPUT@'],
+                    capture: true,
+                    input: static_lib,
+                    output: lib_name + '.sym_chk',
+                    depends: [version_map])
         endif
 
-        shared_lib = shared_library(lib_name, sources,
+        shared_lib = shared_library(lib_name, sources_pmd_info,
                 objects: objs,
                 include_directories: includes,
                 dependencies: shared_deps,

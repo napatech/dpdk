@@ -29,8 +29,8 @@
 struct flow_api_backend_s;
 struct common_func_s;
 
-void *callocate_mod(struct common_func_s *mod, int sets, ...);
-void zero_module_cache(struct common_func_s *mod);
+void *nthw_callocate_mod(struct common_func_s *mod, int sets, ...);
+void nthw_zero_module_cache(struct common_func_s *mod);
 
 #define ALL_ENTRIES -1000
 #define ALL_BANK_ENTRIES -1001
@@ -111,13 +111,13 @@ enum {
 
 #define DO_COMPARE_INDEXS(be_module_reg, type, idx, cmp_idx)                                      \
 	do {                                                                                      \
-		typeof(be_module_reg) *temp_be_module = &(be_module_reg);                     \
+		typeof(be_module_reg) temp_be_module = (be_module_reg);                     \
 		typeof(idx) tmp_idx = (idx);                                                  \
 		typeof(cmp_idx) tmp_cmp_idx = (cmp_idx);                                      \
-		if ((unsigned int)(tmp_idx) != (unsigned int)(tmp_cmp_idx)) {                     \
-			(void)memcmp(temp_be_module + tmp_idx, &temp_be_module[tmp_cmp_idx],      \
-				     sizeof(type));                                               \
-		}                                                                                 \
+		if ((unsigned int)(tmp_idx) != (unsigned int)(tmp_cmp_idx))                     \
+			if (memcmp(temp_be_module + tmp_idx, &temp_be_module[tmp_cmp_idx], \
+				sizeof(type)) == 0) \
+				break;                                              \
 	} while (0)
 
 static inline int is_non_zero(const void *addr, size_t n)
@@ -145,7 +145,7 @@ enum km_flm_if_select_e {
 #define COMMON_FUNC_INFO_S                                                                        \
 	int ver;                                                                                  \
 	void *base;                                                                               \
-	unsigned int alloced_size;                                                                \
+	unsigned int allocated_size;                                                              \
 	int debug
 
 enum frame_offs_e {
@@ -237,12 +237,6 @@ enum {
 	PROT_TUN_L4_UDP = 2,
 	PROT_TUN_L4_SCTP = 3,
 	PROT_TUN_L4_ICMP = 4
-};
-
-
-enum {
-	HASH_HASH_NONE = 0,
-	HASH_5TUPLE = 8,
 };
 
 enum {
@@ -905,6 +899,7 @@ enum hw_tpe_e {
 	HW_TPE_IFR_RCP_IPV6_EN,
 	HW_TPE_IFR_RCP_IPV6_DROP,
 	HW_TPE_IFR_RCP_MTU,
+	HW_TPE_IFR_COUNTERS_DROP,
 	HW_TPE_INS_RCP_DYN,
 	HW_TPE_INS_RCP_OFS,
 	HW_TPE_INS_RCP_LEN,
@@ -964,6 +959,12 @@ int hw_mod_tpe_rpp_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e fiel
 int hw_mod_tpe_ifr_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count);
 int hw_mod_tpe_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value);
+
+int hw_mod_tpe_ifr_counters_update(struct flow_api_backend_s *be, int start_idx, int count);
+int hw_mod_tpe_ifr_counters_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+	uint32_t value);
+int hw_mod_tpe_ifr_counters_get(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+	uint32_t *value);
 
 int hw_mod_tpe_ins_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count);
 int hw_mod_tpe_ins_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
@@ -1130,6 +1131,7 @@ struct flow_api_backend_ops {
 	int (*tpe_rpp_rcp_flush)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
 	int (*tpe_rpp_ifr_rcp_flush)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
 	int (*tpe_ifr_rcp_flush)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
+	int (*tpe_ifr_counters_update)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
 	int (*tpe_ins_rcp_flush)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
 	int (*tpe_rpl_rcp_flush)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
 	int (*tpe_rpl_ext_flush)(void *dev, const struct tpe_func_s *tpe, int index, int cnt);
@@ -1162,8 +1164,8 @@ struct flow_api_backend_s {
 	unsigned int max_queues;
 };
 
-int flow_api_backend_init(struct flow_api_backend_s *dev, const struct flow_api_backend_ops *iface,
-	void *be_dev);
-int flow_api_backend_done(struct flow_api_backend_s *dev);
+int nthw_flow_api_backend_init(struct flow_api_backend_s *dev,
+	const struct flow_api_backend_ops *iface, void *be_dev);
+int nthw_flow_api_backend_done(struct flow_api_backend_s *dev);
 
 #endif  /* _HW_MOD_BACKEND_H_ */

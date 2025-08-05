@@ -6,7 +6,7 @@ Compression Device Drivers
 
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :numbered:
 
     overview
@@ -17,3 +17,4 @@ Compression Device Drivers
     qat_comp
     uadk
     zlib
+    zsda

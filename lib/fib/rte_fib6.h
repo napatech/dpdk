@@ -28,6 +28,9 @@ extern "C" {
 /** Maximum depth value possible for IPv6 FIB. */
 #define RTE_FIB6_MAXDEPTH (RTE_DEPRECATED(RTE_FIB6_MAXDEPTH) RTE_IPV6_MAX_DEPTH)
 
+/* Maximum length of a FIB name. */
+#define RTE_FIB6_NAMESIZE	64
+
 struct rte_fib6;
 struct rte_rib6;
 
@@ -83,6 +86,16 @@ struct rte_fib6_conf {
 };
 
 /**
+ * Free an FIB object.
+ *
+ * @param fib
+ *   FIB object handle created by rte_fib6_create().
+ *   If fib is NULL, no operation is performed.
+ */
+void
+rte_fib6_free(struct rte_fib6 *fib);
+
+/**
  * Create FIB
  *
  * @param name
@@ -96,7 +109,8 @@ struct rte_fib6_conf {
  *  NULL otherwise with rte_errno set to an appropriate values.
  */
 struct rte_fib6 *
-rte_fib6_create(const char *name, int socket_id, struct rte_fib6_conf *conf);
+rte_fib6_create(const char *name, int socket_id, struct rte_fib6_conf *conf)
+	__rte_malloc __rte_dealloc(rte_fib6_free, 1);
 
 /**
  * Find an existing FIB object and return a pointer to it.
@@ -110,16 +124,6 @@ rte_fib6_create(const char *name, int socket_id, struct rte_fib6_conf *conf);
  */
 struct rte_fib6 *
 rte_fib6_find_existing(const char *name);
-
-/**
- * Free an FIB object.
- *
- * @param fib
- *   FIB object handle created by rte_fib6_create().
- *   If fib is NULL, no operation is performed.
- */
-void
-rte_fib6_free(struct rte_fib6 *fib);
 
 /**
  * Add a route to the FIB.

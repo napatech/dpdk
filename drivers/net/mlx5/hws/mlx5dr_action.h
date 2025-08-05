@@ -160,7 +160,7 @@ struct mlx5dr_action_template {
 
 struct mlx5dr_action {
 	uint8_t type;
-	uint8_t flags;
+	uint16_t flags;
 	struct mlx5dr_context *ctx;
 	union {
 		struct {
@@ -226,6 +226,10 @@ struct mlx5dr_action {
 				struct {
 					struct mlx5dr_matcher *matcher;
 				} jump_to_matcher;
+				struct {
+					struct mlx5dr_devx_obj *devx_obj;
+					enum mlx5dr_table_type type;
+				} dest_tbl;
 			};
 		};
 

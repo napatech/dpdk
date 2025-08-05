@@ -1793,6 +1793,8 @@ txgbe_fill_cluster_head_buf(struct rte_mbuf *head, struct txgbe_rx_desc *desc,
 	pkt_flags = rx_desc_status_to_pkt_flags(staterr, rxq->vlan_flags);
 	pkt_flags |= rx_desc_error_to_pkt_flags(staterr);
 	pkt_flags |= txgbe_rxd_pkt_info_to_pkt_flags(pkt_info);
+	if (TXGBE_RXD_RSCCNT(desc->qw0.dw0))
+		pkt_flags |= RTE_MBUF_F_RX_LRO;
 	head->ol_flags = pkt_flags;
 	head->packet_type = txgbe_rxd_pkt_info_to_pkt_type(pkt_info,
 						rxq->pkt_type_mask);
@@ -3090,6 +3092,10 @@ txgbe_dev_rss_hash_update(struct rte_eth_dev *dev,
 		if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV6_UDP ||
 		    rss_hf & RTE_ETH_RSS_IPV6_UDP_EX)
 			mrqc |= TXGBE_VFPLCFG_RSSIPV6UDP;
+		if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV4_SCTP)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV4SCTP;
+		if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV6_SCTP)
+			mrqc |= TXGBE_VFPLCFG_RSSIPV6SCTP;
 
 		if (rss_hf)
 			mrqc |= TXGBE_VFPLCFG_RSSENA;
@@ -3120,6 +3126,10 @@ txgbe_dev_rss_hash_update(struct rte_eth_dev *dev,
 		if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV6_UDP ||
 		    rss_hf & RTE_ETH_RSS_IPV6_UDP_EX)
 			mrqc |= TXGBE_RACTL_RSSIPV6UDP;
+		if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV4_SCTP)
+			mrqc |= TXGBE_RACTL_RSSIPV4SCTP;
+		if (rss_hf & RTE_ETH_RSS_NONFRAG_IPV6_SCTP)
+			mrqc |= TXGBE_RACTL_RSSIPV6SCTP;
 
 		if (rss_hf)
 			mrqc |= TXGBE_RACTL_RSSENA;
@@ -3173,6 +3183,10 @@ txgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 		if (mrqc & TXGBE_VFPLCFG_RSSIPV6UDP)
 			rss_hf |= RTE_ETH_RSS_NONFRAG_IPV6_UDP |
 				  RTE_ETH_RSS_IPV6_UDP_EX;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV4SCTP)
+			rss_hf |= RTE_ETH_RSS_NONFRAG_IPV4_SCTP;
+		if (mrqc & TXGBE_VFPLCFG_RSSIPV6SCTP)
+			rss_hf |= RTE_ETH_RSS_NONFRAG_IPV6_SCTP;
 		if (!(mrqc & TXGBE_VFPLCFG_RSSENA))
 			rss_hf = 0;
 	} else {
@@ -3192,6 +3206,10 @@ txgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 		if (mrqc & TXGBE_RACTL_RSSIPV6UDP)
 			rss_hf |= RTE_ETH_RSS_NONFRAG_IPV6_UDP |
 				  RTE_ETH_RSS_IPV6_UDP_EX;
+		if (mrqc & TXGBE_RACTL_RSSIPV4SCTP)
+			rss_hf |= RTE_ETH_RSS_NONFRAG_IPV4_SCTP;
+		if (mrqc & TXGBE_RACTL_RSSIPV6SCTP)
+			rss_hf |= RTE_ETH_RSS_NONFRAG_IPV6_SCTP;
 		if (!(mrqc & TXGBE_RACTL_RSSENA))
 			rss_hf = 0;
 	}

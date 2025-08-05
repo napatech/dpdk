@@ -8,6 +8,7 @@
 #include <time.h>
 #include <net/if.h>
 
+#include <eal_export.h>
 #include <rte_mbuf.h>
 #include <ethdev_driver.h>
 #include <rte_malloc.h>
@@ -726,13 +727,6 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		DPAA2_PMD_WARN("To use Normal buffers, run 'export DPNI_NORMAL_BUF=1' before running dynamic_dpl.sh script");
 	}
 
-	/* Rx deferred start is not supported */
-	if (rx_conf->rx_deferred_start) {
-		DPAA2_PMD_ERR("%s:Rx deferred start not supported",
-			dev->data->name);
-		return -EINVAL;
-	}
-
 	if (!priv->bp_list || priv->bp_list->mp != mb_pool) {
 		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 			ret = rte_dpaa2_bpid_info_init(mb_pool);
@@ -888,13 +882,6 @@ dpaa2_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	uint64_t iova;
 
 	PMD_INIT_FUNC_TRACE();
-
-	/* Tx deferred start is not supported */
-	if (tx_conf->tx_deferred_start) {
-		DPAA2_PMD_ERR("%s:Tx deferred start not supported",
-			dev->data->name);
-		return -EINVAL;
-	}
 
 	dpaa2_q->nb_desc = UINT16_MAX;
 	dpaa2_q->offloads = tx_conf->offloads;
@@ -2253,6 +2240,7 @@ dpaa2_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(dpaa2_eth_eventq_attach)
 int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 		int eth_rx_queue_id,
 		struct dpaa2_dpcon_dev *dpcon,
@@ -2339,6 +2327,7 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(dpaa2_eth_eventq_detach)
 int dpaa2_eth_eventq_detach(const struct rte_eth_dev *dev,
 		int eth_rx_queue_id)
 {
@@ -2424,6 +2413,7 @@ dpaa2_tm_ops_get(struct rte_eth_dev *dev __rte_unused, void *ops)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_dpaa2_thread_init, 21.08)
 void
 rte_pmd_dpaa2_thread_init(void)
 {
@@ -2539,8 +2529,7 @@ populate_mac_addr(struct fsl_mc_io *dpni_dev,
 					      ret);
 				goto cleanup;
 			}
-			memcpy(&prime_mac, &phy_mac,
-				sizeof(struct rte_ether_addr));
+			prime_mac = phy_mac;
 		}
 	} else if (rte_is_zero_ether_addr(&prime_mac)) {
 		/* In case phys and prime, both are zero, create random MAC */
@@ -2555,7 +2544,7 @@ populate_mac_addr(struct fsl_mc_io *dpni_dev,
 	}
 
 	/* prime_mac the final MAC address */
-	memcpy(mac_entry, &prime_mac, sizeof(struct rte_ether_addr));
+	*mac_entry = prime_mac;
 	return 0;
 
 cleanup:
@@ -2864,6 +2853,7 @@ init_err:
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_dpaa2_dev_is_dpaa2, 24.11)
 int
 rte_pmd_dpaa2_dev_is_dpaa2(uint32_t eth_id)
 {
@@ -2879,6 +2869,7 @@ rte_pmd_dpaa2_dev_is_dpaa2(uint32_t eth_id)
 	return dev->device->driver == &rte_dpaa2_pmd.driver;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_dpaa2_ep_name, 24.11)
 const char *
 rte_pmd_dpaa2_ep_name(uint32_t eth_id)
 {
@@ -2904,6 +2895,7 @@ rte_pmd_dpaa2_ep_name(uint32_t eth_id)
 }
 
 #if defined(RTE_LIBRTE_IEEE1588)
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_dpaa2_get_one_step_ts, 24.11)
 int
 rte_pmd_dpaa2_get_one_step_ts(uint16_t port_id, bool mc_query)
 {
@@ -2932,6 +2924,7 @@ rte_pmd_dpaa2_get_one_step_ts(uint16_t port_id, bool mc_query)
 	return priv->ptp_correction_offset;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_dpaa2_set_one_step_ts, 24.11)
 int
 rte_pmd_dpaa2_set_one_step_ts(uint16_t port_id, uint16_t offset, uint8_t ch_update)
 {

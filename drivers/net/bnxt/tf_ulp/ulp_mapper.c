@@ -1359,8 +1359,7 @@ ulp_mapper_key_recipe_tbl_deinit(struct bnxt_ulp_mapper_data *mdata)
 			recipes = mdata->key_recipe_info.recipes[dir][ftype];
 			for (idx = 0; idx < mdata->key_recipe_info.num_recipes;
 			      idx++) {
-				if (recipes[idx])
-					rte_free(recipes[idx]);
+				rte_free(recipes[idx]);
 			}
 			rte_free(mdata->key_recipe_info.recipes[dir][ftype]);
 			mdata->key_recipe_info.recipes[dir][ftype] = NULL;
@@ -3612,9 +3611,13 @@ ulp_mapper_func_cond_list_process(struct bnxt_ulp_mapper_parms *parms,
 		}
 	}
 	/* write the value into result */
-	ulp_operand_read(val, res_local + res_size -
-			 ULP_BITS_2_BYTE_NR(oper_size),
-			 ULP_BITS_2_BYTE_NR(val_len));
+	if (unlikely(ulp_operand_read(val, res_local + res_size -
+				      ULP_BITS_2_BYTE_NR(oper_size),
+				      ULP_BITS_2_BYTE_NR(val_len)))) {
+		BNXT_DRV_DBG(ERR,
+			     "field idx operand read failed\n");
+		return -EINVAL;
+	}
 
 	/* convert the data to cpu format */
 	*res = tfp_be_to_cpu_64(*res);

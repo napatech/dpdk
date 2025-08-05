@@ -13,8 +13,8 @@ import uuid
 from abc import abstractmethod
 from dataclasses import dataclass
 
-import scapy.utils  # type: ignore[import-untyped]
-from scapy.packet import Packet  # type: ignore[import-untyped]
+import scapy.utils
+from scapy.packet import Packet
 
 from framework.settings import SETTINGS
 from framework.testbed_model.port import Port
@@ -34,10 +34,12 @@ class PacketFilteringConfig:
     Attributes:
         no_lldp: If :data:`True`, LLDP packets will be filtered out when capturing.
         no_arp: If :data:`True`, ARP packets will be filtered out when capturing.
+        no_icmp: If :data:`True`, ICMP packets will be filtered out when capturing.
     """
 
     no_lldp: bool = True
     no_arp: bool = True
+    no_icmp: bool = True
 
 
 class CapturingTrafficGenerator(TrafficGenerator):
@@ -70,7 +72,7 @@ class CapturingTrafficGenerator(TrafficGenerator):
         receive_port: Port,
         filter_config: PacketFilteringConfig,
         duration: float,
-        capture_name: str = _get_default_capture_name(),
+        capture_name: str = "",
     ) -> list[Packet]:
         """Send `packets` and capture received traffic.
 
@@ -103,6 +105,9 @@ class CapturingTrafficGenerator(TrafficGenerator):
             filter_config,
             duration,
         )
+
+        if not capture_name:
+            capture_name = _get_default_capture_name()
 
         self._logger.debug(f"Received packets: {get_packet_summaries(received_packets)}")
         self._write_capture_from_packets(capture_name, received_packets)

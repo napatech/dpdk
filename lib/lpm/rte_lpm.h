@@ -77,37 +77,49 @@ enum rte_lpm_qsbr_mode {
 /** @internal Tbl24 entry structure. */
 __extension__
 struct rte_lpm_tbl_entry {
-	/**
-	 * Stores Next hop (tbl8 or tbl24 when valid_group is not set) or
-	 * a group index pointing to a tbl8 structure (tbl24 only, when
-	 * valid_group is set)
-	 */
-	uint32_t next_hop    :24;
-	/* Using single uint8_t to store 3 values. */
-	uint32_t valid       :1;   /**< Validation flag. */
-	/**
-	 * For tbl24:
-	 *  - valid_group == 0: entry stores a next hop
-	 *  - valid_group == 1: entry stores a group_index pointing to a tbl8
-	 * For tbl8:
-	 *  - valid_group indicates whether the current tbl8 is in use or not
-	 */
-	uint32_t valid_group :1;
-	uint32_t depth       :6; /**< Rule depth. */
+	union {
+		RTE_ATOMIC(uint32_t) val;
+		struct {
+			/**
+			 * Stores Next hop (tbl8 or tbl24 when valid_group is not set) or
+			 * a group index pointing to a tbl8 structure (tbl24 only, when
+			 * valid_group is set)
+			 */
+			uint32_t next_hop    :24;
+			/* Using single uint8_t to store 3 values. */
+			uint32_t valid       :1;   /**< Validation flag. */
+			/**
+			 * For tbl24:
+			 *  - valid_group == 0: entry stores a next hop
+			 *  - valid_group == 1: entry stores a group_index pointing to a tbl8
+			 * For tbl8:
+			 *  - valid_group indicates whether the current tbl8 is in use or not
+			 */
+			uint32_t valid_group :1;
+			uint32_t depth       :6; /**< Rule depth. */
+		};
+	};
 };
 
 #else
 
 __extension__
 struct rte_lpm_tbl_entry {
-	uint32_t depth       :6;
-	uint32_t valid_group :1;
-	uint32_t valid       :1;
-	uint32_t next_hop    :24;
-
+	union {
+		RTE_ATOMIC(uint32_t) val;
+		struct {
+			uint32_t depth       :6;
+			uint32_t valid_group :1;
+			uint32_t valid       :1;
+			uint32_t next_hop    :24;
+		};
+	};
 };
 
 #endif
+
+static_assert(sizeof(struct rte_lpm_tbl_entry) == sizeof(uint32_t),
+		"sizeof(struct rte_lpm_tbl_entry) == sizeof(uint32_t)");
 
 /** LPM configuration structure. */
 struct rte_lpm_config {
@@ -141,6 +153,16 @@ struct rte_lpm_rcu_config {
 };
 
 /**
+ * Free an LPM object.
+ *
+ * @param lpm
+ *   LPM object handle
+ *   If lpm is NULL, no operation is performed.
+ */
+void
+rte_lpm_free(struct rte_lpm *lpm);
+
+/**
  * Create an LPM object.
  *
  * @param name
@@ -161,7 +183,8 @@ struct rte_lpm_rcu_config {
  */
 struct rte_lpm *
 rte_lpm_create(const char *name, int socket_id,
-		const struct rte_lpm_config *config);
+	       const struct rte_lpm_config *config)
+	__rte_malloc __rte_dealloc(rte_lpm_free, 1);
 
 /**
  * Find an existing LPM object and return a pointer to it.
@@ -175,16 +198,6 @@ rte_lpm_create(const char *name, int socket_id,
  */
 struct rte_lpm *
 rte_lpm_find_existing(const char *name);
-
-/**
- * Free an LPM object.
- *
- * @param lpm
- *   LPM object handle
- *   If lpm is NULL, no operation is performed.
- */
-void
-rte_lpm_free(struct rte_lpm *lpm);
 
 /**
  * Associate RCU QSBR variable with an LPM object.

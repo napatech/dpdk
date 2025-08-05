@@ -112,7 +112,8 @@ cn9k_nix_prefree_seg(struct rte_mbuf *m, struct rte_mbuf **extm, struct cn9k_eth
 			m->next = prev;
 			txq->tx_compl.ptr[sqe_id] = m;
 		} else {
-			sqe_id = __atomic_fetch_add(&txq->tx_compl.sqe_id, 1, __ATOMIC_RELAXED);
+			sqe_id = rte_atomic_fetch_add_explicit(&txq->tx_compl.sqe_id, 1,
+							       rte_memory_order_relaxed);
 			send_hdr->w0.pnc = 1;
 			send_hdr->w1.sqe_id = sqe_id &
 				txq->tx_compl.nb_desc_mask;
@@ -597,9 +598,9 @@ static __rte_always_inline void
 cn9k_nix_sec_fc_wait_one(const struct cn9k_eth_txq *txq)
 {
 	uint64_t nb_desc = txq->cpt_desc;
-	uint64_t *fc = txq->cpt_fc;
+	uint64_t __rte_atomic *fc = txq->cpt_fc;
 
-	while (nb_desc <= __atomic_load_n(fc, __ATOMIC_RELAXED))
+	while (nb_desc <= rte_atomic_load_explicit(fc, rte_memory_order_relaxed))
 		;
 }
 
@@ -889,6 +890,9 @@ cn9k_nix_prepare_tso(struct rte_mbuf *m, union nix_send_hdr_w1_u *w1,
 	w0->lso_mps = m->tso_segsz;
 	w0->lso_format = NIX_LSO_FORMAT_IDX_TSOV4 + !!(ol_flags & RTE_MBUF_F_TX_IPV6);
 	w1->ol4type = NIX_SENDL4TYPE_TCP_CKSUM;
+	w1->ol3type = ((!!(ol_flags & RTE_MBUF_F_TX_IPV4)) << 1) +
+		      ((!!(ol_flags & RTE_MBUF_F_TX_IPV6)) << 2) +
+		      !!(ol_flags & RTE_MBUF_F_TX_IP_CKSUM);
 
 	/* Handle tunnel tso */
 	if ((flags & NIX_TX_OFFLOAD_OL3_OL4_CSUM_F) &&
@@ -1402,7 +1406,7 @@ cn9k_nix_xmit_pkts_vector(void *tx_queue, struct rte_mbuf **tx_pkts,
 			 */
 			const uint8x16_t tbl = {
 				/* [0-15] = il4type:il3type */
-				0x04, /* none (IPv6 assumed) */
+				0x00, /* none */
 				0x14, /* RTE_MBUF_F_TX_TCP_CKSUM (IPv6 assumed) */
 				0x24, /* RTE_MBUF_F_TX_SCTP_CKSUM (IPv6 assumed) */
 				0x34, /* RTE_MBUF_F_TX_UDP_CKSUM (IPv6 assumed) */
@@ -1606,7 +1610,7 @@ cn9k_nix_xmit_pkts_vector(void *tx_queue, struct rte_mbuf **tx_pkts,
 			const uint8x16x2_t tbl = {{
 				{
 					/* [0-15] = il4type:il3type */
-					0x04, /* none (IPv6) */
+					0x00, /* none */
 					0x14, /* RTE_MBUF_F_TX_TCP_CKSUM (IPv6) */
 					0x24, /* RTE_MBUF_F_TX_SCTP_CKSUM (IPv6) */
 					0x34, /* RTE_MBUF_F_TX_UDP_CKSUM (IPv6) */

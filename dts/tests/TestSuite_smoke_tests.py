@@ -14,11 +14,12 @@ in the infrastructure (a faulty link between NICs or a misconfiguration).
 
 import re
 
-from framework.config import PortConfig
+from framework.config.node import PortConfig
 from framework.remote_session.testpmd_shell import TestPmdShell
 from framework.settings import SETTINGS
 from framework.test_suite import TestSuite, func_test
 from framework.testbed_model.capability import TopologyType, requires
+from framework.testbed_model.linux_session import LinuxSession
 from framework.utils import REGEX_FOR_PCI_ADDRESS
 
 
@@ -30,8 +31,6 @@ class TestSmokeTests(TestSuite):
     The infrastructure also needs to be tested, as that is also used by all other test suites.
 
     Attributes:
-        is_blocking: This test suite will block the execution of all other test suites
-            in the test run after it.
         nics_in_node: The NICs present on the SUT node.
     """
 
@@ -46,8 +45,9 @@ class TestSmokeTests(TestSuite):
         Setup:
             Set the build directory path and a list of NICs in the SUT node.
         """
-        self.dpdk_build_dir_path = self.sut_node.remote_dpdk_build_dir
-        self.nics_in_node = self.sut_node.config.ports
+        self.sut_node = self._ctx.sut_node  # FIXME: accessing the context should be forbidden
+        self.dpdk_build_dir_path = self._ctx.dpdk_build.remote_dpdk_build_dir
+        self.nics_in_node = [p.config for p in self.topology.sut_ports]
 
     @func_test
     def test_unit_tests(self) -> None:
@@ -60,7 +60,7 @@ class TestSmokeTests(TestSuite):
             Run the ``fast-tests`` unit test suite through meson.
         """
         self.sut_node.main_session.send_command(
-            f"meson test -C {self.dpdk_build_dir_path} --suite fast-tests -t 60",
+            f"meson test -C {self.dpdk_build_dir_path} --suite fast-tests -t 120",
             480,
             verify=True,
             privileged=True,
@@ -78,7 +78,7 @@ class TestSmokeTests(TestSuite):
             Run the ``driver-tests`` unit test suite through meson.
         """
         vdev_args = ""
-        for dev in self.sut_node.virtual_devices:
+        for dev in self._ctx.dpdk.get_virtual_devices():
             vdev_args += f"--vdev {dev} "
         vdev_args = vdev_args[:-1]
         driver_tests_command = f"meson test -C {self.dpdk_build_dir_path} --suite driver-tests"
@@ -104,7 +104,7 @@ class TestSmokeTests(TestSuite):
         Test:
             List all devices found in testpmd and verify the configured devices are among them.
         """
-        with TestPmdShell(self.sut_node) as testpmd:
+        with TestPmdShell() as testpmd:
             dev_list = [str(x) for x in testpmd.get_devices()]
         for nic in self.nics_in_node:
             self.verify(
@@ -118,13 +118,16 @@ class TestSmokeTests(TestSuite):
         """Device driver in OS.
 
         Test that the devices configured in the test run configuration are bound to
-        the proper driver.
+        the proper driver. This test case runs on Linux only.
 
         Test:
             List all devices with the ``dpdk-devbind.py`` script and verify that
             the configured devices are bound to the proper driver.
         """
-        path_to_devbind = self.sut_node.path_to_devbind_script
+        if not isinstance(self._ctx.sut_node.main_session, LinuxSession):
+            return
+
+        path_to_devbind = self._ctx.sut_node.main_session.devbind_script_path
 
         all_nics_in_dpdk_devbind = self.sut_node.main_session.send_command(
             f"{path_to_devbind} --status | awk '/{REGEX_FOR_PCI_ADDRESS}/'",
@@ -136,7 +139,7 @@ class TestSmokeTests(TestSuite):
             # with the address for the nic we are on in the loop and then captures the
             # name of the driver in a group
             devbind_info_for_nic = re.search(
-                f"{nic.pci}[^\\n]*drv=([\\d\\w-]*) [^\\n]*",
+                rf"{nic.pci}.*drv=(\S+) [^\\n]*",
                 all_nics_in_dpdk_devbind,
             )
             self.verify(

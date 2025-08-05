@@ -45,7 +45,7 @@ int hw_mod_hsh_alloc(struct flow_api_backend_s *be)
 
 	switch (_VER_) {
 	case 5:
-		if (!callocate_mod((struct common_func_s *)&be->hsh, 1, &be->hsh.v5.rcp,
+		if (!nthw_callocate_mod((struct common_func_s *)&be->hsh, 1, &be->hsh.v5.rcp,
 				be->hsh.nb_rcp, sizeof(struct hsh_v5_rcp_s)))
 			return -1;
 
@@ -71,7 +71,7 @@ void hw_mod_hsh_free(struct flow_api_backend_s *be)
 int hw_mod_hsh_reset(struct flow_api_backend_s *be)
 {
 	/* Zero entire cache area */
-	zero_module_cache((struct common_func_s *)(&be->hsh));
+	nthw_zero_module_cache((struct common_func_s *)(&be->hsh));
 
 	NT_LOG(DBG, FILTER, "INIT HSH RCP");
 	return hw_mod_hsh_rcp_flush(be, 0, be->hsh.nb_rcp);
@@ -121,8 +121,23 @@ static int hw_mod_hsh_rcp_mod(struct flow_api_backend_s *be, enum hw_hsh_e field
 				INDEX_TOO_LARGE_LOG;
 				return INDEX_TOO_LARGE;
 			}
+			/* Size of the structure */
+			size_t element_size = sizeof(struct hsh_v5_rcp_s);
+			/* Size of the buffer */
+			size_t buffer_size = sizeof(be->hsh.v5.rcp);
 
-			DO_COMPARE_INDEXS(be->hsh.v5.rcp, struct hsh_v5_rcp_s, index, word_off);
+			/* Calculate the maximum valid index (number of elements in the buffer) */
+			size_t max_idx = buffer_size / element_size;
+
+			/* Check that both indices are within bounds before calling the macro */
+			if (index < max_idx && word_off < max_idx) {
+				DO_COMPARE_INDEXS(be->hsh.v5.rcp, struct hsh_v5_rcp_s, index,
+					word_off);
+
+			} else {
+				INDEX_TOO_LARGE_LOG;
+				return INDEX_TOO_LARGE;
+			}
 			break;
 
 		case HW_HSH_RCP_FIND:
@@ -206,7 +221,7 @@ static int hw_mod_hsh_rcp_mod(struct flow_api_backend_s *be, enum hw_hsh_e field
 			break;
 
 		case HW_HSH_RCP_WORD_MASK:
-			if (word_off > HSH_RCP_WORD_MASK_SIZE) {
+			if (word_off >= HSH_RCP_WORD_MASK_SIZE) {
 				WORD_OFF_TOO_LARGE_LOG;
 				return WORD_OFF_TOO_LARGE;
 			}

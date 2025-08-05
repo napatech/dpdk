@@ -9,6 +9,7 @@
 #include "ngbe_eeprom.h"
 #include "ngbe_mng.h"
 #include "ngbe_hw.h"
+#include "ngbe_vf.h"
 
 static s32 ngbe_is_lldp(struct ngbe_hw *hw)
 {
@@ -863,6 +864,15 @@ s32 ngbe_setup_fc_em(struct ngbe_hw *hw)
 		err = NGBE_ERR_CONFIG;
 		goto out;
 	}
+
+	/*
+	 * Reconfig mac ctrl frame fwd rule to make sure it still
+	 * working after port stop/start.
+	 */
+	wr32m(hw, NGBE_MACRXFLT, NGBE_MACRXFLT_CTL_MASK,
+	      (hw->fc.mac_ctrl_frame_fwd ?
+	       NGBE_MACRXFLT_CTL_NOPS : NGBE_MACRXFLT_CTL_DROP));
+	ngbe_flush(hw);
 
 	err = hw->phy.set_pause_adv(hw, reg_cu);
 
@@ -1921,6 +1931,8 @@ void ngbe_read_efuse(struct ngbe_hw *hw)
 void ngbe_map_device_id(struct ngbe_hw *hw)
 {
 	u16 oem = hw->sub_system_id & NGBE_OEM_MASK;
+	u16 ncsi = hw->sub_system_id & NGBE_NCSI_SUP_MASK;
+	u16 wol = hw->sub_system_id & NGBE_WOL_SUP_MASK;
 
 	hw->is_pf = true;
 
@@ -1981,9 +1993,9 @@ void ngbe_map_device_id(struct ngbe_hw *hw)
 			oem == NGBE_LY_YT8521S_SFP)
 		hw->gpio_ctl = true;
 
-	hw->wol_enabled = (hw->sub_system_id & NGBE_WOL_SUP_MASK) ? true : false;
-	hw->ncsi_enabled = (hw->sub_system_id & NGBE_NCSI_SUP_MASK ||
-			    hw->sub_system_id & NGBE_OCP_CARD) ? true : false;
+	hw->wol_enabled = (wol == NGBE_WOL_SUP_MASK) ? true : false;
+	hw->ncsi_enabled = (ncsi == NGBE_NCSI_SUP_MASK ||
+			   oem == NGBE_OCP_CARD) ? true : false;
 }
 
 /**
@@ -2112,6 +2124,9 @@ s32 ngbe_init_shared_code(struct ngbe_hw *hw)
 	switch (hw->mac.type) {
 	case ngbe_mac_em:
 		ngbe_init_ops_pf(hw);
+		break;
+	case ngbe_mac_em_vf:
+		ngbe_init_ops_vf(hw);
 		break;
 	default:
 		status = NGBE_ERR_DEVICE_NOT_SUPPORTED;

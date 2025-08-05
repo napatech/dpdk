@@ -7,15 +7,15 @@ import socket
 import traceback
 from typing import Union
 
-from paramiko import AutoAddPolicy, SSHClient, Transport  # type: ignore[import-untyped]
-from paramiko.ssh_exception import (  # type: ignore[import-untyped]
+from paramiko import AutoAddPolicy, SSHClient, Transport
+from paramiko.ssh_exception import (
     AuthenticationException,
     BadHostKeyException,
     NoValidConnectionsError,
     SSHException,
 )
 
-from framework.config import NodeConfiguration
+from framework.config.node import NodeConfiguration
 from framework.exception import SSHConnectionError
 from framework.logger import DTSLogger
 

@@ -40,7 +40,11 @@
 #define TRUNCATED_DIGEST_BYTE_LENGTH_SHA384		(24)
 #define TRUNCATED_DIGEST_BYTE_LENGTH_SHA512		(32)
 
-#define MAXIMUM_IV_LENGTH				(16)
+/*
+ * maximum IV length need to include both the
+ * auth IV length (16 bytes) and the cipher IV length (16 bytes)
+ */
+#define MAXIMUM_IV_LENGTH				(32)
 #define AES_GCM_J0_LENGTH				(16)
 
 #define IV_OFFSET			(sizeof(struct rte_crypto_op) + \
@@ -64,6 +68,7 @@
 #define CRYPTODEV_NAME_MVSAM_PMD		crypto_mvsam
 #define CRYPTODEV_NAME_CCP_PMD		crypto_ccp
 #define CRYPTODEV_NAME_VIRTIO_PMD	crypto_virtio
+#define CRYPTODEV_NAME_VIRTIO_USER_PMD	crypto_virtio_user
 #define CRYPTODEV_NAME_OCTEONTX_SYM_PMD	crypto_octeontx
 #define CRYPTODEV_NAME_CAAM_JR_PMD	crypto_caam_jr
 #define CRYPTODEV_NAME_NITROX_PMD	crypto_nitrox_sym
@@ -72,6 +77,7 @@
 #define CRYPTODEV_NAME_CN10K_PMD	crypto_cn10k
 #define CRYPTODEV_NAME_MLX5_PMD		crypto_mlx5
 #define CRYPTODEV_NAME_UADK_PMD		crypto_uadk
+#define CRYPTODEV_NAME_ZSDA_SYM_PMD	crypto_zsda
 
 
 enum cryptodev_api_test_type {
@@ -87,7 +93,6 @@ struct crypto_testsuite_params {
 	struct rte_mempool *large_mbuf_pool;
 	struct rte_mempool *op_mpool;
 	struct rte_mempool *session_mpool;
-	struct rte_mempool *session_priv_mpool;
 	struct rte_cryptodev_config conf;
 	struct rte_cryptodev_qp_conf qp_conf;
 

@@ -2,6 +2,7 @@
  * Copyright(C) 2021 Marvell.
  */
 
+#include <eal_export.h>
 #include <rte_pmd_cnxk.h>
 
 #include <cnxk_ethdev.h>
@@ -20,6 +21,7 @@
 #define CNXK_MAX_IPSEC_RULES	"max_ipsec_rules"
 #define CNXK_NIX_INL_RX_INJ_ENABLE	"rx_inj_ena"
 #define CNXK_NIX_CUSTOM_INB_SA	      "custom_inb_sa"
+#define CNXK_NIX_NB_INL_INB_QS        "nb_inl_inb_qs"
 
 /* Default soft expiry poll freq in usec */
 #define CNXK_NIX_SOFT_EXP_POLL_FREQ_DFLT 100
@@ -231,6 +233,10 @@ cnxk_eth_outb_sa_idx_get(struct cnxk_eth_dev *dev, uint32_t *idx_p,
 		if (spi > dev->outb.max_sa)
 			return -ENOTSUP;
 		idx = spi;
+		if (!plt_bitmap_get(dev->outb.sa_bmap, idx)) {
+			plt_err("Outbound SA index %u already in use", idx);
+			return -EEXIST;
+		}
 	} else {
 		/* Scan bitmap to get the free sa index */
 		rc = plt_bitmap_scan(dev->outb.sa_bmap, &pos, &slab);
@@ -265,14 +271,14 @@ cnxk_eth_outb_sa_idx_put(struct cnxk_eth_dev *dev, uint32_t idx)
 }
 
 struct cnxk_eth_sec_sess *
-cnxk_eth_sec_sess_get_by_spi(struct cnxk_eth_dev *dev, uint32_t spi, bool inb)
+cnxk_eth_sec_sess_get_by_sa_idx(struct cnxk_eth_dev *dev, uint32_t sa_idx, bool inb)
 {
 	struct cnxk_eth_sec_sess_list *list;
 	struct cnxk_eth_sec_sess *eth_sec;
 
 	list = inb ? &dev->inb.list : &dev->outb.list;
 	TAILQ_FOREACH(eth_sec, list, entry) {
-		if (eth_sec->spi == spi)
+		if (eth_sec->sa_idx == sa_idx)
 			return eth_sec;
 	}
 
@@ -300,18 +306,21 @@ cnxk_eth_sec_sess_get_by_sess(struct cnxk_eth_dev *dev,
 	return NULL;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_inl_dev_submit, 23.11)
 uint16_t
 rte_pmd_cnxk_inl_dev_submit(struct rte_pmd_cnxk_inl_dev_q *qptr, void *inst, uint16_t nb_inst)
 {
 	return cnxk_pmd_ops.inl_dev_submit((struct roc_nix_inl_dev_q *)qptr, inst, nb_inst);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_inl_dev_qptr_get, 23.11)
 struct rte_pmd_cnxk_inl_dev_q *
 rte_pmd_cnxk_inl_dev_qptr_get(void)
 {
 	return roc_nix_inl_dev_qptr_get(0);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_cpt_q_stats_get, 23.11)
 int
 rte_pmd_cnxk_cpt_q_stats_get(uint16_t portid, enum rte_pmd_cnxk_cpt_q_stats_type type,
 			     struct rte_pmd_cnxk_cpt_q_stats *stats, uint16_t idx)
@@ -323,6 +332,7 @@ rte_pmd_cnxk_cpt_q_stats_get(uint16_t portid, enum rte_pmd_cnxk_cpt_q_stats_type
 					    (struct roc_nix_cpt_lf_stats *)stats, idx);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_hw_session_base_get, 23.11)
 union rte_pmd_cnxk_ipsec_hw_sa *
 rte_pmd_cnxk_hw_session_base_get(uint16_t portid, bool inb)
 {
@@ -338,15 +348,34 @@ rte_pmd_cnxk_hw_session_base_get(uint16_t portid, bool inb)
 	return (union rte_pmd_cnxk_ipsec_hw_sa *)sa_base;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_sa_flush, 23.11)
 int
 rte_pmd_cnxk_sa_flush(uint16_t portid, union rte_pmd_cnxk_ipsec_hw_sa *sess, bool inb)
 {
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
 	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	rte_spinlock_t *lock;
+	bool inl_dev;
+	int rc;
 
-	return roc_nix_inl_sa_sync(&dev->nix, sess, inb, ROC_NIX_INL_SA_OP_FLUSH);
+	inl_dev = !!dev->inb.inl_dev;
+	lock = inb ? &dev->inb.lock : &dev->outb.lock;
+	rte_spinlock_lock(lock);
+
+	/* Acquire lock on inline dev for inbound */
+	if (inb && inl_dev)
+		roc_nix_inl_dev_lock();
+
+	rc = roc_nix_inl_sa_sync(&dev->nix, sess, inb, ROC_NIX_INL_SA_OP_FLUSH);
+
+	if (inb && inl_dev)
+		roc_nix_inl_dev_unlock();
+	rte_spinlock_unlock(lock);
+
+	return rc;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_hw_sa_read, 22.07)
 int
 rte_pmd_cnxk_hw_sa_read(uint16_t portid, void *sess, union rte_pmd_cnxk_ipsec_hw_sa *data,
 			uint32_t len, bool inb)
@@ -354,6 +383,8 @@ rte_pmd_cnxk_hw_sa_read(uint16_t portid, void *sess, union rte_pmd_cnxk_ipsec_hw
 	struct rte_eth_dev *eth_dev = &rte_eth_devices[portid];
 	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
 	struct cnxk_eth_sec_sess *eth_sec;
+	rte_spinlock_t *lock;
+	bool inl_dev;
 	void *sa;
 	int rc;
 
@@ -363,15 +394,34 @@ rte_pmd_cnxk_hw_sa_read(uint16_t portid, void *sess, union rte_pmd_cnxk_ipsec_hw
 	else
 		sa = sess;
 
+	inl_dev = !!dev->inb.inl_dev;
+	lock = inb ? &dev->inb.lock : &dev->outb.lock;
+	rte_spinlock_lock(lock);
+
+	/* Acquire lock on inline dev for inbound */
+	if (inb && inl_dev)
+		roc_nix_inl_dev_lock();
+
 	rc = roc_nix_inl_sa_sync(&dev->nix, sa, inb, ROC_NIX_INL_SA_OP_FLUSH);
 	if (rc)
-		return -EINVAL;
+		goto err;
+
+	if (inb && inl_dev)
+		roc_nix_inl_dev_unlock();
+	rte_spinlock_unlock(lock);
 
 	memcpy(data, sa, len);
 
 	return 0;
+err:
+	if (inb && inl_dev)
+		roc_nix_inl_dev_unlock();
+	rte_spinlock_unlock(lock);
+
+	return rc;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_hw_sa_write, 22.07)
 int
 rte_pmd_cnxk_hw_sa_write(uint16_t portid, void *sess, union rte_pmd_cnxk_ipsec_hw_sa *data,
 			 uint32_t len, bool inb)
@@ -380,7 +430,10 @@ rte_pmd_cnxk_hw_sa_write(uint16_t portid, void *sess, union rte_pmd_cnxk_ipsec_h
 	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
 	struct cnxk_eth_sec_sess *eth_sec;
 	struct roc_nix_inl_dev_q *q;
+	rte_spinlock_t *lock;
+	bool inl_dev;
 	void *sa;
+	int rc;
 
 	eth_sec = cnxk_eth_sec_sess_get_by_sess(dev, sess);
 	if (eth_sec)
@@ -392,9 +445,24 @@ rte_pmd_cnxk_hw_sa_write(uint16_t portid, void *sess, union rte_pmd_cnxk_ipsec_h
 	if (q && cnxk_nix_inl_fc_check(q->fc_addr, &q->fc_addr_sw, q->nb_desc, 1))
 		return -EAGAIN;
 
-	return roc_nix_inl_ctx_write(&dev->nix, data, sa, inb, len);
+	inl_dev = !!dev->inb.inl_dev;
+	lock = inb ? &dev->inb.lock : &dev->outb.lock;
+	rte_spinlock_lock(lock);
+
+	/* Acquire lock on inline dev for inbound */
+	if (inb && inl_dev)
+		roc_nix_inl_dev_lock();
+
+	rc = roc_nix_inl_ctx_write(&dev->nix, data, sa, inb, len);
+
+	if (inb && inl_dev)
+		roc_nix_inl_dev_unlock();
+	rte_spinlock_unlock(lock);
+
+	return rc;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_inl_ipsec_res, 23.11)
 union rte_pmd_cnxk_cpt_res_s *
 rte_pmd_cnxk_inl_ipsec_res(struct rte_mbuf *mbuf)
 {
@@ -413,6 +481,7 @@ rte_pmd_cnxk_inl_ipsec_res(struct rte_mbuf *mbuf)
 	return (void *)(wqe + 64 + desc_size);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_cnxk_hw_inline_inb_cfg_set, 23.11)
 void
 rte_pmd_cnxk_hw_inline_inb_cfg_set(uint16_t portid, struct rte_pmd_cnxk_ipsec_inb_cfg *cfg)
 {
@@ -493,6 +562,7 @@ nix_inl_parse_devargs(struct rte_devargs *devargs,
 	uint32_t max_ipsec_rules = 0;
 	struct rte_kvargs *kvlist;
 	uint8_t custom_inb_sa = 0;
+	uint8_t nb_inl_inb_qs = 1;
 	uint32_t nb_meta_bufs = 0;
 	uint32_t meta_buf_sz = 0;
 	uint8_t rx_inj_ena = 0;
@@ -524,6 +594,7 @@ nix_inl_parse_devargs(struct rte_devargs *devargs,
 	rte_kvargs_process(kvlist, CNXK_MAX_IPSEC_RULES, &parse_max_ipsec_rules, &max_ipsec_rules);
 	rte_kvargs_process(kvlist, CNXK_NIX_INL_RX_INJ_ENABLE, &parse_val_u8, &rx_inj_ena);
 	rte_kvargs_process(kvlist, CNXK_NIX_CUSTOM_INB_SA, &parse_val_u8, &custom_inb_sa);
+	rte_kvargs_process(kvlist, CNXK_NIX_NB_INL_INB_QS, &parse_val_u8, &nb_inl_inb_qs);
 	rte_kvargs_free(kvlist);
 
 null_devargs:
@@ -539,6 +610,8 @@ null_devargs:
 	inl_dev->max_ipsec_rules = max_ipsec_rules;
 	if (roc_feature_nix_has_rx_inject())
 		inl_dev->rx_inj_ena = rx_inj_ena;
+	if (roc_feature_nix_has_inl_multi_queue())
+		inl_dev->nb_inb_cptlfs = nb_inl_inb_qs;
 	inl_dev->custom_inb_sa = custom_inb_sa;
 	return 0;
 exit:
@@ -622,7 +695,6 @@ cnxk_nix_inl_dev_probe(struct rte_pci_driver *pci_drv,
 		goto free_mem;
 	}
 
-	inl_dev->attach_cptlf = true;
 	/* WQE skip is one for DPDK */
 	wqe_skip = RTE_ALIGN_CEIL(sizeof(struct rte_mbuf), ROC_CACHE_LINE_SZ);
 	wqe_skip = wqe_skip / ROC_CACHE_LINE_SZ;
@@ -669,4 +741,5 @@ RTE_PMD_REGISTER_PARAM_STRING(cnxk_nix_inl,
 			      CNXK_NIX_SOFT_EXP_POLL_FREQ "=<0-U32_MAX>"
 			      CNXK_MAX_IPSEC_RULES "=<1-4095>"
 			      CNXK_NIX_INL_RX_INJ_ENABLE "=1"
-			      CNXK_NIX_CUSTOM_INB_SA "=1");
+			      CNXK_NIX_CUSTOM_INB_SA "=1"
+			      CNXK_NIX_NB_INL_INB_QS "=[0-16]");

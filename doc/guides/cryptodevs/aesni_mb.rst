@@ -67,6 +67,7 @@ AEAD algorithms:
 * RTE_CRYPTO_AEAD_AES_CCM
 * RTE_CRYPTO_AEAD_AES_GCM
 * RTE_CRYPTO_AEAD_CHACHA20_POLY1305
+* RTE_CRYPTO_AEAD_SM4_GCM
 
 Protocol offloads:
 
@@ -167,7 +168,7 @@ Example:
 
 .. code-block:: console
 
-    ./dpdk-l2fwd-crypto -l 1 -n 4 --vdev="crypto_aesni_mb,socket_id=0,max_nb_sessions=128" \
+    ./dpdk-l2fwd-crypto -l 1 --vdev="crypto_aesni_mb,socket_id=0,max_nb_sessions=128" \
     -- -p 1 --cdev SW --chain CIPHER_HASH --cipher_algo "aes-cbc" --auth_algo "sha1-hmac"
 
 Extra notes

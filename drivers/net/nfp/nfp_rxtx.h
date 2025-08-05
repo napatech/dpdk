@@ -117,25 +117,25 @@ struct __rte_aligned(64) nfp_net_txq {
 struct nfp_net_rx_desc {
 	union {
 		/** Freelist descriptor. */
-		struct {
-			uint16_t dma_addr_hi;  /**< High bits of buffer address. */
-			uint8_t spare;         /**< Reserved, must be zero. */
-			uint8_t dd;            /**< Whether descriptor available. */
-			uint32_t dma_addr_lo;  /**< Low bits of buffer address. */
-		} __rte_packed fld;
+		struct __rte_packed_begin {
+			rte_le16_t dma_addr_hi;  /**< High bits of buffer address. */
+			uint8_t spare;           /**< Reserved, must be zero. */
+			uint8_t dd;              /**< Whether descriptor available. */
+			rte_le32_t dma_addr_lo;  /**< Low bits of buffer address. */
+		} __rte_packed_end fld;
 
 		/** RX descriptor. */
-		struct {
-			uint16_t data_len;     /**< Length of frame + metadata. */
+		struct __rte_packed_begin {
+			rte_le16_t data_len;     /**< Length of frame + metadata. */
 			uint8_t reserved;      /**< Reserved, must be zero. */
 			uint8_t meta_len_dd;   /**< Length of metadata + done flag. */
 
-			uint16_t flags;        /**< RX flags. */
-			uint16_t offload_info; /**< Offloading info. */
-		} __rte_packed rxd;
+			rte_le16_t flags;        /**< RX flags. */
+			rte_le16_t offload_info; /**< Offloading info. */
+		} __rte_packed_end rxd;
 
 		/** Reserved. */
-		uint32_t vals[2];
+		rte_le32_t vals[2];
 	};
 };
 
@@ -245,6 +245,10 @@ void nfp_net_tx_queue_info_get(struct rte_eth_dev *dev,
 		uint16_t queue_id,
 		struct rte_eth_txq_info *qinfo);
 void nfp_net_recv_pkts_set(struct rte_eth_dev *eth_dev);
+int nfp_net_rx_burst_mode_get(struct rte_eth_dev *eth_dev, uint16_t queue_id,
+		struct rte_eth_burst_mode *mode);
+int nfp_net_tx_burst_mode_get(struct rte_eth_dev *eth_dev, uint16_t queue_id,
+		struct rte_eth_burst_mode *mode);
 void nfp_net_parse_ptype(struct nfp_net_rxq *rxq,
 		struct nfp_net_rx_desc *rxds,
 		struct rte_mbuf *mb);

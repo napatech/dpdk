@@ -65,7 +65,7 @@ static struct backend_dev_s {
 			mod##_nthw_set_debug_mode((inst), 0);                                     \
 	} while (0)
 
-const struct flow_api_backend_ops *bin_flow_backend_init(nthw_fpga_t *p_fpga, void **be_dev);
+const struct flow_api_backend_ops *nthw_bin_flow_backend_init(nthw_fpga_t *p_fpga, void **be_dev);
 static void bin_flow_backend_done(void *be_dev);
 
 static int set_debug_mode(void *be_dev, enum debug_mode_e mode)
@@ -1584,7 +1584,7 @@ static bool tpe_get_present(void *be_dev)
 {
 	struct backend_dev_s *be = (struct backend_dev_s *)be_dev;
 	return be->p_csu_nthw != NULL && be->p_hfu_nthw != NULL && be->p_rpp_lr_nthw != NULL &&
-		be->p_tx_cpy_nthw != NULL && be->p_tx_ins_nthw != NULL &&
+		be->p_ifr_nthw != NULL && be->p_tx_cpy_nthw != NULL && be->p_tx_ins_nthw != NULL &&
 		be->p_tx_rpl_nthw != NULL;
 }
 
@@ -1632,7 +1632,7 @@ static uint32_t tpe_get_version(void *be_dev)
 		return 3;
 	}
 
-	assert(false);
+	RTE_ASSERT(false);
 	return 0;
 }
 
@@ -1707,6 +1707,31 @@ static int tpe_ifr_rcp_flush(void *be_dev, const struct tpe_func_s *ifr, int ind
 				ifr->v3.ifr_rcp[index + i].ipv6_drop);
 			ifr_nthw_rcp_mtu(be->p_ifr_nthw, ifr->v3.ifr_rcp[index + i].mtu);
 			ifr_nthw_rcp_flush(be->p_ifr_nthw);
+		}
+
+	} else {
+		res = -1;
+	}
+
+	CHECK_DEBUG_OFF(ifr, be->p_ifr_nthw);
+	return res;
+}
+
+static int tpe_ifr_counters_update(void *be_dev, const struct tpe_func_s *ifr, int index, int cnt)
+{
+	int res = 0;
+	int i = 0;
+	struct backend_dev_s *be = (struct backend_dev_s *)be_dev;
+	CHECK_DEBUG_ON(be, ifr, be->p_ifr_nthw);
+
+	if (ifr->ver >= 2) {
+		ifr_nthw_counters_cnt(be->p_ifr_nthw, 1);
+
+		for (i = 0; i < cnt; i++) {
+			ifr_nthw_counters_select(be->p_ifr_nthw, index + i);
+			ifr_nthw_counters_update(be->p_ifr_nthw);
+			ifr_nthw_counters_drop(be->p_ifr_nthw,
+				&ifr->v3.ifr_counters[index + i].drop, 1);
 		}
 
 	} else {
@@ -2062,6 +2087,7 @@ const struct flow_api_backend_ops flow_be_iface = {
 	tpe_rpp_rcp_flush,
 	tpe_rpp_ifr_rcp_flush,
 	tpe_ifr_rcp_flush,
+	tpe_ifr_counters_update,
 	tpe_ins_rcp_flush,
 	tpe_rpl_rcp_flush,
 	tpe_rpl_ext_flush,
@@ -2071,7 +2097,7 @@ const struct flow_api_backend_ops flow_be_iface = {
 	tpe_csu_rcp_flush,
 };
 
-const struct flow_api_backend_ops *bin_flow_backend_init(nthw_fpga_t *p_fpga, void **dev)
+const struct flow_api_backend_ops *nthw_bin_flow_backend_init(nthw_fpga_t *p_fpga, void **dev)
 {
 	uint8_t physical_adapter_no = (uint8_t)p_fpga->p_fpga_info->adapter_no;
 
@@ -2245,11 +2271,11 @@ static void bin_flow_backend_done(void *dev)
 }
 
 static const struct flow_backend_ops ops = {
-	.bin_flow_backend_init = bin_flow_backend_init,
+	.nthw_bin_flow_backend_init = nthw_bin_flow_backend_init,
 	.bin_flow_backend_done = bin_flow_backend_done,
 };
 
-void flow_backend_init(void)
+void nthw_flow_backend_init(void)
 {
 	register_flow_backend_ops(&ops);
 }

@@ -2,6 +2,7 @@
  * Copyright (C) 2021 Marvell International Ltd.
  */
 
+#include <eal_export.h>
 #include <rte_vect.h>
 
 #include "cnxk_dmadev.h"
@@ -281,15 +282,14 @@ cnxk_dmadev_copy(void *dev_private, uint16_t vchan, rte_iova_t src, rte_iova_t d
 
 	if (flags & RTE_DMA_OP_FLAG_SUBMIT) {
 		rte_wmb();
-		plt_write64(dpi_conf->pnum_words + CNXK_DPI_DW_PER_SINGLE_CMD,
+		plt_write64(dpivf->total_pnum_words + CNXK_DPI_DW_PER_SINGLE_CMD,
 			    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-		dpi_conf->stats.submitted += dpi_conf->pending + 1;
-		dpi_conf->pnum_words = 0;
-		dpi_conf->pending = 0;
+		dpivf->total_pnum_words = 0;
 	} else {
-		dpi_conf->pnum_words += CNXK_DPI_DW_PER_SINGLE_CMD;
-		dpi_conf->pending++;
+		dpivf->total_pnum_words += CNXK_DPI_DW_PER_SINGLE_CMD;
 	}
+
+	dpi_conf->stats.submitted += 1;
 
 	return dpi_conf->desc_idx++;
 }
@@ -337,15 +337,14 @@ cnxk_dmadev_copy_sg(void *dev_private, uint16_t vchan, const struct rte_dma_sge 
 
 	if (flags & RTE_DMA_OP_FLAG_SUBMIT) {
 		rte_wmb();
-		plt_write64(dpi_conf->pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
+		plt_write64(dpivf->total_pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
 			    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-		dpi_conf->stats.submitted += dpi_conf->pending + 1;
-		dpi_conf->pnum_words = 0;
-		dpi_conf->pending = 0;
+		dpivf->total_pnum_words = 0;
 	} else {
-		dpi_conf->pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
-		dpi_conf->pending++;
+		dpivf->total_pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
 	}
+
+	dpi_conf->stats.submitted += 1;
 
 	return dpi_conf->desc_idx++;
 }
@@ -383,15 +382,14 @@ cn10k_dmadev_copy(void *dev_private, uint16_t vchan, rte_iova_t src, rte_iova_t 
 
 	if (flags & RTE_DMA_OP_FLAG_SUBMIT) {
 		rte_wmb();
-		plt_write64(dpi_conf->pnum_words + CNXK_DPI_DW_PER_SINGLE_CMD,
+		plt_write64(dpivf->total_pnum_words + CNXK_DPI_DW_PER_SINGLE_CMD,
 			    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-		dpi_conf->stats.submitted += dpi_conf->pending + 1;
-		dpi_conf->pnum_words = 0;
-		dpi_conf->pending = 0;
+		dpivf->total_pnum_words = 0;
 	} else {
-		dpi_conf->pnum_words += 8;
-		dpi_conf->pending++;
+		dpivf->total_pnum_words += CNXK_DPI_DW_PER_SINGLE_CMD;
 	}
+
+	dpi_conf->stats.submitted += 1;
 
 	return dpi_conf->desc_idx++;
 }
@@ -426,15 +424,14 @@ cn10k_dmadev_copy_sg(void *dev_private, uint16_t vchan, const struct rte_dma_sge
 
 	if (flags & RTE_DMA_OP_FLAG_SUBMIT) {
 		rte_wmb();
-		plt_write64(dpi_conf->pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
+		plt_write64(dpivf->total_pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
 			    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-		dpi_conf->stats.submitted += dpi_conf->pending + 1;
-		dpi_conf->pnum_words = 0;
-		dpi_conf->pending = 0;
+		dpivf->total_pnum_words = 0;
 	} else {
-		dpi_conf->pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
-		dpi_conf->pending++;
+		dpivf->total_pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
 	}
+
+	dpi_conf->stats.submitted += 1;
 
 	return dpi_conf->desc_idx++;
 }
@@ -449,6 +446,7 @@ cnxk_dma_adapter_format_event(uint64_t event)
 	return w0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(cn10k_dma_adapter_enqueue)
 uint16_t
 cn10k_dma_adapter_enqueue(void *ws, struct rte_event ev[], uint16_t nb_events)
 {
@@ -495,21 +493,20 @@ cn10k_dma_adapter_enqueue(void *ws, struct rte_event ev[], uint16_t nb_events)
 
 		if (op->flags & RTE_DMA_OP_FLAG_SUBMIT) {
 			rte_wmb();
-			plt_write64(dpi_conf->pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
+			plt_write64(dpivf->total_pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
 				    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-			dpi_conf->stats.submitted += dpi_conf->pending + 1;
-			dpi_conf->pnum_words = 0;
-			dpi_conf->pending = 0;
+			dpivf->total_pnum_words = 0;
 		} else {
-			dpi_conf->pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
-			dpi_conf->pending++;
+			dpivf->total_pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
 		}
+		dpi_conf->stats.submitted += 1;
 		rte_mcslock_unlock(&dpivf->mcs_lock, &mcs_lock_me);
 	}
 
 	return count;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(cn9k_dma_adapter_dual_enqueue)
 uint16_t
 cn9k_dma_adapter_dual_enqueue(void *ws, struct rte_event ev[], uint16_t nb_events)
 {
@@ -567,21 +564,20 @@ cn9k_dma_adapter_dual_enqueue(void *ws, struct rte_event ev[], uint16_t nb_event
 
 		if (op->flags & RTE_DMA_OP_FLAG_SUBMIT) {
 			rte_wmb();
-			plt_write64(dpi_conf->pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
+			plt_write64(dpivf->total_pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
 				    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-			dpi_conf->stats.submitted += dpi_conf->pending + 1;
-			dpi_conf->pnum_words = 0;
-			dpi_conf->pending = 0;
+			dpivf->total_pnum_words = 0;
 		} else {
-			dpi_conf->pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
-			dpi_conf->pending++;
+			dpivf->total_pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
 		}
+		dpi_conf->stats.submitted += 1;
 		rte_mcslock_unlock(&dpivf->mcs_lock, &mcs_lock_me);
 	}
 
 	return count;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(cn9k_dma_adapter_enqueue)
 uint16_t
 cn9k_dma_adapter_enqueue(void *ws, struct rte_event ev[], uint16_t nb_events)
 {
@@ -636,21 +632,20 @@ cn9k_dma_adapter_enqueue(void *ws, struct rte_event ev[], uint16_t nb_events)
 
 		if (op->flags & RTE_DMA_OP_FLAG_SUBMIT) {
 			rte_wmb();
-			plt_write64(dpi_conf->pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
+			plt_write64(dpivf->total_pnum_words + CNXK_DPI_CMD_LEN(nb_src, nb_dst),
 				    dpivf->rdpi.rbase + DPI_VDMA_DBELL);
-			dpi_conf->stats.submitted += dpi_conf->pending + 1;
-			dpi_conf->pnum_words = 0;
-			dpi_conf->pending = 0;
+			dpivf->total_pnum_words = 0;
 		} else {
-			dpi_conf->pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
-			dpi_conf->pending++;
+			dpivf->total_pnum_words += CNXK_DPI_CMD_LEN(nb_src, nb_dst);
 		}
+		dpi_conf->stats.submitted += 1;
 		rte_mcslock_unlock(&dpivf->mcs_lock, &mcs_lock_me);
 	}
 
 	return count;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(cnxk_dma_adapter_dequeue)
 uintptr_t
 cnxk_dma_adapter_dequeue(uintptr_t get_work1)
 {

@@ -10,13 +10,15 @@ project('DPDK', 'c',
             'default_library=static',
             'warning_level=2',
         ],
-        meson_version: '>= 0.57'
+        meson_version: '>= 0.57.2'
+        # meson_version_windows: '>= 1.5.2'
 )
+
+fs = import('fs')
 
 # check for developer mode
 developer_mode = false
 if get_option('developer_mode').auto()
-    fs = import('fs')
     developer_mode = fs.exists('.git')
 else
     developer_mode = get_option('developer_mode').enabled()

@@ -51,6 +51,9 @@ static int eth_mtr_capabilities_get_inline(struct rte_eth_dev *eth_dev,
 				"Ethernet device does not support metering");
 	}
 
+	if (cap == NULL)
+		return -1;
+
 	memset(cap, 0x0, sizeof(struct rte_mtr_capabilities));
 
 	/* MBR records use 28-bit integers */
@@ -419,6 +422,9 @@ static int eth_mtr_stats_read_inline(struct rte_eth_dev *eth_dev,
 				"MTR id is out of range");
 	}
 
+	if (stats == NULL)
+		return -1;
+
 	memset(stats, 0x0, sizeof(struct rte_mtr_stats));
 	profile_inline_ops->flm_mtr_read_stats(internals->flw_dev, caller_id, mtr_id, stats_mask,
 		&stats->n_pkts[RTE_COLOR_GREEN],
@@ -476,7 +482,7 @@ static struct meter_ops_s meter_ops = {
 	.eth_mtr_ops_get = eth_mtr_ops_get,
 };
 
-void meter_init(void)
+void nthw_meter_init(void)
 {
 	NT_LOG(DBG, NTNIC, "Meter ops initialized");
 	register_meter_ops(&meter_ops);

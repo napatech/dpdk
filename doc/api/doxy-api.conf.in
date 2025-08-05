@@ -19,9 +19,9 @@ INPUT                   = @TOPDIR@/doc/api/doxy-api-index.md \
                           @TOPDIR@/drivers/net/cnxk \
                           @TOPDIR@/drivers/net/dpaa \
                           @TOPDIR@/drivers/net/dpaa2 \
-                          @TOPDIR@/drivers/net/i40e \
-                          @TOPDIR@/drivers/net/iavf \
-                          @TOPDIR@/drivers/net/ixgbe \
+                          @TOPDIR@/drivers/net/intel/i40e \
+                          @TOPDIR@/drivers/net/intel/iavf \
+                          @TOPDIR@/drivers/net/intel/ixgbe \
                           @TOPDIR@/drivers/net/mlx5 \
                           @TOPDIR@/drivers/net/softnic \
                           @TOPDIR@/drivers/raw/dpaa2_cmdif \
@@ -69,6 +69,7 @@ INPUT                   = @TOPDIR@/doc/api/doxy-api-index.md \
                           @TOPDIR@/lib/pdcp \
                           @TOPDIR@/lib/pdump \
                           @TOPDIR@/lib/pipeline \
+                          @TOPDIR@/lib/pmu \
                           @TOPDIR@/lib/port \
                           @TOPDIR@/lib/power \
                           @TOPDIR@/lib/ptr_compress \
@@ -103,6 +104,18 @@ PREDEFINED              = __DOXYGEN__ \
                           __rte_shared_trylock_function(x)= \
                           __rte_assert_shared_lock(x)= \
                           __rte_unlock_function(x)= \
+                          __rte_capability(x)= \
+                          __rte_requires_capability(x)= \
+                          __rte_acquire_capability(x)= \
+                          __rte_try_acquire_capability(x)= \
+                          __rte_release_capability(x)= \
+                          __rte_assert_capability(x)= \
+                          __rte_requires_shared_capability(x)= \
+                          __rte_acquire_shared_capability(x)= \
+                          __rte_try_acquire_shared_capability(x)= \
+                          __rte_release_shared_capability(x)= \
+                          __rte_assert_shared_capability(x)= \
+                          __rte_exclude_capability(x)= \
                           __attribute__(x)=
 
 OPTIMIZE_OUTPUT_FOR_C   = YES

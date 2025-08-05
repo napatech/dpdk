@@ -35,6 +35,55 @@ cperf_set_ops_asym_modex(struct rte_crypto_op **ops,
 }
 
 static void
+cperf_set_ops_asym_rsa(struct rte_crypto_op **ops,
+		   uint32_t src_buf_offset __rte_unused,
+		   uint32_t dst_buf_offset __rte_unused, uint16_t nb_ops,
+		   void *sess,
+		   const struct cperf_options *options,
+		   const struct cperf_test_vector *test_vector __rte_unused,
+		   uint16_t iv_offset __rte_unused,
+		   uint32_t *imix_idx __rte_unused,
+		   uint64_t *tsc_start __rte_unused)
+{
+	uint8_t crypto_buf[CRYPTO_BUF_SIZE] = {0};
+	uint16_t i;
+
+	for (i = 0; i < nb_ops; i++) {
+		struct rte_crypto_asym_op *asym_op = ops[i]->asym;
+
+		ops[i]->status = RTE_CRYPTO_OP_STATUS_NOT_PROCESSED;
+		asym_op->rsa.op_type = options->asym_op_type;
+		if (options->asym_op_type == RTE_CRYPTO_ASYM_OP_SIGN) {
+			asym_op->rsa.message.data = rsa_plaintext.data;
+			asym_op->rsa.message.length = rsa_plaintext.len;
+			asym_op->rsa.sign.data = crypto_buf;
+			asym_op->rsa.sign.length = options->rsa_data->n.length;
+		} else if (options->asym_op_type == RTE_CRYPTO_ASYM_OP_ENCRYPT) {
+			asym_op->rsa.message.data = rsa_plaintext.data;
+			asym_op->rsa.message.length = rsa_plaintext.len;
+			asym_op->rsa.cipher.data = crypto_buf;
+			asym_op->rsa.cipher.length = options->rsa_data->n.length;
+		} else if (options->asym_op_type == RTE_CRYPTO_ASYM_OP_DECRYPT) {
+			asym_op->rsa.cipher.data = options->rsa_data->cipher.data;
+			asym_op->rsa.cipher.length = options->rsa_data->cipher.length;
+			asym_op->rsa.message.data = crypto_buf;
+			asym_op->rsa.message.length = options->rsa_data->n.length;
+		} else if (options->asym_op_type == RTE_CRYPTO_ASYM_OP_VERIFY) {
+			memcpy(crypto_buf, options->rsa_data->sign.data,
+				options->rsa_data->sign.length);
+			asym_op->rsa.sign.data = crypto_buf;
+			asym_op->rsa.sign.length = options->rsa_data->sign.length;
+			asym_op->rsa.message.data = rsa_plaintext.data;
+			asym_op->rsa.message.length = rsa_plaintext.len;
+		} else {
+			rte_panic("Unsupported RSA operation type %d\n",
+				  options->asym_op_type);
+		}
+		rte_crypto_op_attach_asym_session(ops[i], sess);
+	}
+}
+
+static void
 cperf_set_ops_asym_ecdsa(struct rte_crypto_op **ops,
 		   uint32_t src_buf_offset __rte_unused,
 		   uint32_t dst_buf_offset __rte_unused, uint16_t nb_ops,
@@ -688,7 +737,9 @@ cperf_set_ops_aead(struct rte_crypto_op **ops,
 	uint16_t i;
 	/* AAD is placed after the IV */
 	uint16_t aad_offset = iv_offset +
-			RTE_ALIGN_CEIL(test_vector->aead_iv.length, 16);
+			((options->aead_algo == RTE_CRYPTO_AEAD_AES_CCM) ?
+			RTE_ALIGN_CEIL(test_vector->aead_iv.length, 16) :
+			test_vector->aead_iv.length);
 
 	for (i = 0; i < nb_ops; i++) {
 		struct rte_crypto_sym_op *sym_op = ops[i]->sym;
@@ -1031,6 +1082,38 @@ cperf_create_session(struct rte_mempool *sess_mp,
 		xform.modex.exponent.data = options->modex_data->exponent.data;
 		xform.modex.exponent.length = options->modex_data->exponent.len;
 
+		ret = rte_cryptodev_asym_session_create(dev_id, &xform,
+				sess_mp, &asym_sess);
+		if (ret < 0) {
+			RTE_LOG(ERR, USER1, "Asym session create failed\n");
+			return NULL;
+		}
+		return asym_sess;
+	}
+
+	if (options->op_type == CPERF_ASYM_RSA) {
+		xform.next = NULL;
+		xform.xform_type = RTE_CRYPTO_ASYM_XFORM_RSA;
+		xform.rsa.padding.type = options->rsa_data->padding;
+		xform.rsa.n.data = options->rsa_data->n.data;
+		xform.rsa.n.length = options->rsa_data->n.length;
+		xform.rsa.e.data = options->rsa_data->e.data;
+		xform.rsa.e.length = options->rsa_data->e.length;
+		xform.rsa.d.data = options->rsa_data->d.data;
+		xform.rsa.d.length = options->rsa_data->d.length;
+		xform.rsa.key_type = options->rsa_data->key_type;
+		if (xform.rsa.key_type == RTE_RSA_KEY_TYPE_QT) {
+			xform.rsa.qt.p.data = options->rsa_data->p.data;
+			xform.rsa.qt.p.length = options->rsa_data->p.length;
+			xform.rsa.qt.q.data = options->rsa_data->q.data;
+			xform.rsa.qt.q.length = options->rsa_data->q.length;
+			xform.rsa.qt.dP.data = options->rsa_data->dp.data;
+			xform.rsa.qt.dP.length = options->rsa_data->dp.length;
+			xform.rsa.qt.dQ.data = options->rsa_data->dq.data;
+			xform.rsa.qt.dQ.length = options->rsa_data->dq.length;
+			xform.rsa.qt.qInv.data = options->rsa_data->qinv.data;
+			xform.rsa.qt.qInv.length = options->rsa_data->qinv.length;
+		}
 		ret = rte_cryptodev_asym_session_create(dev_id, &xform,
 				sess_mp, &asym_sess);
 		if (ret < 0) {
@@ -1399,6 +1482,9 @@ cperf_get_op_functions(const struct cperf_options *options,
 		break;
 	case CPERF_ASYM_MODEX:
 		op_fns->populate_ops = cperf_set_ops_asym_modex;
+		break;
+	case CPERF_ASYM_RSA:
+		op_fns->populate_ops = cperf_set_ops_asym_rsa;
 		break;
 	case CPERF_ASYM_SECP256R1:
 		op_fns->populate_ops = cperf_set_ops_asym_ecdsa;

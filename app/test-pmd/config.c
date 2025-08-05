@@ -92,7 +92,8 @@ const struct rss_type_info rss_type_table[] = {
 	{ "all", RTE_ETH_RSS_ETH | RTE_ETH_RSS_VLAN | RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP |
 		RTE_ETH_RSS_UDP | RTE_ETH_RSS_SCTP | RTE_ETH_RSS_L2_PAYLOAD |
 		RTE_ETH_RSS_L2TPV3 | RTE_ETH_RSS_ESP | RTE_ETH_RSS_AH | RTE_ETH_RSS_PFCP |
-		RTE_ETH_RSS_GTPU | RTE_ETH_RSS_ECPRI | RTE_ETH_RSS_MPLS | RTE_ETH_RSS_L2TPV2},
+		RTE_ETH_RSS_GTPU | RTE_ETH_RSS_ECPRI | RTE_ETH_RSS_MPLS | RTE_ETH_RSS_L2TPV2 |
+		RTE_ETH_RSS_IB_BTH },
 	{ "none", 0 },
 	{ "ip", RTE_ETH_RSS_IP },
 	{ "udp", RTE_ETH_RSS_UDP },
@@ -149,6 +150,7 @@ const struct rss_type_info rss_type_table[] = {
 	{ "l3-dst-only", RTE_ETH_RSS_L3_DST_ONLY },
 	{ "l3-src-only", RTE_ETH_RSS_L3_SRC_ONLY },
 	{ "ipv6-flow-label", RTE_ETH_RSS_IPV6_FLOW_LABEL },
+	{ "ib-bth", RTE_ETH_RSS_IB_BTH },
 	{ NULL, 0},
 };
 
@@ -393,6 +395,7 @@ nic_xstats_display(portid_t port_id)
 	struct rte_eth_xstat *xstats;
 	int cnt_xstats, idx_xstat;
 	struct rte_eth_xstat_name *xstats_names;
+	int state;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		print_valid_ports();
@@ -442,6 +445,17 @@ nic_xstats_display(portid_t port_id)
 	for (idx_xstat = 0; idx_xstat < cnt_xstats; idx_xstat++) {
 		if (xstats_hide_zero && !xstats[idx_xstat].value)
 			continue;
+		if (xstats_hide_disabled) {
+			state = rte_eth_xstats_query_state(port_id, idx_xstat);
+			if (state == 0)
+				continue;
+		}
+		if (xstats_show_state) {
+			char opt[3] = {'D', 'E', '-'};
+			state = rte_eth_xstats_query_state(port_id, idx_xstat);
+			printf("state: %c	", state < 0 ? opt[2] : opt[state]);
+		}
+
 		printf("%s: %"PRIu64"\n",
 			xstats_names[idx_xstat].name,
 			xstats[idx_xstat].value);
@@ -1802,7 +1816,8 @@ port_flow_configure(portid_t port_id,
 {
 	struct rte_port *port;
 	struct rte_flow_error error;
-	const struct rte_flow_queue_attr *attr_list[nb_queue];
+	const struct rte_flow_queue_attr **attr_list =
+	    alloca(sizeof(struct rte_flow_queue_attr *) * nb_queue);
 	int std_queue;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -2616,10 +2631,10 @@ port_flow_template_table_create(portid_t port_id, uint32_t id,
 	int ret;
 	uint32_t i;
 	struct rte_flow_error error;
-	struct rte_flow_pattern_template
-			*flow_pattern_templates[nb_pattern_templates];
-	struct rte_flow_actions_template
-			*flow_actions_templates[nb_actions_templates];
+	struct rte_flow_pattern_template **flow_pattern_templates =
+	    alloca(sizeof(struct rte_flow_pattern_template *) * nb_pattern_templates);
+	struct rte_flow_actions_template **flow_actions_templates =
+	    alloca(sizeof(struct rte_flow_actions_template *) * nb_actions_templates);
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 	    port_id == (portid_t)RTE_PORT_ALL)
@@ -4468,7 +4483,7 @@ ring_rxd_display_dword(union igb_ring_dword dword)
 
 static void
 ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
-#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 			   portid_t port_id,
 #else
 			   __rte_unused portid_t port_id,
@@ -4477,7 +4492,7 @@ ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
 {
 	struct igb_ring_desc_16_bytes *ring =
 		(struct igb_ring_desc_16_bytes *)ring_mz->addr;
-#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 	int ret;
 	struct rte_eth_dev_info dev_info;
 
@@ -4793,11 +4808,12 @@ port_rss_hash_key_update(portid_t port_id, char rss_type[], uint8_t *hash_key,
 
 	rss_conf.rss_key = NULL;
 	rss_conf.rss_key_len = 0;
-	rss_conf.rss_hf = str_to_rsstypes(rss_type);
+	rss_conf.rss_hf = 0;
 	diag = rte_eth_dev_rss_hash_conf_get(port_id, &rss_conf);
 	if (diag == 0) {
 		rss_conf.rss_key = hash_key;
 		rss_conf.rss_key_len = hash_key_len;
+		rss_conf.rss_hf = str_to_rsstypes(rss_type);
 		diag = rte_eth_dev_rss_hash_update(port_id, &rss_conf);
 	}
 	if (diag == 0)
@@ -5551,7 +5567,7 @@ parse_port_list(const char *list, unsigned int *values, unsigned int maxsize)
 	char *end = NULL;
 	int min, max;
 	int value, i;
-	unsigned int marked[maxsize];
+	unsigned int *marked = alloca(sizeof(unsigned int) * maxsize);
 
 	if (list == NULL || values == NULL)
 		return 0;
@@ -6438,6 +6454,78 @@ rx_vlan_strip_set_on_queue(portid_t port_id, uint16_t queue_id, int on)
 }
 
 void
+nic_xstats_set_counter(portid_t port_id, char *counter_name, int on)
+{
+	struct rte_eth_xstat_name *xstats_names;
+	int cnt_xstats;
+	int ret;
+	uint64_t id;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
+		print_valid_ports();
+		return;
+	}
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		fprintf(stderr, "Error: Invalid port number %i\n", port_id);
+		return;
+	}
+
+	if (counter_name == NULL) {
+		fprintf(stderr, "Error: Invalid counter name\n");
+		return;
+	}
+
+	/* Get count */
+	cnt_xstats = rte_eth_xstats_get_names(port_id, NULL, 0);
+	if (cnt_xstats  < 0) {
+		fprintf(stderr, "Error: Cannot get count of xstats\n");
+		return;
+	}
+
+	/* Get id-name lookup table */
+	xstats_names = malloc(sizeof(struct rte_eth_xstat_name) * cnt_xstats);
+	if (xstats_names == NULL) {
+		fprintf(stderr, "Cannot allocate memory for xstats lookup\n");
+		return;
+	}
+	if (cnt_xstats != rte_eth_xstats_get_names(
+			port_id, xstats_names, cnt_xstats)) {
+		fprintf(stderr, "Error: Cannot get xstats lookup\n");
+		free(xstats_names);
+		return;
+	}
+
+	if (rte_eth_xstats_get_id_by_name(port_id, counter_name, &id) < 0) {
+		fprintf(stderr, "Cannot find xstats with a given name\n");
+		free(xstats_names);
+		return;
+	}
+
+	/* set counter */
+	ret = rte_eth_xstats_set_counter(port_id, id, on);
+	if (ret < 0) {
+		switch (ret) {
+		case -EINVAL:
+			fprintf(stderr, "failed to find %s\n", counter_name);
+			break;
+		case -ENOTSUP:
+			fprintf(stderr, "operation not supported by device\n");
+			break;
+		case -ENOSPC:
+			fprintf(stderr, "there were not enough available counters\n");
+			break;
+		case -EPERM:
+			fprintf(stderr, "operation not premitted\n");
+			break;
+		default:
+			fprintf(stderr, "operation failed - diag=%d\n", ret);
+			break;
+		}
+	}
+	free(xstats_names);
+}
+
+void
 rx_vlan_filter_set(portid_t port_id, int on)
 {
 	int diag;
@@ -6663,6 +6751,18 @@ void
 set_xstats_hide_zero(uint8_t on_off)
 {
 	xstats_hide_zero = on_off;
+}
+
+void
+set_xstats_show_state(uint8_t on_off)
+{
+	xstats_show_state = on_off;
+}
+
+void
+set_xstats_hide_disabled(uint8_t on_off)
+{
+	xstats_hide_disabled = on_off;
 }
 
 void
@@ -7176,8 +7276,8 @@ port_dcb_info_display(portid_t port_id)
 	printf("\n  TC :        ");
 	for (i = 0; i < dcb_info.nb_tcs; i++)
 		printf("\t%4d", i);
-	printf("\n  Priority :  ");
-	for (i = 0; i < dcb_info.nb_tcs; i++)
+	printf("\n  Prio2TC :  ");
+	for (i = 0; i < RTE_ETH_DCB_NUM_USER_PRIORITIES; i++)
 		printf("\t%4d", dcb_info.prio_tc[i]);
 	printf("\n  BW percent :");
 	for (i = 0; i < dcb_info.nb_tcs; i++)
@@ -7292,7 +7392,8 @@ show_macs(portid_t port_id)
 	if (eth_dev_info_get_print_err(port_id, &dev_info))
 		return;
 
-	struct rte_ether_addr addr[dev_info.max_mac_addrs];
+	struct rte_ether_addr *addr =
+	    alloca(sizeof(struct rte_ether_addr) * dev_info.max_mac_addrs);
 	rc = rte_eth_macaddrs_get(port_id, addr, dev_info.max_mac_addrs);
 	if (rc < 0)
 		return;

@@ -22,14 +22,10 @@
 uint8_t cn10k_cryptodev_driver_id;
 
 static struct rte_pci_id pci_id_cpt_table[] = {
-	{
-		RTE_PCI_DEVICE(PCI_VENDOR_ID_CAVIUM,
-			       PCI_DEVID_CN10K_RVU_CPT_VF)
-	},
-	/* sentinel */
-	{
-		.device_id = 0
-	},
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KA, PCI_DEVID_CN10K_RVU_CPT_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KAS, PCI_DEVID_CN10K_RVU_CPT_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KB, PCI_DEVID_CN10K_RVU_CPT_VF),
+	{.vendor_id = 0},
 };
 
 static int

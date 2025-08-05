@@ -63,7 +63,7 @@ for details.
 
    .. code-block:: console
 
-      ./<build_dir>/app/dpdk-testpmd -c 0xc -a 0002:02:00.0 -- --portmask=0x1 --nb-cores=1 --port-topology=loop --rxq=1 --txq=1
+      ./<build_dir>/app/dpdk-testpmd -l 2,3 -a 0002:02:00.0 -- --portmask=0x1 --nb-cores=1 --port-topology=loop --rxq=1 --txq=1
       EAL: Detected 4 lcore(s)
       EAL: Detected 1 NUMA nodes
       EAL: Multi-process socket /var/run/dpdk/rte/mp_socket
@@ -470,6 +470,29 @@ Runtime Config Options
    With the above configuration, inline inbound IPsec post-processing
    should be done by the application.
 
+- ``Enable force tail drop feature`` (default ``0``)
+
+   Force tail drop can be enabled
+   by specifying ``force_tail_drop`` devargs parameter.
+   This option is for OCTEON CN10K SoC family.
+
+   For example::
+
+      -a 0002:02:00.0,force_tail_drop=1
+
+   With the above configuration, descriptors are internally increased
+   and back pressures are optimized to avoid CQ full situation due to inflight packets.
+
+- ``Disable RQ XQE drop`` (default ``0``)
+
+   Rx XQE drop can be disabled
+   by specifying ``disable_xqe_drop`` devargs parameter.
+   This option is for OCTEON CN10K SoC family.
+
+   For example::
+
+      -a 0002:02:00.0,disable_xqe_drop=1
+
 .. note::
 
    Above devarg parameters are configurable per device, user needs to pass the
@@ -559,7 +582,7 @@ pattern.
 
 Example usage in testpmd::
 
-   ./dpdk-testpmd -c 3 -w 0002:02:00.0,switch_header=exdsa -- -i \
+   ./dpdk-testpmd -l 0,1 -w 0002:02:00.0,switch_header=exdsa -- -i \
                   --rx-offloads=0x00080000 --rxq 8 --txq 8
    testpmd> flow create 0 ingress pattern eth / raw relative is 0 pattern \
           spec ab pattern mask ab offset is 4 / end actions queue index 1 / end

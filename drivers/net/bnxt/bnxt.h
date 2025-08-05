@@ -219,16 +219,16 @@ struct bnxt_led_cfg {
 #define BNXT_LED_DFLT_ENABLES(x)                        \
 	rte_cpu_to_le_32(BNXT_LED_DFLT_ENA << (BNXT_LED_DFLT_ENA_SHIFT * (x)))
 
-struct bnxt_vlan_table_entry {
+struct __rte_packed_begin bnxt_vlan_table_entry {
 	uint16_t		tpid;
 	uint16_t		vid;
-} __rte_packed;
+} __rte_packed_end;
 
-struct bnxt_vlan_antispoof_table_entry {
+struct __rte_packed_begin bnxt_vlan_antispoof_table_entry {
 	uint16_t		tpid;
 	uint16_t		vid;
 	uint16_t		mask;
-} __rte_packed;
+} __rte_packed_end;
 
 struct bnxt_child_vf_info {
 	void			*req_buf;
@@ -1112,12 +1112,8 @@ inline uint16_t bnxt_max_rings(struct bnxt *bp)
 static inline bool
 bnxt_compressed_rx_cqe_mode_enabled(struct bnxt *bp)
 {
-	uint64_t rx_offloads = bp->eth_dev->data->dev_conf.rxmode.offloads;
-
 	if (bp->vnic_cap_flags & BNXT_VNIC_CAP_L2_CQE_MODE &&
 		bp->flags2 & BNXT_FLAGS2_COMPRESSED_RX_CQE &&
-		!(rx_offloads & RTE_ETH_RX_OFFLOAD_TCP_LRO) &&
-		!(rx_offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT) &&
 		!bp->num_reps && !bp->ieee_1588)
 		return true;
 

@@ -11,6 +11,13 @@
 #include "../common.h"
 #include "snippet_match_mpls.h"
 
+
+static void
+snippet_init_mpls(void)
+{
+	init_default_snippet();
+}
+
 static void
 snippet_mpls_create_actions(struct rte_flow_action *actions)
 {
@@ -59,7 +66,7 @@ snippet_mpls_create_pattern_template(uint16_t port_id, struct rte_flow_error *er
 		 * the Traffic Class set to 0,
 		 * and the Bottom of Stack bit set to 1.
 		 */
-		.label_tc_s = "\xff\xff\xf1",
+		.label_tc_s = { 0xff, 0xff, 0xf1 },
 	};
 
 	/* Define the flow pattern template. */

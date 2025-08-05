@@ -102,6 +102,7 @@ static void hn_remove_delayed(void *args)
 	uint16_t port_id = hv->vf_ctx.vf_port;
 	struct rte_device *dev = rte_eth_devices[port_id].device;
 	int ret;
+	bool all_eth_removed;
 
 	/* Tell VSP to switch data path to synthetic */
 	hn_vf_remove(hv);
@@ -138,7 +139,17 @@ static void hn_remove_delayed(void *args)
 		PMD_DRV_LOG(ERR, "rte_eth_dev_close failed port_id=%u ret=%d",
 			    port_id, ret);
 
-	ret = rte_dev_remove(dev);
+	/* Remove the rte device when all its eth devices are removed */
+	all_eth_removed = true;
+	RTE_ETH_FOREACH_DEV_OF(port_id, dev) {
+		if (rte_eth_devices[port_id].state != RTE_ETH_DEV_UNUSED) {
+			all_eth_removed = false;
+			break;
+		}
+	}
+	if (all_eth_removed)
+		ret = rte_dev_remove(dev);
+
 	hv->vf_ctx.vf_state = vf_removed;
 
 	rte_rwlock_write_unlock(&hv->vf_lock);
@@ -305,8 +316,9 @@ static void hn_vf_remove(struct hn_data *hv)
 	} else {
 		/* Stop incoming packets from arriving on VF */
 		ret = hn_nvs_set_datapath(hv, NVS_DATAPATH_SYNTHETIC);
-		if (ret == 0)
-			hv->vf_ctx.vf_vsc_switched = false;
+		if (ret)
+			PMD_DRV_LOG(ERR, "Failed to switch to synthetic");
+		hv->vf_ctx.vf_vsc_switched = false;
 	}
 	rte_rwlock_write_unlock(&hv->vf_lock);
 }

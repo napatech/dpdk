@@ -22,7 +22,11 @@ from dataclasses import dataclass, field
 from enum import Flag, auto
 from os import environ
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, ClassVar, Concatenate, ParamSpec, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Concatenate, Literal, ParamSpec, Tuple, TypeAlias
+
+from framework.context import get_ctx
+from framework.remote_session.interactive_shell import only_active
+from framework.testbed_model.topology import TopologyType
 
 if TYPE_CHECKING or environ.get("DTS_DOC_BUILD"):
     from enum import Enum as NoAliasEnum
@@ -32,13 +36,11 @@ else:
 from typing_extensions import Self, Unpack
 
 from framework.exception import InteractiveCommandExecutionError, InternalError
-from framework.params.testpmd import SimpleForwardingModes, TestPmdParams
+from framework.params.testpmd import PortTopology, SimpleForwardingModes, TestPmdParams
 from framework.params.types import TestPmdParamsDict
 from framework.parser import ParserFn, TextParser
 from framework.remote_session.dpdk_shell import DPDKShell
 from framework.settings import SETTINGS
-from framework.testbed_model.cpu import LogicalCoreCount, LogicalCoreList
-from framework.testbed_model.sut_node import SutNode
 from framework.utils import REGEX_FOR_MAC_ADDRESS, StrEnum
 
 P = ParamSpec("P")
@@ -50,9 +52,7 @@ TestPmdShellCapabilityMethod: TypeAlias = Callable[
 
 TestPmdShellDecorator: TypeAlias = Callable[[TestPmdShellMethod], TestPmdShellMethod]
 
-TestPmdShellNicCapability = (
-    TestPmdShellCapabilityMethod | tuple[TestPmdShellCapabilityMethod, TestPmdShellDecorator]
-)
+TestPmdShellNicCapability = tuple[TestPmdShellCapabilityMethod, TestPmdShellDecorator | None]
 
 
 class TestPmdDevice:
@@ -705,6 +705,48 @@ class TestPmdPortStats(TextParser):
     tx_bps: int = field(metadata=TextParser.find_int(r"Tx-bps:\s+(\d+)"))
 
 
+@dataclass(kw_only=True)
+class FlowRule:
+    """Class representation of flow rule parameters.
+
+    This class represents the parameters of any flow rule as per the
+    following pattern:
+
+    [group {group_id}] [priority {level}] [ingress] [egress]
+    [user_id {user_id}] pattern {item} [/ {item} [...]] / end
+    actions {action} [/ {action} [...]] / end
+    """
+
+    #:
+    group_id: int | None = None
+    #:
+    priority_level: int | None = None
+    #:
+    direction: Literal["ingress", "egress"]
+    #:
+    user_id: int | None = None
+    #:
+    pattern: list[str]
+    #:
+    actions: list[str]
+
+    def __str__(self) -> str:
+        """Returns the string representation of this instance."""
+        ret = ""
+        pattern = " / ".join(self.pattern)
+        action = " / ".join(self.actions)
+        if self.group_id is not None:
+            ret += f"group {self.group_id} "
+        if self.priority_level is not None:
+            ret += f"priority {self.priority_level} "
+        ret += f"{self.direction} "
+        if self.user_id is not None:
+            ret += f"user_id {self.user_id} "
+        ret += f"pattern {pattern} / end "
+        ret += f"actions {action} / end"
+        return ret
+
+
 class PacketOffloadFlag(Flag):
     """Flag representing the Packet Offload Features Flags in DPDK.
 
@@ -1229,6 +1271,11 @@ class TestPmdVerbosePacket(TextParser):
     l3_len: int | None = field(default=None, metadata=TextParser.find_int(r"l3_len=(\d+)"))
     #:
     l4_len: int | None = field(default=None, metadata=TextParser.find_int(r"l4_len=(\d+)"))
+    #:
+    l4_dport: int | None = field(
+        default=None,
+        metadata=TextParser.find_int(r"Destination (?:TCP|UDP) port=(\d+)"),
+    )
 
 
 class RxOffloadCapability(Flag):
@@ -1348,6 +1395,49 @@ class RxOffloadCapabilities(TextParser):
     per_port: RxOffloadCapability = field(metadata=RxOffloadCapability.make_parser(True))
 
 
+@dataclass
+class TestPmdPortFlowCtrl(TextParser):
+    """Class representing a port's flow control parameters.
+
+    The parameters can also be parsed from the output of ``show port <port_id> flow_ctrl``.
+    """
+
+    #: Enable Reactive Extensions.
+    rx: bool = field(default=False, metadata=TextParser.find(r"Rx pause: on"))
+    #: Enable Transmit.
+    tx: bool = field(default=False, metadata=TextParser.find(r"Tx pause: on"))
+    #: High threshold value to trigger XOFF.
+    high_water: int = field(
+        default=0, metadata=TextParser.find_int(r"High waterline: (0x[a-fA-F\d]+)")
+    )
+    #: Low threshold value to trigger XON.
+    low_water: int = field(
+        default=0, metadata=TextParser.find_int(r"Low waterline: (0x[a-fA-F\d]+)")
+    )
+    #: Pause quota in the Pause frame.
+    pause_time: int = field(default=0, metadata=TextParser.find_int(r"Pause time: (0x[a-fA-F\d]+)"))
+    #: Send XON frame.
+    send_xon: bool = field(default=False, metadata=TextParser.find(r"Tx pause: on"))
+    #: Enable receiving MAC control frames.
+    mac_ctrl_frame_fwd: bool = field(default=False, metadata=TextParser.find(r"Tx pause: on"))
+    #: Change the auto-negotiation parameter.
+    autoneg: bool = field(default=False, metadata=TextParser.find(r"Autoneg: on"))
+
+    def __str__(self) -> str:
+        """Returns the string representation of this instance."""
+        ret = (
+            f"rx {'on' if self.rx else 'off'} "
+            f"tx {'on' if self.tx else 'off'} "
+            f"{self.high_water} "
+            f"{self.low_water} "
+            f"{self.pause_time} "
+            f"{1 if self.send_xon else 0} "
+            f"mac_ctrl_frame_fwd {'on' if self.mac_ctrl_frame_fwd else 'off'} "
+            f"autoneg {'on' if self.autoneg else 'off'}"
+        )
+        return ret
+
+
 def requires_stopped_ports(func: TestPmdShellMethod) -> TestPmdShellMethod:
     """Decorator for :class:`TestPmdShell` commands methods that require stopped ports.
 
@@ -1428,9 +1518,6 @@ class TestPmdShell(DPDKShell):
     _app_params: TestPmdParams
     _ports: list[TestPmdPort] | None
 
-    #: The path to the testpmd executable.
-    path: ClassVar[PurePath] = PurePath("app", "dpdk-testpmd")
-
     #: The testpmd's prompt.
     _default_prompt: ClassVar[str] = "testpmd>"
 
@@ -1441,28 +1528,21 @@ class TestPmdShell(DPDKShell):
 
     def __init__(
         self,
-        node: SutNode,
-        privileged: bool = True,
-        timeout: float = SETTINGS.timeout,
-        lcore_filter_specifier: LogicalCoreCount | LogicalCoreList = LogicalCoreCount(),
-        ascending_cores: bool = True,
-        append_prefix_timestamp: bool = True,
         name: str | None = None,
+        privileged: bool = True,
         **app_params: Unpack[TestPmdParamsDict],
     ) -> None:
         """Overrides :meth:`~.dpdk_shell.DPDKShell.__init__`. Changes app_params to kwargs."""
-        super().__init__(
-            node,
-            privileged,
-            timeout,
-            lcore_filter_specifier,
-            ascending_cores,
-            append_prefix_timestamp,
-            TestPmdParams(**app_params),
-            name,
-        )
+        if "port_topology" not in app_params and get_ctx().topology.type is TopologyType.one_link:
+            app_params["port_topology"] = PortTopology.loop
+        super().__init__(name, privileged, app_params=TestPmdParams(**app_params))
         self.ports_started = not self._app_params.disable_device_start
         self._ports = None
+
+    @property
+    def path(self) -> PurePath:
+        """The path to the testpmd executable."""
+        return PurePath("app/dpdk-testpmd")
 
     @property
     def ports(self) -> list[TestPmdPort]:
@@ -1497,13 +1577,6 @@ class TestPmdShell(DPDKShell):
             if "Packet forwarding already started" not in start_cmd_output:
                 self._logger.debug(f"Failed to start packet forwarding: \n{start_cmd_output}")
                 raise InteractiveCommandExecutionError("Testpmd failed to start packet forwarding.")
-
-            number_of_ports = len(self._app_params.allowed_ports or [])
-            for port_id in range(number_of_ports):
-                if not self.wait_link_status_up(port_id):
-                    raise InteractiveCommandExecutionError(
-                        "Not all ports came up after starting packet forwarding in testpmd."
-                    )
 
     def stop(self, verify: bool = True) -> str:
         """Stop packet forwarding.
@@ -1643,6 +1716,24 @@ class TestPmdShell(DPDKShell):
         self.send_command(f"port config all rxq {number_of}")
         self.send_command(f"port config all txq {number_of}")
 
+    @requires_stopped_ports
+    def close_all_ports(self, verify: bool = True) -> None:
+        """Close all ports.
+
+        Args:
+            verify: If :data:`True` the output of the close command will be scanned in an attempt
+                to verify that all ports were stopped successfully. Defaults to :data:`True`.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and at lease one port
+                failed to close.
+        """
+        port_close_output = self.send_command("port close all")
+        if verify:
+            num_ports = len(self.ports)
+            if not all(f"Port {p_id} is closed" in port_close_output for p_id in range(num_ports)):
+                raise InteractiveCommandExecutionError("Ports were not closed successfully.")
+
     def show_port_info_all(self) -> list[TestPmdPort]:
         """Returns the information of all the ports.
 
@@ -1749,18 +1840,20 @@ class TestPmdShell(DPDKShell):
         if verify:
             if (
                 "Invalid multicast_addr" in output
-                or f'multicast address {"already" if add else "not"} filtered by port' in output
+                or f"multicast address {'already' if add else 'not'} filtered by port" in output
             ):
                 self._logger.debug(f"Failed to {mcast_cmd} {multi_addr} on port {port_id}")
                 raise InteractiveCommandExecutionError(
                     f"Failed to {mcast_cmd} {multi_addr} on port {port_id} \n{output}"
                 )
 
-    def show_port_stats_all(self) -> list[TestPmdPortStats]:
+    def show_port_stats_all(self) -> Tuple[list[TestPmdPortStats], str]:
         """Returns the statistics of all the ports.
 
         Returns:
-            list[TestPmdPortStats]: A list containing all the ports stats as `TestPmdPortStats`.
+            Tuple[str, list[TestPmdPortStats]]: A tuple where the first element is the stats of all
+            ports as `TestPmdPortStats` and second is the raw testpmd output that was collected
+            from the sent command.
         """
         output = self.send_command("show port stats all")
 
@@ -1775,7 +1868,7 @@ class TestPmdShell(DPDKShell):
         #   #################################################
         #
         iter = re.finditer(r"(^  #*.+#*$[^#]+)^  #*\r$", output, re.MULTILINE)
-        return [TestPmdPortStats.parse(block.group(1)) for block in iter]
+        return ([TestPmdPortStats.parse(block.group(1)) for block in iter], output)
 
     def show_port_stats(self, port_id: int) -> TestPmdPortStats:
         """Returns the given port statistics.
@@ -1794,6 +1887,29 @@ class TestPmdShell(DPDKShell):
             raise InteractiveCommandExecutionError("invalid port given")
 
         return TestPmdPortStats.parse(output)
+
+    def set_multicast_all(self, on: bool, verify: bool = True) -> None:
+        """Turns multicast mode on/off for the specified port.
+
+        Args:
+            on: If :data:`True`, turns multicast mode on, otherwise turns off.
+            verify: If :data:`True` an additional command will be sent to verify
+                that multicast mode is properly set. Defaults to :data:`True`.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and multicast
+                mode is not properly set.
+        """
+        multicast_cmd_output = self.send_command(f"set allmulti all {'on' if on else 'off'}")
+        if verify:
+            port_stats = self.show_port_info_all()
+            if on ^ all(stats.is_allmulticast_mode_enabled for stats in port_stats):
+                self._logger.debug(
+                    f"Failed to set multicast mode on all ports.: \n{multicast_cmd_output}"
+                )
+                raise InteractiveCommandExecutionError(
+                    "Testpmd failed to set multicast mode on all ports."
+                )
 
     @requires_stopped_ports
     def csum_set_hw(
@@ -1836,13 +1952,76 @@ class TestPmdShell(DPDKShell):
                                                            {port_id}:\n{csum_output}"""
                     )
 
+    def flow_create(self, flow_rule: FlowRule, port_id: int) -> int:
+        """Creates a flow rule in the testpmd session.
+
+        This command is implicitly verified as needed to return the created flow rule id.
+
+        Args:
+            flow_rule: :class:`FlowRule` object used for creating testpmd flow rule.
+            port_id: Integer representing the port to use.
+
+        Raises:
+            InteractiveCommandExecutionError: If flow rule is invalid.
+
+        Returns:
+            Id of created flow rule.
+        """
+        flow_output = self.send_command(f"flow create {port_id} {flow_rule}")
+        match = re.search(r"#(\d+)", flow_output)
+        if match is not None:
+            match_str = match.group(1)
+            flow_id = int(match_str)
+            return flow_id
+        else:
+            self._logger.debug(f"Failed to create flow rule:\n{flow_output}")
+            raise InteractiveCommandExecutionError(f"Failed to create flow rule:\n{flow_output}")
+
+    def flow_validate(self, flow_rule: FlowRule, port_id: int) -> bool:
+        """Validates a flow rule in the testpmd session.
+
+        Args:
+            flow_rule: :class:`FlowRule` object used for validating testpmd flow rule.
+            port_id: Integer representing the port to use.
+
+        Returns:
+            Boolean representing whether rule is valid or not.
+        """
+        flow_output = self.send_command(f"flow validate {port_id} {flow_rule}")
+        if "Flow rule validated" in flow_output:
+            return True
+        return False
+
+    def flow_delete(self, flow_id: int, port_id: int, verify: bool = True) -> None:
+        """Deletes the specified flow rule from the testpmd session.
+
+        Args:
+            flow_id: ID of the flow to remove.
+            port_id: Integer representing the port to use.
+            verify: If :data:`True`, the output of the command is scanned
+                to ensure the flow rule was deleted successfully.
+
+        Raises:
+            InteractiveCommandExecutionError: If flow rule is invalid.
+        """
+        flow_output = self.send_command(f"flow destroy {port_id} rule {flow_id}")
+        if verify:
+            if "destroyed" not in flow_output:
+                self._logger.debug(f"Failed to delete flow rule:\n{flow_output}")
+                raise InteractiveCommandExecutionError(
+                    f"Failed to delete flow rule:\n{flow_output}"
+                )
+
+    @requires_started_ports
     @requires_stopped_ports
     def set_port_mtu(self, port_id: int, mtu: int, verify: bool = True) -> None:
         """Change the MTU of a port using testpmd.
 
         Some PMDs require that the port be stopped before changing the MTU, and it does no harm to
         stop the port before configuring in cases where it isn't required, so ports are stopped
-        prior to changing their MTU.
+        prior to changing their MTU. On the other hand, some PMDs require that the port had already
+        been started once since testpmd startup. Therefore, ports are also started before stopping
+        them to ensure this has happened.
 
         Args:
             port_id: ID of the port to adjust the MTU on.
@@ -1857,7 +2036,7 @@ class TestPmdShell(DPDKShell):
         set_mtu_output = self.send_command(f"port config mtu {port_id} {mtu}")
         if verify and (f"MTU: {mtu}" not in self.send_command(f"show port info {port_id}")):
             self._logger.debug(
-                f"Failed to set mtu to {mtu} on port {port_id}." f" Output was:\n{set_mtu_output}"
+                f"Failed to set mtu to {mtu} on port {port_id}. Output was:\n{set_mtu_output}"
             )
             raise InteractiveCommandExecutionError(
                 f"Test pmd failed to update mtu of port {port_id} to {mtu}"
@@ -1906,6 +2085,7 @@ class TestPmdShell(DPDKShell):
             out.append(TestPmdVerbosePacket.parse(f"{prev_header}\n{match.group('PACKET')}"))
         return out
 
+    @requires_stopped_ports
     def set_vlan_filter(self, port: int, enable: bool, verify: bool = True) -> None:
         """Set vlan filter on.
 
@@ -1924,14 +2104,75 @@ class TestPmdShell(DPDKShell):
             vlan_settings = self.show_port_info(port_id=port).vlan_offload
             if enable ^ (vlan_settings is not None and VLANOffloadFlag.FILTER in vlan_settings):
                 self._logger.debug(
-                    f"""Failed to {'enable' if enable else 'disable'}
+                    f"""Failed to {"enable" if enable else "disable"}
                                    filter on port {port}: \n{filter_cmd_output}"""
                 )
                 raise InteractiveCommandExecutionError(
-                    f"""Failed to {'enable' if enable else 'disable'}
+                    f"""Failed to {"enable" if enable else "disable"}
                     filter on port {port}"""
                 )
 
+    def set_mac_address(self, port: int, mac_address: str, verify: bool = True) -> None:
+        """Set port's MAC address.
+
+        Args:
+            port: The number of the requested port.
+            mac_address: The MAC address to set.
+            verify: If :data:`True`, the output of the command is scanned to verify that
+                the mac address is set in the specified port.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and the command
+                fails to execute.
+        """
+        output = self.send_command(f"mac_addr set {port} {mac_address}", skip_first_line=True)
+        if verify:
+            if output.strip():
+                self._logger.debug(
+                    f"Testpmd failed to set MAC address {mac_address} on port {port}."
+                )
+                raise InteractiveCommandExecutionError(
+                    f"Testpmd failed to set MAC address {mac_address} on port {port}."
+                )
+
+    def set_flow_control(
+        self, port: int, flow_ctrl: TestPmdPortFlowCtrl, verify: bool = True
+    ) -> None:
+        """Set the given `port`'s flow control.
+
+        Args:
+            port: The number of the requested port.
+            flow_ctrl: The requested flow control parameters.
+            verify: If :data:`True`, the output of the command is scanned to verify that
+                the flow control in the specified port is set.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and the command
+                fails to execute.
+        """
+        output = self.send_command(f"set flow_ctrl {flow_ctrl} {port}", skip_first_line=True)
+        if verify:
+            if output.strip():
+                self._logger.debug(f"Testpmd failed to set the {flow_ctrl} in port {port}.")
+                raise InteractiveCommandExecutionError(
+                    f"Testpmd failed to set the {flow_ctrl} in port {port}."
+                )
+
+    def show_port_flow_info(self, port: int) -> TestPmdPortFlowCtrl | None:
+        """Show port info flow.
+
+        Args:
+            port: The number of the requested port.
+
+        Returns:
+            The current port flow control parameters if supported, otherwise :data:`None`.
+        """
+        output = self.send_command(f"show port {port} flow_ctrl")
+        if "Flow control infos" in output:
+            return TestPmdPortFlowCtrl.parse(output)
+        return None
+
+    @requires_stopped_ports
     def rx_vlan(self, vlan: int, port: int, add: bool, verify: bool = True) -> None:
         """Add specified vlan tag to the filter list on a port. Requires vlan filter to be on.
 
@@ -1954,13 +2195,14 @@ class TestPmdShell(DPDKShell):
                 or "Bad arguments" in rx_cmd_output
             ):
                 self._logger.debug(
-                    f"""Failed to {'add' if add else 'remove'} tag {vlan}
+                    f"""Failed to {"add" if add else "remove"} tag {vlan}
                     port {port}: \n{rx_cmd_output}"""
                 )
                 raise InteractiveCommandExecutionError(
                     f"Testpmd failed to {'add' if add else 'remove'} tag {vlan} on port {port}."
                 )
 
+    @requires_stopped_ports
     def set_vlan_strip(self, port: int, enable: bool, verify: bool = True) -> None:
         """Enable or disable vlan stripping on the specified port.
 
@@ -1979,7 +2221,7 @@ class TestPmdShell(DPDKShell):
             vlan_settings = self.show_port_info(port_id=port).vlan_offload
             if enable ^ (vlan_settings is not None and VLANOffloadFlag.STRIP in vlan_settings):
                 self._logger.debug(
-                    f"""Failed to set strip {'on' if enable else 'off'}
+                    f"""Failed to set strip {"on" if enable else "off"}
                     port {port}: \n{strip_cmd_output}"""
                 )
                 raise InteractiveCommandExecutionError(
@@ -2077,11 +2319,72 @@ class TestPmdShell(DPDKShell):
                     f"Testpmd failed to set verbose level to {level}."
                 )
 
-    def _close(self) -> None:
+    def rx_vxlan(self, vxlan_id: int, port_id: int, enable: bool, verify: bool = True) -> None:
+        """Add or remove vxlan id to/from filter list.
+
+        Args:
+            vxlan_id: VXLAN ID to add to port filter list.
+            port_id: ID of the port to modify VXLAN filter of.
+            enable: If :data:`True`, adds specified VXLAN ID, otherwise removes it.
+            verify: If :data:`True`, the output of the command is checked to verify
+                the VXLAN ID was successfully added/removed from the port.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and VXLAN ID
+                is not successfully added or removed.
+        """
+        action = "add" if enable else "rm"
+        vxlan_output = self.send_command(f"rx_vxlan_port {action} {vxlan_id} {port_id}")
+        if verify:
+            if "udp tunneling add error" in vxlan_output:
+                self._logger.debug(f"Failed to set VXLAN:\n{vxlan_output}")
+                raise InteractiveCommandExecutionError(f"Failed to set VXLAN:\n{vxlan_output}")
+
+    def clear_port_stats(self, port_id: int, verify: bool = True) -> None:
+        """Clear statistics of a given port.
+
+        Args:
+            port_id: ID of the port to clear the statistics on.
+            verify: If :data:`True` the output of the command will be scanned to verify that it was
+                successful, otherwise failures will be ignored. Defaults to :data:`True`.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and testpmd fails to
+                clear the statistics of the given port.
+        """
+        clear_output = self.send_command(f"clear port stats {port_id}")
+        if verify and f"NIC statistics for port {port_id} cleared" not in clear_output:
+            raise InteractiveCommandExecutionError(
+                f"Test pmd failed to set clear forwarding stats on port {port_id}"
+            )
+
+    def clear_port_stats_all(self, verify: bool = True) -> None:
+        """Clear the statistics of all ports that testpmd is aware of.
+
+        Args:
+            verify: If :data:`True` the output of the command will be scanned to verify that all
+                ports had their statistics cleared, otherwise failures will be ignored. Defaults to
+                :data:`True`.
+
+        Raises:
+            InteractiveCommandExecutionError: If `verify` is :data:`True` and testpmd fails to
+                clear the statistics of any of its ports.
+        """
+        clear_output = self.send_command("clear port stats all")
+        if verify:
+            if type(self._app_params.port_numa_config) is list:
+                for port_id in range(len(self._app_params.port_numa_config)):
+                    if f"NIC statistics for port {port_id} cleared" not in clear_output:
+                        raise InteractiveCommandExecutionError(
+                            f"Test pmd failed to set clear forwarding stats on port {port_id}"
+                        )
+
+    @only_active
+    def close(self) -> None:
         """Overrides :meth:`~.interactive_shell.close`."""
         self.stop()
         self.send_command("quit", "Bye...")
-        return super()._close()
+        return super().close()
 
     """
     ====== Capability retrieval methods ======
@@ -2242,6 +2545,24 @@ class TestPmdShell(DPDKShell):
                     f"Failed to update ring size of queue {queue_id} on port {port_id}"
                 )
 
+    @requires_stopped_ports
+    def set_queue_deferred_start(
+        self, port_id: int, queue_id: int, is_rx_queue: bool, on: bool
+    ) -> None:
+        """Set the deferred start attribute of the specified queue on/off.
+
+        Args:
+            port_id: The port that the queue resides on.
+            queue_id: The ID of the queue on the port.
+            is_rx_queue: Whether to modify an RX or TX queue. If :data:`True` an RX queue will be
+                updated, otherwise a TX queue will be updated.
+            on: Whether to set deferred start mode on or off. If :data:`True` deferred start will
+                be turned on, otherwise it will be turned off.
+        """
+        queue_type = "rxq" if is_rx_queue else "txq"
+        action = "on" if on else "off"
+        self.send_command(f"port {port_id} {queue_type} {queue_id} deferred_start {action}")
+
     def _update_capabilities_from_flag(
         self,
         supported_capabilities: MutableSet["NicCapability"],
@@ -2315,6 +2636,42 @@ class TestPmdShell(DPDKShell):
             command = str.replace(command, "add", "remove", 1)
             self.send_command(command)
 
+    def get_capabilities_flow_ctrl(
+        self,
+        supported_capabilities: MutableSet["NicCapability"],
+        unsupported_capabilities: MutableSet["NicCapability"],
+    ) -> None:
+        """Get flow control capability and check for testpmd failure.
+
+        Args:
+            supported_capabilities: Supported capabilities will be added to this set.
+            unsupported_capabilities: Unsupported capabilities will be added to this set.
+        """
+        self._logger.debug("Getting flow ctrl capabilities.")
+        command = f"show port {self.ports[0].id} flow_ctrl"
+        output = self.send_command(command)
+        if "Flow control infos" in output:
+            supported_capabilities.add(NicCapability.FLOW_CTRL)
+        else:
+            unsupported_capabilities.add(NicCapability.FLOW_CTRL)
+
+    def get_capabilities_physical_function(
+        self,
+        supported_capabilities: MutableSet["NicCapability"],
+        unsupported_capabilities: MutableSet["NicCapability"],
+    ) -> None:
+        """Store capability representing a physical function test run.
+
+        Args:
+            supported_capabilities: Supported capabilities will be added to this set.
+            unsupported_capabilities: Unsupported capabilities will be added to this set.
+        """
+        ctx = get_ctx()
+        if ctx.topology.vf_ports == []:
+            supported_capabilities.add(NicCapability.PHYSICAL_FUNCTION)
+        else:
+            unsupported_capabilities.add(NicCapability.PHYSICAL_FUNCTION)
+
 
 class NicCapability(NoAliasEnum):
     """A mapping between capability names and the associated :class:`TestPmdShell` methods.
@@ -2347,108 +2704,126 @@ class NicCapability(NoAliasEnum):
         add_remove_mtu(9000),
     )
     #:
-    RX_OFFLOAD_VLAN_STRIP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_VLAN_STRIP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports L3 checksum offload.
-    RX_OFFLOAD_IPV4_CKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_IPV4_CKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports L4 checksum offload.
-    RX_OFFLOAD_UDP_CKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_UDP_CKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports L4 checksum offload.
-    RX_OFFLOAD_TCP_CKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_TCP_CKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports Large Receive Offload.
-    RX_OFFLOAD_TCP_LRO: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
-    )
+    RX_OFFLOAD_TCP_LRO: TestPmdShellNicCapability = (TestPmdShell.get_capabilities_rx_offload, None)
     #: Device supports QinQ (queue in queue) offload.
-    RX_OFFLOAD_QINQ_STRIP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_QINQ_STRIP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports inner packet L3 checksum.
-    RX_OFFLOAD_OUTER_IPV4_CKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_OUTER_IPV4_CKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports MACsec.
-    RX_OFFLOAD_MACSEC_STRIP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_MACSEC_STRIP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports filtering of a VLAN Tag identifier.
-    RX_OFFLOAD_VLAN_FILTER: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_VLAN_FILTER: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports VLAN offload.
-    RX_OFFLOAD_VLAN_EXTEND: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_VLAN_EXTEND: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports receiving segmented mbufs.
-    RX_OFFLOAD_SCATTER: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
-    )
+    RX_OFFLOAD_SCATTER: TestPmdShellNicCapability = (TestPmdShell.get_capabilities_rx_offload, None)
     #: Device supports Timestamp.
-    RX_OFFLOAD_TIMESTAMP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_TIMESTAMP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports crypto processing while packet is received in NIC.
-    RX_OFFLOAD_SECURITY: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_SECURITY: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports CRC stripping.
-    RX_OFFLOAD_KEEP_CRC: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_KEEP_CRC: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports L4 checksum offload.
-    RX_OFFLOAD_SCTP_CKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_SCTP_CKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports inner packet L4 checksum.
-    RX_OFFLOAD_OUTER_UDP_CKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_OUTER_UDP_CKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports RSS hashing.
-    RX_OFFLOAD_RSS_HASH: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_RSS_HASH: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports scatter Rx packets to segmented mbufs.
-    RX_OFFLOAD_BUFFER_SPLIT: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_BUFFER_SPLIT: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports all checksum capabilities.
-    RX_OFFLOAD_CHECKSUM: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
+    RX_OFFLOAD_CHECKSUM: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_rx_offload,
+        None,
     )
     #: Device supports all VLAN capabilities.
-    RX_OFFLOAD_VLAN: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_rx_offload
-    )
+    RX_OFFLOAD_VLAN: TestPmdShellNicCapability = (TestPmdShell.get_capabilities_rx_offload, None)
     #: Device supports Rx queue setup after device started.
-    RUNTIME_RX_QUEUE_SETUP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_show_port_info
+    RUNTIME_RX_QUEUE_SETUP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_show_port_info,
+        None,
     )
     #: Device supports Tx queue setup after device started.
-    RUNTIME_TX_QUEUE_SETUP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_show_port_info
+    RUNTIME_TX_QUEUE_SETUP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_show_port_info,
+        None,
     )
     #: Device supports shared Rx queue among ports within Rx domain and switch domain.
-    RXQ_SHARE: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_show_port_info
-    )
+    RXQ_SHARE: TestPmdShellNicCapability = (TestPmdShell.get_capabilities_show_port_info, None)
     #: Device supports keeping flow rules across restart.
-    FLOW_RULE_KEEP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_show_port_info
-    )
+    FLOW_RULE_KEEP: TestPmdShellNicCapability = (TestPmdShell.get_capabilities_show_port_info, None)
     #: Device supports keeping shared flow objects across restart.
-    FLOW_SHARED_OBJECT_KEEP: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_show_port_info
+    FLOW_SHARED_OBJECT_KEEP: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_show_port_info,
+        None,
     )
     #: Device supports multicast address filtering.
-    MCAST_FILTERING: TestPmdShellCapabilityMethod = functools.partial(
-        TestPmdShell.get_capabilities_mcast_filtering
+    MCAST_FILTERING: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_mcast_filtering,
+        None,
+    )
+    #: Device supports flow ctrl.
+    FLOW_CTRL: TestPmdShellNicCapability = (TestPmdShell.get_capabilities_flow_ctrl, None)
+    #: Device is running on a physical function.
+    PHYSICAL_FUNCTION: TestPmdShellNicCapability = (
+        TestPmdShell.get_capabilities_physical_function,
+        None,
     )
 
     def __call__(

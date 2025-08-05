@@ -36,11 +36,11 @@ Running the Application
 ^^^^^^^^^^^^^^^^^^^^^^^
 
 To run the application, start ``simple_mp`` binary in one terminal,
-passing at least two cores in the coremask/corelist:
+passing at least two cores in the corelist:
 
 .. code-block:: console
 
-    ./<build_dir>/examples/dpdk-simple_mp -l 0-1 -n 4 --proc-type=primary
+    ./<build_dir>/examples/dpdk-simple_mp -l 0-1 --proc-type=primary
 
 For the first DPDK process run, the proc-type flag can be omitted or set to auto,
 since all DPDK processes will default to being a primary instance,
@@ -49,20 +49,13 @@ The process should start successfully and display a command prompt as follows:
 
 .. code-block:: console
 
-    $ ./<build_dir>/examples/dpdk-simple_mp -l 0-1 -n 4 --proc-type=primary
-    EAL: coremask set to 3
-    EAL: Detected lcore 0 on socket 0
-    EAL: Detected lcore 1 on socket 0
-    EAL: Detected lcore 2 on socket 0
-    EAL: Detected lcore 3 on socket 0
+    $ ./<build_dir>/examples/dpdk-simple_mp -l 0-1 --proc-type=primary
     ...
-
     EAL: Requesting 2 pages of size 1073741824
     EAL: Requesting 768 pages of size 2097152
     EAL: Ask a virtual area of 0x40000000 bytes
     EAL: Virtual area found at 0x7ff200000000 (size = 0x40000000)
     ...
-
     EAL: check module finished
     EAL: Main core 0 is ready (tid=54e41820)
     EAL: Core 1 is ready (tid=53b32700)
@@ -72,11 +65,11 @@ The process should start successfully and display a command prompt as follows:
     simple_mp >
 
 To run the secondary process to communicate with the primary process,
-again run the same binary setting at least two cores in the coremask/corelist:
+again run the same binary setting at least two cores in the corelist:
 
 .. code-block:: console
 
-    ./<build_dir>/examples/dpdk-simple_mp -l 2-3 -n 4 --proc-type=secondary
+    ./<build_dir>/examples/dpdk-simple_mp -l 2-3 --proc-type=secondary
 
 When running a secondary process such as above,
 the ``proc-type`` parameter can be specified as auto.
@@ -170,10 +163,10 @@ Example:
 
 .. code-block:: console
 
-    # ./<build_dir>/examples/dpdk-symmetric_mp -l 1 -n 4 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=0
-    # ./<build_dir>/examples/dpdk-symmetric_mp -l 2 -n 4 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=1
-    # ./<build_dir>/examples/dpdk-symmetric_mp -l 3 -n 4 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=2
-    # ./<build_dir>/examples/dpdk-symmetric_mp -l 4 -n 4 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=3
+    # ./<build_dir>/examples/dpdk-symmetric_mp -l 1 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=0
+    # ./<build_dir>/examples/dpdk-symmetric_mp -l 2 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=1
+    # ./<build_dir>/examples/dpdk-symmetric_mp -l 3 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=2
+    # ./<build_dir>/examples/dpdk-symmetric_mp -l 4 --proc-type=auto -- -p 3 --num-procs=4 --proc-id=3
 
 .. note::
 
@@ -237,8 +230,8 @@ In addition to the EAL parameters, the application-specific parameters are:
 .. note::
 
    In the server process, has a single thread using the lowest numbered lcore
-   in the coremask/corelist, performs all packet I/O.
-   If coremask/corelist parameter specifies with more than a single lcore bit set,
+   in the corelist, performs all packet I/O.
+   If corelist parameter specifies with more than a single lcore,
    an additional lcore will be used for a thread to print packet count periodically.
 
 The server application stores configuration data in shared memory,
@@ -250,9 +243,9 @@ the commands are:
 
 .. code-block:: console
 
-    # ./<build_dir>/examples/dpdk-mp_server -l 1-2 -n 4 -- -p 3 -n 2
-    # ./<build_dir>/examples/dpdk-mp_client -l 3 -n 4 --proc-type=auto -- -n 0
-    # ./<build_dir>/examples/dpdk-mp_client -l 4 -n 4 --proc-type=auto -- -n 1
+    # ./<build_dir>/examples/dpdk-mp_server -l 1-2 -- -p 3 -n 2
+    # ./<build_dir>/examples/dpdk-mp_client -l 3 --proc-type=auto -- -n 0
+    # ./<build_dir>/examples/dpdk-mp_client -l 4 --proc-type=auto -- -n 1
 
 .. note::
 

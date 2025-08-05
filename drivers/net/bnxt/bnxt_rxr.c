@@ -1366,6 +1366,10 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			bnxt_db_write(&rxr->rx_db, rxr->rx_raw_prod);
 			rxq->rxrearm_start++;
 			rxq->rxrearm_nb--;
+			if (rxq->rxrearm_start >= rxq->nb_rx_desc) {
+				rxq->rxrearm_start = 0;
+				rxq->epoch = rxq->epoch == 0 ? 1 : 0;
+			}
 		} else {
 			/* Retry allocation on next call. */
 			break;
@@ -1390,14 +1394,6 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		} else if ((CMP_TYPE(rxcmp) >= CMPL_BASE_TYPE_RX_TPA_START_V2) &&
 			   (CMP_TYPE(rxcmp) <= CMPL_BASE_TYPE_RX_TPA_START_V3)) {
 			rc = bnxt_rx_pkt(&rx_pkts[nb_rx_pkts], rxq, &raw_cons);
-			if (!rc)
-				nb_rx_pkts++;
-			else if (rc == -EBUSY)	/* partial completion */
-				break;
-			else if (rc == -ENODEV)	/* completion for representor */
-				nb_rep_rx_pkts++;
-			else if (rc == -ENOMEM)
-				nb_rx_pkts++;
 		} else if (!BNXT_NUM_ASYNC_CPR(rxq->bp)) {
 			evt =
 			bnxt_event_hwrm_resp_handler(rxq->bp,
@@ -1407,6 +1403,14 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 				goto done;
 		}
 
+		if (!rc)
+			nb_rx_pkts++;
+		else if (rc == -EBUSY)	/* partial completion */
+			break;
+		else if (rc == -ENODEV)	/* completion for representor */
+			nb_rep_rx_pkts++;
+		else if (rc == -ENOMEM)
+			nb_rx_pkts++;
 		raw_cons = NEXT_RAW_CMP(raw_cons);
 		/*
 		 * The HW reposting may fall behind if mbuf allocation has

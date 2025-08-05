@@ -9,6 +9,35 @@
 #include "nthw_core.h"
 #include "ntnic_dbs.h"
 
+#include "nthw_si5332_si5156.h"
+#include "nthw_pcal6416a.h"
+#include "nthw_pca9532.h"
+#include "nthw_phy_tile.h"
+#include "nthw_rpf.h"
+#include "nthw_prm_nt400dxx.h"
+#include "nthw_pcm_nt400dxx.h"
+#include "nthw_igam.h"
+
+/*
+ * Structs for controlling Agilex based NT400DXX adapter
+ */
+typedef struct nthw_agx_s {
+	nthw_i2cm_t *p_i2cm;
+	nthw_pca9849_t *p_pca9849;
+	nthw_pcal6416a_t *p_io_ts;	/* PCAL6416A I/O expander for controlling TS */
+	nthw_pcal6416a_t *p_io_nim;	/* PCAL6416A I/O expander for controlling TS */
+	nthw_pca9532_t *p_pca9532_led;
+	nthw_si5332_t *p_si5332;
+	nthw_si5156_t *p_si5156;
+	nthw_prm_nt400dxx_t *p_prm;
+	nthw_pcm_nt400dxx_t *p_pcm;
+	nthw_igam_t *p_igam;
+	nthw_phy_tile_t *p_phy_tile;
+	nthw_rpf_t *p_rpf;
+	bool tcxo_present;
+	bool tcxo_capable;
+} nthw_agx_t;
+
 typedef enum nt_meta_port_type_e {
 	PORT_TYPE_PHYSICAL,
 	PORT_TYPE_VIRTUAL,
@@ -88,6 +117,7 @@ typedef struct fpga_info_s {
 
 	nthw_adapter_id_t n_nthw_adapter_id;
 
+	nthw_agx_t mp_nthw_agx;	/* For the Agilex based NT400DXX */
 } fpga_info_t;
 
 

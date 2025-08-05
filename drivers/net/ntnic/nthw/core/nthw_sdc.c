@@ -22,10 +22,7 @@ nthw_sdc_t *nthw_sdc_new(void)
 
 void nthw_sdc_delete(nthw_sdc_t *p)
 {
-	if (p) {
-		memset(p, 0, sizeof(nthw_sdc_t));
-		free(p);
-	}
+	free(p);
 }
 
 int nthw_sdc_init(nthw_sdc_t *p, nthw_fpga_t *p_fpga, int n_instance)
@@ -132,8 +129,7 @@ int nthw_sdc_get_states(nthw_sdc_t *p, uint64_t *pn_result_mask)
 	if (val != 0)
 		n_err_cnt++;
 
-	if (pn_result_mask)
-		*pn_result_mask = n_mask;
+	*pn_result_mask = n_mask;
 
 	return n_err_cnt;	/* 0 = all ok */
 }

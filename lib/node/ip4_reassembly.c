@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 
+#include <eal_export.h>
 #include <rte_cycles.h>
 #include <rte_debug.h>
 #include <rte_ethdev.h>
@@ -127,6 +128,7 @@ ip4_reassembly_node_process(struct rte_graph *graph, struct rte_node *node, void
 	return idx;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_node_ip4_reassembly_configure, 23.11)
 int
 rte_node_ip4_reassembly_configure(struct rte_node_ip4_reassembly_cfg *cfg, uint16_t cnt)
 {
@@ -157,7 +159,7 @@ ip4_reassembly_node_init(const struct rte_graph *graph, struct rte_node *node)
 	while (elem) {
 		if (elem->node_id == node->id) {
 			/* Update node specific context */
-			memcpy(ctx, &elem->ctx, sizeof(ip4_reassembly_ctx_t));
+			*ctx = elem->ctx;
 			break;
 		}
 		elem = elem->next;

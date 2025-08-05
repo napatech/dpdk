@@ -84,9 +84,11 @@ Amaranath Somalapuram <asomalap@amd.com>
 Amine Kherbouche <amine.kherbouche@6wind.com>
 Amin Tootoonchian <amint@icsi.berkeley.edu>
 Ami Sabo <amis@radware.com>
+Amir Avivi <amir.avivi@intel.com>
 Amit Bernstein <amitbern@amazon.com>
 Amit Gupta <agupta3@marvell.com>
 Amit Prakash Shukla <amitprakashs@marvell.com>
+Amiya Ranjan Mohakud <amiyaranjan.mohakud@gmail.com>
 Amr Mokhtar <amr.mokhtar@intel.com>
 Amruta Zende <amruta.zende@intel.com>
 Amrutha Sampath <amrutha.sampath@intel.com>
@@ -119,10 +121,12 @@ Andrzej Ostruszka <amo@semihalf.com> <aostruszka@marvell.com>
 Andrzej Wilczynski <andrzejx.wilczynski@intel.com>
 Andy Gospodarek <andrew.gospodarek@broadcom.com> <gospo@broadcom.com>
 Andy Green <andy@warmcat.com>
-Andy Moreton <andy.moreton@amd.com> <amoreton@xilinx.com> <amoreton@solarflare.com>
+Andy Moreton <andy.moreton@amd.com> <amoreton@xilinx.com>
+Andy Moreton <andy.moreton@amd.com> <amoreton@solarflare.com>
 Andy Pei <andy.pei@intel.com>
 Anirudh Venkataramanan <anirudh.venkataramanan@intel.com>
-Ankur Dwivedi <adwivedi@marvell.com> <ankur.dwivedi@caviumnetworks.com> <ankur.dwivedi@cavium.com>
+Ankur Dwivedi <adwivedi@marvell.com> <ankur.dwivedi@caviumnetworks.com>
+Ankur Dwivedi <adwivedi@marvell.com> <ankur.dwivedi@cavium.com>
 Anna Lukin <annal@silicom.co.il>
 Anoob Joseph <anoobj@marvell.com> <anoob.joseph@caviumnetworks.com>
 Antara Ganesh Kolar <antara.ganesh.kolar@intel.com>
@@ -134,6 +138,7 @@ Anupam Kapoor <anupam.kapoor@gmail.com>
 Apeksha Gupta <apeksha.gupta@nxp.com>
 Archana Muniganti <marchana@marvell.com> <muniganti.archana@caviumnetworks.com>
 Archit Pandey <architpandeynitk@gmail.com>
+Ariel Otilibili <ariel.otilibili@6wind.com> <otilibil@eurecom.fr>
 Arkadiusz Kubalewski <arkadiusz.kubalewski@intel.com>
 Arkadiusz Kusztal <arkadiuszx.kusztal@intel.com>
 Arnaud Fiorini <arnaud.fiorini@polymtl.ca>
@@ -148,7 +153,8 @@ Artur Tyminski <arturx.tyminski@intel.com>
 Asaf Penso <asafp@nvidia.com> <asafp@mellanox.com>
 Asaf Ravid <aravid@marvell.com>
 Ashijeet Acharya <ashijeet.acharya@6wind.com>
-Ashish Gupta <ashishg@marvell.com> <ashish.gupta@marvell.com> <ashish.gupta@caviumnetworks.com>
+Ashish Gupta <ashishg@marvell.com> <ashish.gupta@marvell.com>
+Ashish Gupta <ashishg@marvell.com> <ashish.gupta@caviumnetworks.com>
 Ashish Jain <ashish.jain@nxp.com>
 Ashish Paul <apaul@juniper.net>
 Ashish Sadanandan <ashish.sadanandan@gmail.com>
@@ -164,6 +170,7 @@ Balakrishna Bhamidipati <bbhamidipati@marvell.com>
 Balasubramanian Manoharan <balasubramanian.manoharan@caviumnetworks.com>
 Balazs Nemeth <bnemeth@redhat.com> <balazs.nemeth@intel.com>
 Bao-Long Tran <longtb5@viettel.com.vn>
+Baoyuan Li <updoing@sina.com>
 Bar Neuman <bneuman@nvidia.com>
 Barak Enat <barak@saguna.net>
 Barbara Skobiej <barbara.skobiej@intel.com>
@@ -191,9 +198,11 @@ Bill Hong <bhong@brocade.com>
 Bill Xiang <xiangwencheng@dayudpu.com>
 Billy McFall <bmcfall@redhat.com>
 Billy O'Mahony <billy.o.mahony@intel.com>
-Bing Zhao <bingz@nvidia.com> <bingz@mellanox.com> <bing.zhao@hxt-semitech.com>
+Bing Zhao <bingz@nvidia.com> <bingz@mellanox.com>
+Bing Zhao <bingz@nvidia.com> <bing.zhao@hxt-semitech.com>
 Bin Huang <brian.huangbin@huawei.com> <bin.huang@hxt-semitech.com>
 Bin Zheng <zhengbin.89740@bytedance.com>
+Bingbin Chen <chen.bingbin@zte.com.cn>
 Björn Töpel <bjorn.topel@intel.com>
 Bo Chen <box.c.chen@intel.com>
 Boleslav Stankevich <boleslav.stankevich@oktetlabs.ru>
@@ -214,7 +223,9 @@ Brick Yang <brick.yang@nxp.com>
 Bruce Allan <bruce.w.allan@intel.com>
 Bruce Liu <2103458176@qq.com>
 Bruce Merry <bmerry@sarao.ac.za>
-Bruce Richardson <bruce.richardson@intel.com> <bruce.ricahrdson@intel.com> <bruce.richarsdon@intel.com> <bruce.ruchardson@intel.com>
+Bruce Richardson <bruce.richardson@intel.com> <bruce.ricahrdson@intel.com>
+Bruce Richardson <bruce.richardson@intel.com> <bruce.richarsdon@intel.com>
+Bruce Richardson <bruce.richardson@intel.com> <bruce.ruchardson@intel.com>
 Bryan Benson <bmbenson@amazon.com>
 Byron Marohn <byron.marohn@intel.com>
 Carolyn Wyborny <carolyn.wyborny@intel.com>
@@ -224,13 +235,15 @@ Chandubabu Namburu <chandu@amd.com>
 Chang Miao <chang.miao@corigine.com>
 Changchun Ouyang <changchun.ouyang@intel.com>
 Changpeng Liu <changpeng.liu@intel.com>
+Changqi Dingluo <dingluochangqi.ck@bytedance.com>
 Changqing Wu <changqingx.wu@intel.com>
 Chaoyong He <chaoyong.he@corigine.com>
 Chao Zhu <chaozhu@linux.vnet.ibm.com> <bjzhuc@cn.ibm.com>
 Charles Brett <cfb@hpe.com>
 Charles Myers <charles.myers@spirent.com>
 Charles Stoll <charles.stoll@intel.com>
-Chas Williams <3chas3@gmail.com> <chas3@att.com> <ciwillia@brocade.com>
+Chas Williams <3chas3@gmail.com> <chas3@att.com>
+Chas Williams <3chas3@gmail.com> <ciwillia@brocade.com>
 Chenbo Xia <chenbox@nvidia.com> <chenbo.xia@intel.com>
 Chengchang Tang <tangchengchang@huawei.com> <tangchengchang@hisilicon.com>
 Chengfeng Ye <cyeaa@connect.ust.hk>
@@ -270,6 +283,7 @@ Cian Ferriter <cian.ferriter@intel.com>
 Ciara Loftus <ciara.loftus@intel.com>
 Ciara Power <ciara.power@intel.com>
 Claire Murphy <claire.k.murphy@intel.com>
+Clemens Famulla-Conrad <cfamullaconrad@suse.com>
 Cody Doucette <doucette@bu.edu>
 Congwen Zhang <zhang.congwen@zte.com.cn>
 Conor Fogarty <conor.fogarty@intel.com>
@@ -316,7 +330,8 @@ Dave Ertman <david.m.ertman@intel.com>
 Dave Johnson <davejo@cisco.com>
 David Binderman <dcb314@hotmail.com>
 David Bouyeure <david.bouyeure@fraudbuster.mobi>
-David Christensen <drc@linux.ibm.com> <drc@linux.vnet.ibm.com> <david.christensen@broadcom.com>
+David Christensen <drc@linux.ibm.com> <drc@linux.vnet.ibm.com>
+David Christensen <drc@linux.ibm.com> <david.christensen@broadcom.com>
 David Coyle <david.coyle@intel.com>
 Davide Caratti <dcaratti@redhat.com>
 David George <david.george@sophos.com>
@@ -350,12 +365,14 @@ Devendra Singh Rawat <dsinghrawat@marvell.com>
 Dex Chen <dex.chen@ruckuswireless.com>
 Dexia Li <dexia.li@jaguarmicro.com>
 Dexuan Cui <decui@microsoft.com>
+Dhanya Pillai <dhanya.r.pillai@intel.com>
 Dharmik Thakkar <dharmikjayesh.thakkar@arm.com> <dharmik.thakkar@arm.com>
 Dheemanth Mallikarjun <dheemanthm@vmware.com>
 Dhruv Tripathi <dhruv.tripathi@arm.com>
 Diana Wang <na.wang@corigine.com>
 Didier Pallard <didier.pallard@6wind.com>
 Dilshod Urazov <dilshod.urazov@oktetlabs.ru>
+Dima Ruinskiy <dima.ruinskiy@intel.com>
 Ding Zhi <zhi.ding@6wind.com>
 Diogo Behrens <diogo.behrens@huawei.com>
 Dirk-Holger Lenz <dirk.lenz@ng4t.com>
@@ -370,6 +387,7 @@ Dongdong Liu <liudongdong3@huawei.com>
 Dongsheng Rong <rongdongsheng@baidu.com>
 Dongsu Han <dongsuh@cs.cmu.edu>
 Dong Wang <dong1.wang@intel.com>
+Dongwei Xu <xudw@yunsilicon.com>
 Dongyang Pan <197020236@qq.com>
 Dong Zhou <dongzhou@nvidia.com> <dongz@mellanox.com>
 Don Provan <dprovan@bivio.net>
@@ -387,9 +405,11 @@ Dustin Lundquist <dustin@null-ptr.net>
 Dzmitry Sautsa <dzmitryx.sautsa@intel.com>
 Ed Czeck <ed.czeck@atomicrules.com>
 Eduard Serra <eserra@vmware.com>
+Edvard Fagerholm <edvard.fagerholm@gmail.com>
 Edward Makarov <makarov@kraftway.ru>
 Edwin Brossette <edwin.brossette@6wind.com>
 Eelco Chaudron <echaudro@redhat.com>
+Eimear Morrissey <eimear.morrissey@huawei.com>
 Elad Nachman <eladv6@gmail.com>
 Elad Persiko <eladpe@mellanox.com>
 Elena Agostini <eagostini@nvidia.com>
@@ -429,7 +449,9 @@ Fengjiang Liu <liufengjiang.0426@bytedance.com>
 Fengnan Chang <changfengnan@bytedance.com>
 Fengtian Guo <fengtian.guo@6wind.com>
 Ferdinand Thiessen <rpm@fthiessen.de>
-Ferruh Yigit <ferruh.yigit@amd.com> <ferruh.yigit@intel.com> <ferruh.yigit@xilinx.com> <ferruhy@gmail.com>
+Ferruh Yigit <ferruh.yigit@amd.com> <ferruh.yigit@intel.com>
+Ferruh Yigit <ferruh.yigit@amd.com> <ferruh.yigit@xilinx.com>
+Ferruh Yigit <ferruh.yigit@amd.com> <ferruhy@gmail.com>
 Fidaullah Noonari <fidaullah.noonari@emumba.com>
 Fidel Castro <fidelcastro.s@hotmail.com>
 Fiona Trahe <fiona.trahe@intel.com>
@@ -447,6 +469,7 @@ Frank Du <frank.du@intel.com>
 Frank Zhao <frank.zhao@starfivetech.com>
 Frederico Cadete <frederico.cadete-ext@oneaccess-net.com>
 Fredrik A Lindgren <fredrik.a.lindgren@tietoevry.com>
+Frode Nordahl <frode.nordahl@canonical.com>
 Gabriel Ganne <gabriel.ganne@6wind.com>
 Gaetan Rivet <grive@u256.net> <gaetan.rivet@6wind.com>
 Gagandeep Singh <g.singh@nxp.com>
@@ -463,8 +486,8 @@ Gargi Sau <gargi.sau@intel.com>
 Gary Mussar <gmussar@ciena.com>
 Gaurav Singh <gaurav1086@gmail.com>
 Gautam Dawar <gdawar@solarflare.com>
-Gavin Hu <gavin.hu@arm.com> <gavin.hu@linaro.org>
-Gavin Li <gavinl@nvidia.com>
+Gavin Hu <gahu@nvidia.com> <gavin.hu@arm.com>
+Gavin Hu <gahu@nvidia.com> <gavin.hu@linaro.org>
 Geoffrey Le Gourriérec <geoffrey.le_gourrierec@6wind.com>
 Geoffrey Lv <geoffrey.lv@gmail.com>
 Geoff Thorpe <geoff.thorpe@nxp.com>
@@ -483,7 +506,8 @@ Gordon Noonan <gordon.noonan@intel.com>
 Gosia Bakota <gosia.bakota@intel.com>
 Govindarajulu Varadarajan <gvaradar@cisco.com>
 Gowrishankar Muthukrishnan <gmuthukrishn@marvell.com> <gowrishankar.m@linux.vnet.ibm.com>
-Gregory Etelson <getelson@nvidia.com> <getelson@mellanox.com> <gregory@weka.io>
+Gregory Etelson <getelson@nvidia.com> <getelson@mellanox.com>
+Gregory Etelson <getelson@nvidia.com> <gregory@weka.io>
 Greg Tucker <greg.b.tucker@intel.com>
 Grishma Kotecha <grishma.kotecha@intel.com>
 Grzegorz Galkowski <grzegorz.galkowski@intel.com>
@@ -541,6 +565,7 @@ Hemant Agrawal <hemant.agrawal@nxp.com> <hemant@freescale.com>
 Heng Ding <hengx.ding@intel.com>
 Hengjian Zhang <hengjianx.zhang@intel.com>
 Heng Jiang <jiangheng14@huawei.com>
+Hengqi Chen <hengqi.chen@gmail.com>
 Heng Wang <heng.wang@ericsson.com>
 Henning Schild <henning.schild@siemens.com>
 Henry Cai <caihe@huawei.com>
@@ -613,10 +638,13 @@ Jacek Piasecki <jacekx.piasecki@intel.com>
 Jacek Siuda <jck@semihalf.com>
 Jack Bond-Preston <jack.bond-preston@foss.arm.com> <jack.bond-preston@arm.com>
 Jacob Keller <jacob.e.keller@intel.com>
+Jake Freeland <jfree@freebsd.org>
+Jakub Buchocki <jakubx.buchocki@intel.com>
 Jakub Chylkowski <jakubx.chylkowski@intel.com>
 Jakub Grajciar <jgrajcia@cisco.com>
 Jakub Neruda <neruda@netcope.com>
-Jakub Palider <jpalider@marvell.com> <jpa@semihalf.com> <jpalider@gmail.com>
+Jakub Palider <jpalider@marvell.com> <jpa@semihalf.com>
+Jakub Palider <jpalider@marvell.com> <jpalider@gmail.com>
 Jakub Poczatek <jakub.poczatek@intel.com>
 Jakub Wysocki <jakubx.wysocki@intel.com>
 James Davidson <james.davidson@brocade.com>
@@ -625,7 +653,6 @@ James Grant <j.grant@qub.ac.uk>
 James Hershaw <james.hershaw@corigine.com>
 James Poole <james.g.poole@intel.com>
 Jamie Lavigne <lavignen@amazon.com>
-Jananee Parthasarathy <jananeex.m.parthasarathy@intel.com>
 Jan Beulich <jbeulich@suse.com>
 Jan Blunck <jblunck@infradead.org>
 Jan Medala <jan.medala@outlook.com> <jan@semihalf.com>
@@ -633,10 +660,14 @@ Jan Remes <remes@netcope.com>
 Jan Sokolowski <jan.sokolowski@intel.com>
 Jan Viktorin <viktorin@cesnet.cz> <viktorin@rehivetech.com>
 Jan Wickbom <jan.wickbom@ericsson.com>
+Jananee Parthasarathy <jananeex.m.parthasarathy@intel.com>
+Janardhanan Arumugam <janardhanan.arumugam@intel.com>
+Jaromír Smrček <4plague@gmail.com>
 Jaroslaw Gawin <jaroslawx.gawin@intel.com>
 Jaroslaw Ilgiewicz <jaroslaw.ilgiewicz@intel.com>
 Jason He <jason.he@broadcom.com>
 Jason Wang <jasowang@redhat.com>
+Jasper Tran O'Leary <jtranoleary@google.com>
 Jasvinder Singh <jasvinder.singh@intel.com>
 Jay Ding <jay.ding@broadcom.com>
 Jay Jayatheerthan <jay.jayatheerthan@intel.com>
@@ -657,7 +688,8 @@ Jeff Shaw <jeffrey.b.shaw@intel.com>
 Jens Freimann <jfreimann@redhat.com> <jfreiman@redhat.com>
 Jeremy Plsek <jplsek@iol.unh.edu>
 Jeremy Spewock <jspewock@iol.unh.edu>
-Jerin Jacob <jerinj@marvell.com> <jerin.jacob@caviumnetworks.com> <jerinjacobk@gmail.com>
+Jerin Jacob <jerinj@marvell.com> <jerin.jacob@caviumnetworks.com>
+Jerin Jacob <jerinj@marvell.com> <jerinjacobk@gmail.com>
 Jeroen de Borst <jeroendb@google.com>
 Jerome Jutteau <jerome.jutteau@outscale.com>
 Jerry Hao OS <jerryhao@os.amperecomputing.com>
@@ -671,8 +703,8 @@ Jia He <justin.he@arm.com> <jia.he@hxt-semitech.com>
 Jian Wang <jianwang@trustnetic.com>
 Jianbo Liu <jianbo.liu@arm.com> <jianbo.liu@linaro.org>
 Jianfeng Tan <jianfeng.tan@intel.com>
-Jiang Yu <yux.jiang@intel.com>
 Jiangu Zhao <zhaojg@arraynetworks.com.cn>
+Jianping Zhao <zhao305149619@gmail.com>
 Jianwei Ma <jianwei.ma@intel.com>
 Jianwei Mei <jianweix.mei@intel.com>
 Jiaqi Min <jiaqix.min@intel.com>
@@ -724,7 +756,8 @@ John Ousterhout <ouster@cs.stanford.edu>
 John Romein <romein@astron.nl>
 John W. Linville <linville@tuxdriver.com>
 Jonas Pfefferle <jpf@zurich.ibm.com> <pepperjo@japf.ch>
-Jonathan Erb <jonathan.erb@threater.com> <jonathan.erb@threatblockr.com> <jonathan.erb@banduracyber.com>
+Jonathan Erb <jonathan.erb@threater.com> <jonathan.erb@threatblockr.com>
+Jonathan Erb <jonathan.erb@threater.com> <jonathan.erb@banduracyber.com>
 Jonathan Tsai <jonathan1.tsai@intel.com>
 Jon DeVree <nuxi@vault24.org>
 Jon Loeliger <jdl@netgate.com>
@@ -732,7 +765,6 @@ Joongi Kim <joongi@an.kaist.ac.kr>
 Jørgen Østergaard Sloth <jorgen.sloth@xci.dk>
 Jörg Thalheim <joerg@thalheim.io>
 Joseph Richard <joseph.richard@windriver.com>
-Josh Hay <joshua.a.hay@intel.com>
 Josh Soref <jsoref@gmail.com>
 Joshua Hay <joshua.a.hay@intel.com>
 Joshua Washington <joshwash@google.com>
@@ -751,13 +783,13 @@ Julien Hascoet <ju.hascoet@gmail.com>
 Julien Massonneau <julien.massonneau@6wind.com>
 Julien Meunier <julien.meunier@nokia.com> <julien.meunier@6wind.com>
 Július Milan <jmilan.dev@gmail.com>
-Junfeng Guo <junfeng.guo@intel.com>
+Junfeng Guo <junfengg@nvidia.com> <junfeng.guo@intel.com>
 Junjie Chen <junjie.j.chen@intel.com>
 Junjie Wan <wanjunjie@bytedance.com>
 Junlong Wang <wang.junlong1@zte.com.cn>
 Jun Qiu <jun.qiu@jaguarmicro.com>
 Jun W Zhou <junx.w.zhou@intel.com>
-Junxiao Shi <git@mail1.yoursunny.com>
+Junxiao Shi <git@mail1.yoursunny.com> <sunnylandh@gmail.com>
 Jun Wang <junwang01@cestc.cn>
 Jun Yang <jun.yang@nxp.com>
 Jun Zhang <xuejun.zhang@intel.com>
@@ -798,17 +830,19 @@ Kevin Scott <kevin.c.scott@intel.com>
 Kevin Traynor <ktraynor@redhat.com>
 Ke Xu <ke1.xu@intel.com>
 Ke Zhang <ke1x.zhang@intel.com>
+Khadem Ullah <14pwcse1224@uetpeshawar.edu.pk>
 Khoa To <khot@microsoft.com>
 Kiran KN <kirankn@juniper.net>
-Kiran Kumar K <kirankumark@marvell.com>
-Kiran Kumar <kkokkilagadda@caviumnetworks.com> <kiran.kokkilagadda@caviumnetworks.com>
+Kiran Kumar K <kirankumark@marvell.com> <kkokkilagadda@caviumnetworks.com>
+Kiran Kumar K <kirankumark@marvell.com> <kiran.kokkilagadda@caviumnetworks.com>
 Kiran Patil <kiran.patil@intel.com>
 Kiran Vedere <kiranv@nvidia.com>
 Kirill Rybalchenko <kirill.rybalchenko@intel.com>
 Kishore Padmanabha <kishore.padmanabha@broadcom.com>
 Klaus Degner <kd@allegro-packets.com>
 Kommula Shiva Shankar <kshankar@marvell.com>
-Konstantin Ananyev <konstantin.ananyev@huawei.com> <konstantin.v.ananyev@yandex.ru> <konstantin.ananyev@intel.com>
+Konstantin Ananyev <konstantin.ananyev@huawei.com> <konstantin.v.ananyev@yandex.ru>
+Konstantin Ananyev <konstantin.ananyev@huawei.com> <konstantin.ananyev@intel.com>
 Krishna Murthy <krishna.j.murthy@intel.com>
 Krzysztof Galazka <krzysztof.galazka@intel.com>
 Krzysztof Kanas <kkanas@marvell.com> <krzysztof.kanas@caviumnetworks.com>
@@ -841,7 +875,8 @@ Lev Faerman <lev.faerman@intel.com>
 Lewei Yang <leweix.yang@intel.com>
 Lewis Donzis <lew@perftech.com>
 Leyi Rong <leyi.rong@intel.com>
-Liang Ma <liangma@bytedance.com> <liangma@liangbit.com> <liang.j.ma@intel.com>
+Liang Ma <liangma@bytedance.com> <liangma@liangbit.com>
+Liang Ma <liangma@bytedance.com> <liang.j.ma@intel.com>
 Liang-Min Larry Wang <liang-min.wang@intel.com>
 Liangxing Wang <liangxing.wang@arm.com>
 Liang Xu <liang.xu@cinfotech.cn>
@@ -871,7 +906,10 @@ Lotem Leder <lotem.leder@intel.com>
 Louise Kilheeney <louise.kilheeney@intel.com>
 Louis Luo <llouis@vmware.com>
 Louis Peens <louis.peens@corigine.com> <louis.peens@netronome.com>
-Luca Boccassi <luca.boccassi@microsoft.com> <bluca@debian.org> <luca.boccassi@gmail.com> <lboccass@brocade.com> <luca.boccassi@intl.att.com>
+Luca Boccassi <luca.boccassi@microsoft.com> <bluca@debian.org>
+Luca Boccassi <luca.boccassi@microsoft.com> <luca.boccassi@gmail.com>
+Luca Boccassi <luca.boccassi@microsoft.com> <lboccass@brocade.com>
+Luca Boccassi <luca.boccassi@microsoft.com> <luca.boccassi@intl.att.com>
 Luca Vizzarro <luca.vizzarro@arm.com>
 Luc Pelletier <lucp.at.work@gmail.com>
 Luka Jankovic <luka.jankovic@ericsson.com>
@@ -886,6 +924,7 @@ Lukasz Majczak <lma@semihalf.com>
 Lukasz Plachno <lukasz.plachno@intel.com>
 Lukasz Wojciechowski <l.wojciechow@partner.samsung.com>
 Luke Gorrie <luke@snabb.co>
+Luke Seewald <luke.seewald@gmail.com>
 Lunyuan Cui <lunyuanx.cui@intel.com>
 Lu Qiuwen <luqiuwen@iie.ac.cn>
 Lyn M <netinal7@gmail.com>
@@ -983,6 +1022,7 @@ Maxime Gouin <maxime.gouin@6wind.com>
 Maxime Leroy <maxime.leroy@6wind.com>
 Md Fahad Iqbal Polash <md.fahad.iqbal.polash@intel.com>
 Megha Ajmera <megha.ajmera@intel.com>
+Menachem Fogel <menachem.fogel@intel.com>
 Meijuan Zhao <meijuanx.zhao@intel.com>
 Meir Levi <mlevi4@marvell.com>
 Meir Tseitlin <mirots@gmail.com>
@@ -1028,8 +1068,10 @@ Mike Pattrick <mkp@redhat.com>
 Mike Sowka <msowka@gmail.com>
 Mike Stolarchuk <mike.stolarchuk@bigswitch.com>
 Mike Ximing Chen <mike.ximing.chen@intel.com>
+Mikolaj Filar <mikolajx.filar@intel.com>
 Milena Olech <milena.olech@intel.com>
 Min Cao <min.cao@intel.com>
+Minggang Li (Gavin) <gavinl@nvidia.com>
 Minghuan Lian <minghuan.lian@nxp.com>
 Mingjin Ye <mingjinx.ye@intel.com>
 Mingshan Zhang <mingshan.zhang@intel.com>
@@ -1042,12 +1084,14 @@ Miroslaw Walukiewicz <miroslaw.walukiewicz@intel.com>
 Mitch Williams <mitch.a.williams@intel.com>
 Mit Matelske <mit@pt.net>
 Mohamad Noor Alim Hussin <mohamad.noor.alim.hussin@intel.com>
+Mohamed Feroz Abdul Majeeth <mabdulmajeet@marvell.com>
 Mohammad Abdul Awal <mohammad.abdul.awal@intel.com>
 Mohammad Iqbal Ahmad <mahmad@marvell.com>
 Mohammed Gamal <mgamal@redhat.com>
 Mohsin Kazmi <mohsin.kazmi14@gmail.com>
 Mohsin Mazhar Shaikh <mohsinmazhar_shaikh@trendmicro.com>
 Mohsin Shaikh <mohsinshaikh@niometrics.com>
+Monendra Singh Kushwaha <kmonendra@marvell.com>
 Morten Brørup <mb@smartsharesystems.com>
 Moti Haimovsky <motih@mellanox.com>
 Muhammad Ahmad <muhammad.ahmad@emumba.com>
@@ -1062,12 +1106,13 @@ Nagadheeraj Rottela <rnagadheeraj@marvell.com>
 Naga Harish K S V <s.v.naga.harish.k@intel.com>
 Naga Suresh Somarowthu <naga.sureshx.somarowthu@intel.com>
 Nalla Pradeep <pnalla@marvell.com>
-Na Na <nana.nn@alibaba-inc.com>
+Na Na <nana@yunsilicon.com> <nana.nn@alibaba-inc.com>
 Nan Chen <whutchennan@gmail.com>
 Nandini Persad <nandinipersad361@gmail.com>
 Nannan Lu <nannan.lu@intel.com>
 Nan Zhou <zhounan14@huawei.com>
-Narcisa Vasile <navasile@linux.microsoft.com> <navasile@microsoft.com> <narcisa.vasile@microsoft.com>
+Narcisa Vasile <navasile@linux.microsoft.com> <navasile@microsoft.com>
+Narcisa Vasile <navasile@linux.microsoft.com> <narcisa.vasile@microsoft.com>
 Narender Vangati <narender.vangati@intel.com>
 Naresh Kumar PBS <nareshkumar.pbs@broadcom.com>
 Natalie Samsonov <nsamsono@marvell.com>
@@ -1075,6 +1120,7 @@ Natanael Copa <ncopa@alpinelinux.org>
 Nathan Brown <nathan.brown@arm.com>
 Nathan Law <nlaw@brocade.com>
 Nathan Skrzypczak <nathan.skrzypczak@gmail.com>
+Nawal Kishor <nkishor@marvell.com>
 Neel Patel <neel.patel@amd.com> <neel@pensando.io>
 Neil Horman <nhorman@tuxdriver.com>
 Nelio Laranjeiro <nelio.laranjeiro@6wind.com>
@@ -1092,6 +1138,7 @@ Nicolas Chautru <nicolas.chautru@intel.com>
 Nicolas Dichtel <nicolas.dichtel@6wind.com>
 Nicolas Harnois <nicolas.harnois@6wind.com>
 Nicolás Pernas Maradei <nico@emutex.com> <nicolas.pernas.maradei@emutex.com>
+Nicolas Planel <nplanel@cisco.com>
 Nikhil Agarwal <nikhil.agarwal@amd.com> <nikhil.agarwal@linaro.org>
 Nikhil Jagtap <nikhil.jagtap@gmail.com>
 Nikhil Rao <nikhil.rao@intel.com>
@@ -1105,7 +1152,8 @@ Nir Efrati <nir.efrati@intel.com>
 Nirmoy Das <ndas@suse.de>
 Nishikant Nayak <nishikanta.nayak@intel.com>
 Nithin Dabilpuram <ndabilpuram@marvell.com> <nithin.dabilpuram@caviumnetworks.com>
-Nitin Saxena <nitin.saxena@caviumnetworks.com>
+Nithinsen Kaithakadan <nkaithakadan@marvell.com>
+Nitin Saxena <nsaxena@marvell.com> <nitin.saxena@caviumnetworks.com>
 Nitzan Weller <nitzanwe@mellanox.com>
 Nizan Zorea <nizan.zorea@intel.com>
 Noa Ezra <noae@mellanox.com>
@@ -1138,7 +1186,8 @@ Padraig Connolly <padraig.j.connolly@intel.com>
 Pallantla Poornima <pallantlax.poornima@intel.com>
 Pallavi Kadam <pallavi.kadam@intel.com>
 Pandi Kumar Maharajan <pandi.maharajan@intel.com>
-Pankaj Gupta <pankaj.gupta@broadcom.com> <pagupta@vmware.com> <pagupta@redhat.com>
+Pankaj Gupta <pankaj.gupta@broadcom.com> <pagupta@vmware.com>
+Pankaj Gupta <pankaj.gupta@broadcom.com> <pagupta@redhat.com>
 Panu Matilainen <pmatilai@redhat.com>
 Paolo Valerio <pvalerio@redhat.com>
 Parav Pandit <parav@nvidia.com> <parav@mellanox.com>
@@ -1172,7 +1221,8 @@ Pawel Malinowski <pawel.malinowski@intel.com>
 Pawel Modrak <pawelx.modrak@intel.com>
 Pawel Rutkowski <pawelx.rutkowski@intel.com>
 Pawel Sobczyk <pawel.sobczyk@intel.com>
-Pawel Wodkowski <pawelwod@gmail.com> <pawelx.wodkowski@intel.com> <pawelx.wdkowski@intel.com>
+Pawel Wodkowski <pawelwod@gmail.com> <pawelx.wodkowski@intel.com>
+Pawel Wodkowski <pawelwod@gmail.com> <pawelx.wdkowski@intel.com>
 Pei Chao <peichao85@gmail.com>
 Pei Zhang <pezhang@redhat.com>
 Pengfei Sun <sunpengfei16@huawei.com>
@@ -1190,13 +1240,15 @@ Petr Houska <t-pehous@microsoft.com>
 Phanendra Vukkisala <pvukkisala@marvell.com>
 Phil Yang <phil.yang@arm.com>
 Philip Prindeville <philipp@redfish-solutions.com>
-Pier Damouny  <pdamouny@nvidia.com>
+Pier Damouny <pdamouny@nvidia.com>
 Pierre Pfister <ppfister@cisco.com>
+Pieter Jansen Van Vuuren <pieter.jansen-van-vuuren@amd.com>
 Piotr Azarewicz <piotr.azarewicz@intel.com> <piotrx.t.azarewicz@intel.com>
 Piotr Bartosiewicz <piotr.bartosiewicz@atendesoftware.pl>
 Piotr Bronowski <piotrx.bronowski@intel.com>
 Piotr Gardocki <piotrx.gardocki@intel.com>
-Piotr Kubaj <pkubaj@freebsd.org>
+Piotr Krzewinski <piotr.krzewinski@ericsson.com>
+Piotr Kubaj <piotrx.kubaj@intel.com> <pkubaj@freebsd.org>
 Piotr Kwapulinski <piotr.kwapulinski@intel.com>
 Piotr Pietruszewski <piotr.pietruszewski@intel.com>
 Piotr Raczynski <piotr.raczynski@intel.com>
@@ -1209,7 +1261,7 @@ Prateek Agarwal <prateekag@cse.iitb.ac.in>
 Prathisna Padmasanan <prathisna.padmasanan@intel.com>
 Praveen Kaligineedi <pkaligineedi@google.com>
 Praveen Shetty <praveen.shetty@intel.com>
-Pravin Pathak <pravin.pathak@intel.com>
+Pravin Pathak <pravin.pathak.dev@gmail.com> <pravin.pathak@intel.com>
 Prince Takkar <ptakkar@marvell.com>
 Priyalee Kushwaha <priyalee.kushwaha@intel.com>
 Priyanka Jain <priyanka.jain@nxp.com>
@@ -1247,16 +1299,20 @@ Rahul Gupta <rahul.gupta@broadcom.com>
 Rahul Lakkireddy <rahul.lakkireddy@chelsio.com>
 Rahul Shah <rahul.r.shah@intel.com>
 Raja Zidane <rzidane@nvidia.com>
+Rajesh Mudimadugula <rmudimadugul@marvell.com>
 Rajesh Ravi <rajesh.ravi@broadcom.com>
 Rakesh Kudurumalla <rkudurumalla@marvell.com> <rkudurumalla@caviumnetworks.com>
 Ralf Hoffmann <ralf.hoffmann@allegro-packets.com>
-Rami Rosen <ramirose@gmail.com> <rami.rosen@intel.com> <roszenrami@gmail.com>
+Rami Rosen <ramirose@gmail.com> <rami.rosen@intel.com>
+Rami Rosen <ramirose@gmail.com> <roszenrami@gmail.com>
 Randy Schacher <stuart.schacher@broadcom.com>
 Rani Sharoni <ranish@nvidia.com>
 Ranjit Menon <ranjit.menon@intel.com>
-Rasesh Mody <rmody@marvell.com> <rasesh.mody@cavium.com> <rasesh.mody@qlogic.com>
+Rasesh Mody <rmody@marvell.com> <rasesh.mody@cavium.com>
+Rasesh Mody <rmody@marvell.com> <rasesh.mody@qlogic.com>
 Rashmi Shetty <rashmi.shetty@intel.com>
-Raslan Darawsheh <rasland@nvidia.com> <rasland@mellanox.com> <rdarawsheh@asaltech.com>
+Raslan Darawsheh <rasland@nvidia.com> <rasland@mellanox.com>
+Raslan Darawsheh <rasland@nvidia.com> <rdarawsheh@asaltech.com>
 Rastislav Cernay <cernay@netcope.com>
 Raveendra Padasalagi <raveendra.padasalagi@broadcom.com>
 Ravi Kerur <rkerur@brocade.com> <rkerur@gmail.com>
@@ -1270,20 +1326,23 @@ Remi Pommarel <repk@triplefau.lt>
 Remigiusz Konca <remigiuszx.konca@intel.com>
 Remy Horton <remy.horton@intel.com>
 Renata Saiakhova <renata.saiakhova@ekinops.com>
+Renyong Wan <wanry@yunsilicon.com>
 Reshma Pattan <reshma.pattan@intel.com> <reshma.pattan@gmail.com>
 Ricardo Roldan <rroldan@bequant.com>
 Ricardo Salveti <ricardo.salveti@linaro.org>
 Richael Zhuang <richael.zhuang@arm.com>
 Richard Donkin <richard.donkin@corigine.com>
 Richard Eklycke <richard.eklycke@ericsson.com>
-Richard Houldsworth <rhouldsw@xilinx.com> <rhouldsworth@solarflare.com>
+Richard Houldsworth <richard.houldsworth@amd.com> <rhouldsw@xilinx.com>
+Richard Houldsworth <richard.houldsworth@amd.com> <rhouldsworth@solarflare.com>
 Richard Walsh <richard.walsh@intel.com>
 Rich Lane <rich.lane@bigswitch.com>
 Ricky Li <ricky.li@intel.com>
 R Mohamed Shah <mohamedshah.r@amd.com>
 Robert Konklewski <robertx.konklewski@intel.com>
 Robert Malz <robertx.malz@intel.com>
-Robert Sanford <rsanford@akamai.com> <rsanford2@gmail.com> <rsanford@prolexic.com>
+Robert Sanford <rsanford@akamai.com> <rsanford2@gmail.com>
+Robert Sanford <rsanford@akamai.com> <rsanford@prolexic.com>
 Robert Shearman <rshearma@brocade.com>
 Robert Stonehouse <rstonehouse@solarflare.com>
 Robin Jarry <rjarry@redhat.com> <robin.jarry@6wind.com>
@@ -1306,14 +1365,17 @@ Ronak Doshi <ronak.doshi@broadcom.com> <doshir@vmware.com>
 Ron Beider <rbeider@amazon.com>
 Ronghua Zhang <rzhang@vmware.com>
 RongQiang Xie <xie.rongqiang@zte.com.cn>
+Rong Qian <qianr@yunsilicon.com>
 RongQing Li <lirongqing@baidu.com>
 Rongwei Liu <rongweil@nvidia.com>
 Rory Sexton <rory.sexton@intel.com>
-Rosen Xu <rosen.xu@intel.com>
+Rosen Xu <rosen.xu@altera.com> <rosen.xu@intel.com>
 Roy Franz <roy.franz@cavium.com>
 Roy Pledge <roy.pledge@nxp.com>
 Roy Shterman <roy.shterman@vastdata.com>
+Rui Ferreira <rui.ferreira1@h-partners.com>
 Ruifeng Wang <ruifeng.wang@arm.com>
+Rupesh Chiluka <rchiluka@marvell.com>
 Rushil Gupta <rushilg@google.com>
 Ryan E Hall <ryan.e.hall@intel.com>
 Sabyasachi Sengupta <sabyasg@hpe.com>
@@ -1378,6 +1440,7 @@ Shally Verma <shallyv@marvell.com> <shally.verma@caviumnetworks.com>
 Shani Peretz <shperetz@nvidia.com>
 Shannon Nelson <snelson@pensando.io>
 Shannon Zhao <zhaoshenglong@huawei.com>
+Shaokai Zhang <felix.zhang@jaguarmicro.com>
 Shaopeng He <shaopeng.he@intel.com>
 Shaowei Sun <1819846787@qq.com>
 Sharmila Podury <sharmila.podury@att.com>
@@ -1394,6 +1457,7 @@ Shijith Thotton <sthotton@marvell.com> <shijith.thotton@caviumnetworks.com>
 Shiqi Liu <835703180@qq.com>
 Shiri Kuzin <shirik@nvidia.com> <shirik@mellanox.com>
 Shivah Shankar S <sshankarnara@marvell.com>
+Shivaji Kant <shivajikant@google.com>
 Shivanshu Shukla <shivanshu.shukla@intel.com>
 Shiweixian <shiweixian@huawei.com>
 Shiyang He <shiyangx.he@intel.com>
@@ -1460,7 +1524,9 @@ Stefan Wegrzyn <stefan.wegrzyn@intel.com>
 Stepan Sojka <stepan.sojka@adaptivemobile.com>
 Stephen Coleman <omegacoleman@gmail.com>
 Stephen Douthit <stephend@silicom-usa.com>
-Stephen Hemminger <stephen@networkplumber.org> <sthemmin@microsoft.com> <shemming@brocade.com> <shemminger@vyatta.com>
+Stephen Hemminger <stephen@networkplumber.org> <sthemmin@microsoft.com>
+Stephen Hemminger <stephen@networkplumber.org> <shemming@brocade.com>
+Stephen Hemminger <stephen@networkplumber.org> <shemminger@vyatta.com>
 Stephen Hurd <stephen.hurd@broadcom.com> <shurd@broadcom.com>
 Steve Capper <steve.capper@arm.com>
 Steven Lariau <steven.lariau@arm.com>
@@ -1471,7 +1537,8 @@ Steve Rempe <steve.rempe@broadcom.com>
 Steve Shin <jonshin@cisco.com>
 Steve Yang <stevex.yang@intel.com>
 Stewart Allen <allenste@amazon.com>
-Suanming Mou <suanmingm@nvidia.com> <suanmingm@mellanox.com> <mousuanming@huawei.com>
+Suanming Mou <suanmingm@nvidia.com> <suanmingm@mellanox.com>
+Suanming Mou <suanmingm@nvidia.com> <mousuanming@huawei.com>
 Subendu Santra <subendu@arista.com>
 Subhi Masri <subhim@nvidia.com>
 Subrahmanyam Nilla <snilla@marvell.com> <snilla@caviumnetworks.com>
@@ -1480,7 +1547,8 @@ Sudheer Mogilappagari <sudheer.mogilappagari@intel.com>
 Sujith Sankar <ssujith@cisco.com>
 Sunila Sahu <ssahu@marvell.com> <sunila.sahu@caviumnetworks.com>
 Sunil Kulkarni <sunil.kulkarni@caviumnetworks.com>
-Sunil Kumar Kori <skori@marvell.com> <skori@mavell.com> <sunil.kori@nxp.com>
+Sunil Kumar Kori <skori@marvell.com> <skori@mavell.com>
+Sunil Kumar Kori <skori@marvell.com> <sunil.kori@nxp.com>
 Sunil Pai G <sunil.pai.g@intel.com>
 Sunil Uttarwar <sunilprakashrao.uttarwar@amd.com>
 Sun Jiajia <sunx.jiajia@intel.com>
@@ -1501,6 +1569,8 @@ Takeshi Yoshimura <tyos@jp.ibm.com> <t.yoshimura8869@gmail.com>
 Takuya Asada <syuu@cloudius-systems.com>
 Tal Avraham <talavr@annapurnalabs.com>
 Tal Shnaiderman <talshn@nvidia.com> <talshn@mellanox.com>
+Tamar Mashiah <tmashiah@nvidia.com>
+Tanzeel Ahmed <tanzeelahmed713@gmail.com>
 Tao Y Yang <tao.y.yang@intel.com>
 Tao Zhu <taox.zhu@intel.com>
 Taripin Samuel <samuel.taripin@intel.com>
@@ -1517,6 +1587,7 @@ Thibaut Collet <thibaut.collet@6wind.com>
 Thierry Herbelot <thierry.herbelot@6wind.com>
 Thierry Martin <thierry.martin.public@gmail.com>
 Thinh Tran <thinhtr@linux.vnet.ibm.com>
+Thiyagarajan P <thiyagarajan.p@amd.com>
 Thomas Faivre <thomas.faivre@6wind.com>
 Thomas F Herbert <therbert@redhat.com>
 Thomas Graf <tgraf@redhat.com>
@@ -1540,6 +1611,7 @@ Tim Shearer <tim.shearer@overturenetworks.com>
 Ting-Kai Ku <ting-kai.ku@intel.com>
 Ting Xu <ting.xu@intel.com>
 Tingting Liao <tingtingx.liao@intel.com>
+Tirthendu Sarkar <tirthendu.sarkar@intel.com>
 Tiwei Bie <tiwei.bie@intel.com> <btw@mail.ustc.edu.cn>
 Todd Fujinaka <todd.fujinaka@intel.com>
 Tomáš Ďurovec <tomas.durovec@pantheon.tech>
@@ -1651,6 +1723,7 @@ Wei Xie <weix.xie@intel.com>
 Weiyuan Li <weiyuanx.li@intel.com>
 Wei Zhao <wei.zhao1@intel.com>
 Wen Chiu <wchiu@brocade.com>
+Wenbo Cao <caowenbo@mucse.com>
 Wen-Chi Yang <wolkayang@gmail.com>
 Wenfeng Liu <liuwf@arraynetworks.com.cn>
 Wenjie Li <wenjiex.a.li@intel.com>
@@ -1686,6 +1759,7 @@ Xiaonan Zhang <xiaonanx.zhang@intel.com>
 Xiao Wang <xiao.w.wang@intel.com>
 Xiaoxiao Zeng <xiaoxiaox.zeng@intel.com>
 Xiaoxin Peng <xiaoxin.peng@broadcom.com>
+Xiaoxiong Zhang <zhangxx@yunsilicon.com>
 Xiaoyu Min <jackmin@nvidia.com> <jackmin@mellanox.com>
 Xiaoyun Li <xiaoyun.li@intel.com>
 Xiaoyun Wang <cloud.wangxiaoyun@huawei.com>
@@ -1712,8 +1786,11 @@ Yahui Cao <yahui.cao@intel.com>
 Yajun Wu <yajunw@nvidia.com>
 Yangchao Zhou <zhouyates@gmail.com>
 Yanglong Wu <yanglong.wu@intel.com>
+Yang Ming <mosesyyoung@gmail.com> <ming.1.yang@nokia-sbell.com>
 Yang Zhang <zy107165@alibaba-inc.com>
+Yaniv Rosner <yrosner@nvidia.com>
 Yanjie Xu <yanjie.xu@intel.com>
+Yan Lu <luyan@cmss.chinamobile.com>
 Yan Xia <yanx.xia@intel.com>
 Yao-Po Wang <blue119@gmail.com>
 Yao Zhao <yao.zhao@windriver.com>
@@ -1759,6 +1836,7 @@ Yongxin Liu <yongxin.liu@windriver.com>
 Yong Xu <yong.xu@corigine.com>
 Yong Zhang <zhang.yong25@zte.com.cn>
 Yoni Gilad <yonig@radcom.com>
+Yosef Raisman <yraisman@amazon.com>
 Youri Querry <youri.querry_1@nxp.com>
 Yuanhan Liu <yliu@fridaylinux.org> <yuanhan.liu@linux.intel.com>
 Yuan Peng <yuan.peng@intel.com>
@@ -1780,7 +1858,7 @@ Yu Wenjun <yuwenjun@cmss.chinamobile.com> <yuwenjun0x@163.com>
 Yuying Zhang <yuying.zhang@intel.com>
 Yu Zhang <zhangyu31@baidu.com>
 Yvonne Yang <yvonnex.yang@intel.com>
-Zalfresso-Jundzillo <marekx.zalfresso-jundzillo@intel.com>
+Zaiyu Wang <zaiyuwang@trustnetic.com>
 Zbigniew Bodek <zbigniew.bodek@caviumnetworks.com>
 Zengmo Gao <gaozengmo@jd.com>
 Zerun Fu <zerun.fu@corigine.com>
@@ -1792,6 +1870,7 @@ Zhenghua Zhou <zhenghuax.zhou@intel.com>
 Zhenning Xiao <zhenning.xiao@intel.com>
 Zhe Tao <zhe.tao@intel.com>
 Zhichao Zeng <zhichaox.zeng@intel.com>
+Zhigang Hu <zhigang.hu@intel.com>
 Zhigang Lu <zlu@ezchip.com>
 Zhiguang He <hezhiguang3@huawei.com>
 Zhihong Peng <zhihongx.peng@intel.com>
@@ -1805,8 +1884,10 @@ Zhiyong Yang <zhiyong.yang@intel.com>
 Zhuobin Huang <zobin1999@gmail.com>
 Zi Hu <huzilucky@gmail.com>
 Zijie Pan <zijie.pan@6wind.com>
+Ziwei Xiao <ziweixiao@google.com>
 Ziyang Xuan <xuanziyang2@huawei.com>
 Ziye Yang <ziye.yang@intel.com>
 Zoltan Kiss <zoltan.kiss@schaman.hu> <zoltan.kiss@linaro.org>
 Zorik Machulsky <zorik@amazon.com>
-Zyta Szpak <zyta@marvell.com> <zr@semihalf.com> <zyta.szpak@semihalf.com>
+Zyta Szpak <zyta@marvell.com> <zr@semihalf.com>
+Zyta Szpak <zyta@marvell.com> <zyta.szpak@semihalf.com>

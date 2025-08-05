@@ -23,6 +23,7 @@
 #include <stdalign.h>
 #include <sys/un.h>
 #include <time.h>
+#include <linux/rtnetlink.h>
 
 #include <ethdev_linux_ethtool.h>
 #include <ethdev_driver.h>
@@ -643,9 +644,9 @@ mlx5_dev_nl_ifindex_verify(uint32_t if_index, struct mlx5_priv *priv)
 
 	if (if_index == bond->ifindex)
 		return true;
-	for (i = 0; i < bond->n_port; i++) {
-		if (i >= MLX5_BOND_MAX_PORTS)
-			return false;
+	for (i = 0; i < MLX5_BOND_MAX_PORTS; i++) {
+		if (!strlen(priv->sh->bond.ports[i].ifname))
+			continue;
 		if (if_index == bond->ports[i].ifindex)
 			return true;
 	}
@@ -674,6 +675,59 @@ mlx5_link_update_bond(struct rte_eth_dev *dev)
 }
 
 static void
+mlx5_handle_port_info_update(struct mlx5_dev_info *dev_info, uint32_t if_index,
+			     uint16_t msg_type)
+{
+	struct mlx5_switch_info info = {
+		.master = 0,
+		.representor = 0,
+		.name_type = MLX5_PHYS_PORT_NAME_TYPE_NOTSET,
+		.port_name = 0,
+		.switch_id = 0,
+	};
+	uint32_t i;
+	int nl_route;
+
+	if (dev_info->port_num <= 1 || dev_info->port_info == NULL)
+		return;
+
+	DRV_LOG(DEBUG, "IB device %s ifindex %u received netlink event %u",
+			dev_info->ibname, if_index, msg_type);
+	for (i = 1; i <= dev_info->port_num; i++) {
+		if (!dev_info->port_info[i].valid)
+			continue;
+		if (dev_info->port_info[i].ifindex == if_index)
+			break;
+	}
+	if (msg_type == RTM_NEWLINK && i > dev_info->port_num) {
+		nl_route = mlx5_nl_init(NETLINK_ROUTE, 0);
+		if  (nl_route < 0)
+			goto flush_all;
+
+		if (mlx5_nl_switch_info(nl_route, if_index, &info)) {
+			if (mlx5_sysfs_switch_info(if_index, &info))
+				goto flush_all;
+		}
+
+		if (info.name_type == MLX5_PHYS_PORT_NAME_TYPE_PFSF ||
+		    info.name_type == MLX5_PHYS_PORT_NAME_TYPE_PFVF)
+			goto flush_all;
+		close(nl_route);
+	} else if (msg_type == RTM_DELLINK && i <= dev_info->port_num) {
+		memset(dev_info->port_info + i, 0, sizeof(struct mlx5_port_nl_info));
+	}
+
+	return;
+flush_all:
+	if (nl_route >= 0)
+		close(nl_route);
+	for (i = 1; i <= dev_info->port_num; i++) {
+		if (!dev_info->port_info[i].ifindex)
+			dev_info->port_info[i].valid = 0;
+	}
+}
+
+static void
 mlx5_dev_interrupt_nl_cb(struct nlmsghdr *hdr, void *cb_arg)
 {
 	struct mlx5_dev_ctx_shared *sh = cb_arg;
@@ -682,6 +736,9 @@ mlx5_dev_interrupt_nl_cb(struct nlmsghdr *hdr, void *cb_arg)
 
 	if (mlx5_nl_parse_link_status_update(hdr, &if_index) < 0)
 		return;
+	if (sh->cdev->config.probe_opt && sh->cdev->dev_info.port_num > 1 && !sh->rdma_monitor_supp)
+		mlx5_handle_port_info_update(&sh->cdev->dev_info, if_index, hdr->nlmsg_type);
+
 	for (i = 0; i < sh->max_port; i++) {
 		struct mlx5_dev_shared_port *port = &sh->port[i];
 		struct rte_eth_dev *dev;
@@ -835,6 +892,85 @@ mlx5_dev_interrupt_handler_devx(void *cb_arg)
 			(sh, (uint64_t)out.cmd_resp.wr_id,
 			 mlx5_devx_get_out_command_status(buf));
 #endif /* HAVE_IBV_DEVX_ASYNC */
+}
+
+static void
+mlx5_dev_interrupt_ib_cb(struct nlmsghdr *hdr, void *cb_arg)
+{
+	mlx5_nl_rdma_monitor_info_get(hdr, (struct mlx5_nl_port_info *)cb_arg);
+}
+
+void
+mlx5_dev_interrupt_handler_ib(void *arg)
+{
+	struct mlx5_dev_ctx_shared *sh = arg;
+	struct mlx5_nl_port_info data = {
+		.flags = 0,
+		.name = "",
+		.ifindex = 0,
+		.ibindex = 0,
+		.portnum = 0,
+	};
+	int nlsk_fd = rte_intr_fd_get(sh->intr_handle_ib);
+	struct mlx5_dev_info *dev_info;
+	uint32_t i;
+
+	dev_info = &sh->cdev->dev_info;
+	DRV_LOG(DEBUG, "IB device %s received RDMA monitor netlink event", dev_info->ibname);
+	if (dev_info->port_num <= 1 || dev_info->port_info == NULL)
+		return;
+
+	if (nlsk_fd < 0)
+		return;
+
+	if (mlx5_nl_read_events(nlsk_fd, mlx5_dev_interrupt_ib_cb, &data) < 0)
+		DRV_LOG(ERR, "Failed to process Netlink events: %s",
+			rte_strerror(rte_errno));
+
+	if (!(data.flags & MLX5_NL_CMD_GET_EVENT_TYPE) ||
+		!(data.flags & MLX5_NL_CMD_GET_PORT_INDEX) ||
+		!(data.flags & MLX5_NL_CMD_GET_IB_INDEX))
+		return;
+
+	if (data.ibindex != dev_info->ibindex)
+		return;
+
+	if (data.event_type != MLX5_NL_RDMA_NETDEV_ATTACH_EVENT &&
+		data.event_type != MLX5_NL_RDMA_NETDEV_DETACH_EVENT)
+		return;
+
+	if (data.event_type == MLX5_NL_RDMA_NETDEV_ATTACH_EVENT &&
+	    !(data.flags & MLX5_NL_CMD_GET_NET_INDEX))
+		return;
+
+	DRV_LOG(DEBUG, "Event info: type %d, ibindex %d, ifindex %d, portnum %d,",
+		data.event_type, data.ibindex, data.ifindex, data.portnum);
+
+	/* Changes found in number of SF/VF ports. All information is likely unreliable. */
+	if (data.portnum > dev_info->port_num) {
+		DRV_LOG(ERR, "Port[%d] exceeds maximum[%d]", data.portnum, dev_info->port_num);
+		goto flush_all;
+	}
+	if (data.event_type == MLX5_NL_RDMA_NETDEV_ATTACH_EVENT) {
+		if (!dev_info->port_info[data.portnum].ifindex) {
+			dev_info->port_info[data.portnum].ifindex = data.ifindex;
+			dev_info->port_info[data.portnum].valid = 1;
+		} else {
+			DRV_LOG(WARNING, "Duplicate RDMA event for port[%d] ifindex[%d]",
+				data.portnum, data.ifindex);
+			if (data.ifindex != dev_info->port_info[data.portnum].ifindex)
+				goto flush_all;
+		}
+	} else if (data.event_type == MLX5_NL_RDMA_NETDEV_DETACH_EVENT) {
+		memset(dev_info->port_info + data.portnum, 0, sizeof(struct mlx5_port_nl_info));
+	}
+	return;
+
+flush_all:
+	for (i = 1; i <= dev_info->port_num; i++) {
+		dev_info->port_info[i].ifindex = 0;
+		dev_info->port_info[i].valid = 0;
+	}
 }
 
 /**
@@ -1263,7 +1399,9 @@ mlx5_os_read_dev_counters(struct rte_eth_dev *dev, bool bond_master, uint64_t *s
 	/* Read ifreq counters. */
 	if (bond_master) {
 		/* Sum xstats from bonding device member ports. */
-		for (i = 0; i < priv->sh->bond.n_port; i++) {
+		for (i = 0; i < MLX5_BOND_MAX_PORTS; i++) {
+			if (!strlen(priv->sh->bond.ports[i].ifname))
+				continue;
 			ret = _mlx5_os_read_dev_counters(dev, i, stats);
 			if (ret)
 				return ret;
@@ -1313,28 +1451,26 @@ mlx5_os_get_stats_n(struct rte_eth_dev *dev, bool bond_master,
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct ethtool_drvinfo drvinfo;
 	struct ifreq ifr;
-	int ret;
+	int ret, i, j;
+	uint16_t *target;
 
 	drvinfo.cmd = ETHTOOL_GDRVINFO;
 	ifr.ifr_data = (caddr_t)&drvinfo;
 	/* Bonding PFs. */
 	if (bond_master) {
-		ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[0].ifname,
-					   SIOCETHTOOL, &ifr);
-		if (ret) {
-			DRV_LOG(WARNING, "bonding port %u unable to query number of"
-				" statistics for the 1st slave, %d", PORT_ID(priv), ret);
-			return ret;
+		for (i = 0, j = 0; i < MLX5_BOND_MAX_PORTS; i++) {
+			if (!strlen(priv->sh->bond.ports[i].ifname))
+				continue;
+			ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[i].ifname,
+						   SIOCETHTOOL, &ifr);
+			if (ret) {
+				DRV_LOG(WARNING, "bonding port %u unable to query number of statistics for the %d lag member, %d",
+						PORT_ID(priv), j, ret);
+				return ret;
+			}
+			target = !j++ ? n_stats : n_stats_sec;
+			*target = drvinfo.n_stats;
 		}
-		*n_stats = drvinfo.n_stats;
-		ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[1].ifname,
-					   SIOCETHTOOL, &ifr);
-		if (ret) {
-			DRV_LOG(WARNING, "bonding port %u unable to query number of"
-				" statistics for the 2nd slave, %d", PORT_ID(priv), ret);
-			return ret;
-		}
-		*n_stats_sec = drvinfo.n_stats;
 	} else {
 		ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
 		if (ret) {
@@ -1425,6 +1561,11 @@ static const struct mlx5_counter_ctrl mlx5_counters_init[] = {
 		.dpdk_name = "hairpin_out_of_buffer",
 		.ctr_name = "hairpin_out_of_buffer",
 		.dev = 1,
+		.ctrl = {
+			.enable = mlx5_enable_port_level_hairpin_counter,
+			.disable = mlx5_disable_port_level_hairpin_counter,
+			.enabled = 0,
+		}
 	},
 	{
 		.dpdk_name = "dev_internal_queue_oob",
@@ -1585,7 +1726,7 @@ mlx5_os_get_stats_strings(struct rte_eth_dev *dev, bool bond_master,
 	struct mlx5_xstats_ctrl *xstats_ctrl = &priv->xstats_ctrl;
 	struct ifreq ifr;
 	int ret;
-	uint32_t i, j, idx;
+	uint32_t dev_idx, i, j, idx;
 
 	/* Ensure no out of bounds access before. */
 	MLX5_ASSERT(xstats_n <= MLX5_MAX_XSTATS);
@@ -1593,8 +1734,15 @@ mlx5_os_get_stats_strings(struct rte_eth_dev *dev, bool bond_master,
 	strings->string_set = ETH_SS_STATS;
 	strings->len = stats_n;
 	ifr.ifr_data = (caddr_t)strings;
+	for (dev_idx = 0; dev_idx < MLX5_BOND_MAX_PORTS; dev_idx++)
+		if (strlen(priv->sh->bond.ports[dev_idx].ifname))
+			break;
+	if (bond_master && dev_idx >= MLX5_BOND_MAX_PORTS) {
+		DRV_LOG(WARNING, "port %u unable to get the primary lag member", PORT_ID(priv));
+		return -ENODEV;
+	}
 	if (bond_master)
-		ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[0].ifname,
+		ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[dev_idx].ifname,
 					   SIOCETHTOOL, &ifr);
 	else
 		ret = mlx5_ifreq(dev, SIOCETHTOOL, &ifr);
@@ -1631,8 +1779,15 @@ mlx5_os_get_stats_strings(struct rte_eth_dev *dev, bool bond_master,
 		return 0;
 	}
 
+	for (++dev_idx; dev_idx < MLX5_BOND_MAX_PORTS; dev_idx++)
+		if (strlen(priv->sh->bond.ports[dev_idx].ifname))
+			break;
+	if (dev_idx >= MLX5_BOND_MAX_PORTS) {
+		DRV_LOG(WARNING, "port %u unable to get the secondary lag member", PORT_ID(priv));
+		return -ENODEV;
+	}
 	strings->len = stats_n_2nd;
-	ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[1].ifname,
+	ret = mlx5_ifreq_by_ifname(priv->sh->bond.ports[dev_idx].ifname,
 				   SIOCETHTOOL, &ifr);
 	if (ret) {
 		DRV_LOG(WARNING, "port %u unable to get statistic names for 2nd slave with %d",

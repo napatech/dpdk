@@ -7,6 +7,7 @@
 #include <rte_crypto.h>
 #include <cryptodev_pmd.h>
 #include <rte_security.h>
+#include <rte_net_crc.h>
 
 #include "qat_common.h"
 #include "icp_qat_hw.h"
@@ -92,7 +93,7 @@ typedef int (*qat_sym_build_request_t)(void *in_op, struct qat_sym_session *ctx,
 		uint8_t *out_msg, void *op_cookie);
 
 /* Common content descriptor */
-struct __rte_cache_aligned qat_sym_cd {
+struct __rte_cache_aligned __rte_packed_begin qat_sym_cd {
 	struct icp_qat_hw_cipher_algo_blk cipher;
 	union {
 		struct icp_qat_hw_auth_algo_blk hash;
@@ -100,7 +101,7 @@ struct __rte_cache_aligned qat_sym_cd {
 		struct icp_qat_hw_gen3_crc_cd crc_gen3;
 		struct icp_qat_hw_gen4_crc_cd crc_gen4;
 	};
-} __rte_packed;
+} __rte_packed_end;
 
 struct qat_sym_session {
 	enum icp_qat_fw_la_cmd_id qat_cmd;
@@ -146,9 +147,9 @@ struct qat_sym_session {
 	uint8_t is_auth;
 	uint8_t is_cnt_zero;
 	/* Some generations need different setup of counter */
-	uint8_t is_zuc256;
 	uint8_t is_wireless;
 	uint32_t slice_types;
+	struct rte_net_crc *crc;
 	enum qat_sym_proto_flag qat_proto_flag;
 	qat_sym_build_request_t build_request[2];
 #ifndef RTE_QAT_OPENSSL

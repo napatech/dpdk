@@ -8,6 +8,7 @@
 #include <time.h>
 #include <net/if.h>
 
+#include <eal_export.h>
 #include <rte_mbuf.h>
 #include <ethdev_driver.h>
 #include <rte_malloc.h>
@@ -933,7 +934,7 @@ dpaa2_dev_process_atomic_event(struct qbman_swp *swp __rte_unused,
 	dqrr_index = qbman_get_dqrr_idx(dq);
 	*dpaa2_seqn(ev->mbuf) = dqrr_index + 1;
 	DPAA2_PER_LCORE_DQRR_SIZE++;
-	DPAA2_PER_LCORE_DQRR_HELD |= 1 << dqrr_index;
+	DPAA2_PER_LCORE_DQRR_HELD |= UINT64_C(1) << dqrr_index;
 	DPAA2_PER_LCORE_DQRR_MBUF(dqrr_index) = ev->mbuf;
 }
 
@@ -1317,7 +1318,7 @@ dpaa2_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 				flags[loop] = QBMAN_ENQUEUE_FLAG_DCA |
 						dqrr_index;
 				DPAA2_PER_LCORE_DQRR_SIZE--;
-				DPAA2_PER_LCORE_DQRR_HELD &= ~(1 << dqrr_index);
+				DPAA2_PER_LCORE_DQRR_HELD &= ~(UINT64_C(1) << dqrr_index);
 				*dpaa2_seqn(*bufs) = DPAA2_INVALID_MBUF_SEQN;
 			}
 
@@ -1575,11 +1576,12 @@ dpaa2_set_enqueue_descriptor(struct dpaa2_queue *dpaa2_q,
 		dq_idx = *dpaa2_seqn(m) - 1;
 		qbman_eq_desc_set_dca(eqdesc, 1, dq_idx, 0);
 		DPAA2_PER_LCORE_DQRR_SIZE--;
-		DPAA2_PER_LCORE_DQRR_HELD &= ~(1 << dq_idx);
+		DPAA2_PER_LCORE_DQRR_HELD &= ~(UINT64_C(1) << dq_idx);
 	}
 	*dpaa2_seqn(m) = DPAA2_INVALID_MBUF_SEQN;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(dpaa2_dev_tx_multi_txq_ordered)
 uint16_t
 dpaa2_dev_tx_multi_txq_ordered(void **queue,
 		struct rte_mbuf **bufs, uint16_t nb_pkts)
@@ -1962,14 +1964,6 @@ skip_tx:
 	return num_tx;
 }
 
-#if defined(RTE_TOOLCHAIN_GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-qual"
-#elif defined(RTE_TOOLCHAIN_CLANG)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wcast-qual"
-#endif
-
 /* This function loopbacks all the received packets.*/
 uint16_t
 dpaa2_dev_loopback_rx(void *queue,
@@ -2083,7 +2077,7 @@ dpaa2_dev_loopback_rx(void *queue,
 			if (unlikely((status & QBMAN_DQ_STAT_VALIDFRAME) == 0))
 				continue;
 		}
-		fd[num_rx] = (struct qbman_fd *)qbman_result_DQ_fd(dq_storage);
+		fd[num_rx] = RTE_PTR_UNQUAL(qbman_result_DQ_fd(dq_storage));
 
 		dq_storage++;
 		num_rx++;
@@ -2118,8 +2112,3 @@ dpaa2_dev_loopback_rx(void *queue,
 
 	return 0;
 }
-#if defined(RTE_TOOLCHAIN_GCC)
-#pragma GCC diagnostic pop
-#elif defined(RTE_TOOLCHAIN_CLANG)
-#pragma clang diagnostic pop
-#endif

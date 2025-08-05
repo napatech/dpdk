@@ -39,6 +39,7 @@
 #include <rte_debug.h>
 #include <rte_devargs.h>
 
+#include <eal_export.h>
 #include "eal_filesystem.h"
 #include "private.h"
 
@@ -48,6 +49,7 @@
  */
 
 /* Map pci device */
+RTE_EXPORT_SYMBOL(rte_pci_map_device)
 int
 rte_pci_map_device(struct rte_pci_device *dev)
 {
@@ -69,6 +71,7 @@ rte_pci_map_device(struct rte_pci_device *dev)
 }
 
 /* Unmap pci device */
+RTE_EXPORT_SYMBOL(rte_pci_unmap_device)
 void
 rte_pci_unmap_device(struct rte_pci_device *dev)
 {
@@ -103,20 +106,27 @@ pci_uio_alloc_resource(struct rte_pci_device *dev,
 {
 	char devname[PATH_MAX]; /* contains the /dev/uioX */
 	struct rte_pci_addr *loc;
+	int fd;
 
 	loc = &dev->addr;
 
 	snprintf(devname, sizeof(devname), "/dev/uio@pci:%u:%u:%u",
 			dev->addr.bus, dev->addr.devid, dev->addr.function);
 
-	if (access(devname, O_RDWR) < 0) {
-		PCI_LOG(WARNING, "  "PCI_PRI_FMT" not managed by UIO driver, skipping",
-			loc->domain, loc->bus, loc->devid, loc->function);
-		return 1;
+	fd = open(devname, O_RDWR);
+	if (fd < 0) {
+		if (errno == ENOENT) {
+			PCI_LOG(WARNING, PCI_PRI_FMT" not managed by UIO driver, skipping",
+					loc->domain, loc->bus, loc->devid, loc->function);
+			return 1;
+		}
+		PCI_LOG(ERR, "Failed to open device file for " PCI_PRI_FMT " (%s)",
+				loc->domain, loc->bus, loc->devid, loc->function, devname);
+		return -1;
 	}
 
 	/* save fd if in primary process */
-	if (rte_intr_fd_set(dev->intr_handle, open(devname, O_RDWR))) {
+	if (rte_intr_fd_set(dev->intr_handle, fd)) {
 		PCI_LOG(WARNING, "Failed to save fd");
 		goto error;
 	}
@@ -179,7 +189,15 @@ pci_uio_map_resource_by_index(struct rte_pci_device *dev, int res_idx,
 
 	/* if matching map is found, then use it */
 	offset = res_idx * pagesz;
-	mapaddr = pci_map_resource(NULL, fd, (off_t)offset,
+
+	/*
+	 * Use baseaddr as a hint to avoid mapping resources
+	 * where malloc(3) et al. usually make allocations.
+	 * This reduces mapping conflicts in secondary processes
+	 * that make memory allocations before initializing EAL.
+	 */
+	mapaddr = pci_map_resource((void *)rte_eal_get_baseaddr(),
+			fd, (off_t)offset,
 			(size_t)dev->mem_resource[res_idx].len, 0);
 	close(fd);
 	if (mapaddr == NULL)
@@ -395,6 +413,7 @@ pci_device_iova_mode(const struct rte_pci_driver *pdrv __rte_unused,
 }
 
 /* Read PCI config space. */
+RTE_EXPORT_SYMBOL(rte_pci_read_config)
 int rte_pci_read_config(const struct rte_pci_device *dev,
 		void *buf, size_t len, off_t offset)
 {
@@ -441,6 +460,7 @@ int rte_pci_read_config(const struct rte_pci_device *dev,
 }
 
 /* Write PCI config space. */
+RTE_EXPORT_SYMBOL(rte_pci_write_config)
 int rte_pci_write_config(const struct rte_pci_device *dev,
 		const void *buf, size_t len, off_t offset)
 {
@@ -454,7 +474,6 @@ int rte_pci_write_config(const struct rte_pci_device *dev,
 			.pc_func = dev->addr.function,
 		},
 		.pi_reg = offset,
-		.pi_data = *(const uint32_t *)buf,
 		.pi_width = len,
 	};
 
@@ -463,7 +482,7 @@ int rte_pci_write_config(const struct rte_pci_device *dev,
 		goto error;
 	}
 
-	memcpy(&pi.pi_data, buf, len);
+	memcpy(&pi.pi_data, buf, RTE_MIN(len, sizeof(pi.pi_data)));
 
 	fd = open("/dev/pci", O_RDWR);
 	if (fd < 0) {
@@ -484,6 +503,7 @@ int rte_pci_write_config(const struct rte_pci_device *dev,
 }
 
 /* Read PCI MMIO space. */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_mmio_read, 23.07)
 int rte_pci_mmio_read(const struct rte_pci_device *dev, int bar,
 		      void *buf, size_t len, off_t offset)
 {
@@ -495,6 +515,7 @@ int rte_pci_mmio_read(const struct rte_pci_device *dev, int bar,
 }
 
 /* Write PCI MMIO space. */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_mmio_write, 23.07)
 int rte_pci_mmio_write(const struct rte_pci_device *dev, int bar,
 		       const void *buf, size_t len, off_t offset)
 {
@@ -505,6 +526,7 @@ int rte_pci_mmio_write(const struct rte_pci_device *dev, int bar,
 	return len;
 }
 
+RTE_EXPORT_SYMBOL(rte_pci_ioport_map)
 int
 rte_pci_ioport_map(struct rte_pci_device *dev, int bar,
 		struct rte_pci_ioport *p)
@@ -566,6 +588,7 @@ pci_uio_ioport_read(struct rte_pci_ioport *p,
 #endif
 }
 
+RTE_EXPORT_SYMBOL(rte_pci_ioport_read)
 void
 rte_pci_ioport_read(struct rte_pci_ioport *p,
 		void *data, size_t len, off_t offset)
@@ -608,6 +631,7 @@ pci_uio_ioport_write(struct rte_pci_ioport *p,
 #endif
 }
 
+RTE_EXPORT_SYMBOL(rte_pci_ioport_write)
 void
 rte_pci_ioport_write(struct rte_pci_ioport *p,
 		const void *data, size_t len, off_t offset)
@@ -621,6 +645,7 @@ rte_pci_ioport_write(struct rte_pci_ioport *p,
 	}
 }
 
+RTE_EXPORT_SYMBOL(rte_pci_ioport_unmap)
 int
 rte_pci_ioport_unmap(struct rte_pci_ioport *p)
 {

@@ -315,6 +315,37 @@ mlx5_set_txlimit_params(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 }
 
 /**
+ * Get maximal work queue size in WQEs
+ *
+ * @param sh
+ *   Pointer to the device shared context.
+ * @return
+ *   Maximal number of WQEs in queue
+ */
+uint16_t
+mlx5_dev_get_max_wq_size(struct mlx5_dev_ctx_shared *sh)
+{
+	uint16_t max_wqe = MLX5_WQ_INDEX_MAX;
+
+	if (sh->cdev->config.devx) {
+		/* use HCA properties for DevX config */
+		MLX5_ASSERT(sh->cdev->config.hca_attr.log_max_wq_sz != 0);
+		MLX5_ASSERT(sh->cdev->config.hca_attr.log_max_wq_sz < MLX5_WQ_INDEX_WIDTH);
+		if (sh->cdev->config.hca_attr.log_max_wq_sz != 0 &&
+		    sh->cdev->config.hca_attr.log_max_wq_sz < MLX5_WQ_INDEX_WIDTH)
+			max_wqe = 1u << sh->cdev->config.hca_attr.log_max_wq_sz;
+	} else {
+		/* use IB device capabilities */
+		MLX5_ASSERT(sh->dev_cap.max_qp_wr > 0);
+		MLX5_ASSERT((unsigned int)sh->dev_cap.max_qp_wr <= MLX5_WQ_INDEX_MAX);
+		if (sh->dev_cap.max_qp_wr > 0 &&
+		    (uint32_t)sh->dev_cap.max_qp_wr <= MLX5_WQ_INDEX_MAX)
+			max_wqe = (uint16_t)sh->dev_cap.max_qp_wr;
+	}
+	return max_wqe;
+}
+
+/**
  * DPDK callback to get information about the device.
  *
  * @param dev
@@ -327,6 +358,7 @@ mlx5_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int max;
+	uint16_t max_wqe;
 
 	/* FIXME: we should ask the device for these values. */
 	info->min_rx_bufsize = 32;
@@ -359,10 +391,9 @@ mlx5_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	info->flow_type_rss_offloads = ~MLX5_RSS_HF_MASK;
 	mlx5_set_default_params(dev, info);
 	mlx5_set_txlimit_params(dev, info);
-	info->rx_desc_lim.nb_max =
-		1 << priv->sh->cdev->config.hca_attr.log_max_wq_sz;
-	info->tx_desc_lim.nb_max =
-		1 << priv->sh->cdev->config.hca_attr.log_max_wq_sz;
+	max_wqe = mlx5_dev_get_max_wq_size(priv->sh);
+	info->rx_desc_lim.nb_max = max_wqe;
+	info->tx_desc_lim.nb_max = max_wqe;
 	if (priv->sh->cdev->config.hca_attr.mem_rq_rmp &&
 	    priv->obj_ops.rxq_obj_new == devx_obj_ops.rxq_obj_new)
 		info->dev_capa |= RTE_ETH_DEV_CAPA_RXQ_SHARE;
@@ -617,6 +648,7 @@ mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 	};
 
 	if (dev->rx_pkt_burst == mlx5_rx_burst ||
+	    dev->rx_pkt_burst == mlx5_rx_burst_out_of_order ||
 	    dev->rx_pkt_burst == mlx5_rx_burst_mprq ||
 	    dev->rx_pkt_burst == mlx5_rx_burst_vec ||
 	    dev->rx_pkt_burst == mlx5_rx_burst_mprq_vec) {
@@ -647,6 +679,14 @@ mlx5_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 	ret = mlx5_get_mtu(dev, &kern_mtu);
 	if (ret)
 		return ret;
+
+	if (kern_mtu == mtu) {
+		priv->mtu = mtu;
+		DRV_LOG(DEBUG, "port %u adapter MTU was already set to %u",
+			dev->data->port_id, mtu);
+		return 0;
+	}
+
 	/* Set kernel interface MTU first. */
 	ret = mlx5_set_mtu(dev, mtu);
 	if (ret)
@@ -679,7 +719,12 @@ mlx5_select_rx_function(struct rte_eth_dev *dev)
 	eth_rx_burst_t rx_pkt_burst = mlx5_rx_burst;
 
 	MLX5_ASSERT(dev != NULL);
-	if (mlx5_check_vec_rx_support(dev) > 0) {
+	if (mlx5_shared_rq_enabled(dev)) {
+		rx_pkt_burst = mlx5_rx_burst_out_of_order;
+		DRV_LOG(DEBUG, "port %u forced to use SPRQ"
+			" Rx function with Out-of-Order completions",
+			dev->data->port_id);
+	} else if (mlx5_check_vec_rx_support(dev) > 0) {
 		if (mlx5_mprq_enabled(dev)) {
 			rx_pkt_burst = mlx5_rx_burst_mprq_vec;
 			DRV_LOG(DEBUG, "port %u selected vectorized"

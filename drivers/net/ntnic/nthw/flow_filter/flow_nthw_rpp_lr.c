@@ -22,7 +22,7 @@ struct rpp_lr_nthw *rpp_lr_nthw_new(void)
 	struct rpp_lr_nthw *p = malloc(sizeof(struct rpp_lr_nthw));
 
 	if (p)
-		(void)memset(p, 0, sizeof(*p));
+		memset(p, 0, sizeof(*p));
 
 	return p;
 }
@@ -30,7 +30,7 @@ struct rpp_lr_nthw *rpp_lr_nthw_new(void)
 void rpp_lr_nthw_delete(struct rpp_lr_nthw *p)
 {
 	if (p) {
-		(void)memset(p, 0, sizeof(*p));
+		memset(p, 0, sizeof(*p));
 		free(p);
 	}
 }
@@ -40,7 +40,7 @@ int rpp_lr_nthw_init(struct rpp_lr_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
 	const char *const p_adapter_id_str = p_fpga->p_fpga_info->mp_adapter_id_str;
 	nthw_module_t *p_mod = nthw_fpga_query_module(p_fpga, MOD_RPP_LR, n_instance);
 
-	assert(n_instance >= 0 && n_instance < 256);
+	RTE_ASSERT(n_instance >= 0 && n_instance < 256);
 
 	if (p == NULL)
 		return p_mod == NULL ? -1 : 0;
@@ -54,18 +54,21 @@ int rpp_lr_nthw_init(struct rpp_lr_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
 	p->mp_fpga = p_fpga;
 	p->m_physical_adapter_no = (uint8_t)n_instance;
 	p->m_rpp_lr = nthw_fpga_query_module(p_fpga, MOD_RPP_LR, n_instance);
-
-	p->mp_rcp_ctrl = nthw_module_get_register(p->m_rpp_lr, RPP_LR_RCP_CTRL);
+	if (p->m_rpp_lr)
+		p->mp_rcp_ctrl = nthw_module_get_register(p->m_rpp_lr, RPP_LR_RCP_CTRL);
 	p->mp_rcp_addr = nthw_register_get_field(p->mp_rcp_ctrl, RPP_LR_RCP_CTRL_ADR);
 	p->mp_rcp_cnt = nthw_register_get_field(p->mp_rcp_ctrl, RPP_LR_RCP_CTRL_CNT);
-	p->mp_rcp_data = nthw_module_get_register(p->m_rpp_lr, RPP_LR_RCP_DATA);
+	if (p->m_rpp_lr)
+		p->mp_rcp_data = nthw_module_get_register(p->m_rpp_lr, RPP_LR_RCP_DATA);
 	p->mp_rcp_data_exp = nthw_register_get_field(p->mp_rcp_data, RPP_LR_RCP_DATA_EXP);
 
-	p->mp_ifr_rcp_ctrl = nthw_module_query_register(p->m_rpp_lr, RPP_LR_IFR_RCP_CTRL);
+	if (p->m_rpp_lr)
+		p->mp_ifr_rcp_ctrl = nthw_module_query_register(p->m_rpp_lr, RPP_LR_IFR_RCP_CTRL);
 	p->mp_ifr_rcp_addr =
 		nthw_register_query_field(p->mp_ifr_rcp_ctrl, RPP_LR_IFR_RCP_CTRL_ADR);
 	p->mp_ifr_rcp_cnt = nthw_register_query_field(p->mp_ifr_rcp_ctrl, RPP_LR_IFR_RCP_CTRL_CNT);
-	p->mp_ifr_rcp_data = nthw_module_query_register(p->m_rpp_lr, RPP_LR_IFR_RCP_DATA);
+	if (p->m_rpp_lr)
+		p->mp_ifr_rcp_data = nthw_module_query_register(p->m_rpp_lr, RPP_LR_IFR_RCP_DATA);
 	p->mp_ifr_rcp_data_ipv4_en =
 		nthw_register_query_field(p->mp_ifr_rcp_data, RPP_LR_IFR_RCP_DATA_IPV4_EN);
 	p->mp_ifr_rcp_data_ipv6_en =
@@ -82,39 +85,39 @@ int rpp_lr_nthw_init(struct rpp_lr_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
 
 void rpp_lr_nthw_rcp_select(const struct rpp_lr_nthw *p, uint32_t val)
 {
-	assert(p->mp_rcp_addr);
+	RTE_ASSERT(p->mp_rcp_addr);
 	nthw_field_set_val32(p->mp_rcp_addr, val);
 }
 
 void rpp_lr_nthw_rcp_cnt(const struct rpp_lr_nthw *p, uint32_t val)
 {
-	assert(p->mp_rcp_cnt);
+	RTE_ASSERT(p->mp_rcp_cnt);
 	nthw_field_set_val32(p->mp_rcp_cnt, val);
 }
 
 void rpp_lr_nthw_rcp_exp(const struct rpp_lr_nthw *p, uint32_t val)
 {
-	assert(p->mp_rcp_data_exp);
+	RTE_ASSERT(p->mp_rcp_data_exp);
 	nthw_field_set_val32(p->mp_rcp_data_exp, val);
 }
 
 void rpp_lr_nthw_rcp_flush(const struct rpp_lr_nthw *p)
 {
-	assert(p->mp_rcp_ctrl);
-	assert(p->mp_rcp_data);
+	RTE_ASSERT(p->mp_rcp_ctrl);
+	RTE_ASSERT(p->mp_rcp_data);
 	nthw_register_flush(p->mp_rcp_ctrl, 1);
 	nthw_register_flush(p->mp_rcp_data, 1);
 }
 
 void rpp_lr_nthw_ifr_rcp_select(const struct rpp_lr_nthw *p, uint32_t val)
 {
-	assert(p->mp_ifr_rcp_addr);
+	RTE_ASSERT(p->mp_ifr_rcp_addr);
 	nthw_field_set_val32(p->mp_ifr_rcp_addr, val);
 }
 
 void rpp_lr_nthw_ifr_rcp_cnt(const struct rpp_lr_nthw *p, uint32_t val)
 {
-	assert(p->mp_ifr_rcp_cnt);
+	RTE_ASSERT(p->mp_ifr_rcp_cnt);
 	nthw_field_set_val32(p->mp_ifr_rcp_cnt, val);
 }
 
@@ -144,14 +147,14 @@ void rpp_lr_nthw_ifr_rcp_ipv6_drop(const struct rpp_lr_nthw *p, uint32_t val)
 
 void rpp_lr_nthw_ifr_rcp_mtu(const struct rpp_lr_nthw *p, uint32_t val)
 {
-	assert(p->mp_ifr_rcp_data_mtu);
+	RTE_ASSERT(p->mp_ifr_rcp_data_mtu);
 	nthw_field_set_val32(p->mp_ifr_rcp_data_mtu, val);
 }
 
 void rpp_lr_nthw_ifr_rcp_flush(const struct rpp_lr_nthw *p)
 {
-	assert(p->mp_ifr_rcp_ctrl);
-	assert(p->mp_ifr_rcp_data);
+	RTE_ASSERT(p->mp_ifr_rcp_ctrl);
+	RTE_ASSERT(p->mp_ifr_rcp_data);
 	nthw_register_flush(p->mp_ifr_rcp_ctrl, 1);
 	nthw_register_flush(p->mp_ifr_rcp_data, 1);
 }

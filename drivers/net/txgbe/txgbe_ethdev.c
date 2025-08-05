@@ -826,7 +826,7 @@ eth_txgbe_dev_uninit(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-static int txgbe_ntuple_filter_uninit(struct rte_eth_dev *eth_dev)
+int txgbe_ntuple_filter_uninit(struct rte_eth_dev *eth_dev)
 {
 	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(eth_dev);
 	struct txgbe_5tuple_filter *p_5tuple;
@@ -2250,7 +2250,7 @@ txgbe_read_stats_registers(struct txgbe_hw *hw,
 	hw_stats->rx_total_bytes += rd64(hw, TXGBE_MACRXGBOCTL);
 
 	hw_stats->rx_broadcast_packets += rd64(hw, TXGBE_MACRXOCTL);
-	hw_stats->tx_broadcast_packets += rd32(hw, TXGBE_MACTXOCTL);
+	hw_stats->tx_broadcast_packets += rd64(hw, TXGBE_MACTXOCTL);
 
 	hw_stats->rx_size_64_packets += rd64(hw, TXGBE_MACRX1TO64L);
 	hw_stats->rx_size_65_to_127_packets += rd64(hw, TXGBE_MACRX65TO127L);
@@ -2269,7 +2269,8 @@ txgbe_read_stats_registers(struct txgbe_hw *hw,
 	hw_stats->tx_size_1024_to_max_packets +=
 			rd64(hw, TXGBE_MACTX1024TOMAXL);
 
-	hw_stats->rx_undersize_errors += rd64(hw, TXGBE_MACRXERRLENL);
+	hw_stats->rx_length_errors += rd64(hw, TXGBE_MACRXERRLENL);
+	hw_stats->rx_undersize_errors += rd32(hw, TXGBE_MACRXUNDERSIZE);
 	hw_stats->rx_oversize_cnt += rd32(hw, TXGBE_MACRXOVERSIZE);
 	hw_stats->rx_jabber_errors += rd32(hw, TXGBE_MACRXJABBER);
 
@@ -3586,6 +3587,7 @@ txgbe_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	hw->fc.low_water[0]   = fc_conf->low_water;
 	hw->fc.send_xon       = fc_conf->send_xon;
 	hw->fc.disable_fc_autoneg = !fc_conf->autoneg;
+	hw->fc.mac_ctrl_frame_fwd = fc_conf->mac_ctrl_frame_fwd;
 
 	err = txgbe_fc_enable(hw);
 
@@ -4236,7 +4238,10 @@ txgbe_add_5tuple_filter(struct rte_eth_dev *dev,
 		return -ENOSYS;
 	}
 
-	txgbe_inject_5tuple_filter(dev, filter);
+	if (txgbe_is_pf(TXGBE_DEV_HW(dev)))
+		txgbe_inject_5tuple_filter(dev, filter);
+	else
+		txgbevf_inject_5tuple_filter(dev, filter);
 
 	return 0;
 }
@@ -4260,6 +4265,11 @@ txgbe_remove_5tuple_filter(struct rte_eth_dev *dev,
 				~(1 << (index % (sizeof(uint32_t) * NBBY)));
 	TAILQ_REMOVE(&filter_info->fivetuple_list, filter, entries);
 	rte_free(filter);
+
+	if (!txgbe_is_pf(TXGBE_DEV_HW(dev))) {
+		txgbevf_remove_5tuple_filter(dev, index);
+		return;
+	}
 
 	wr32(hw, TXGBE_5TFDADDR(index), 0);
 	wr32(hw, TXGBE_5TFSADDR(index), 0);

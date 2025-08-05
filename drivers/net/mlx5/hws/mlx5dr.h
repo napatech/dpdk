@@ -17,6 +17,9 @@ enum mlx5dr_table_type {
 	MLX5DR_TABLE_TYPE_NIC_RX,
 	MLX5DR_TABLE_TYPE_NIC_TX,
 	MLX5DR_TABLE_TYPE_FDB,
+	MLX5DR_TABLE_TYPE_FDB_RX,
+	MLX5DR_TABLE_TYPE_FDB_TX,
+	MLX5DR_TABLE_TYPE_FDB_UNIFIED,
 	MLX5DR_TABLE_TYPE_MAX,
 };
 
@@ -63,10 +66,13 @@ enum mlx5dr_action_flags {
 	MLX5DR_ACTION_FLAG_HWS_RX = 1 << 3,
 	MLX5DR_ACTION_FLAG_HWS_TX = 1 << 4,
 	MLX5DR_ACTION_FLAG_HWS_FDB = 1 << 5,
+	MLX5DR_ACTION_FLAG_HWS_FDB_RX = 1 << 6,
+	MLX5DR_ACTION_FLAG_HWS_FDB_TX = 1 << 7,
+	MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED = 1 << 8,
 	/* Shared action can be used over a few threads, since data is written
 	 * only once at the creation of the action.
 	 */
-	MLX5DR_ACTION_FLAG_SHARED = 1 << 6,
+	MLX5DR_ACTION_FLAG_SHARED = 1 << 9,
 };
 
 enum mlx5dr_action_aso_meter_color {
@@ -328,13 +334,13 @@ union mlx5dr_crc_encap_entropy_hash_ip_field {
 	};
 };
 
-struct mlx5dr_crc_encap_entropy_hash_fields {
+struct __rte_packed_begin mlx5dr_crc_encap_entropy_hash_fields {
 	union mlx5dr_crc_encap_entropy_hash_ip_field dst;
 	union mlx5dr_crc_encap_entropy_hash_ip_field src;
 	uint8_t next_protocol;
 	rte_be16_t dst_port;
 	rte_be16_t src_port;
-} __rte_packed;
+} __rte_packed_end;
 
 enum mlx5dr_crc_encap_entropy_hash_size {
 	MLX5DR_CRC_ENCAP_ENTROPY_HASH_SIZE_8,

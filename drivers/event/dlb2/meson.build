@@ -20,23 +20,26 @@ sources = files(
         'pf/base/dlb2_resource.c',
         'rte_pmd_dlb2.c',
         'dlb2_selftest.c',
+        'dlb2_sse.c',
 )
 
-if target_has_avx512
-    cflags += '-DCC_AVX512_SUPPORT'
-    sources += files('dlb2_avx512.c')
-
-elif cc_has_avx512
-    cflags += '-DCC_AVX512_SUPPORT'
-    avx512_tmplib = static_library('avx512_tmp',
-                               'dlb2_avx512.c',
-                               dependencies: [static_rte_eal, static_rte_eventdev],
-                               c_args: cflags + cc_avx512_flags)
-    objs += avx512_tmplib.extract_objects('dlb2_avx512.c')
-else
-    sources += files('dlb2_sse.c')
-endif
+sources_avx512 += files('dlb2_avx512.c')
 
 headers = files('rte_pmd_dlb2.h')
 
 deps += ['mbuf', 'mempool', 'ring', 'pci', 'bus_pci']
+
+dlb_pmd_defines = ['-DDLB2_BYPASS_FENCE_ON_PP', '-DDLB_HW_CREDITS_CHECKS', '-DDLB_SW_CREDITS_CHECKS', '-DDLB_TYPE_CHECK']
+dlb_pmd_default = ['0','1','1','1']
+
+c_args=get_option('c_args')
+index = 0
+foreach opt: dlb_pmd_defines
+    opt_true = opt + '=1'
+    opt_false = opt + '=0'
+    if not (c_args.contains(opt_true) or c_args.contains(opt_false))
+        cflags += opt + '=' + dlb_pmd_default[index]
+    endif
+
+    index += 1
+endforeach

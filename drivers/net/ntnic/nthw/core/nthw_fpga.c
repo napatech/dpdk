@@ -14,6 +14,7 @@
 #include "nthw_fpga_mod_str_map.h"
 
 #include "nthw_tsm.h"
+#include "nthw_spi_v3.h"
 
 #include <arpa/inet.h>
 
@@ -74,7 +75,7 @@ int nthw_fpga_iic_scan(nthw_fpga_t *p_fpga, const int n_instance_no_begin,
 {
 	int i;
 
-	assert(n_instance_no_begin <= n_instance_no_end);
+	RTE_ASSERT(n_instance_no_begin <= n_instance_no_end);
 
 	for (i = n_instance_no_begin; i <= n_instance_no_end; i++) {
 		nthw_iic_t *p_nthw_iic = nthw_iic_new();
@@ -151,6 +152,172 @@ int nthw_fpga_silabs_detect(nthw_fpga_t *p_fpga, const int n_instance_no, const 
 	return res;
 }
 
+int nthw_fpga_avr_probe(nthw_fpga_t *p_fpga, const int n_instance_no)
+{
+	struct fpga_info_s *p_fpga_info = p_fpga->p_fpga_info;
+	const char *const p_adapter_id_str = p_fpga_info->mp_adapter_id_str;
+	nthw_spi_v3_t *p_avr_spi;
+	int res = -1;
+
+	p_avr_spi = nthw_spi_v3_new();
+
+	if (p_avr_spi) {
+		struct avr_vpd_info_s {
+			/* avr info */
+			uint32_t n_avr_spi_version;
+			uint8_t n_avr_fw_ver_major;
+			uint8_t n_avr_fw_ver_minor;
+			uint8_t n_avr_fw_ver_micro;
+			uint8_t a_avr_fw_ver_str[50];
+			uint8_t a_avr_fw_plat_id_str[20];
+
+			/* vpd_eeprom_t */
+			uint8_t psu_hw_version;
+			uint8_t vpd_pn[GEN2_PN_SIZE];
+			uint8_t vpd_pba[GEN2_PBA_SIZE];
+			uint8_t vpd_sn[GEN2_SN_SIZE];
+			uint8_t vpd_board_name[GEN2_BNAME_SIZE];
+			uint8_t vpd_platform_section[GEN2_PLATFORM_SIZE];
+
+			/* board_info_t aka vpd_platform_section: */
+			uint32_t product_family;/* uint8_t 1: capture, 2: Inline, 3: analysis */
+			uint32_t feature_mask;	/* Bit 0: OC192 capable */
+			uint32_t invfeature_mask;
+			uint8_t no_of_macs;
+			uint8_t mac_address[6];
+			uint16_t custom_id;
+			uint8_t user_id[8];
+			/*
+			 * Reserved NT operations to monitor the reprogram count of user_id with
+			 * vpduser
+			 */
+			uint16_t user_id_erase_write_count;
+
+			/*
+			 * AVR_OP_SYSINFO: struct version_sysinfo_request_container
+			 * Which version of the sysinfo container to retrieve. Set to zero to fetch
+			 * latest. Offset zero of latest always contain an uint8_t version info
+			 */
+			uint8_t sysinfo_container_version;
+
+			/* AVR_OP_SYSINFO: struct AvrLibcVersion */
+			/* The constant __AVR_LIBC_VERSION__ */
+			uint32_t sysinfo_avr_libc_version;
+
+			/* AVR_OP_SYSINFO: struct AvrLibcSignature */
+			uint8_t sysinfo_signature_0;	/* The constant SIGNATURE_0 */
+			uint8_t sysinfo_signature_1;	/* The constant SIGNATURE_1 */
+			uint8_t sysinfo_signature_2;	/* The constant SIGNATURE_2 */
+
+			/* AVR_OP_SYSINFO: struct AvrOs */
+			uint8_t sysinfo_spi_version;	/* SPI command layer version */
+			/*
+			 * Hardware revision. Locked to eeprom address zero. Is also available via
+			 * VPD read opcode (prior to v1.4b, this is required)
+			 */
+			uint8_t sysinfo_hw_revision;
+			/*
+			 * Number of ticks/second (Note: Be aware this may become zero if timer
+			 * module is rewritten to a tickles system!)
+			 */
+			uint8_t sysinfo_ticks_per_second;
+			uint32_t sysinfo_uptime;/* Uptime in seconds since last AVR reset */
+			uint8_t sysinfo_osccal;	/* OSCCAL value */
+
+			/*
+			 * Meta data concluded/calculated from req/reply
+			 */
+			bool b_feature_mask_valid;
+			bool b_crc16_valid;
+			uint16_t n_crc16_stored;
+			uint16_t n_crc16_calced;
+			uint64_t n_mac_val;
+		};
+
+		struct avr_vpd_info_s avr_vpd_info;
+		struct tx_rx_buf tx_buf;
+		struct tx_rx_buf rx_buf;
+		char rx_data[MAX_AVR_CONTAINER_SIZE];
+		uint32_t u32;
+
+		memset(&avr_vpd_info, 0, sizeof(avr_vpd_info));
+
+		nthw_spi_v3_init(p_avr_spi, p_fpga, n_instance_no);
+
+		/* AVR_OP_SPI_VERSION */
+		tx_buf.size = 0;
+		tx_buf.p_buf = NULL;
+		rx_buf.size = sizeof(u32);
+		rx_buf.p_buf = &u32;
+		u32 = 0;
+		res = nthw_spi_v3_transfer(p_avr_spi, AVR_OP_SPI_VERSION, &tx_buf, &rx_buf);
+		avr_vpd_info.n_avr_spi_version = u32;
+		NT_LOG(DBG, NTHW, "%s: AVR%d: SPI_VER: %d", p_adapter_id_str, n_instance_no,
+			avr_vpd_info.n_avr_spi_version);
+
+		/* AVR_OP_VERSION */
+		tx_buf.size = 0;
+		tx_buf.p_buf = NULL;
+		rx_buf.size = sizeof(rx_data);
+		rx_buf.p_buf = &rx_data;
+		res = nthw_spi_v3_transfer(p_avr_spi, AVR_OP_VERSION, &tx_buf, &rx_buf);
+
+		avr_vpd_info.n_avr_fw_ver_major = rx_data[0];
+		avr_vpd_info.n_avr_fw_ver_minor = rx_data[1];
+		avr_vpd_info.n_avr_fw_ver_micro = rx_data[2];
+		NT_LOG(DBG, NTHW, "%s: AVR%d: FW_VER: %c.%c.%c", p_adapter_id_str, n_instance_no,
+			avr_vpd_info.n_avr_fw_ver_major, avr_vpd_info.n_avr_fw_ver_minor,
+			avr_vpd_info.n_avr_fw_ver_micro);
+
+		memcpy(avr_vpd_info.a_avr_fw_ver_str, &rx_data[0 + 3],
+			sizeof(avr_vpd_info.a_avr_fw_ver_str));
+		NT_LOG(DBG, NTHW, "%s: AVR%d: FW_VER_STR: '%.*s'", p_adapter_id_str,
+			n_instance_no, (int)sizeof(avr_vpd_info.a_avr_fw_ver_str),
+			avr_vpd_info.a_avr_fw_ver_str);
+
+		memcpy(avr_vpd_info.a_avr_fw_plat_id_str, &rx_data[0 + 3 + 50],
+			sizeof(avr_vpd_info.a_avr_fw_plat_id_str));
+		NT_LOG(DBG, NTHW, "%s: AVR%d: FW_HW_ID_STR: '%.*s'", p_adapter_id_str,
+			n_instance_no, (int)sizeof(avr_vpd_info.a_avr_fw_plat_id_str),
+			avr_vpd_info.a_avr_fw_plat_id_str);
+
+		snprintf(p_fpga_info->nthw_hw_info.hw_plat_id_str,
+			sizeof(p_fpga_info->nthw_hw_info.hw_plat_id_str), "%s",
+			(char *)avr_vpd_info.a_avr_fw_plat_id_str);
+		p_fpga_info->nthw_hw_info
+		.hw_plat_id_str[sizeof(p_fpga_info->nthw_hw_info.hw_plat_id_str) - 1] = 0;
+
+		/* AVR_OP_SYSINFO_2 */
+		tx_buf.size = 0;
+		tx_buf.p_buf = NULL;
+		rx_buf.size = sizeof(rx_data);
+		rx_buf.p_buf = &rx_data;
+		res = nthw_spi_v3_transfer(p_avr_spi, AVR_OP_SYSINFO_2, &tx_buf, &rx_buf);
+
+		/* AVR_OP_SYSINFO */
+		tx_buf.size = 0;
+		tx_buf.p_buf = NULL;
+		rx_buf.size = sizeof(rx_data);
+		rx_buf.p_buf = &rx_data;
+		res = nthw_spi_v3_transfer(p_avr_spi, AVR_OP_SYSINFO, &tx_buf, &rx_buf);
+
+		NT_LOG(ERR, NTHW, "%s: AVR%d: SYSINFO: NA: res=%d sz=%d",
+				p_adapter_id_str, n_instance_no, res, rx_buf.size);
+
+		/* AVR_OP_VPD_READ */
+		tx_buf.size = 0;
+		tx_buf.p_buf = NULL;
+		rx_buf.size = sizeof(rx_data);
+		rx_buf.p_buf = &rx_data;
+		res = nthw_spi_v3_transfer(p_avr_spi, AVR_OP_VPD_READ, &tx_buf, &rx_buf);
+
+		NT_LOG(ERR, NTHW, "%s:%u: res=%d", __func__, __LINE__, res);
+		NT_LOG(ERR, NTHW, "%s: AVR%d: SYSINFO2: NA: res=%d sz=%d",
+			p_adapter_id_str, n_instance_no, res, rx_buf.size);
+	}
+	return res;
+}
+
 /*
  * NT200A02, NT200A01-HWbuild2
  */
@@ -162,8 +329,8 @@ int nthw_fpga_si5340_clock_synth_init_fmt2(nthw_fpga_t *p_fpga, const uint8_t n_
 	nthw_iic_t *p_nthw_iic = nthw_iic_new();
 	nthw_si5340_t *p_nthw_si5340 = nthw_si5340_new();
 
-	assert(p_nthw_iic);
-	assert(p_nthw_si5340);
+	RTE_ASSERT(p_nthw_iic);
+	RTE_ASSERT(p_nthw_si5340);
 	nthw_iic_init(p_nthw_iic, p_fpga, 0, 8);/* I2C cycle time 125Mhz ~ 8ns */
 
 	nthw_si5340_init(p_nthw_si5340, p_nthw_iic, n_iic_addr);/* si5340_u23_i2c_addr_7bit */
@@ -176,6 +343,7 @@ int nthw_fpga_si5340_clock_synth_init_fmt2(nthw_fpga_t *p_fpga, const uint8_t n_
 
 int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 {
+	RTE_ASSERT(p_fpga_info);
 	const char *const p_adapter_id_str = p_fpga_info->mp_adapter_id_str;
 
 	nthw_hif_t *p_nthw_hif = NULL;
@@ -191,8 +359,6 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 	char s_fpga_prod_ver_rev_str[32] = { 0 };
 
 	int res = 0;
-
-	assert(p_fpga_info);
 
 	{
 		const uint64_t n_fpga_ident = nthw_fpga_read_ident(p_fpga_info);
@@ -230,6 +396,8 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 		if (p_fpga == NULL) {
 			NT_LOG(ERR, NTHW, "%s: Unsupported FPGA: %s (%08X)", p_adapter_id_str,
 				s_fpga_prod_ver_rev_str, p_fpga_info->n_fpga_build_time);
+			nthw_fpga_mgr_delete(p_fpga_mgr);
+			p_fpga_mgr = NULL;
 			return -1;
 		}
 
@@ -263,29 +431,25 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 	nthw_rac_rab_flush(p_nthw_rac);
 	p_fpga_info->mp_nthw_rac = p_nthw_rac;
 
-	bool included = true;
 	struct nt200a0x_ops *nt200a0x_ops = get_nt200a0x_ops();
+	struct nt400dxx_ops *nt400dxx_ops = get_nt400dxx_ops();
 
 	switch (p_fpga_info->n_nthw_adapter_id) {
 	case NT_HW_ADAPTER_ID_NT200A02:
 		if (nt200a0x_ops != NULL)
 			res = nt200a0x_ops->nthw_fpga_nt200a0x_init(p_fpga_info);
-
-		else
-			included = false;
-
 		break;
+
+	case NT_HW_ADAPTER_ID_NT400D13:
+		if (nt400dxx_ops != NULL)
+			res = nt400dxx_ops->nthw_fpga_nt400dxx_init(p_fpga_info);
+		break;
+
 	default:
 		NT_LOG(ERR, NTHW, "%s: Unsupported HW product id: %d", p_adapter_id_str,
 			p_fpga_info->n_nthw_adapter_id);
 		res = -1;
 		break;
-	}
-
-	if (!included) {
-		NT_LOG(ERR, NTHW, "%s: NOT INCLUDED HW product: %d", p_adapter_id_str,
-			p_fpga_info->n_nthw_adapter_id);
-		res = -1;
 	}
 
 	if (res) {
@@ -385,10 +549,8 @@ int nthw_fpga_shutdown(struct fpga_info_s *p_fpga_info)
 {
 	int res = -1;
 
-	if (p_fpga_info) {
-		if (p_fpga_info && p_fpga_info->mp_nthw_rac)
+		if (p_fpga_info->mp_nthw_rac)
 			res = nthw_rac_rab_reset(p_fpga_info->mp_nthw_rac);
-	}
 
 	return res;
 }
@@ -405,4 +567,18 @@ struct nt200a0x_ops *get_nt200a0x_ops(void)
 	if (nt200a0x_ops == NULL)
 		nt200a0x_ops_init();
 	return nt200a0x_ops;
+}
+
+static struct nt400dxx_ops *nt400dxx_ops;
+
+void register_nt400dxx_ops(struct nt400dxx_ops *ops)
+{
+	nt400dxx_ops = ops;
+}
+
+struct nt400dxx_ops *get_nt400dxx_ops(void)
+{
+	if (nt400dxx_ops == NULL)
+		nt400dxx_ops_init();
+	return nt400dxx_ops;
 }

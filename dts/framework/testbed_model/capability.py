@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2024 PANTHEON.tech s.r.o.
+# Copyright(c) 2025 Arm Limited
 
 """Testbed capabilities.
 
@@ -53,7 +54,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar, Protocol
 
 from typing_extensions import Self
 
-from framework.exception import ConfigurationError
+from framework.exception import ConfigurationError, InternalError, SkippedTestException
 from framework.logger import get_dts_logger
 from framework.remote_session.testpmd_shell import (
     NicCapability,
@@ -62,8 +63,9 @@ from framework.remote_session.testpmd_shell import (
     TestPmdShellDecorator,
     TestPmdShellMethod,
 )
+from framework.testbed_model.node import Node
+from framework.testbed_model.port import DriverKind
 
-from .sut_node import SutNode
 from .topology import Topology, TopologyType
 
 if TYPE_CHECKING:
@@ -89,7 +91,7 @@ class Capability(ABC):
     #: A set storing the capabilities whose support should be checked.
     capabilities_to_check: ClassVar[set[Self]] = set()
 
-    def register_to_check(self) -> Callable[[SutNode, "Topology"], set[Self]]:
+    def register_to_check(self) -> Callable[[Node, "Topology"], set[Self]]:
         """Register the capability to be checked for support.
 
         Returns:
@@ -117,27 +119,27 @@ class Capability(ABC):
         """An optional method that modifies the required capabilities."""
 
     @classmethod
-    def _get_and_reset(cls, sut_node: SutNode, topology: "Topology") -> set[Self]:
+    def _get_and_reset(cls, node: Node, topology: "Topology") -> set[Self]:
         """The callback method to be called after all capabilities have been registered.
 
         Not only does this method check the support of capabilities,
         but it also reset the internal set of registered capabilities
         so that the "register, then get support" workflow works in subsequent test runs.
         """
-        supported_capabilities = cls.get_supported_capabilities(sut_node, topology)
+        supported_capabilities = cls.get_supported_capabilities(node, topology)
         cls.capabilities_to_check = set()
         return supported_capabilities
 
     @classmethod
     @abstractmethod
-    def get_supported_capabilities(cls, sut_node: SutNode, topology: "Topology") -> set[Self]:
+    def get_supported_capabilities(cls, node: Node, topology: "Topology") -> set[Self]:
         """Get the support status of each registered capability.
 
         Each subclass must implement this method and return the subset of supported capabilities
         of :attr:`capabilities_to_check`.
 
         Args:
-            sut_node: The SUT node of the current test run.
+            node: The node to check capabilities against.
             topology: The topology of the current test run.
 
         Returns:
@@ -169,7 +171,7 @@ class DecoratedNicCapability(Capability):
     _unique_capabilities: ClassVar[dict[NicCapability, Self]] = {}
 
     @classmethod
-    def get_unique(cls, nic_capability: NicCapability) -> "DecoratedNicCapability":
+    def get_unique(cls, nic_capability: NicCapability) -> Self:
         """Get the capability uniquely identified by `nic_capability`.
 
         This is a factory method that implements a quasi-enum pattern.
@@ -186,11 +188,7 @@ class DecoratedNicCapability(Capability):
         Returns:
             The capability uniquely identified by `nic_capability`.
         """
-        decorator_fn = None
-        if isinstance(nic_capability.value, tuple):
-            capability_fn, decorator_fn = nic_capability.value
-        else:
-            capability_fn = nic_capability.value
+        capability_fn, decorator_fn = nic_capability.value
 
         if nic_capability not in cls._unique_capabilities:
             cls._unique_capabilities[nic_capability] = cls(
@@ -200,7 +198,7 @@ class DecoratedNicCapability(Capability):
 
     @classmethod
     def get_supported_capabilities(
-        cls, sut_node: SutNode, topology: "Topology"
+        cls, node: Node, topology: "Topology"
     ) -> set["DecoratedNicCapability"]:
         """Overrides :meth:`~Capability.get_supported_capabilities`.
 
@@ -210,7 +208,7 @@ class DecoratedNicCapability(Capability):
         before executing its `capability_fn` so that each capability is retrieved only once.
         """
         supported_conditional_capabilities: set["DecoratedNicCapability"] = set()
-        logger = get_dts_logger(f"{sut_node.name}.{cls.__name__}")
+        logger = get_dts_logger(f"{node.name}.{cls.__name__}")
         if topology.type is topology.type.no_link:
             logger.debug(
                 "No links available in the current topology, not getting NIC capabilities."
@@ -221,10 +219,11 @@ class DecoratedNicCapability(Capability):
         )
         if cls.capabilities_to_check:
             capabilities_to_check_map = cls._get_decorated_capabilities_map()
-            with TestPmdShell(
-                sut_node, privileged=True, disable_device_start=True
-            ) as testpmd_shell:
-                for conditional_capability_fn, capabilities in capabilities_to_check_map.items():
+            with TestPmdShell() as testpmd_shell:
+                for (
+                    conditional_capability_fn,
+                    capabilities,
+                ) in capabilities_to_check_map.items():
                     supported_capabilities: set[NicCapability] = set()
                     unsupported_capabilities: set[NicCapability] = set()
                     capability_fn = cls._reduce_capabilities(
@@ -282,8 +281,8 @@ class TopologyCapability(Capability):
     """A wrapper around :class:`~.topology.TopologyType`.
 
     Each test case must be assigned a topology. It could be done explicitly;
-    the implicit default is :attr:`~.topology.TopologyType.default`, which this class defines
-    as equal to :attr:`~.topology.TopologyType.two_links`.
+    the implicit default is given by :meth:`~.topology.TopologyType.default`, which this class
+    returns :attr:`~.topology.TopologyType.two_links`.
 
     Test case topology may be set by setting the topology for the whole suite.
     The priority in which topology is set is as follows:
@@ -311,7 +310,7 @@ class TopologyCapability(Capability):
         test_case_or_suite.topology_type = self
 
     @classmethod
-    def get_unique(cls, topology_type: TopologyType) -> "TopologyCapability":
+    def get_unique(cls, topology_type: TopologyType) -> Self:
         """Get the capability uniquely identified by `topology_type`.
 
         This is a factory method that implements a quasi-enum pattern.
@@ -334,7 +333,7 @@ class TopologyCapability(Capability):
 
     @classmethod
     def get_supported_capabilities(
-        cls, sut_node: SutNode, topology: "Topology"
+        cls, node: Node, topology: "Topology"
     ) -> set["TopologyCapability"]:
         """Overrides :meth:`~Capability.get_supported_capabilities`."""
         supported_capabilities = set()
@@ -353,12 +352,16 @@ class TopologyCapability(Capability):
         At that point, the test case topologies have been set by the :func:`requires` decorator.
         The test suite topology only affects the test case topologies
         if not :attr:`~.topology.TopologyType.default`.
+
+        Raises:
+            ConfigurationError: If the topology type requested by the test case is more complex than
+                the test suite's.
         """
         if inspect.isclass(test_case_or_suite):
-            if self.topology_type is not TopologyType.default:
+            if self.topology_type is not TopologyType.default():
                 self.add_to_required(test_case_or_suite)
                 for test_case in test_case_or_suite.get_test_cases():
-                    if test_case.topology_type.topology_type is TopologyType.default:
+                    if test_case.topology_type.topology_type is TopologyType.default():
                         # test case topology has not been set, use the one set by the test suite
                         self.add_to_required(test_case)
                     elif test_case.topology_type > test_case_or_suite.topology_type:
@@ -421,14 +424,8 @@ class TopologyCapability(Capability):
         return self.topology_type.__hash__()
 
     def __str__(self):
-        """Easy to read string of class and name of :attr:`topology_type`.
-
-        Converts :attr:`TopologyType.default` to the actual value.
-        """
-        name = self.topology_type.name
-        if self.topology_type is TopologyType.default:
-            name = TopologyType.get_from_value(self.topology_type.value).name
-        return f"{type(self.topology_type).__name__}.{name}"
+        """Easy to read string of class and name of :attr:`topology_type`."""
+        return f"{type(self.topology_type).__name__}.{self.topology_type.name}"
 
     def __repr__(self):
         """Easy to read string of class and name of :attr:`topology_type`."""
@@ -443,9 +440,11 @@ class TestProtocol(Protocol):
     #: The reason for skipping the test case or suite.
     skip_reason: ClassVar[str] = ""
     #: The topology type of the test case or suite.
-    topology_type: ClassVar[TopologyCapability] = TopologyCapability(TopologyType.default)
+    topology_type: ClassVar[TopologyCapability] = TopologyCapability(TopologyType.default())
     #: The capabilities the test case or suite requires in order to be executed.
     required_capabilities: ClassVar[set[Capability]] = set()
+    #: The SUT ports topology configuration of the test case or suite.
+    sut_ports_drivers: ClassVar[DriverKind | tuple[DriverKind, ...] | None] = None
 
     @classmethod
     def get_test_cases(cls) -> list[type["TestCase"]]:
@@ -457,9 +456,32 @@ class TestProtocol(Protocol):
         raise NotImplementedError()
 
 
+def configure_ports(
+    *drivers: DriverKind, all_for: DriverKind | None = None
+) -> Callable[[type[TestProtocol]], type[TestProtocol]]:
+    """Decorator for test suite and test cases to configure ports drivers.
+
+    Configure all the SUT ports for the specified driver kind with `all_for`. Otherwise, specify
+    the port's respective driver kind in the positional argument. The amount of ports specified must
+    adhere to the requested topology.
+
+    Raises:
+        InternalError: If both positional arguments and `all_for` are set.
+    """
+    if len(drivers) and all_for is not None:
+        msg = "Cannot set both positional arguments and `all_for` to configure ports drivers."
+        raise InternalError(msg)
+
+    def _decorator(func: type[TestProtocol]) -> type[TestProtocol]:
+        func.sut_ports_drivers = all_for or drivers
+        return func
+
+    return _decorator
+
+
 def requires(
     *nic_capabilities: NicCapability,
-    topology_type: TopologyType = TopologyType.default,
+    topology_type: TopologyType = TopologyType.default(),
 ) -> Callable[[type[TestProtocol]], type[TestProtocol]]:
     """A decorator that adds the required capabilities to a test case or test suite.
 
@@ -471,7 +493,9 @@ def requires(
         The decorated test case or test suite.
     """
 
-    def add_required_capability(test_case_or_suite: type[TestProtocol]) -> type[TestProtocol]:
+    def add_required_capability(
+        test_case_or_suite: type[TestProtocol],
+    ) -> type[TestProtocol]:
         for nic_capability in nic_capabilities:
             decorated_nic_capability = DecoratedNicCapability.get_unique(nic_capability)
             decorated_nic_capability.add_to_required(test_case_or_suite)
@@ -485,14 +509,14 @@ def requires(
 
 
 def get_supported_capabilities(
-    sut_node: SutNode,
+    node: Node,
     topology_config: Topology,
     capabilities_to_check: set[Capability],
 ) -> set[Capability]:
     """Probe the environment for `capabilities_to_check` and return the supported ones.
 
     Args:
-        sut_node: The SUT node to check for capabilities.
+        node: The node to check capabilities against.
         topology_config: The topology config to check for capabilities.
         capabilities_to_check: The capabilities to check.
 
@@ -504,6 +528,23 @@ def get_supported_capabilities(
         callbacks.add(capability_to_check.register_to_check())
     supported_capabilities = set()
     for callback in callbacks:
-        supported_capabilities.update(callback(sut_node, topology_config))
+        supported_capabilities.update(callback(node, topology_config))
 
     return supported_capabilities
+
+
+def test_if_supported(test: type[TestProtocol], supported_caps: set[Capability]) -> None:
+    """Test if the given test suite or test case is supported.
+
+    Args:
+        test: The test suite or case.
+        supported_caps: The capabilities that need to be checked against the test.
+
+    Raises:
+        SkippedTestException: If the test hasn't met the requirements.
+    """
+    unsupported_caps = test.required_capabilities - supported_caps
+    if unsupported_caps:
+        capability_str = "capabilities" if len(unsupported_caps) > 1 else "capability"
+        msg = f"Required {capability_str} '{unsupported_caps}' not found."
+        raise SkippedTestException(msg)

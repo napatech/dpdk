@@ -49,47 +49,44 @@
 /* LPB & SPB */
 #define CNXK_NIX_NUM_POOLS_MAX 2
 
-#define CNXK_NIX_DEF_SQ_COUNT	512
+#define CNXK_NIX_DEF_SQ_COUNT 512
 
-#define CNXK_NIX_RSS_L3_L4_SRC_DST                                             \
-	(RTE_ETH_RSS_L3_SRC_ONLY | RTE_ETH_RSS_L3_DST_ONLY |                   \
-	 RTE_ETH_RSS_L4_SRC_ONLY | RTE_ETH_RSS_L4_DST_ONLY)
+#define CNXK_NIX_RSS_L3_L4_SRC_DST                                                                 \
+	(RTE_ETH_RSS_L3_SRC_ONLY | RTE_ETH_RSS_L3_DST_ONLY | RTE_ETH_RSS_L4_SRC_ONLY |             \
+	 RTE_ETH_RSS_L4_DST_ONLY)
 
-#define CNXK_NIX_RSS_OFFLOAD                                                   \
-	(RTE_ETH_RSS_PORT | RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP |                 \
-	 RTE_ETH_RSS_TCP | RTE_ETH_RSS_SCTP | RTE_ETH_RSS_TUNNEL |             \
-	 RTE_ETH_RSS_L2_PAYLOAD | CNXK_NIX_RSS_L3_L4_SRC_DST |                 \
-	 RTE_ETH_RSS_LEVEL_MASK | RTE_ETH_RSS_C_VLAN)
+#define CNXK_NIX_RSS_OFFLOAD                                                                       \
+	(RTE_ETH_RSS_PORT | RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP | RTE_ETH_RSS_TCP |                   \
+	 RTE_ETH_RSS_SCTP | RTE_ETH_RSS_TUNNEL | RTE_ETH_RSS_L2_PAYLOAD |                          \
+	 CNXK_NIX_RSS_L3_L4_SRC_DST | RTE_ETH_RSS_LEVEL_MASK | RTE_ETH_RSS_C_VLAN |                \
+	 RTE_ETH_RSS_ESP | RTE_ETH_RSS_IB_BTH)
 
-#define CNXK_NIX_TX_OFFLOAD_CAPA                                               \
-	(RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE | RTE_ETH_TX_OFFLOAD_MT_LOCKFREE |          \
-	 RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_QINQ_INSERT |             \
-	 RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |    \
-	 RTE_ETH_TX_OFFLOAD_TCP_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM |                 \
-	 RTE_ETH_TX_OFFLOAD_SCTP_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_TSO |                  \
-	 RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO | RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |        \
-	 RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO | RTE_ETH_TX_OFFLOAD_MULTI_SEGS |              \
+#define CNXK_NIX_TX_OFFLOAD_CAPA                                                                   \
+	(RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE | RTE_ETH_TX_OFFLOAD_MT_LOCKFREE |                      \
+	 RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_QINQ_INSERT |                         \
+	 RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |                \
+	 RTE_ETH_TX_OFFLOAD_TCP_CKSUM | RTE_ETH_TX_OFFLOAD_UDP_CKSUM |                             \
+	 RTE_ETH_TX_OFFLOAD_SCTP_CKSUM | RTE_ETH_TX_OFFLOAD_TCP_TSO |                              \
+	 RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO | RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |                    \
+	 RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO | RTE_ETH_TX_OFFLOAD_MULTI_SEGS |                          \
 	 RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | RTE_ETH_TX_OFFLOAD_SECURITY)
 
-#define CNXK_NIX_RX_OFFLOAD_CAPA                                               \
-	(RTE_ETH_RX_OFFLOAD_CHECKSUM | RTE_ETH_RX_OFFLOAD_SCTP_CKSUM |         \
-	 RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM | RTE_ETH_RX_OFFLOAD_SCATTER |    \
-	 RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM | RTE_ETH_RX_OFFLOAD_RSS_HASH |    \
-	 RTE_ETH_RX_OFFLOAD_TIMESTAMP | RTE_ETH_RX_OFFLOAD_VLAN_STRIP |        \
+#define CNXK_NIX_RX_OFFLOAD_CAPA                                                                   \
+	(RTE_ETH_RX_OFFLOAD_CHECKSUM | RTE_ETH_RX_OFFLOAD_SCTP_CKSUM |                             \
+	 RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM | RTE_ETH_RX_OFFLOAD_SCATTER |                        \
+	 RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM | RTE_ETH_RX_OFFLOAD_RSS_HASH |                        \
+	 RTE_ETH_RX_OFFLOAD_TIMESTAMP | RTE_ETH_RX_OFFLOAD_VLAN_STRIP |                            \
 	 RTE_ETH_RX_OFFLOAD_SECURITY)
 
-#define RSS_IPV4_ENABLE                                                        \
-	(RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_FRAG_IPV4 |                            \
-	 RTE_ETH_RSS_NONFRAG_IPV4_UDP | RTE_ETH_RSS_NONFRAG_IPV4_TCP |         \
-	 RTE_ETH_RSS_NONFRAG_IPV4_SCTP)
+#define RSS_IPV4_ENABLE                                                                            \
+	(RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_FRAG_IPV4 | RTE_ETH_RSS_NONFRAG_IPV4_UDP |                 \
+	 RTE_ETH_RSS_NONFRAG_IPV4_TCP | RTE_ETH_RSS_NONFRAG_IPV4_SCTP)
 
-#define RSS_IPV6_ENABLE                                                        \
-	(RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_FRAG_IPV6 |                            \
-	 RTE_ETH_RSS_NONFRAG_IPV6_UDP | RTE_ETH_RSS_NONFRAG_IPV6_TCP |         \
-	 RTE_ETH_RSS_NONFRAG_IPV6_SCTP)
+#define RSS_IPV6_ENABLE                                                                            \
+	(RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_FRAG_IPV6 | RTE_ETH_RSS_NONFRAG_IPV6_UDP |                 \
+	 RTE_ETH_RSS_NONFRAG_IPV6_TCP | RTE_ETH_RSS_NONFRAG_IPV6_SCTP)
 
-#define RSS_IPV6_EX_ENABLE                                                     \
-	(RTE_ETH_RSS_IPV6_EX | RTE_ETH_RSS_IPV6_TCP_EX | RTE_ETH_RSS_IPV6_UDP_EX)
+#define RSS_IPV6_EX_ENABLE (RTE_ETH_RSS_IPV6_EX | RTE_ETH_RSS_IPV6_TCP_EX | RTE_ETH_RSS_IPV6_UDP_EX)
 
 #define RSS_MAX_LEVELS 3
 
@@ -108,6 +105,8 @@
 
 /* Fastpath lookup */
 #define CNXK_NIX_FASTPATH_LOOKUP_MEM "cnxk_nix_fastpath_lookup_mem"
+
+#define CNXK_NIX_DMAC_IDX_INVALID -1
 
 struct cnxk_fc_cfg {
 	enum rte_eth_fc_mode mode;
@@ -345,6 +344,7 @@ struct cnxk_eth_dev {
 	uint8_t max_mac_entries;
 	bool dmac_filter_enable;
 	int *dmac_idx_map;
+	struct rte_ether_addr *dmac_addrs;
 
 	uint16_t flags;
 	uint8_t ptype_disable;
@@ -503,7 +503,7 @@ cnxk_nix_tx_queue_sec_count(uint64_t *mem, uint16_t sqes_per_sqb_log2, uint64_t 
 }
 
 static inline int
-cnxk_nix_inl_fc_check(uint64_t *fc, int32_t *fc_sw, uint32_t nb_desc, uint16_t nb_inst)
+cnxk_nix_inl_fc_check(uint64_t __rte_atomic *fc, int32_t *fc_sw, uint32_t nb_desc, uint16_t nb_inst)
 {
 	uint8_t retry_count = 32;
 	int32_t val, newval;
@@ -553,6 +553,10 @@ extern struct rte_tm_ops cnxk_tm_ops;
 /* Platform specific rte pmd cnxk ops */
 typedef uint16_t (*cnxk_inl_dev_submit_cb_t)(struct roc_nix_inl_dev_q *q, void *inst,
 					     uint16_t nb_inst);
+
+typedef void (*cnxk_ethdev_rx_offload_cb_t)(uint16_t port_id, uint64_t flags);
+
+extern cnxk_ethdev_rx_offload_cb_t cnxk_ethdev_rx_offload_cb;
 
 struct cnxk_ethdev_pmd_ops {
 	cnxk_inl_dev_submit_cb_t inl_dev_submit;
@@ -723,14 +727,15 @@ int cnxk_nix_lookup_mem_sa_base_set(struct cnxk_eth_dev *dev);
 int cnxk_nix_lookup_mem_sa_base_clear(struct cnxk_eth_dev *dev);
 int cnxk_nix_lookup_mem_metapool_set(struct cnxk_eth_dev *dev);
 int cnxk_nix_lookup_mem_metapool_clear(struct cnxk_eth_dev *dev);
+int cnxk_nix_lookup_mem_bufsize_set(struct cnxk_eth_dev *dev, uint64_t size);
+int cnxk_nix_lookup_mem_bufsize_clear(struct cnxk_eth_dev *dev);
 __rte_internal
 int cnxk_nix_inb_mode_set(struct cnxk_eth_dev *dev, bool use_inl_dev);
-typedef void (*cnxk_ethdev_rx_offload_cb_t)(uint16_t port_id, uint64_t flags);
 __rte_internal
 void cnxk_ethdev_rx_offload_cb_register(cnxk_ethdev_rx_offload_cb_t cb);
 
-struct cnxk_eth_sec_sess *cnxk_eth_sec_sess_get_by_spi(struct cnxk_eth_dev *dev,
-						       uint32_t spi, bool inb);
+struct cnxk_eth_sec_sess *cnxk_eth_sec_sess_get_by_sa_idx(struct cnxk_eth_dev *dev,
+							  uint32_t sa_idx, bool inb);
 struct cnxk_eth_sec_sess *
 cnxk_eth_sec_sess_get_by_sess(struct cnxk_eth_dev *dev,
 			      struct rte_security_session *sess);

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2024 Intel Corporation
  */
+#include <eal_export.h>
 #include <rte_random.h>
 #include <rte_common.h>
 #include <rte_bitops.h>
@@ -8,6 +9,7 @@
 #include <rte_thash.h>
 #include <rte_log.h>
 
+#define MAX_POLY_DEGREE 32
 #define MAX_TOEPLITZ_KEY_LENGTH 64
 RTE_LOG_REGISTER_SUFFIX(thash_poly_logtype, thash_poly, INFO);
 #define RTE_LOGTYPE_HASH thash_poly_logtype
@@ -118,16 +120,16 @@ static uint32_t
 gf2_mul(uint32_t a, uint32_t b, uint32_t r, int degree)
 {
 	uint64_t product = 0;
-	uint64_t r_poly = r|(1ULL << degree);
+	uint64_t r_poly = r | RTE_BIT64(degree);
 
 	for (; b; b &= (b - 1))
 		product ^= (uint64_t)a << (rte_bsf32(b));
 
 	for (int i = degree * 2 - 1; i >= degree; i--)
-		if (product & (1 << i))
+		if (product & RTE_BIT64(i))
 			product ^= r_poly << (i - degree);
 
-	return product;
+	return (uint32_t)product;
 }
 
 static uint32_t
@@ -149,7 +151,7 @@ gf2_pow(uint32_t a, uint32_t pow, uint32_t r, int degree)
 static uint32_t
 __thash_get_rand_poly(int poly_degree)
 {
-	uint32_t roots[poly_degree];
+	uint32_t roots[MAX_POLY_DEGREE];
 	uint32_t rnd;
 	uint32_t ret_poly = 0;
 	int i, j;
@@ -194,9 +196,7 @@ __thash_get_rand_poly(int poly_degree)
 	 * Get coefficients of the polynomial for
 	 * (x - roots[0])(x - roots[1])...(x - roots[n])
 	 */
-	uint32_t poly_coefficients[poly_degree + 1];
-	for (i = 0; i <= poly_degree; i++)
-		poly_coefficients[i] = 0;
+	uint32_t poly_coefficients[MAX_POLY_DEGREE + 1] = {0};
 
 	poly_coefficients[0] = 1; /* highest degree term coefficient in the end */
 	for (i = 0; i < (int)poly_degree; i++) {
@@ -242,12 +242,13 @@ thash_test_poly_order(uint32_t poly, int degree)
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(thash_get_rand_poly)
 uint32_t
 thash_get_rand_poly(uint32_t poly_degree)
 {
 	uint32_t ret_poly;
 
-	if (poly_degree > 32) {
+	if (poly_degree > MAX_POLY_DEGREE) {
 		HASH_LOG(ERR, "Wrong polynomial degree %d, must be in range [1, 32]", poly_degree);
 		return 0;
 	}

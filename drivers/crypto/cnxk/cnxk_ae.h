@@ -191,7 +191,7 @@ static __rte_always_inline int
 cnxk_ae_fill_ec_params(struct cnxk_ae_sess *sess, struct rte_crypto_asym_xform *xform)
 {
 	struct roc_ae_ec_ctx *ec = &sess->ec_ctx;
-	union cpt_inst_w4 w4;
+	union cpt_inst_w4 w4 = {0};
 
 	switch (xform->ec.curve_id) {
 	case RTE_CRYPTO_EC_GROUP_SECP192R1:
@@ -1090,6 +1090,9 @@ cnxk_ae_sm2_sign_prep(struct rte_crypto_sm2_op_param *sm2,
 	if (order_len > ROC_AE_EC_DATA_MAX)
 		order_len = ROC_AE_EC_DATA_MAX;
 
+	if (pkey_len > ROC_AE_EC_DATA_MAX)
+		pkey_len = ROC_AE_EC_DATA_MAX;
+
 	/* Truncate input length to curve prime length */
 	if (message_len > prime_len)
 		message_len = prime_len;
@@ -1180,6 +1183,12 @@ cnxk_ae_sm2_verify_prep(struct rte_crypto_sm2_op_param *sm2,
 	order_len = ec_grp->order.length;
 	if (order_len > ROC_AE_EC_DATA_MAX)
 		order_len = ROC_AE_EC_DATA_MAX;
+
+	if (qx_len > ROC_AE_EC_DATA_MAX)
+		qx_len = ROC_AE_EC_DATA_MAX;
+
+	if (qy_len > ROC_AE_EC_DATA_MAX)
+		qy_len = ROC_AE_EC_DATA_MAX;
 
 	/* Truncate input length to curve prime length */
 	if (message_len > prime_len)

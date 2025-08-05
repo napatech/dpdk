@@ -34,7 +34,7 @@ int hw_mod_pdb_alloc(struct flow_api_backend_s *be)
 
 	switch (_VER_) {
 	case 9:
-		if (!callocate_mod((struct common_func_s *)&be->pdb, 2, &be->pdb.v9.rcp,
+		if (!nthw_callocate_mod((struct common_func_s *)&be->pdb, 2, &be->pdb.v9.rcp,
 				be->pdb.nb_pdb_rcp_categories, sizeof(struct pdb_v9_rcp_s),
 				&be->pdb.v9.config, 1, sizeof(struct pdb_v9_config_s)))
 			return -1;
@@ -62,7 +62,7 @@ int hw_mod_pdb_reset(struct flow_api_backend_s *be)
 {
 	int err = 0;
 	/* Zero entire cache area */
-	zero_module_cache((struct common_func_s *)(&be->hsh));
+	nthw_zero_module_cache((struct common_func_s *)(&be->hsh));
 
 	NT_LOG(DBG, FILTER, "INIT PDB RCP");
 	err |= hw_mod_pdb_rcp_flush(be, 0, ALL_ENTRIES);
@@ -131,8 +131,22 @@ static int hw_mod_pdb_rcp_mod(struct flow_api_backend_s *be, enum hw_pdb_e field
 				INDEX_TOO_LARGE_LOG;
 				return INDEX_TOO_LARGE;
 			}
+			/* Size of the structure */
+			size_t element_size = sizeof(struct pdb_v9_rcp_s);
+			/* Size of the buffer */
+			size_t buffer_size = sizeof(be->pdb.v9.rcp);
 
-			DO_COMPARE_INDEXS(be->pdb.v9.rcp, struct pdb_v9_rcp_s, index, *value);
+			/* Calculate the maximum valid index (number of elements in the buffer) */
+			size_t max_idx = buffer_size / element_size;
+
+			/* Check that both indices are within bounds before calling the macro */
+			if (index < max_idx && *value < max_idx) {
+				DO_COMPARE_INDEXS(be->pdb.v9.rcp, struct pdb_v9_rcp_s, index,
+					*value);
+			} else {
+				INDEX_TOO_LARGE_LOG;
+				return INDEX_TOO_LARGE;
+			}
 			break;
 
 		case HW_PDB_RCP_DESCRIPTOR:

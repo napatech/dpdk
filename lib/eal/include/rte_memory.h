@@ -46,7 +46,7 @@ extern "C" {
 /**
  * Physical memory segment descriptor.
  */
-struct rte_memseg {
+struct __rte_packed_begin rte_memseg {
 	rte_iova_t iova;            /**< Start IO address. */
 	union {
 		void *addr;         /**< Start virtual address. */
@@ -58,7 +58,7 @@ struct rte_memseg {
 	uint32_t nchannel;          /**< Number of channels. */
 	uint32_t nrank;             /**< Number of ranks. */
 	uint32_t flags;             /**< Memseg-specific flags */
-} __rte_packed;
+} __rte_packed_end;
 
 /**
  * memseg list is a special case as we need to store a bunch of other data
@@ -727,6 +727,24 @@ rte_mem_alloc_validator_register(const char *name,
  */
 int
 rte_mem_alloc_validator_unregister(const char *name, int socket_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Fill memory with zero's (e.g. sensitive keys).
+ * Normally using memset() is fine, but in cases where clearing out local data
+ * before going out of scope is required, use rte_memzero_explicit() instead
+ * to prevent the compiler from optimizing away the zeroing operation.
+ *
+ * @param dst
+ *   Target buffer.
+ * @param sz
+ *   Number of bytes to fill.
+ */
+__rte_experimental
+void
+rte_memzero_explicit(void *dst, size_t sz);
 
 #ifdef __cplusplus
 }

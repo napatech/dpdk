@@ -1451,6 +1451,8 @@ mlx5_flow_item_field_width(struct rte_eth_dev *dev,
 	case RTE_FLOW_FIELD_META:
 		return (flow_dv_get_metadata_reg(dev, attr, error) == REG_C_0) ?
 			rte_popcount32(priv->sh->dv_meta_mask) : 32;
+	case RTE_FLOW_FIELD_GTP_PSC_QFI:
+		return 6;
 	case RTE_FLOW_FIELD_POINTER:
 	case RTE_FLOW_FIELD_VALUE:
 		return inherit < 0 ? 0 : inherit;
@@ -7925,7 +7927,10 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 				mlx5_flow_tunnel_ip_check(items, next_protocol,
 							  item_flags,
 							  &l3_tunnel_flag);
-			if (l3_tunnel_detection == l3_tunnel_inner) {
+			/*
+			 * explicitly allow inner IPIP match
+			 */
+			if (l3_tunnel_detection == l3_tunnel_outer) {
 				item_flags |= l3_tunnel_flag;
 				tunnel = 1;
 			}
@@ -7949,7 +7954,10 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 				mlx5_flow_tunnel_ip_check(items, next_protocol,
 							  item_flags,
 							  &l3_tunnel_flag);
-			if (l3_tunnel_detection == l3_tunnel_inner) {
+			/*
+			 * explicitly allow inner IPIP match
+			 */
+			if (l3_tunnel_detection == l3_tunnel_outer) {
 				item_flags |= l3_tunnel_flag;
 				tunnel = 1;
 			}
@@ -8939,21 +8947,23 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 						  RTE_FLOW_ERROR_TYPE_ACTION,
 						  NULL,
 						  "unsupported action MARK");
-		if (action_flags & MLX5_FLOW_ACTION_QUEUE)
-			return rte_flow_error_set(error, ENOTSUP,
-						  RTE_FLOW_ERROR_TYPE_ACTION,
-						  NULL,
-						  "unsupported action QUEUE");
-		if (action_flags & MLX5_FLOW_ACTION_RSS)
-			return rte_flow_error_set(error, ENOTSUP,
-						  RTE_FLOW_ERROR_TYPE_ACTION,
-						  NULL,
-						  "unsupported action RSS");
-		if (!(action_flags & MLX5_FLOW_FATE_ESWITCH_ACTIONS))
-			return rte_flow_error_set(error, EINVAL,
-						  RTE_FLOW_ERROR_TYPE_ACTION,
-						  actions,
-						  "no fate action is found");
+		if (!priv->jump_fdb_rx_en) {
+			if (action_flags & MLX5_FLOW_ACTION_QUEUE)
+				return rte_flow_error_set(error, ENOTSUP,
+							  RTE_FLOW_ERROR_TYPE_ACTION,
+							  NULL,
+							  "unsupported action QUEUE");
+			if (action_flags & MLX5_FLOW_ACTION_RSS)
+				return rte_flow_error_set(error, ENOTSUP,
+							  RTE_FLOW_ERROR_TYPE_ACTION,
+							  NULL,
+							  "unsupported action RSS");
+			if (!(action_flags & MLX5_FLOW_FATE_ESWITCH_ACTIONS))
+				return rte_flow_error_set(error, EINVAL,
+							  RTE_FLOW_ERROR_TYPE_ACTION,
+							  actions,
+							  "no fate action is found");
+		}
 	} else {
 		if (!(action_flags & MLX5_FLOW_FATE_ACTIONS) && attr->ingress)
 			return rte_flow_error_set(error, EINVAL,
@@ -9839,23 +9849,26 @@ flow_dv_translate_item_gre(void *key, const struct rte_flow_item *item,
 	} gre_crks_rsvd0_ver_m, gre_crks_rsvd0_ver_v;
 	uint16_t protocol_m, protocol_v;
 
-	if (key_type & MLX5_SET_MATCHER_M) {
+	/* Common logic to SWS/HWS */
+	if (key_type & MLX5_SET_MATCHER_M)
 		MLX5_SET(fte_match_set_lyr_2_4, headers_v, ip_protocol, 0xff);
-		if (!gre_m)
-			gre_m = &rte_flow_item_gre_mask;
-		gre_v = gre_m;
-	} else {
+	else
 		MLX5_SET(fte_match_set_lyr_2_4, headers_v, ip_protocol,
-			 IPPROTO_GRE);
-		if (!gre_v) {
-			gre_v = &empty_gre;
+			IPPROTO_GRE);
+	/* HWS mask logic only */
+	if (key_type & MLX5_SET_MATCHER_HS_M) {
+		if (!gre_m)
 			gre_m = &empty_gre;
-		} else if (!gre_m) {
-			gre_m = &rte_flow_item_gre_mask;
-		}
-		if (key_type == MLX5_SET_MATCHER_HS_V)
-			gre_m = gre_v;
+		gre_v = gre_m;
+	} else if (!gre_v) {
+		gre_v = &empty_gre;
+		gre_m = &empty_gre;
+	} else if (!gre_m) {
+		gre_m = &rte_flow_item_gre_mask;
 	}
+	/* SWS logic only */
+	if (key_type & MLX5_SET_MATCHER_SW_M)
+		gre_v = gre_m;
 	gre_crks_rsvd0_ver_m.value = rte_be_to_cpu_16(gre_m->c_rsvd0_ver);
 	gre_crks_rsvd0_ver_v.value = rte_be_to_cpu_16(gre_v->c_rsvd0_ver);
 	MLX5_SET(fte_match_set_misc, misc_v, gre_c_present,
@@ -10872,9 +10885,21 @@ flow_dv_translate_item_port_id(struct rte_eth_dev *dev, void *key,
 
 	MLX5_ASSERT(wks);
 	if (pid_v && pid_v->id == MLX5_PORT_ESW_MGR) {
-		flow_dv_translate_item_source_vport(key,
-				key_type & MLX5_SET_MATCHER_V ?
-				mlx5_flow_get_esw_manager_vport_id(dev) : 0xffff);
+		priv = dev->data->dev_private;
+		if (priv->sh->dev_cap.esw_info.regc_mask) {
+			if (key_type & MLX5_SET_MATCHER_M) {
+				vport_meta = priv->sh->dev_cap.esw_info.regc_mask;
+			} else {
+				vport_meta = priv->sh->dev_cap.esw_info.regc_value;
+				wks->vport_meta_tag = vport_meta;
+			}
+			flow_dv_translate_item_meta_vport(key, vport_meta,
+							  priv->sh->dev_cap.esw_info.regc_mask);
+		} else {
+			flow_dv_translate_item_source_vport(key,
+					key_type & MLX5_SET_MATCHER_V ?
+					mlx5_flow_get_esw_manager_vport_id(dev) : 0xffff);
+		}
 		return 0;
 	}
 	mask = pid_m ? pid_m->id : 0xffff;
@@ -14443,6 +14468,64 @@ flow_dv_translate_items(struct rte_eth_dev *dev,
 	return 0;
 }
 
+static int
+flow_dv_translate_items_geneve_opt_nta(struct rte_eth_dev *dev,
+				   const struct rte_flow_item *items,
+				   struct mlx5_flow_attr *attr,
+				   struct rte_flow_error *error)
+{
+	rte_be32_t geneve_mask = 0xffffffff;
+	struct rte_pmd_mlx5_geneve_tlv geneve_tlv = {
+		/* Take from item spec, if changed, destroy and add new parser. */
+		.option_class			= 0,
+		/* Take from item spec, if changed, destroy and add new parser. */
+		.option_type			= 0,
+		/* 1DW is supported. */
+		.option_len			= 1,
+		.match_on_class_mode		= 1,
+		.offset				= 0,
+		.sample_len			= 1,
+		.match_data_mask		= &geneve_mask
+	};
+	const struct rte_flow_item_geneve_opt *geneve_opt_v = items->spec;
+	const struct rte_flow_item_geneve_opt *geneve_opt_m = items->mask;
+	void *geneve_parser;
+	struct mlx5_priv *priv = dev->data->dev_private;
+#ifdef RTE_LIBRTE_MLX5_DEBUG
+	struct mlx5_geneve_tlv_option *option;
+#endif
+
+	/* option length is not as supported. */
+	if ((geneve_opt_v->option_len & geneve_opt_m->option_len) > geneve_tlv.option_len)
+		return rte_flow_error_set(error, ENOTSUP,
+			RTE_FLOW_ERROR_TYPE_ITEM, items,
+			" GENEVE OPT length is not supported ");
+	geneve_tlv.option_class = geneve_opt_v->option_class & geneve_opt_m->option_class;
+	geneve_tlv.option_type = geneve_opt_v->option_type & geneve_opt_m->option_type;
+	/* if parser doesn't exist */
+	if (!priv->tlv_options) {
+		/* Create a GENEVE option parser. */
+		geneve_parser = mlx5_geneve_tlv_parser_create(attr->port_id,
+						&geneve_tlv, 1);
+		if (!geneve_parser)
+			return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ITEM, items,
+				" GENEVE OPT parser creation failed ");
+#ifdef RTE_LIBRTE_MLX5_DEBUG
+	} else {
+		/* Check if option exist in current parser. */
+		option = mlx5_geneve_tlv_option_get(priv,
+						geneve_tlv.option_type,
+						geneve_tlv.option_class);
+		if (!option)
+			return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ITEM, items,
+				" GENEVE OPT configured does not match this rule class/type");
+#endif
+	}
+	return 0;
+}
+
 /**
  * Fill the flow matcher with DV spec for items supported in non template mode.
  *
@@ -14467,6 +14550,7 @@ flow_dv_translate_items_nta(struct rte_eth_dev *dev,
 			const struct rte_flow_item *items,
 			struct mlx5_dv_matcher_workspace *wks,
 			void *key, uint32_t key_type,
+			struct mlx5_flow_attr *attr,
 			struct rte_flow_error *error)
 {
 	int item_type;
@@ -14486,6 +14570,12 @@ flow_dv_translate_items_nta(struct rte_eth_dev *dev,
 	case RTE_FLOW_ITEM_TYPE_FLEX:
 		mlx5_flex_flow_translate_item(dev, key, flex_item_key.buf, items, tunnel != 0);
 		wks->last_item = tunnel ? MLX5_FLOW_ITEM_INNER_FLEX : MLX5_FLOW_ITEM_OUTER_FLEX;
+		break;
+	case RTE_FLOW_ITEM_TYPE_GENEVE_OPT:
+		ret = flow_dv_translate_items_geneve_opt_nta(dev, items, attr, error);
+		if (ret)
+			return ret;
+		wks->last_item = MLX5_FLOW_LAYER_GENEVE_OPT;
 		break;
 	default:
 		ret = flow_dv_translate_items(dev, items, wks, key, key_type,  error);
@@ -14557,12 +14647,12 @@ __flow_dv_translate_items_hws(const struct rte_flow_item *items,
 		/* Non template flow. */
 		if (nt_flow) {
 			ret = flow_dv_translate_items_nta(&rte_eth_devices[attr->port_id],
-							  items, &wks, key, key_type,  NULL);
+							  items, &wks, key, key_type, attr, error);
 			if (ret)
 				goto exit;
 		} else {
 			ret = flow_dv_translate_items(&rte_eth_devices[attr->port_id],
-						      items, &wks, key, key_type,  NULL);
+						      items, &wks, key, key_type, error);
 			if (ret)
 				goto exit;
 		}
@@ -18056,6 +18146,11 @@ flow_dv_query(struct rte_eth_dev *dev,
 						  error);
 			break;
 		case RTE_FLOW_ACTION_TYPE_AGE:
+			if (flow->indirect_type == MLX5_INDIRECT_ACTION_TYPE_CT)
+				return rte_flow_error_set(error, ENOTSUP,
+						  RTE_FLOW_ERROR_TYPE_ACTION,
+						  actions,
+						  "age not available");
 			ret = flow_dv_query_age(dev, flow, data, error);
 			break;
 		default:

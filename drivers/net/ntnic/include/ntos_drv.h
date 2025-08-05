@@ -51,6 +51,7 @@ struct nthw_memory_descriptor {
 struct hwq_s {
 	int vf_num;
 	struct nthw_memory_descriptor virt_queues_ctrl;
+	struct nthw_memory_descriptor pkt_buffers_ctrl;
 	struct nthw_memory_descriptor *pkt_buffers;
 };
 
@@ -69,7 +70,7 @@ struct __rte_cache_aligned ntnic_rx_queue {
 	nt_meta_port_type_t type;
 	uint32_t port;     /* Rx port for this queue */
 	enum fpga_info_profile profile;  /* Inline / Capture */
-
+	uint8_t rx_deferred_start;
 };
 
 struct __rte_cache_aligned ntnic_tx_queue {
@@ -89,6 +90,7 @@ struct __rte_cache_aligned ntnic_tx_queue {
 	unsigned long err_pkts;	/* Tx error packet stat */
 	int  enabled;  /* Enabling/disabling of this queue */
 	enum fpga_info_profile profile;  /* Inline / Capture */
+	uint8_t tx_deferred_start;
 };
 
 struct nt_mtr_profile {

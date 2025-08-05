@@ -10,12 +10,14 @@
 #include <unistd.h>
 #include <inttypes.h>
 
+#include <eal_export.h>
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <ethdev_driver.h>
 #include <bus_pci_driver.h>
 #include <rte_common.h>
 #include <rte_eal_paging.h>
+#include <rte_bitops.h>
 
 #include <mlx5_common.h>
 #include <mlx5_common_mr.h>
@@ -333,7 +335,7 @@ mlx5_tx_queue_pre_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t *desc)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
-	if (*desc > 1 << priv->sh->cdev->config.hca_attr.log_max_wq_sz) {
+	if (*desc > mlx5_dev_get_max_wq_size(priv->sh)) {
 		DRV_LOG(ERR,
 			"port %u number of descriptors requested for Tx queue"
 			" %u is more than supported",
@@ -693,21 +695,39 @@ mlx5_txq_obj_verify(struct rte_eth_dev *dev)
  *
  * @param txq_ctrl
  *   Pointer to Tx queue control structure.
+ * @param devx
+ *   If the calculation is used for Devx queue.
  *
  * @return
  *   The number of WQEBB.
  */
 static int
-txq_calc_wqebb_cnt(struct mlx5_txq_ctrl *txq_ctrl)
+txq_calc_wqebb_cnt(struct mlx5_txq_ctrl *txq_ctrl, bool devx)
 {
 	unsigned int wqe_size;
 	const unsigned int desc = 1 << txq_ctrl->txq.elts_n;
 
-	wqe_size = MLX5_WQE_CSEG_SIZE +
-		   MLX5_WQE_ESEG_SIZE +
-		   MLX5_WSEG_SIZE -
-		   MLX5_ESEG_MIN_INLINE_SIZE +
-		   txq_ctrl->max_inline_data;
+	if (devx) {
+		wqe_size = txq_ctrl->txq.tso_en ?
+			   RTE_ALIGN(txq_ctrl->max_tso_header, MLX5_WSEG_SIZE) : 0;
+		wqe_size += MLX5_WQE_CSEG_SIZE +
+			    MLX5_WQE_ESEG_SIZE +
+			    MLX5_WQE_DSEG_SIZE;
+		if (txq_ctrl->txq.inlen_send)
+			wqe_size = RTE_MAX(wqe_size, sizeof(struct mlx5_wqe_cseg) +
+						     sizeof(struct mlx5_wqe_eseg) +
+						     RTE_ALIGN(txq_ctrl->txq.inlen_send +
+							       sizeof(uint32_t),
+							       MLX5_WSEG_SIZE));
+		wqe_size = RTE_ALIGN(wqe_size, MLX5_WQE_SIZE);
+	} else {
+		wqe_size = MLX5_WQE_CSEG_SIZE +
+			   MLX5_WQE_ESEG_SIZE +
+			   MLX5_WSEG_SIZE -
+			   MLX5_ESEG_MIN_INLINE_SIZE +
+			   txq_ctrl->max_inline_data;
+		wqe_size = RTE_MAX(wqe_size, MLX5_WQE_SIZE);
+	}
 	return rte_align32pow2(wqe_size * desc) / MLX5_WQE_SIZE;
 }
 
@@ -727,11 +747,11 @@ txq_calc_inline_max(struct mlx5_txq_ctrl *txq_ctrl)
 	struct mlx5_priv *priv = txq_ctrl->priv;
 	unsigned int wqe_size;
 
-	wqe_size = priv->sh->dev_cap.max_qp_wr / desc;
+	wqe_size = mlx5_dev_get_max_wq_size(priv->sh) / desc;
 	if (!wqe_size)
 		return 0;
 	/*
-	 * This calculation is derived from tthe source of
+	 * This calculation is derived from the source of
 	 * mlx5_calc_send_wqe() in rdma_core library.
 	 */
 	wqe_size = wqe_size * MLX5_WQE_SIZE -
@@ -739,7 +759,7 @@ txq_calc_inline_max(struct mlx5_txq_ctrl *txq_ctrl)
 		   MLX5_WQE_ESEG_SIZE -
 		   MLX5_WSEG_SIZE -
 		   MLX5_WSEG_SIZE +
-		   MLX5_DSEG_MIN_INLINE_SIZE;
+		   MLX5_ESEG_MIN_INLINE_SIZE;
 	return wqe_size;
 }
 
@@ -964,11 +984,8 @@ txq_set_params(struct mlx5_txq_ctrl *txq_ctrl)
  *
  * @param txq_ctrl
  *   Pointer to Tx queue control structure.
- *
- * @return
- *   Zero on success, otherwise the parameters can not be adjusted.
  */
-static int
+static void
 txq_adjust_params(struct mlx5_txq_ctrl *txq_ctrl)
 {
 	struct mlx5_priv *priv = txq_ctrl->priv;
@@ -981,82 +998,109 @@ txq_adjust_params(struct mlx5_txq_ctrl *txq_ctrl)
 		 * Inline data feature is not engaged at all.
 		 * There is nothing to adjust.
 		 */
-		return 0;
+		return;
 	}
 	if (txq_ctrl->max_inline_data <= max_inline) {
 		/*
 		 * The requested inline data length does not
 		 * exceed queue capabilities.
 		 */
-		return 0;
+		return;
 	}
 	if (txq_ctrl->txq.inlen_mode > max_inline) {
-		DRV_LOG(ERR,
-			"minimal data inline requirements (%u) are not"
-			" satisfied (%u) on port %u, try the smaller"
-			" Tx queue size (%d)",
-			txq_ctrl->txq.inlen_mode, max_inline,
-			priv->dev_data->port_id, priv->sh->dev_cap.max_qp_wr);
-		goto error;
+		DRV_LOG(WARNING,
+			"minimal data inline requirements (%u) are not satisfied (%u) on port %u",
+			txq_ctrl->txq.inlen_mode, max_inline, priv->dev_data->port_id);
 	}
 	if (txq_ctrl->txq.inlen_send > max_inline &&
 	    config->txq_inline_max != MLX5_ARG_UNSET &&
 	    config->txq_inline_max > (int)max_inline) {
-		DRV_LOG(ERR,
-			"txq_inline_max requirements (%u) are not"
-			" satisfied (%u) on port %u, try the smaller"
-			" Tx queue size (%d)",
-			txq_ctrl->txq.inlen_send, max_inline,
-			priv->dev_data->port_id, priv->sh->dev_cap.max_qp_wr);
-		goto error;
+		DRV_LOG(WARNING,
+			"txq_inline_max requirements (%u) are not satisfied (%u) on port %u",
+			txq_ctrl->txq.inlen_send, max_inline, priv->dev_data->port_id);
 	}
 	if (txq_ctrl->txq.inlen_empw > max_inline &&
 	    config->txq_inline_mpw != MLX5_ARG_UNSET &&
 	    config->txq_inline_mpw > (int)max_inline) {
-		DRV_LOG(ERR,
-			"txq_inline_mpw requirements (%u) are not"
-			" satisfied (%u) on port %u, try the smaller"
-			" Tx queue size (%d)",
-			txq_ctrl->txq.inlen_empw, max_inline,
-			priv->dev_data->port_id, priv->sh->dev_cap.max_qp_wr);
-		goto error;
+		DRV_LOG(WARNING,
+			"txq_inline_mpw requirements (%u) are not satisfied (%u) on port %u",
+			txq_ctrl->txq.inlen_empw, max_inline, priv->dev_data->port_id);
 	}
+	MLX5_ASSERT(max_inline >= (MLX5_ESEG_MIN_INLINE_SIZE - MLX5_DSEG_MIN_INLINE_SIZE));
+	max_inline -= MLX5_ESEG_MIN_INLINE_SIZE - MLX5_DSEG_MIN_INLINE_SIZE;
 	if (txq_ctrl->txq.tso_en && max_inline < MLX5_MAX_TSO_HEADER) {
-		DRV_LOG(ERR,
-			"tso header inline requirements (%u) are not"
-			" satisfied (%u) on port %u, try the smaller"
-			" Tx queue size (%d)",
-			MLX5_MAX_TSO_HEADER, max_inline,
-			priv->dev_data->port_id, priv->sh->dev_cap.max_qp_wr);
-		goto error;
+		DRV_LOG(WARNING,
+			"tso header inline requirements (%u) are not satisfied (%u) on port %u",
+			MLX5_MAX_TSO_HEADER, max_inline, priv->dev_data->port_id);
 	}
 	if (txq_ctrl->txq.inlen_send > max_inline) {
 		DRV_LOG(WARNING,
-			"adjust txq_inline_max (%u->%u)"
-			" due to large Tx queue on port %u",
-			txq_ctrl->txq.inlen_send, max_inline,
-			priv->dev_data->port_id);
+			"adjust txq_inline_max (%u->%u) due to large Tx queue on port %u",
+			txq_ctrl->txq.inlen_send, max_inline, priv->dev_data->port_id);
 		txq_ctrl->txq.inlen_send = max_inline;
 	}
 	if (txq_ctrl->txq.inlen_empw > max_inline) {
 		DRV_LOG(WARNING,
-			"adjust txq_inline_mpw (%u->%u)"
-			"due to large Tx queue on port %u",
-			txq_ctrl->txq.inlen_empw, max_inline,
-			priv->dev_data->port_id);
+			"adjust txq_inline_mpw (%u->%u) due to large Tx queue on port %u",
+			txq_ctrl->txq.inlen_empw, max_inline, priv->dev_data->port_id);
 		txq_ctrl->txq.inlen_empw = max_inline;
 	}
 	txq_ctrl->max_inline_data = RTE_MAX(txq_ctrl->txq.inlen_send,
 					    txq_ctrl->txq.inlen_empw);
-	MLX5_ASSERT(txq_ctrl->max_inline_data <= max_inline);
-	MLX5_ASSERT(txq_ctrl->txq.inlen_mode <= max_inline);
 	MLX5_ASSERT(txq_ctrl->txq.inlen_mode <= txq_ctrl->txq.inlen_send);
 	MLX5_ASSERT(txq_ctrl->txq.inlen_mode <= txq_ctrl->txq.inlen_empw ||
 		    !txq_ctrl->txq.inlen_empw);
-	return 0;
-error:
-	rte_errno = ENOMEM;
-	return -ENOMEM;
+}
+
+/*
+ * Calculate WQ memory length for a Tx queue.
+ *
+ * @param log_wqe_cnt
+ *   Logarithm value of WQE numbers.
+ *
+ * @return
+ *   memory length of this WQ.
+ */
+static uint32_t mlx5_txq_wq_mem_length(uint32_t log_wqe_cnt)
+{
+	uint32_t num_of_wqbbs = 1U << log_wqe_cnt;
+	uint32_t umem_size;
+
+	umem_size = MLX5_WQE_SIZE * num_of_wqbbs;
+	return umem_size;
+}
+
+/*
+ * Calculate CQ memory length for a Tx queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param txq_ctrl
+ *   Pointer to the TxQ control structure of the CQ.
+ *
+ * @return
+ *   memory length of this CQ.
+ */
+static uint32_t
+mlx5_txq_cq_mem_length(struct rte_eth_dev *dev, struct mlx5_txq_ctrl *txq_ctrl)
+{
+	uint32_t cqe_n, log_desc_n;
+
+	if (__rte_trace_point_fp_is_enabled() &&
+	    txq_ctrl->txq.offloads & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP)
+		cqe_n = UINT16_MAX / 2 - 1;
+	else
+		cqe_n = (1UL << txq_ctrl->txq.elts_n) / MLX5_TX_COMP_THRESH +
+			1 + MLX5_TX_COMP_THRESH_INLINE_DIV;
+	log_desc_n = log2above(cqe_n);
+	cqe_n = 1UL << log_desc_n;
+	if (cqe_n > UINT16_MAX) {
+		DRV_LOG(ERR, "Port %u Tx queue %u requests to many CQEs %u.",
+			dev->data->port_id, txq_ctrl->txq.idx, cqe_n);
+		rte_errno = EINVAL;
+		return 0;
+	}
+	return sizeof(struct mlx5_cqe) * cqe_n;
 }
 
 /**
@@ -1080,42 +1124,71 @@ struct mlx5_txq_ctrl *
 mlx5_txq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	     unsigned int socket, const struct rte_eth_txconf *conf)
 {
+	int ret;
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_txq_ctrl *tmpl;
+	uint16_t max_wqe;
+	uint32_t wqebb_cnt, log_desc_n;
 
-	tmpl = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl) +
+	if (socket != (unsigned int)SOCKET_ID_ANY) {
+		tmpl = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl) +
 			   desc * sizeof(struct rte_mbuf *), 0, socket);
+	} else {
+		tmpl = mlx5_malloc_numa_tolerant(MLX5_MEM_RTE | MLX5_MEM_ZERO, sizeof(*tmpl) +
+					 desc * sizeof(struct rte_mbuf *), 0,
+					 dev->device->numa_node);
+	}
 	if (!tmpl) {
 		rte_errno = ENOMEM;
 		return NULL;
 	}
-	if (mlx5_mr_ctrl_init(&tmpl->txq.mr_ctrl,
-			      &priv->sh->cdev->mr_scache.dev_gen, socket)) {
-		/* rte_errno is already set. */
-		goto error;
+	if (socket != (unsigned int)SOCKET_ID_ANY) {
+		if (mlx5_mr_ctrl_init(&tmpl->txq.mr_ctrl,
+					&priv->sh->cdev->mr_scache.dev_gen, socket))
+			/* rte_errno is already set. */
+			goto error;
+	} else {
+		ret = mlx5_mr_ctrl_init(&tmpl->txq.mr_ctrl,
+					&priv->sh->cdev->mr_scache.dev_gen, dev->device->numa_node);
+		if (ret == -ENOMEM) {
+			ret = mlx5_mr_ctrl_init(&tmpl->txq.mr_ctrl,
+						&priv->sh->cdev->mr_scache.dev_gen, SOCKET_ID_ANY);
+		}
+		if (ret)
+			/* rte_errno is already set. */
+			goto error;
 	}
 	MLX5_ASSERT(desc > MLX5_TX_COMP_THRESH);
 	tmpl->txq.offloads = conf->offloads |
 			     dev->data->dev_conf.txmode.offloads;
 	tmpl->priv = priv;
-	tmpl->socket = socket;
+	tmpl->socket = (socket == (unsigned int)SOCKET_ID_ANY ?
+			(unsigned int)dev->device->numa_node : socket);
 	tmpl->txq.elts_n = log2above(desc);
 	tmpl->txq.elts_s = desc;
 	tmpl->txq.elts_m = desc - 1;
 	tmpl->txq.port_id = dev->data->port_id;
 	tmpl->txq.idx = idx;
 	txq_set_params(tmpl);
-	if (txq_adjust_params(tmpl))
-		goto error;
-	if (txq_calc_wqebb_cnt(tmpl) >
-	    priv->sh->dev_cap.max_qp_wr) {
+	txq_adjust_params(tmpl);
+	wqebb_cnt = txq_calc_wqebb_cnt(tmpl, !!mlx5_devx_obj_ops_en(priv->sh));
+	max_wqe = mlx5_dev_get_max_wq_size(priv->sh);
+	if (wqebb_cnt > max_wqe) {
 		DRV_LOG(ERR,
 			"port %u Tx WQEBB count (%d) exceeds the limit (%d),"
 			" try smaller queue size",
-			dev->data->port_id, txq_calc_wqebb_cnt(tmpl),
-			priv->sh->dev_cap.max_qp_wr);
+			dev->data->port_id, wqebb_cnt, max_wqe);
 		rte_errno = ENOMEM;
 		goto error;
+	}
+	if (priv->sh->config.txq_mem_algn != 0) {
+		log_desc_n = log2above(wqebb_cnt);
+		tmpl->txq.sq_mem_len = mlx5_txq_wq_mem_length(log_desc_n);
+		tmpl->txq.cq_mem_len = mlx5_txq_cq_mem_length(dev, tmpl);
+		DRV_LOG(DEBUG, "Port %u TxQ %u WQ length %u, CQ length %u before align.",
+			dev->data->port_id, idx, tmpl->txq.sq_mem_len, tmpl->txq.cq_mem_len);
+		priv->consec_tx_mem.sq_total_size += tmpl->txq.sq_mem_len;
+		priv->consec_tx_mem.cq_total_size += tmpl->txq.cq_mem_len;
 	}
 	rte_atomic_fetch_add_explicit(&tmpl->refcnt, 1, rte_memory_order_relaxed);
 	tmpl->is_hairpin = false;
@@ -1342,6 +1415,7 @@ mlx5_txq_get_sqn(struct mlx5_txq_ctrl *txq)
 	return txq->is_hairpin ? txq->obj->sq->id : txq->obj->sq_obj.sq->id;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_external_sq_enable, 22.07)
 int
 rte_pmd_mlx5_external_sq_enable(uint16_t port_id, uint32_t sq_num)
 {
@@ -1523,6 +1597,7 @@ mlx5_external_tx_queue_get_validate(uint16_t port_id, uint16_t dpdk_idx)
 	return &priv->ext_txqs[dpdk_idx - MLX5_EXTERNAL_TX_QUEUE_ID_MIN];
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_external_tx_queue_id_map, 24.07)
 int
 rte_pmd_mlx5_external_tx_queue_id_map(uint16_t port_id, uint16_t dpdk_idx,
 				      uint32_t hw_idx)
@@ -1556,6 +1631,7 @@ rte_pmd_mlx5_external_tx_queue_id_map(uint16_t port_id, uint16_t dpdk_idx,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_external_tx_queue_id_unmap, 24.07)
 int
 rte_pmd_mlx5_external_tx_queue_id_unmap(uint16_t port_id, uint16_t dpdk_idx)
 {

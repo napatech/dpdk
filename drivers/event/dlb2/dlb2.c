@@ -43,7 +43,63 @@
  * to DLB can go ahead of relevant application writes like updates to buffers
  * being sent with event
  */
+#ifndef DLB2_BYPASS_FENCE_ON_PP
 #define DLB2_BYPASS_FENCE_ON_PP 0  /* 1 == Bypass fence, 0 == do not bypass */
+#endif
+
+/*
+ * Optimization switches for improving driver performance.
+ * WARNING: Do not change any of the below switches without first
+ * consulting with DLB2 software development team.
+ *
+ * HW credit checks can only be turned off for DLB2 device if following
+ * is true for each created eventdev
+ * LDB credits <= DIR credits + minimum CQ Depth
+ * (CQ Depth is minimum of all ports configured within eventdev)
+ * This needs to be true for all eventdevs created on any DLB2 device
+ * managed by this driver.
+ * DLB2.5 does not any such restriction as it has single credit pool
+ */
+#ifndef DLB_HW_CREDITS_CHECKS
+#define DLB_HW_CREDITS_CHECKS 0
+#endif
+
+/*
+ * SW credit checks can only be turned off if application has a way to
+ * limit input events to the eventdev below assigned credit limit
+ */
+#ifndef DLB_SW_CREDITS_CHECKS
+#define DLB_SW_CREDITS_CHECKS 1
+#endif
+
+/*
+ * This check can only be disabled if application is not using
+ * queues of RTE_EVENT_QUEUE_CFG_ALL_TYPES type.
+ * Once such application is fully validated, type check can be turned off.
+ * HW will continue checking for correct type and generate alarm on mismatch
+ */
+#ifndef DLB_TYPE_CHECK
+#define DLB_TYPE_CHECK 1
+#endif
+#define DLB_TYPE_MACRO 0x010002
+
+/*
+ * To avoid deadlock situations, by default, per port new_event_threshold
+ * check is disabled. nb_events_limit is still checked while allocating
+ * new event credits.
+ */
+#define ENABLE_PORT_THRES_CHECK 1
+/*
+ * To avoid deadlock, ports holding to credits will release them after these
+ * many consecutive zero dequeues
+ */
+#define DLB2_ZERO_DEQ_CREDIT_RETURN_THRES 16384
+
+/*
+ * To avoid deadlock, ports holding to credits will release them after these
+ * many consecutive enqueue failures
+ */
+#define DLB2_ENQ_FAIL_CREDIT_RETURN_THRES 100
 
 /*
  * Resources exposed to eventdev. Some values overridden at runtime using
@@ -52,6 +108,7 @@
 #if (RTE_EVENT_MAX_QUEUES_PER_DEV > UINT8_MAX)
 #error "RTE_EVENT_MAX_QUEUES_PER_DEV cannot fit in member max_event_queues"
 #endif
+
 static struct rte_event_dev_info evdev_dlb2_default_info = {
 	.driver_name = "", /* probe will set */
 	.min_dequeue_timeout_ns = DLB2_MIN_DEQUEUE_TIMEOUT_NS,
@@ -137,10 +194,8 @@ dlb2_init_port_cos(struct dlb2_eventdev *dlb2, int *port_cos)
 	for (q = 0; q < DLB2_MAX_NUM_PORTS_ALL; q++) {
 		dlb2->ev_ports[q].cos_id = port_cos[q];
 		if (port_cos[q] != DLB2_COS_DEFAULT &&
-		    dlb2->cos_ports[port_cos[q]] < DLB2_MAX_NUM_LDB_PORTS_PER_COS) {
+		    dlb2->cos_ports[port_cos[q]] < DLB2_MAX_NUM_LDB_PORTS_PER_COS)
 			dlb2->cos_ports[port_cos[q]]++;
-			dlb2->max_cos_port = q;
-		}
 	}
 }
 
@@ -186,15 +241,15 @@ dlb2_hw_query_resources(struct dlb2_eventdev *dlb2)
 	 * The capabilities (CAPs) were set at compile time.
 	 */
 
-	if (dlb2->max_cq_depth != DLB2_DEFAULT_CQ_DEPTH)
-		num_ldb_ports = DLB2_MAX_HL_ENTRIES / dlb2->max_cq_depth;
-	else
-		num_ldb_ports = dlb2->hw_rsrc_query_results.num_ldb_ports;
+	num_ldb_ports = dlb2->hw_rsrc_query_results.num_ldb_ports;
 
 	evdev_dlb2_default_info.max_event_queues =
 		dlb2->hw_rsrc_query_results.num_ldb_queues;
 
 	evdev_dlb2_default_info.max_event_ports = num_ldb_ports;
+
+	evdev_dlb2_default_info.max_single_link_event_port_queue_pairs =
+		dlb2->hw_rsrc_query_results.num_dir_ports;
 
 	if (dlb2->version == DLB2_HW_V2_5) {
 		evdev_dlb2_default_info.max_num_events =
@@ -376,6 +431,33 @@ set_max_num_events(const char *key __rte_unused,
 }
 
 static int
+set_max_num_events_v2_5(const char *key __rte_unused,
+			const char *value,
+			void *opaque)
+{
+	int *max_num_events = opaque;
+	int ret;
+
+	if (value == NULL || opaque == NULL) {
+		DLB2_LOG_ERR("NULL pointer");
+		return -EINVAL;
+	}
+
+	ret = dlb2_string_to_int(max_num_events, value);
+	if (ret < 0)
+		return ret;
+
+	if (*max_num_events < 0 || *max_num_events >
+			DLB2_MAX_NUM_CREDITS(DLB2_HW_V2_5)) {
+		DLB2_LOG_ERR("dlb2: max_num_events must be between 0 and %d",
+			     DLB2_MAX_NUM_CREDITS(DLB2_HW_V2_5));
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
 set_num_dir_credits(const char *key __rte_unused,
 		    const char *value,
 		    void *opaque)
@@ -447,8 +529,8 @@ set_port_cos(const char *key __rte_unused,
 	     const char *value,
 	     void *opaque)
 {
+	int first, last, cos_id, i, ports_per_cos[DLB2_COS_NUM_VALS] = {0};
 	struct dlb2_port_cos *port_cos = opaque;
-	int first, last, cos_id, i;
 
 	if (value == NULL || opaque == NULL) {
 		DLB2_LOG_ERR("NULL pointer");
@@ -481,6 +563,14 @@ set_port_cos(const char *key __rte_unused,
 
 	for (i = first; i <= last; i++)
 		port_cos->cos_id[i] = cos_id; /* indexed by port */
+
+	for (i = 0; i < DLB2_MAX_NUM_PORTS_ALL; i++)
+		if (port_cos->cos_id[i] != DLB2_COS_DEFAULT &&
+			++ports_per_cos[port_cos->cos_id[i]] > DLB2_MAX_NUM_LDB_PORTS_PER_COS) {
+			DLB2_LOG_ERR("Error parsing ldb port cos_id devarg: More than 16 ports for "
+				"cos_id %d.", port_cos->cos_id[i]);
+			return -EINVAL;
+		}
 
 	return 0;
 }
@@ -637,6 +727,50 @@ set_enable_cq_weight(const char *key __rte_unused,
 	return 0;
 }
 
+static int set_hl_override(const char *key __rte_unused, const char *value,
+			   void *opaque)
+{
+	bool *default_hl = opaque;
+
+	if (value == NULL || opaque == NULL) {
+		DLB2_LOG_ERR("NULL pointer");
+		return -EINVAL;
+	}
+
+	if ((*value == 'n') || (*value == 'N') || (*value == '0'))
+		*default_hl = false;
+	else
+		*default_hl = true;
+
+	return 0;
+}
+
+static int set_hl_entries(const char *key __rte_unused, const char *value,
+			  void *opaque)
+{
+	int hl_entries = 0;
+	int ret;
+
+	if (value == NULL || opaque == NULL) {
+		DLB2_LOG_ERR("NULL pointer");
+		return -EINVAL;
+	}
+
+	ret = dlb2_string_to_int(&hl_entries, value);
+	if (ret < 0)
+		return ret;
+
+	if (!hl_entries || (uint32_t)hl_entries > DLB2_MAX_HL_ENTRIES) {
+		DLB2_LOG_ERR(
+		    "alloc_hl_entries %u out of range, must be in [1 - %d]",
+		    hl_entries, DLB2_MAX_HL_ENTRIES);
+		return -EINVAL;
+	}
+	*(uint32_t *)opaque = hl_entries;
+
+	return 0;
+}
+
 static int
 set_qid_depth_thresh(const char *key __rte_unused,
 		     const char *value,
@@ -782,15 +916,18 @@ dlb2_hw_create_sched_domain(struct dlb2_eventdev *dlb2,
 			    const struct dlb2_hw_rsrcs *resources_asked,
 			    uint8_t device_version)
 {
-	int ret = 0;
-	uint32_t cos_ports = 0;
+	uint32_t total_asked_ports;
 	struct dlb2_create_sched_domain_args *cfg;
+	uint32_t cos_ports = 0, max_cos_port = 0;
+	int ret = 0;
 
 	if (resources_asked == NULL) {
 		DLB2_LOG_ERR("dlb2: dlb2_create NULL parameter");
 		ret = EINVAL;
 		goto error_exit;
 	}
+
+	total_asked_ports = resources_asked->num_ldb_ports + resources_asked->num_dir_ports;
 
 	/* Map generic qm resources to dlb2 resources */
 	cfg = &handle->cfg.resources;
@@ -813,9 +950,14 @@ dlb2_hw_create_sched_domain(struct dlb2_eventdev *dlb2,
 	cos_ports = dlb2->cos_ports[0] + dlb2->cos_ports[1] +
 		    dlb2->cos_ports[2] + dlb2->cos_ports[3];
 
-	if (cos_ports > resources_asked->num_ldb_ports ||
-	    (cos_ports && dlb2->max_cos_port >= resources_asked->num_ldb_ports)) {
-		DLB2_LOG_ERR("dlb2: num_ldb_ports < cos_ports");
+	for (int i = 0; i < DLB2_MAX_NUM_PORTS_ALL; i++) {
+		if (dlb2->ev_ports[i].cos_id != DLB2_COS_DEFAULT)
+			max_cos_port = i;
+	}
+
+	if (cos_ports > resources_asked->num_ldb_ports || max_cos_port >= total_asked_ports) {
+		DLB2_LOG_ERR("dlb2: Insufficient num_ldb_ports=%d: cos_ports=%d max_cos_port=%d",
+			resources_asked->num_ldb_ports, cos_ports, max_cos_port);
 		ret = EINVAL;
 		goto error_exit;
 	}
@@ -834,8 +976,16 @@ dlb2_hw_create_sched_domain(struct dlb2_eventdev *dlb2,
 		DLB2_NUM_ATOMIC_INFLIGHTS_PER_QUEUE *
 		cfg->num_ldb_queues;
 
-	cfg->num_hist_list_entries = resources_asked->num_ldb_ports *
-		evdev_dlb2_default_info.max_event_port_dequeue_depth;
+	/* If hl_entries is non-zero then user specified command line option.
+	 * Else compute using default_port_hl that has been set earlier based
+	 * on use_default_hl option
+	 */
+	if (dlb2->hl_entries) {
+		cfg->num_hist_list_entries = dlb2->hl_entries;
+	} else {
+		cfg->num_hist_list_entries =
+			resources_asked->num_ldb_ports * dlb2->default_port_hl;
+	}
 
 	if (device_version == DLB2_HW_V2_5) {
 		DLB2_LOG_LINE_DBG("sched domain create - ldb_qs=%d, ldb_ports=%d, dir_ports=%d, atomic_inflights=%d, hist_list_entries=%d, credits=%d",
@@ -915,6 +1065,15 @@ dlb2_hw_reset_sched_domain(const struct rte_eventdev *dev, bool reconfig)
 	dlb2->num_queues = 0;
 	dlb2->num_ldb_queues = 0;
 	dlb2->num_dir_queues = 0;
+	if (dlb2->version == DLB2_HW_V2_5) {
+		dlb2->num_credits = 0;
+		dlb2->max_credits = 0;
+	} else {
+		dlb2->num_ldb_credits = 0;
+		dlb2->num_dir_credits = 0;
+		dlb2->max_ldb_credits = 0;
+		dlb2->max_dir_credits = 0;
+	}
 	dlb2->configured = false;
 }
 
@@ -1023,11 +1182,14 @@ dlb2_eventdev_configure(const struct rte_eventdev *dev)
 	if (dlb2->version == DLB2_HW_V2_5) {
 		dlb2->credit_pool = rsrcs->num_credits;
 		dlb2->max_credits = rsrcs->num_credits;
+		dlb2->num_credits = rsrcs->num_credits;
 	} else {
 		dlb2->ldb_credit_pool = rsrcs->num_ldb_credits;
 		dlb2->max_ldb_credits = rsrcs->num_ldb_credits;
+		dlb2->num_ldb_credits = rsrcs->num_ldb_credits;
 		dlb2->dir_credit_pool = rsrcs->num_dir_credits;
 		dlb2->max_dir_credits = rsrcs->num_dir_credits;
+		dlb2->num_dir_credits = rsrcs->num_dir_credits;
 	}
 
 	dlb2->configured = true;
@@ -1044,8 +1206,8 @@ dlb2_eventdev_port_default_conf_get(struct rte_eventdev *dev,
 	struct dlb2_eventdev *dlb2 = dlb2_pmd_priv(dev);
 
 	port_conf->new_event_threshold = dlb2->new_event_limit;
-	port_conf->dequeue_depth = 32;
-	port_conf->enqueue_depth = DLB2_MAX_ENQUEUE_DEPTH;
+	port_conf->dequeue_depth = dlb2->default_port_hl / 2;
+	port_conf->enqueue_depth = evdev_dlb2_default_info.max_event_port_enqueue_depth;
 	port_conf->event_port_cfg = 0;
 }
 
@@ -1537,13 +1699,11 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 {
 	struct dlb2_hw_dev *handle = &dlb2->qm_instance;
 	struct dlb2_create_ldb_port_args cfg = { {0} };
-	int ret;
-	struct dlb2_port *qm_port = NULL;
+	struct dlb2_port *qm_port = &ev_port->qm_port;
 	char mz_name[RTE_MEMZONE_NAMESIZE];
 	uint32_t qm_port_id;
-	uint16_t ldb_credit_high_watermark = 0;
-	uint16_t dir_credit_high_watermark = 0;
-	uint16_t credit_high_watermark = 0;
+	int ret;
+	RTE_SET_USED(enqueue_depth);
 
 	if (handle == NULL)
 		return -EINVAL;
@@ -1560,26 +1720,22 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 	cfg.cq_depth = rte_align32pow2(dequeue_depth);
 	cfg.cq_depth_threshold = 1;
 
-	cfg.cq_history_list_size = cfg.cq_depth;
+	if (dlb2->version == DLB2_HW_V2_5 && qm_port->enable_inflight_ctrl) {
+		cfg.enable_inflight_ctrl = 1;
+		cfg.inflight_threshold = qm_port->inflight_threshold;
+	}
+
+	if (qm_port->hist_list)
+		cfg.cq_history_list_size = qm_port->hist_list;
+	else if (cfg.enable_inflight_ctrl)
+		cfg.cq_history_list_size = RTE_MIN(cfg.cq_depth, dlb2->default_port_hl);
+	else if (dlb2->default_port_hl == DLB2_FIXED_CQ_HL_SIZE)
+		cfg.cq_history_list_size = DLB2_FIXED_CQ_HL_SIZE;
+	else
+		cfg.cq_history_list_size = cfg.cq_depth * 2;
 
 	cfg.cos_id = ev_port->cos_id;
 	cfg.cos_strict = 0;/* best effots */
-
-	/* User controls the LDB high watermark via enqueue depth. The DIR high
-	 * watermark is equal, unless the directed credit pool is too small.
-	 */
-	if (dlb2->version == DLB2_HW_V2) {
-		ldb_credit_high_watermark = enqueue_depth;
-		/* If there are no directed ports, the kernel driver will
-		 * ignore this port's directed credit settings. Don't use
-		 * enqueue_depth if it would require more directed credits
-		 * than are available.
-		 */
-		dir_credit_high_watermark =
-			RTE_MIN(enqueue_depth,
-				handle->cfg.num_dir_credits / dlb2->num_ports);
-	} else
-		credit_high_watermark = enqueue_depth;
 
 	/* Per QM values */
 
@@ -1613,6 +1769,12 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 	}
 
 	qm_port->id = qm_port_id;
+
+	if (dlb2->version == DLB2_HW_V2) {
+		qm_port->cached_ldb_credits = 0;
+		qm_port->cached_dir_credits = 0;
+	} else
+		qm_port->cached_credits = 0;
 
 	if (dlb2->version == DLB2_HW_V2_5 && (dlb2->enable_cq_weight == true)) {
 		struct dlb2_enable_cq_weight_args cq_weight_args = { {0} };
@@ -1657,7 +1819,7 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 	/* The default enqueue functions do not include delayed-pop support for
 	 * performance reasons.
 	 */
-	if (qm_port->token_pop_mode == DELAYED_POP) {
+	if (qm_port->token_pop_mode == RTE_PMD_DLB2_DELAYED_POP) {
 		dlb2->event_dev->enqueue_burst =
 			dlb2_event_enqueue_burst_delayed;
 		dlb2->event_dev->enqueue_new_burst =
@@ -1677,24 +1839,18 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 	qm_port->config_state = DLB2_CONFIGURED;
 
 	if (dlb2->version == DLB2_HW_V2) {
-		qm_port->dir_credits = dir_credit_high_watermark;
-		qm_port->ldb_credits = ldb_credit_high_watermark;
 		qm_port->credit_pool[DLB2_DIR_QUEUE] = &dlb2->dir_credit_pool;
 		qm_port->credit_pool[DLB2_LDB_QUEUE] = &dlb2->ldb_credit_pool;
 
-		DLB2_LOG_LINE_DBG("dlb2: created ldb port %d, depth = %d, ldb credits=%d, dir credits=%d",
+		DLB2_LOG_LINE_DBG("dlb2: created ldb port %d, depth = %d",
 			     qm_port_id,
-			     dequeue_depth,
-			     qm_port->ldb_credits,
-			     qm_port->dir_credits);
+			     dequeue_depth);
 	} else {
-		qm_port->credits = credit_high_watermark;
 		qm_port->credit_pool[DLB2_COMBINED_POOL] = &dlb2->credit_pool;
 
-		DLB2_LOG_LINE_DBG("dlb2: created ldb port %d, depth = %d, credits=%d",
+		DLB2_LOG_LINE_DBG("dlb2: created ldb port %d, depth = %d",
 			     qm_port_id,
-			     dequeue_depth,
-			     qm_port->credits);
+			     dequeue_depth);
 	}
 
 	qm_port->use_scalar = false;
@@ -1714,8 +1870,7 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 
 error_exit:
 
-	if (qm_port)
-		dlb2_free_qe_mem(qm_port);
+	dlb2_free_qe_mem(qm_port);
 
 	rte_spinlock_unlock(&handle->resource_lock);
 
@@ -1849,9 +2004,9 @@ dlb2_hw_create_dir_port(struct dlb2_eventdev *dlb2,
 	qm_port->cq_idx_unmasked = 0;
 
 	if (dlb2->poll_mode == DLB2_CQ_POLL_MODE_SPARSE)
-		qm_port->cq_depth_mask = (cfg.cq_depth * 4) - 1;
+		qm_port->cq_depth_mask = (qm_port->cq_depth * 4) - 1;
 	else
-		qm_port->cq_depth_mask = cfg.cq_depth - 1;
+		qm_port->cq_depth_mask = qm_port->cq_depth - 1;
 
 	qm_port->gen_bit_shift = rte_popcount32(qm_port->cq_depth_mask);
 	/* starting value of gen bit - it toggles at wrap time */
@@ -1866,7 +2021,7 @@ dlb2_hw_create_dir_port(struct dlb2_eventdev *dlb2,
 	qm_port->dequeue_depth = dequeue_depth;
 
 	/* Directed ports are auto-pop, by default. */
-	qm_port->token_pop_mode = AUTO_POP;
+	qm_port->token_pop_mode = RTE_PMD_DLB2_AUTO_POP;
 	qm_port->owed_tokens = 0;
 	qm_port->issued_releases = 0;
 
@@ -1985,18 +2140,6 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 	ev_port->credit_update_quanta = sw_credit_quanta;
 	ev_port->qm_port.hw_credit_quanta = hw_credit_quanta;
 
-	/*
-	 * Validate credit config before creating port
-	 */
-
-	if (port_conf->enqueue_depth > sw_credit_quanta ||
-	    port_conf->enqueue_depth > hw_credit_quanta) {
-		DLB2_LOG_ERR("Invalid port config. Enqueue depth %d must be <= credit quanta %d and batch size %d",
-			     port_conf->enqueue_depth,
-			     sw_credit_quanta,
-			     hw_credit_quanta);
-		return -EINVAL;
-	}
 	ev_port->enq_retries = port_conf->enqueue_depth;
 
 	ev_port->qm_port.reorder_id = 0;
@@ -2436,6 +2579,64 @@ dlb2_event_queue_detach_ldb(struct dlb2_eventdev *dlb2,
 	return ret;
 }
 
+static inline void
+dlb2_port_credits_return(struct dlb2_port *qm_port)
+{
+	/* Return all port credits */
+	if (qm_port->dlb2->version == DLB2_HW_V2_5) {
+		if (qm_port->cached_credits) {
+			rte_atomic_fetch_add_explicit(qm_port->credit_pool[DLB2_COMBINED_POOL],
+					   qm_port->cached_credits, rte_memory_order_seq_cst);
+			qm_port->cached_credits = 0;
+		}
+	} else {
+		if (qm_port->cached_ldb_credits) {
+			rte_atomic_fetch_add_explicit(qm_port->credit_pool[DLB2_LDB_QUEUE],
+					   qm_port->cached_ldb_credits, rte_memory_order_seq_cst);
+			qm_port->cached_ldb_credits = 0;
+		}
+		if (qm_port->cached_dir_credits) {
+			rte_atomic_fetch_add_explicit(qm_port->credit_pool[DLB2_DIR_QUEUE],
+					   qm_port->cached_dir_credits, rte_memory_order_seq_cst);
+			qm_port->cached_dir_credits = 0;
+		}
+	}
+}
+
+static inline void
+dlb2_release_sw_credits(struct dlb2_eventdev *dlb2,
+			struct dlb2_eventdev_port *ev_port, uint16_t val)
+{
+	if (ev_port->inflight_credits) {
+		rte_atomic_fetch_sub_explicit(&dlb2->inflights, val, rte_memory_order_seq_cst);
+		ev_port->inflight_credits -= val;
+	}
+}
+
+static void dlb2_check_and_return_credits(struct dlb2_eventdev_port *ev_port,
+					  bool cond, uint32_t threshold)
+{
+#if DLB_SW_CREDITS_CHECKS || DLB_HW_CREDITS_CHECKS
+	if (cond) {
+		if (++ev_port->credit_return_count > threshold) {
+#if DLB_SW_CREDITS_CHECKS
+			dlb2_release_sw_credits(ev_port->dlb2, ev_port,
+						ev_port->inflight_credits);
+#endif
+#if DLB_HW_CREDITS_CHECKS
+			dlb2_port_credits_return(&ev_port->qm_port);
+#endif
+			ev_port->credit_return_count = 0;
+		}
+	} else {
+		ev_port->credit_return_count = 0;
+	}
+#else
+/* Avoid compilation warning of unused parameters */
+(void)ev_port, (void)cond, (void)threshold;
+#endif
+}
+
 static int
 dlb2_eventdev_port_unlink(struct rte_eventdev *dev, void *event_port,
 			  uint8_t queues[], uint16_t nb_unlinks)
@@ -2455,14 +2656,15 @@ dlb2_eventdev_port_unlink(struct rte_eventdev *dev, void *event_port,
 
 	if (queues == NULL || nb_unlinks == 0) {
 		DLB2_LOG_LINE_DBG("dlb2: queues is NULL or nb_unlinks is 0");
-		return 0; /* Ignore and return success */
+		nb_unlinks = 0; /* Ignore and return success */
+		goto ret_credits;
 	}
 
 	if (ev_port->qm_port.is_directed) {
 		DLB2_LOG_LINE_DBG("dlb2: ignore unlink from dir port %d",
 			     ev_port->id);
 		rte_errno = 0;
-		return nb_unlinks; /* as if success */
+		goto ret_credits;
 	}
 
 	dlb2 = ev_port->dlb2;
@@ -2500,6 +2702,10 @@ dlb2_eventdev_port_unlink(struct rte_eventdev *dev, void *event_port,
 		ev_port->num_links--;
 		ev_queue->num_links--;
 	}
+
+ret_credits:
+	if (ev_port->inflight_credits)
+		dlb2_check_and_return_credits(ev_port, true, 0);
 
 	return nb_unlinks;
 }
@@ -2700,8 +2906,7 @@ dlb2_replenish_sw_credits(struct dlb2_eventdev *dlb2,
 		/* Replenish credits, saving one quanta for enqueues */
 		uint16_t val = ev_port->inflight_credits - quanta;
 
-		rte_atomic_fetch_sub_explicit(&dlb2->inflights, val, rte_memory_order_seq_cst);
-		ev_port->inflight_credits -= val;
+		dlb2_release_sw_credits(dlb2, ev_port, val);
 	}
 }
 
@@ -2732,9 +2937,15 @@ dlb2_check_enqueue_sw_credits(struct dlb2_eventdev *dlb2,
 			return 1;
 		}
 
-		rte_atomic_fetch_add_explicit(&dlb2->inflights, credit_update_quanta,
-				   rte_memory_order_seq_cst);
-		ev_port->inflight_credits += (credit_update_quanta);
+		/* Application will retry if this attempt fails due to contention */
+		if (rte_atomic_compare_exchange_strong_explicit(&dlb2->inflights, &sw_inflights,
+			(sw_inflights+credit_update_quanta), rte_memory_order_seq_cst,
+			rte_memory_order_seq_cst))
+			ev_port->inflight_credits += (credit_update_quanta);
+		else {
+			rte_errno = -ENOSPC;
+			return 1;
+		}
 
 		if (ev_port->inflight_credits < num) {
 			DLB2_INC_STAT(
@@ -2896,7 +3107,9 @@ dlb2_event_enqueue_prep(struct dlb2_eventdev_port *ev_port,
 {
 	struct dlb2_eventdev *dlb2 = ev_port->dlb2;
 	struct dlb2_eventdev_queue *ev_queue;
+#if DLB_HW_CREDITS_CHECKS
 	uint16_t *cached_credits = NULL;
+#endif
 	struct dlb2_queue *qm_queue;
 
 	ev_queue = &dlb2->ev_queues[ev->queue_id];
@@ -2908,6 +3121,7 @@ dlb2_event_enqueue_prep(struct dlb2_eventdev_port *ev_port,
 		goto op_check;
 
 	if (!qm_queue->is_directed) {
+#if DLB_HW_CREDITS_CHECKS
 		/* Load balanced destination queue */
 
 		if (dlb2->version == DLB2_HW_V2) {
@@ -2923,6 +3137,8 @@ dlb2_event_enqueue_prep(struct dlb2_eventdev_port *ev_port,
 			}
 			cached_credits = &qm_port->cached_credits;
 		}
+#endif
+#if DLB_TYPE_CHECK
 		switch (ev->sched_type) {
 		case RTE_SCHED_TYPE_ORDERED:
 			DLB2_LOG_LINE_DBG("dlb2: put_qe: RTE_SCHED_TYPE_ORDERED");
@@ -2951,9 +3167,20 @@ dlb2_event_enqueue_prep(struct dlb2_eventdev_port *ev_port,
 			rte_errno = -EINVAL;
 			return 1;
 		}
+#else
+#if (RTE_SCHED_TYPE_PARALLEL != 2) || (RTE_SCHED_TYPE_ATOMIC != 1)
+#error "ERROR: RTE event schedule type values changed. Needs a code change"
+#endif
+		/* Map RTE eventdev schedule type to DLB HW schedule type */
+		if (qm_queue->sched_type != RTE_SCHED_TYPE_ORDERED)
+			/* RTE-Parallel -> DLB-UnOrd 2->1, RTE-Atm -> DLB-Atm 1->0 */
+			*sched_type = ev->sched_type - 1;
+		else /* To support CFG_ALL_TYPEs */
+			*sched_type = DLB2_SCHED_ORDERED; /* RTE-Ord -> DLB-Ord 0->2 */
+#endif
 	} else {
 		/* Directed destination queue */
-
+#if DLB_HW_CREDITS_CHECKS
 		if (dlb2->version == DLB2_HW_V2) {
 			if (dlb2_check_enqueue_hw_dir_credits(qm_port)) {
 				rte_errno = -ENOSPC;
@@ -2967,6 +3194,7 @@ dlb2_event_enqueue_prep(struct dlb2_eventdev_port *ev_port,
 			}
 			cached_credits = &qm_port->cached_credits;
 		}
+#endif
 		DLB2_LOG_LINE_DBG("dlb2: put_qe: RTE_SCHED_TYPE_DIRECTED");
 
 		*sched_type = DLB2_SCHED_DIRECTED;
@@ -2975,13 +3203,17 @@ dlb2_event_enqueue_prep(struct dlb2_eventdev_port *ev_port,
 op_check:
 	switch (ev->op) {
 	case RTE_EVENT_OP_NEW:
+#if DLB_SW_CREDITS_CHECKS
 		/* Check that a sw credit is available */
 		if (dlb2_check_enqueue_sw_credits(dlb2, ev_port)) {
 			rte_errno = -ENOSPC;
 			return 1;
 		}
 		ev_port->inflight_credits--;
+#endif
+#if DLB_HW_CREDITS_CHECKS
 		(*cached_credits)--;
+#endif
 		break;
 	case RTE_EVENT_OP_FORWARD:
 		/* Check for outstanding_releases underflow. If this occurs,
@@ -2992,10 +3224,14 @@ op_check:
 		RTE_ASSERT(ev_port->outstanding_releases > 0);
 		ev_port->outstanding_releases--;
 		qm_port->issued_releases++;
+#if DLB_HW_CREDITS_CHECKS
 		(*cached_credits)--;
+#endif
 		break;
 	case RTE_EVENT_OP_RELEASE:
+#if DLB_SW_CREDITS_CHECKS
 		ev_port->inflight_credits++;
+#endif
 		/* Check for outstanding_releases underflow. If this occurs,
 		 * the application is not using the EVENT_OPs correctly; for
 		 * example, forwarding or releasing events that were not
@@ -3005,8 +3241,10 @@ op_check:
 		ev_port->outstanding_releases--;
 		qm_port->issued_releases++;
 
+#if DLB_SW_CREDITS_CHECKS
 		/* Replenish s/w credits if enough are cached */
 		dlb2_replenish_sw_credits(dlb2, ev_port);
+#endif
 		break;
 	}
 
@@ -3072,6 +3310,9 @@ __dlb2_event_enqueue_burst_reorder(void *event_port,
 
 	port_data = &dlb2_port[qm_port->id][PORT_TYPE(qm_port)];
 
+	if (!port_data->mmaped)
+		dlb2_iface_low_level_io_init(&ev_port->dlb2->qm_instance);
+
 	num_tx = RTE_MIN(num, ev_port->conf.enqueue_depth);
 #if DLB2_BYPASS_FENCE_ON_PP == 1
 	if (!qm_port->is_producer) /* Call memory fense once at the start */
@@ -3118,7 +3359,7 @@ __dlb2_event_enqueue_burst_reorder(void *event_port,
 		}
 		}
 
-		if (use_delayed && qm_port->token_pop_mode == DELAYED_POP &&
+		if (use_delayed && qm_port->token_pop_mode == RTE_PMD_DLB2_DELAYED_POP &&
 		    (events[i].op == RTE_EVENT_OP_FORWARD ||
 		     events[i].op == RTE_EVENT_OP_RELEASE) &&
 		    qm_port->issued_releases >= thresh - 1) {
@@ -3205,6 +3446,10 @@ __dlb2_event_enqueue_burst(void *event_port,
 	i = 0;
 
 	port_data = &dlb2_port[qm_port->id][PORT_TYPE(qm_port)];
+
+	if (!port_data->mmaped)
+		dlb2_iface_low_level_io_init(&ev_port->dlb2->qm_instance);
+
 	num_tx = RTE_MIN(num, ev_port->conf.enqueue_depth);
 	while (i < num_tx) {
 		uint8_t sched_types[DLB2_NUM_QES_PER_CACHE_LINE];
@@ -3223,7 +3468,7 @@ __dlb2_event_enqueue_burst(void *event_port,
 			int ret;
 
 			if (use_delayed &&
-			    qm_port->token_pop_mode == DELAYED_POP &&
+			    qm_port->token_pop_mode == RTE_PMD_DLB2_DELAYED_POP &&
 			    (ev->op == RTE_EVENT_OP_FORWARD ||
 			     ev->op == RTE_EVENT_OP_RELEASE) &&
 			    qm_port->issued_releases >= thresh - 1) {
@@ -3280,6 +3525,8 @@ __dlb2_event_enqueue_burst(void *event_port,
 			break;
 	}
 
+	dlb2_check_and_return_credits(ev_port, !i,
+				      DLB2_ENQ_FAIL_CREDIT_RETURN_THRES);
 	return i;
 }
 
@@ -3373,7 +3620,7 @@ dlb2_event_release(struct dlb2_eventdev *dlb2,
 		for (; j < DLB2_NUM_QES_PER_CACHE_LINE && (i + j) < n; j++) {
 			int16_t thresh = qm_port->token_pop_thresh;
 
-			if (qm_port->token_pop_mode == DELAYED_POP &&
+			if (qm_port->token_pop_mode == RTE_PMD_DLB2_DELAYED_POP &&
 			    qm_port->issued_releases >= thresh - 1) {
 				/* Insert the token pop QE */
 				dlb2_construct_token_pop_qe(qm_port, j);
@@ -3404,53 +3651,45 @@ sw_credit_update:
 		return;
 	}
 	ev_port->outstanding_releases -= i;
+#if DLB_SW_CREDITS_CHECKS
 	ev_port->inflight_credits += i;
 
 	/* Replenish s/w credits if enough releases are performed */
 	dlb2_replenish_sw_credits(dlb2, ev_port);
+#endif
 }
 
 static inline void
 dlb2_port_credits_inc(struct dlb2_port *qm_port, int num)
 {
 	uint32_t batch_size = qm_port->hw_credit_quanta;
+	int val;
 
 	/* increment port credits, and return to pool if exceeds threshold */
-	if (!qm_port->is_directed) {
-		if (qm_port->dlb2->version == DLB2_HW_V2) {
-			qm_port->cached_ldb_credits += num;
-			if (qm_port->cached_ldb_credits >= 2 * batch_size) {
-				rte_atomic_fetch_add_explicit(
-					qm_port->credit_pool[DLB2_LDB_QUEUE],
-					batch_size, rte_memory_order_seq_cst);
-				qm_port->cached_ldb_credits -= batch_size;
-			}
-		} else {
-			qm_port->cached_credits += num;
-			if (qm_port->cached_credits >= 2 * batch_size) {
-				rte_atomic_fetch_add_explicit(
-				      qm_port->credit_pool[DLB2_COMBINED_POOL],
-				      batch_size, rte_memory_order_seq_cst);
-				qm_port->cached_credits -= batch_size;
-			}
+	if (qm_port->dlb2->version == DLB2_HW_V2_5) {
+		qm_port->cached_credits += num;
+		if (qm_port->cached_credits >= 2 * batch_size) {
+			val = qm_port->cached_credits - batch_size;
+			rte_atomic_fetch_add_explicit(
+			    qm_port->credit_pool[DLB2_COMBINED_POOL], val,
+			    rte_memory_order_seq_cst);
+			qm_port->cached_credits -= val;
+		}
+	} else if (!qm_port->is_directed) {
+		qm_port->cached_ldb_credits += num;
+		if (qm_port->cached_ldb_credits >= 2 * batch_size) {
+			val = qm_port->cached_ldb_credits - batch_size;
+			rte_atomic_fetch_add_explicit(qm_port->credit_pool[DLB2_LDB_QUEUE],
+					   val, rte_memory_order_seq_cst);
+			qm_port->cached_ldb_credits -= val;
 		}
 	} else {
-		if (qm_port->dlb2->version == DLB2_HW_V2) {
-			qm_port->cached_dir_credits += num;
-			if (qm_port->cached_dir_credits >= 2 * batch_size) {
-				rte_atomic_fetch_add_explicit(
-					qm_port->credit_pool[DLB2_DIR_QUEUE],
-					batch_size, rte_memory_order_seq_cst);
-				qm_port->cached_dir_credits -= batch_size;
-			}
-		} else {
-			qm_port->cached_credits += num;
-			if (qm_port->cached_credits >= 2 * batch_size) {
-				rte_atomic_fetch_add_explicit(
-				      qm_port->credit_pool[DLB2_COMBINED_POOL],
-				      batch_size, rte_memory_order_seq_cst);
-				qm_port->cached_credits -= batch_size;
-			}
+		qm_port->cached_ldb_credits += num;
+		if (qm_port->cached_ldb_credits >= 2 * batch_size) {
+			val = qm_port->cached_ldb_credits - batch_size;
+			rte_atomic_fetch_add_explicit(qm_port->credit_pool[DLB2_LDB_QUEUE],
+					   val, rte_memory_order_seq_cst);
+			qm_port->cached_ldb_credits -= val;
 		}
 	}
 }
@@ -3481,6 +3720,15 @@ dlb2_dequeue_wait(struct dlb2_eventdev *dlb2,
 
 	/* Wait/poll time expired */
 	if (elapsed_ticks >= timeout) {
+		/* Return all credits before blocking if remaining credits in
+		 * system is less than quanta.
+		 */
+		uint32_t sw_inflights = rte_atomic_load_explicit(&dlb2->inflights,
+			rte_memory_order_seq_cst);
+		uint32_t quanta = ev_port->credit_update_quanta;
+
+		if (dlb2->new_event_limit - sw_inflights < quanta)
+			dlb2_check_and_return_credits(ev_port, true, 0);
 		return 1;
 	} else if (dlb2->umwait_allowed) {
 		struct rte_power_monitor_cond pmc;
@@ -3897,6 +4145,8 @@ _process_deq_qes_vec_impl(struct dlb2_port *qm_port,
 		_mm_storeu_si128((__m128i *)&events[3], v_ev_3);
 		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched3],
 			      1);
+		DLB2_INC_STAT(qm_port->ev_port->stats.queue[ev_qid3].\
+			qid_depth[RTE_PMD_DLB2_GET_QID_DEPTH(&events[3])], 1);
 		/* fallthrough */
 	case 3:
 		v_ev_2 = _mm_unpacklo_epi64(v_unpk_ev_23, v_qe_2);
@@ -3904,6 +4154,8 @@ _process_deq_qes_vec_impl(struct dlb2_port *qm_port,
 		_mm_storeu_si128((__m128i *)&events[2], v_ev_2);
 		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched2],
 			      1);
+		DLB2_INC_STAT(qm_port->ev_port->stats.queue[ev_qid2].\
+			qid_depth[RTE_PMD_DLB2_GET_QID_DEPTH(&events[2])], 1);
 		/* fallthrough */
 	case 2:
 		v_ev_1 = _mm_blend_epi16(v_unpk_ev_01, v_qe_1, 0x0F);
@@ -3912,6 +4164,8 @@ _process_deq_qes_vec_impl(struct dlb2_port *qm_port,
 		_mm_storeu_si128((__m128i *)&events[1], v_ev_1);
 		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched1],
 			      1);
+		DLB2_INC_STAT(qm_port->ev_port->stats.queue[ev_qid1].\
+			qid_depth[RTE_PMD_DLB2_GET_QID_DEPTH(&events[1])], 1);
 		/* fallthrough */
 	case 1:
 		v_ev_0 = _mm_unpacklo_epi64(v_unpk_ev_01, v_qe_0);
@@ -3919,6 +4173,8 @@ _process_deq_qes_vec_impl(struct dlb2_port *qm_port,
 		_mm_storeu_si128((__m128i *)&events[0], v_ev_0);
 		DLB2_INC_STAT(qm_port->ev_port->stats.rx_sched_cnt[hw_sched0],
 			      1);
+		DLB2_INC_STAT(qm_port->ev_port->stats.queue[ev_qid0].\
+			qid_depth[RTE_PMD_DLB2_GET_QID_DEPTH(&events[0])], 1);
 	}
 	qm_port->reorder_id += valid_events;
 }
@@ -4109,12 +4365,14 @@ dlb2_hw_dequeue_sparse(struct dlb2_eventdev *dlb2,
 	qm_port->owed_tokens += num;
 
 	if (num) {
-		if (qm_port->token_pop_mode == AUTO_POP)
+		if (qm_port->token_pop_mode == RTE_PMD_DLB2_AUTO_POP)
 			dlb2_consume_qe_immediate(qm_port, num);
 
 		ev_port->outstanding_releases += num;
 
+#if DLB_HW_CREDITS_CHECKS
 		dlb2_port_credits_inc(qm_port, num);
+#endif
 	}
 
 	return num;
@@ -4237,12 +4495,14 @@ dlb2_hw_dequeue(struct dlb2_eventdev *dlb2,
 	qm_port->owed_tokens += num;
 
 	if (num) {
-		if (qm_port->token_pop_mode == AUTO_POP)
+		if (qm_port->token_pop_mode == RTE_PMD_DLB2_AUTO_POP)
 			dlb2_consume_qe_immediate(qm_port, num);
 
 		ev_port->outstanding_releases += num;
 
+#if DLB_HW_CREDITS_CHECKS
 		dlb2_port_credits_inc(qm_port, num);
+#endif
 	}
 
 	return num;
@@ -4256,10 +4516,16 @@ dlb2_event_dequeue_burst(void *event_port, struct rte_event *ev, uint16_t num,
 	struct dlb2_port *qm_port = &ev_port->qm_port;
 	struct dlb2_eventdev *dlb2 = ev_port->dlb2;
 	struct dlb2_reorder *order = qm_port->order;
+	struct process_local_port_data *port_data;
 	uint16_t cnt;
 
 	RTE_ASSERT(ev_port->setup_done);
 	RTE_ASSERT(ev != NULL);
+
+	port_data = &dlb2_port[qm_port->id][PORT_TYPE(qm_port)];
+
+	if (!port_data->mmaped)
+		dlb2_iface_low_level_io_init(&dlb2->qm_instance);
 
 	if (ev_port->implicit_release && ev_port->outstanding_releases > 0) {
 		uint16_t out_rels = ev_port->outstanding_releases;
@@ -4274,7 +4540,7 @@ dlb2_event_dequeue_burst(void *event_port, struct rte_event *ev, uint16_t num,
 					order->enq_reorder[i].u64[1] = release_u64;
 
 			__dlb2_event_enqueue_burst_reorder(event_port, NULL, 0,
-						   qm_port->token_pop_mode == DELAYED_POP);
+					qm_port->token_pop_mode == RTE_PMD_DLB2_DELAYED_POP);
 		} else {
 			dlb2_event_release(dlb2, ev_port->id, out_rels);
 		}
@@ -4282,13 +4548,15 @@ dlb2_event_dequeue_burst(void *event_port, struct rte_event *ev, uint16_t num,
 		DLB2_INC_STAT(ev_port->stats.tx_implicit_rel, out_rels);
 	}
 
-	if (qm_port->token_pop_mode == DEFERRED_POP && qm_port->owed_tokens)
+	if (qm_port->token_pop_mode == RTE_PMD_DLB2_DEFERRED_POP && qm_port->owed_tokens)
 		dlb2_consume_qe_immediate(qm_port, qm_port->owed_tokens);
 
 	cnt = dlb2_hw_dequeue(dlb2, ev_port, ev, num, wait);
 
 	DLB2_INC_STAT(ev_port->stats.traffic.total_polls, 1);
 	DLB2_INC_STAT(ev_port->stats.traffic.zero_polls, ((cnt == 0) ? 1 : 0));
+	dlb2_check_and_return_credits(ev_port, !cnt,
+				      DLB2_ZERO_DEQ_CREDIT_RETURN_THRES);
 
 	return cnt;
 }
@@ -4301,10 +4569,16 @@ dlb2_event_dequeue_burst_sparse(void *event_port, struct rte_event *ev,
 	struct dlb2_port *qm_port = &ev_port->qm_port;
 	struct dlb2_eventdev *dlb2 = ev_port->dlb2;
 	struct dlb2_reorder *order = qm_port->order;
+	struct process_local_port_data *port_data;
 	uint16_t cnt;
 
 	RTE_ASSERT(ev_port->setup_done);
 	RTE_ASSERT(ev != NULL);
+
+	port_data = &dlb2_port[qm_port->id][PORT_TYPE(qm_port)];
+
+	if (!port_data->mmaped)
+		dlb2_iface_low_level_io_init(&dlb2->qm_instance);
 
 	if (ev_port->implicit_release && ev_port->outstanding_releases > 0) {
 		uint16_t out_rels = ev_port->outstanding_releases;
@@ -4323,7 +4597,8 @@ dlb2_event_dequeue_burst_sparse(void *event_port, struct rte_event *ev,
 					if (num_releases == RTE_DIM(release_burst)) {
 						__dlb2_event_enqueue_burst_reorder(event_port,
 							release_burst, RTE_DIM(release_burst),
-							qm_port->token_pop_mode == DELAYED_POP);
+							qm_port->token_pop_mode ==
+									RTE_PMD_DLB2_DELAYED_POP);
 						num_releases = 0;
 					}
 				}
@@ -4331,7 +4606,8 @@ dlb2_event_dequeue_burst_sparse(void *event_port, struct rte_event *ev,
 
 			if (num_releases)
 				__dlb2_event_enqueue_burst_reorder(event_port, release_burst
-					, num_releases, qm_port->token_pop_mode == DELAYED_POP);
+					, num_releases,
+					qm_port->token_pop_mode == RTE_PMD_DLB2_DELAYED_POP);
 		} else {
 			dlb2_event_release(dlb2, ev_port->id, out_rels);
 		}
@@ -4340,13 +4616,16 @@ dlb2_event_dequeue_burst_sparse(void *event_port, struct rte_event *ev,
 		DLB2_INC_STAT(ev_port->stats.tx_implicit_rel, out_rels);
 	}
 
-	if (qm_port->token_pop_mode == DEFERRED_POP && qm_port->owed_tokens)
+	if (qm_port->token_pop_mode == RTE_PMD_DLB2_DEFERRED_POP && qm_port->owed_tokens)
 		dlb2_consume_qe_immediate(qm_port, qm_port->owed_tokens);
 
 	cnt = dlb2_hw_dequeue_sparse(dlb2, ev_port, ev, num, wait);
 
 	DLB2_INC_STAT(ev_port->stats.traffic.total_polls, 1);
 	DLB2_INC_STAT(ev_port->stats.traffic.zero_polls, ((cnt == 0) ? 1 : 0));
+	dlb2_check_and_return_credits(ev_port, !cnt,
+				      DLB2_ZERO_DEQ_CREDIT_RETURN_THRES);
+
 	return cnt;
 }
 
@@ -4435,6 +4714,67 @@ dlb2_get_queue_depth(struct dlb2_eventdev *dlb2,
 		return dlb2_get_dir_queue_depth(dlb2, queue);
 	else
 		return dlb2_get_ldb_queue_depth(dlb2, queue);
+}
+
+#define PARAM_ERR(param, ret, err_str)\
+	do { \
+		if (!ret) \
+			ret = -EINVAL; \
+		DLB2_LOG_ERR("dlb2: dlb2_set_port_param error, param=%" PRIu64 " ret=%d %s",\
+			param, ret, err_str); \
+	} while (0)
+
+int
+dlb2_set_port_param(struct dlb2_eventdev *dlb2,
+		    int port_id,
+		    uint64_t param_flags,
+		    struct rte_pmd_dlb2_port_param *param_val)
+{
+	struct rte_pmd_dlb2_port_param *port_param = param_val;
+	struct dlb2_port *port = &dlb2->ev_ports[port_id].qm_port;
+	struct dlb2_hw_dev *handle = &dlb2->qm_instance;
+	int ret = 0, bit = 0;
+
+	while (param_flags) {
+		uint64_t param = rte_bit_relaxed_test_and_clear64(bit++, &param_flags);
+
+		if (!param)
+			continue;
+		switch (param) {
+		case DLB2_SET_PORT_FLOW_MIGRATION_THRESHOLD:
+			if (dlb2->version == DLB2_HW_V2_5) {
+				struct dlb2_cq_inflight_ctrl_args args = {0};
+
+				args.enable = true;
+				args.port_id = port->id;
+				args.threshold = port_param->inflight_threshold;
+				if (dlb2->ev_ports[port_id].setup_done)
+					ret = dlb2_iface_set_cq_inflight_ctrl(handle, &args);
+				if (ret) {
+					PARAM_ERR(param, ret, "Failed to set inflight threshold");
+					return ret;
+				}
+				port->enable_inflight_ctrl = true;
+				port->inflight_threshold = args.threshold;
+			} else {
+				PARAM_ERR(param, ret, "FLOW_MIGRATION_THRESHOLD is only supported for 2.5 HW");
+				return ret;
+			}
+			break;
+		case DLB2_SET_PORT_HL:
+			if (dlb2->ev_ports[port_id].setup_done) {
+				PARAM_ERR(param, ret, "DLB2_SET_PORT_HL must be called before setting up port");
+				return ret;
+			}
+			port->hist_list = port_param->port_hl;
+			break;
+		default:
+			PARAM_ERR(param, ret, "Unsupported flag");
+			return ret;
+		}
+	}
+
+	return ret;
 }
 
 static bool
@@ -4742,6 +5082,28 @@ dlb2_primary_eventdev_probe(struct rte_eventdev *dev,
 		return err;
 	}
 
+	if (dlb2_args->use_default_hl) {
+		dlb2->default_port_hl = DLB2_FIXED_CQ_HL_SIZE;
+		if (dlb2_args->alloc_hl_entries)
+			DLB2_LOG_ERR(": Ignoring 'alloc_hl_entries' and using "
+				     "default history list sizes for eventdev:"
+				     " %s", dev->data->name);
+		dlb2->hl_entries = 0;
+	} else {
+		dlb2->default_port_hl = 2 * DLB2_FIXED_CQ_HL_SIZE;
+
+		if (dlb2_args->alloc_hl_entries >
+		    dlb2->hw_rsrc_query_results.num_hist_list_entries) {
+			DLB2_LOG_ERR(": Insufficient HL entries asked=%d "
+				     "available=%d for eventdev: %s",
+				     dlb2->hl_entries,
+				     dlb2->hw_rsrc_query_results.num_hist_list_entries,
+				     dev->data->name);
+			return -EINVAL;
+		}
+		dlb2->hl_entries = dlb2_args->alloc_hl_entries;
+	}
+
 	dlb2_iface_hardware_init(&dlb2->qm_instance);
 
 	/* configure class of service */
@@ -4782,11 +5144,11 @@ dlb2_primary_eventdev_probe(struct rte_eventdev *dev,
 
 	/* Initialize each port's token pop mode */
 	for (i = 0; i < DLB2_MAX_NUM_PORTS(dlb2->version); i++)
-		dlb2->ev_ports[i].qm_port.token_pop_mode = AUTO_POP;
+		dlb2->ev_ports[i].qm_port.token_pop_mode = RTE_PMD_DLB2_AUTO_POP;
 
 	rte_spinlock_init(&dlb2->qm_instance.resource_lock);
 
-	dlb2_iface_low_level_io_init();
+	dlb2_iface_low_level_io_init(NULL);
 
 	dlb2_entry_points_init(dev);
 
@@ -4818,7 +5180,7 @@ dlb2_secondary_eventdev_probe(struct rte_eventdev *dev,
 		return err;
 	}
 
-	dlb2_iface_low_level_io_init();
+	dlb2_iface_low_level_io_init(&dlb2->qm_instance);
 
 	dlb2_entry_points_init(dev);
 
@@ -4849,6 +5211,8 @@ dlb2_parse_params(const char *params,
 					     DLB2_PRODUCER_COREMASK,
 					     DLB2_DEFAULT_LDB_PORT_ALLOCATION_ARG,
 					     DLB2_ENABLE_CQ_WEIGHT_ARG,
+					     DLB2_USE_DEFAULT_HL,
+					     DLB2_ALLOC_HL_ENTRIES,
 					     NULL };
 
 	if (params != NULL && params[0] != '\0') {
@@ -4868,9 +5232,18 @@ dlb2_parse_params(const char *params,
 				return ret;
 			}
 
-			ret = rte_kvargs_process(kvlist, DLB2_MAX_NUM_EVENTS,
-						 set_max_num_events,
-						 &dlb2_args->max_num_events);
+			if (version == DLB2_HW_V2) {
+				ret = rte_kvargs_process(kvlist,
+						DLB2_MAX_NUM_EVENTS,
+						set_max_num_events,
+						&dlb2_args->max_num_events);
+			} else {
+				ret = rte_kvargs_process(kvlist,
+						DLB2_MAX_NUM_EVENTS,
+						set_max_num_events_v2_5,
+						&dlb2_args->max_num_events);
+			}
+
 			if (ret != 0) {
 				DLB2_LOG_ERR("%s: Error parsing max_num_events parameter",
 					     name);
@@ -5053,6 +5426,26 @@ dlb2_parse_params(const char *params,
 			}
 			if (version == DLB2_HW_V2 && dlb2_args->enable_cq_weight)
 				DLB2_LOG_INFO("Ignoring 'enable_cq_weight=y'. Only supported for 2.5 HW onwards");
+
+			ret = rte_kvargs_process(kvlist, DLB2_USE_DEFAULT_HL,
+						 set_hl_override,
+						 &dlb2_args->use_default_hl);
+			if (ret != 0) {
+				DLB2_LOG_ERR("%s: Error parsing hl_override arg",
+					     name);
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
+
+			ret = rte_kvargs_process(kvlist, DLB2_ALLOC_HL_ENTRIES,
+						 set_hl_entries,
+						 &dlb2_args->alloc_hl_entries);
+			if (ret != 0) {
+				DLB2_LOG_ERR("%s: Error parsing hl_override arg",
+					     name);
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
 
 			rte_kvargs_free(kvlist);
 		}

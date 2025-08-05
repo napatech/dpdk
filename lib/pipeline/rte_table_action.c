@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <eal_export.h>
 #include <rte_common.h>
 #include <rte_byteorder.h>
 #include <rte_cycles.h>
@@ -60,9 +61,9 @@ lb_cfg_check(struct rte_table_action_lb_config *cfg)
 	return 0;
 }
 
-struct lb_data {
+struct __rte_packed_begin lb_data {
 	uint32_t out[RTE_TABLE_ACTION_LB_TABLE_SIZE];
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 lb_apply(struct lb_data *data,
@@ -356,10 +357,10 @@ tm_cfg_check(struct rte_table_action_tm_config *tm)
 	return 0;
 }
 
-struct tm_data {
+struct __rte_packed_begin tm_data {
 	uint32_t queue_id;
 	uint32_t reserved;
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 tm_apply_check(struct rte_table_action_tm_params *p,
@@ -465,11 +466,11 @@ struct encap_qinq_data {
 	((((uint64_t)(s)) & 0x1LLU) << 8) |                \
 	(((uint64_t)(ttl)) & 0xFFLLU)))
 
-struct __rte_aligned(2) encap_mpls_data {
+struct __rte_aligned(2) __rte_packed_begin encap_mpls_data {
 	struct rte_ether_hdr ether;
 	uint32_t mpls[RTE_TABLE_ACTION_MPLS_LABELS_MAX];
 	uint32_t mpls_count;
-} __rte_packed;
+} __rte_packed_end;
 
 #define PPP_PROTOCOL_IP                                    0x0021
 
@@ -487,42 +488,42 @@ struct encap_pppoe_data {
 
 #define IP_PROTO_UDP                                       17
 
-struct __rte_aligned(2) encap_vxlan_ipv4_data {
+struct __rte_aligned(2) __rte_packed_begin encap_vxlan_ipv4_data {
 	struct rte_ether_hdr ether;
 	struct rte_ipv4_hdr ipv4;
 	struct rte_udp_hdr udp;
 	struct rte_vxlan_hdr vxlan;
-} __rte_packed;
+} __rte_packed_end;
 
-struct __rte_aligned(2) encap_vxlan_ipv4_vlan_data {
+struct __rte_aligned(2) __rte_packed_begin encap_vxlan_ipv4_vlan_data {
 	struct rte_ether_hdr ether;
 	struct rte_vlan_hdr vlan;
 	struct rte_ipv4_hdr ipv4;
 	struct rte_udp_hdr udp;
 	struct rte_vxlan_hdr vxlan;
-} __rte_packed;
+} __rte_packed_end;
 
-struct __rte_aligned(2) encap_vxlan_ipv6_data {
+struct __rte_aligned(2) __rte_packed_begin encap_vxlan_ipv6_data {
 	struct rte_ether_hdr ether;
 	struct rte_ipv6_hdr ipv6;
 	struct rte_udp_hdr udp;
 	struct rte_vxlan_hdr vxlan;
-} __rte_packed;
+} __rte_packed_end;
 
-struct __rte_aligned(2) encap_vxlan_ipv6_vlan_data {
+struct __rte_aligned(2) __rte_packed_begin encap_vxlan_ipv6_vlan_data {
 	struct rte_ether_hdr ether;
 	struct rte_vlan_hdr vlan;
 	struct rte_ipv6_hdr ipv6;
 	struct rte_udp_hdr udp;
 	struct rte_vxlan_hdr vxlan;
-} __rte_packed;
+} __rte_packed_end;
 
-struct __rte_aligned(2) encap_qinq_pppoe_data {
+struct __rte_aligned(2) __rte_packed_begin encap_qinq_pppoe_data {
 	struct rte_ether_hdr ether;
 	struct rte_vlan_hdr svlan;
 	struct rte_vlan_hdr cvlan;
 	struct pppoe_ppp_hdr pppoe_ppp;
-} __rte_packed;
+} __rte_packed_end;
 
 static size_t
 encap_data_size(struct rte_table_action_encap_config *encap)
@@ -1196,15 +1197,15 @@ nat_cfg_check(struct rte_table_action_nat_config *nat)
 	return 0;
 }
 
-struct nat_ipv4_data {
+struct __rte_packed_begin nat_ipv4_data {
 	uint32_t addr;
 	uint16_t port;
-} __rte_packed;
+} __rte_packed_end;
 
-struct nat_ipv6_data {
+struct __rte_packed_begin nat_ipv6_data {
 	struct rte_ipv6_addr addr;
 	uint16_t port;
-} __rte_packed;
+} __rte_packed_end;
 
 static size_t
 nat_data_size(struct rte_table_action_nat_config *nat __rte_unused,
@@ -1493,9 +1494,9 @@ ttl_cfg_check(struct rte_table_action_ttl_config *ttl)
 	return 0;
 }
 
-struct ttl_data {
+struct __rte_packed_begin ttl_data {
 	uint32_t n_packets;
-} __rte_packed;
+} __rte_packed_end;
 
 #define TTL_INIT(data, decrement)                         \
 	((data)->n_packets = (decrement) ? 1 : 0)
@@ -1576,10 +1577,10 @@ stats_cfg_check(struct rte_table_action_stats_config *stats)
 	return 0;
 }
 
-struct stats_data {
+struct __rte_packed_begin stats_data {
 	uint64_t n_packets;
 	uint64_t n_bytes;
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 stats_apply(struct stats_data *data,
@@ -1602,9 +1603,9 @@ pkt_work_stats(struct stats_data *data,
 /**
  * RTE_TABLE_ACTION_TIME
  */
-struct time_data {
+struct __rte_packed_begin time_data {
 	uint64_t time;
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 time_apply(struct time_data *data,
@@ -1649,7 +1650,7 @@ struct crypto_op_sym_iv_aad {
 	} iv_aad;
 };
 
-struct sym_crypto_data {
+struct __rte_packed_begin sym_crypto_data {
 
 	union {
 		struct {
@@ -1717,7 +1718,7 @@ struct sym_crypto_data {
 	/** Private data size to store cipher iv / aad. */
 	uint8_t iv_aad_data[32];
 
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 sym_crypto_cfg_check(struct rte_table_action_sym_crypto_config *cfg)
@@ -2052,9 +2053,9 @@ pkt_work_sym_crypto(struct rte_mbuf *mbuf, struct sym_crypto_data *data,
 /**
  * RTE_TABLE_ACTION_TAG
  */
-struct tag_data {
+struct __rte_packed_begin tag_data {
 	uint32_t tag;
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 tag_apply(struct tag_data *data,
@@ -2096,9 +2097,9 @@ pkt4_work_tag(struct rte_mbuf *mbuf0,
 /**
  * RTE_TABLE_ACTION_DECAP
  */
-struct decap_data {
+struct __rte_packed_begin decap_data {
 	uint16_t n;
-} __rte_packed;
+} __rte_packed_end;
 
 static int
 decap_apply(struct decap_data *data,
@@ -2362,6 +2363,7 @@ struct rte_table_action_profile {
 	int frozen;
 };
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_profile_create, 18.05)
 struct rte_table_action_profile *
 rte_table_action_profile_create(struct rte_table_action_common_config *common)
 {
@@ -2383,6 +2385,7 @@ rte_table_action_profile_create(struct rte_table_action_common_config *common)
 }
 
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_profile_action_register, 18.05)
 int
 rte_table_action_profile_action_register(struct rte_table_action_profile *profile,
 	enum rte_table_action_type type,
@@ -2446,6 +2449,7 @@ rte_table_action_profile_action_register(struct rte_table_action_profile *profil
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_profile_freeze, 18.05)
 int
 rte_table_action_profile_freeze(struct rte_table_action_profile *profile)
 {
@@ -2459,6 +2463,7 @@ rte_table_action_profile_freeze(struct rte_table_action_profile *profile)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_profile_free, 18.05)
 int
 rte_table_action_profile_free(struct rte_table_action_profile *profile)
 {
@@ -2481,6 +2486,7 @@ struct rte_table_action {
 	struct meter_profile_data mp[METER_PROFILES_MAX];
 };
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_create, 18.05)
 struct rte_table_action *
 rte_table_action_create(struct rte_table_action_profile *profile,
 	uint32_t socket_id)
@@ -2518,6 +2524,7 @@ action_data_get(void *data,
 	return &data_bytes[offset];
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_apply, 18.05)
 int
 rte_table_action_apply(struct rte_table_action *action,
 	void *data,
@@ -2599,6 +2606,7 @@ rte_table_action_apply(struct rte_table_action *action,
 	}
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_dscp_table_update, 18.05)
 int
 rte_table_action_dscp_table_update(struct rte_table_action *action,
 	uint64_t dscp_mask,
@@ -2631,6 +2639,7 @@ rte_table_action_dscp_table_update(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_meter_profile_add, 18.05)
 int
 rte_table_action_meter_profile_add(struct rte_table_action *action,
 	uint32_t meter_profile_id,
@@ -2671,6 +2680,7 @@ rte_table_action_meter_profile_add(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_meter_profile_delete, 18.05)
 int
 rte_table_action_meter_profile_delete(struct rte_table_action *action,
 	uint32_t meter_profile_id)
@@ -2694,6 +2704,7 @@ rte_table_action_meter_profile_delete(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_meter_read, 18.05)
 int
 rte_table_action_meter_read(struct rte_table_action *action,
 	void *data,
@@ -2756,6 +2767,7 @@ rte_table_action_meter_read(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_ttl_read, 18.05)
 int
 rte_table_action_ttl_read(struct rte_table_action *action,
 	void *data,
@@ -2784,6 +2796,7 @@ rte_table_action_ttl_read(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_stats_read, 18.05)
 int
 rte_table_action_stats_read(struct rte_table_action *action,
 	void *data,
@@ -2819,6 +2832,7 @@ rte_table_action_stats_read(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_time_read, 18.05)
 int
 rte_table_action_time_read(struct rte_table_action *action,
 	void *data,
@@ -2842,6 +2856,7 @@ rte_table_action_time_read(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_crypto_sym_session_get, 18.11)
 struct rte_cryptodev_sym_session *
 rte_table_action_crypto_sym_session_get(struct rte_table_action *action,
 	void *data)
@@ -3429,6 +3444,7 @@ ah_selector(struct rte_table_action *action)
 	return ah_default;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_table_params_get, 18.05)
 int
 rte_table_action_table_params_get(struct rte_table_action *action,
 	struct rte_pipeline_table_params *params)
@@ -3454,6 +3470,7 @@ rte_table_action_table_params_get(struct rte_table_action *action,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_table_action_free, 18.05)
 int
 rte_table_action_free(struct rte_table_action *action)
 {

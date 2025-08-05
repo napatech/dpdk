@@ -5,21 +5,16 @@
 #include "../r8169_ethdev.h"
 #include "../r8169_hw.h"
 #include "../r8169_phy.h"
-#include "rtl8125a_mcu.h"
+#include "rtl8125a.h"
 
 /* For RTL8125A, CFG_METHOD_48,49 */
 
 /* ------------------------------------MAC 8125A------------------------------------- */
 
 void
-rtl_set_mac_mcu_8125a_1(struct rtl_hw *hw)
-{
-	rtl_hw_disable_mac_mcu_bps(hw);
-}
-
-void
 rtl_set_mac_mcu_8125a_2(struct rtl_hw *hw)
 {
+	u16 entry_cnt;
 	static const u16 mcu_patch_code_8125a_2[] = {
 		0xE010, 0xE012, 0xE022, 0xE024, 0xE029, 0xE02B, 0xE094, 0xE09D, 0xE09F,
 		0xE0AA, 0xE0B5, 0xE0C6, 0xE0CC, 0xE0D1, 0xE0D6, 0xE0D8, 0xC602, 0xBE00,
@@ -109,10 +104,14 @@ rtl_set_mac_mcu_8125a_2(struct rtl_hw *hw)
 		0x0B15, 0x090E, 0x1139
 	};
 
-	rtl_hw_disable_mac_mcu_bps(hw);
+	entry_cnt = ARRAY_SIZE(mcu_patch_code_8125a_2);
 
-	rtl_write_mac_mcu_ram_code(hw, mcu_patch_code_8125a_2,
-				   ARRAY_SIZE(mcu_patch_code_8125a_2));
+	/* Get BIN mac mcu patch code version */
+	hw->bin_mcu_patch_code_ver = rtl_get_bin_mcu_patch_code_ver(mcu_patch_code_8125a_2,
+								    entry_cnt);
+
+	if (hw->hw_mcu_patch_code_ver != hw->bin_mcu_patch_code_ver)
+		rtl_write_mac_mcu_ram_code(hw, mcu_patch_code_8125a_2, entry_cnt);
 
 	rtl_mac_ocp_write(hw, 0xFC26, 0x8000);
 
@@ -162,7 +161,12 @@ static void
 rtl_release_phy_mcu_patch_key_lock(struct rtl_hw *hw)
 {
 	switch (hw->mcfg) {
-	case CFG_METHOD_48 ... CFG_METHOD_53:
+	case CFG_METHOD_48:
+	case CFG_METHOD_49:
+	case CFG_METHOD_50:
+	case CFG_METHOD_51:
+	case CFG_METHOD_52:
+	case CFG_METHOD_53:
 		rtl_mdio_direct_write_phy_ocp(hw, 0xA436, 0x0000);
 		rtl_mdio_direct_write_phy_ocp(hw, 0xA438, 0x0000);
 		rtl_clear_eth_phy_ocp_bit(hw, 0xB82E, BIT_0);

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2023 PANTHEON.tech s.r.o.
+# Copyright(c) 2025 Arm Limited
 
 """CPU core representation and filtering.
 
@@ -21,8 +22,25 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, ValuesView
 from dataclasses import dataclass
+from enum import auto, unique
 
-from framework.utils import expand_range
+from framework.utils import StrEnum, expand_range
+
+
+@unique
+class Architecture(StrEnum):
+    r"""The supported architectures of :class:`~framework.testbed_model.node.Node`\s."""
+
+    #:
+    i686 = auto()
+    #:
+    x86_64 = auto()
+    #:
+    x86_32 = auto()
+    #:
+    aarch64 = auto()
+    #:
+    ppc64le = auto()
 
 
 @dataclass(slots=True, frozen=True)
@@ -67,10 +85,10 @@ class LogicalCoreList:
 
         There are four supported logical core list formats::
 
-            lcore_list=[LogicalCore1, LogicalCore2]  # a list of LogicalCores
-            lcore_list=[0,1,2,3]        # a list of int indices
-            lcore_list=['0','1','2-3']  # a list of str indices; ranges are supported
-            lcore_list='0,1,2-3'        # a comma delimited str of indices; ranges are supported
+            lcore_list = [LogicalCore1, LogicalCore2]  # a list of LogicalCores
+            lcore_list = [0, 1, 2, 3]  # a list of int indices
+            lcore_list = ["0", "1", "2-3"]  # a list of str indices; ranges are supported
+            lcore_list = "0,1,2-3"  # a comma delimited str of indices; ranges are supported
 
         Args:
             lcore_list: Various ways to represent multiple logical cores.
@@ -167,7 +185,6 @@ class LogicalCoreFilter(ABC):
 
         # sorting by core is needed in case hyperthreading is enabled
         self._lcores_to_filter = sorted(lcore_list, key=lambda x: x.core, reverse=not ascending)
-        self.filter()
 
     @abstractmethod
     def filter(self) -> list[LogicalCore]:
@@ -210,6 +227,8 @@ class LogicalCoreCountFilter(LogicalCoreFilter):
         Returns:
             The filtered cores.
         """
+        if 0 in self._lcores_to_filter:
+            self._lcores_to_filter = self._lcores_to_filter[1:]
         sockets_to_filter = self._filter_sockets(self._lcores_to_filter)
         filtered_lcores = []
         for socket_to_filter in sockets_to_filter:
@@ -231,6 +250,9 @@ class LogicalCoreCountFilter(LogicalCoreFilter):
 
         Returns:
             A list of lists of logical CPU cores. Each list contains cores from one socket.
+
+        Raises:
+            ValueError: If the number of the requested sockets by the filter can't be satisfied.
         """
         allowed_sockets: set[int] = set()
         socket_count = self._filter_specifier.socket_count
@@ -272,6 +294,10 @@ class LogicalCoreCountFilter(LogicalCoreFilter):
 
         Returns:
             The filtered logical CPU cores.
+
+        Raises:
+            ValueError: If the number of the requested cores per socket by the filter
+                can't be satisfied.
         """
         # no need to use ordered dict, from Python3.7 the dict
         # insertion order is preserved (LIFO).
@@ -327,7 +353,13 @@ class LogicalCoreListFilter(LogicalCoreFilter):
 
         Return:
             The filtered logical CPU cores.
+
+        Raises:
+            ValueError: If the specified lcore filter specifier is invalid.
         """
+        if 0 not in self._filter_specifier.lcore_list:
+            self._lcores_to_filter = self._lcores_to_filter[1:]
+
         if not len(self._filter_specifier.lcore_list):
             return self._lcores_to_filter
 
@@ -360,6 +392,9 @@ def lcore_filter(
 
     Returns:
         The filter that corresponds to `filter_specifier`.
+
+    Raises:
+        ValueError: If the supplied `filter_specifier` is invalid.
     """
     if isinstance(filter_specifier, LogicalCoreList):
         return LogicalCoreListFilter(core_list, filter_specifier, ascending)

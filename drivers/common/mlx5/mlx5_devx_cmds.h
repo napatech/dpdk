@@ -325,6 +325,8 @@ struct mlx5_hca_attr {
 	uint32_t cross_vhca:1;
 	uint32_t lag_rx_port_affinity:1;
 	uint32_t wqe_based_flow_table_sup:1;
+	uint32_t fdb_unified_en:1;
+	uint32_t jump_fdb_rx_en:1;
 	uint8_t max_header_modify_pattern_length;
 	uint64_t system_image_guid;
 	uint32_t log_max_conn_track_offload:5;
@@ -481,6 +483,11 @@ struct mlx5_devx_create_sq_attr {
 	uint32_t packet_pacing_rate_limit_index:16;
 	uint32_t tis_lst_sz:16;
 	uint32_t tis_num:24;
+	uint32_t q_off;
+	void *umem;
+	void *umem_obj;
+	uint32_t q_len;
+	uint32_t db_off;
 	struct mlx5_devx_wq_attr wq_attr;
 };
 
@@ -512,6 +519,11 @@ struct mlx5_devx_cq_attr {
 	uint64_t db_umem_offset;
 	uint32_t eqn;
 	uint64_t db_addr;
+	void *umem;
+	void *umem_obj;
+	uint32_t q_off;
+	uint32_t q_len;
+	uint32_t db_off;
 };
 
 /* Virtq attributes structure, used by VIRTQ operations. */
@@ -848,7 +860,7 @@ __rte_internal
 int mlx5_devx_cmd_wq_query(void *wq, uint32_t *counter_set_id);
 
 __rte_internal
-struct mlx5_devx_obj *mlx5_devx_cmd_queue_counter_alloc(void *ctx);
+struct mlx5_devx_obj *mlx5_devx_cmd_queue_counter_alloc(void *ctx, int *syndrome);
 __rte_internal
 int mlx5_devx_cmd_queue_counter_query(struct mlx5_devx_obj *dcs, int clear,
 				      uint32_t *out_of_buffers);

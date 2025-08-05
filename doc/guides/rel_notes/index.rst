@@ -8,6 +8,8 @@ Release Notes
     :maxdepth: 1
     :numbered:
 
+    release_25_07
+    release_25_03
     release_24_11
     release_24_07
     release_24_03
@@ -44,5 +46,4 @@ Release Notes
     release_2_1
     release_2_0
     release_1_8
-    known_issues
     deprecation

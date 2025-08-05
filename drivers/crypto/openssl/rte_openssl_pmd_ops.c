@@ -630,8 +630,8 @@ static const struct rte_cryptodev_capabilities openssl_pmd_capabilities[] = {
 		{.asym = {
 			.xform_capa = {
 				.xform_type = RTE_CRYPTO_ASYM_XFORM_EDDSA,
-				.hash_algos = (1 << RTE_CRYPTO_AUTH_SHA512 |
-					       1 << RTE_CRYPTO_AUTH_SHAKE_256),
+				.hash_algos = (RTE_BIT64(RTE_CRYPTO_AUTH_SHA512) |
+					       RTE_BIT64(RTE_CRYPTO_AUTH_SHAKE_256)),
 				.op_types =
 				((1<<RTE_CRYPTO_ASYM_OP_SIGN) |
 				 (1 << RTE_CRYPTO_ASYM_OP_VERIFY)),
@@ -1025,7 +1025,7 @@ static int openssl_set_asym_session_parameters(
 		if (rsa == NULL)
 			goto err_rsa;
 
-		if (xform->rsa.key_type == RTE_RSA_KEY_TYPE_EXP) {
+		if (xform->rsa.d.length > 0) {
 			d = BN_bin2bn(
 			(const unsigned char *)xform->rsa.d.data,
 			xform->rsa.d.length,
@@ -1034,7 +1034,9 @@ static int openssl_set_asym_session_parameters(
 				RSA_free(rsa);
 				goto err_rsa;
 			}
-		} else {
+		}
+
+		if (xform->rsa.key_type == RTE_RSA_KEY_TYPE_QT) {
 			p = BN_bin2bn((const unsigned char *)
 					xform->rsa.qt.p.data,
 					xform->rsa.qt.p.length,

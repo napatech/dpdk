@@ -5,7 +5,7 @@ Network Interface Controller Drivers
 ====================================
 
 .. toctree::
-    :maxdepth: 3
+    :maxdepth: 1
     :numbered:
 
     overview
@@ -61,6 +61,7 @@ Network Interface Controller Drivers
     pfe
     qede
     r8169
+    rnp
     sfc_efx
     softnic
     tap
@@ -70,4 +71,5 @@ Network Interface Controller Drivers
     vhost
     virtio
     vmxnet3
+    xsc
     zxdh

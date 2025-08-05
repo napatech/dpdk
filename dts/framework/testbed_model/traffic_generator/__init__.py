@@ -14,7 +14,7 @@ performance testing. In functional testing, we need to be able to dissect each a
 and a capturing traffic generator is required.
 """
 
-from framework.config import ScapyTrafficGeneratorConfig, TrafficGeneratorConfig
+from framework.config.test_run import ScapyTrafficGeneratorConfig, TrafficGeneratorConfig
 from framework.exception import ConfigurationError
 from framework.testbed_model.node import Node
 
@@ -23,19 +23,22 @@ from .scapy import ScapyTrafficGenerator
 
 
 def create_traffic_generator(
-    tg_node: Node, traffic_generator_config: TrafficGeneratorConfig
+    traffic_generator_config: TrafficGeneratorConfig, node: Node
 ) -> CapturingTrafficGenerator:
     """The factory function for creating traffic generator objects from the test run configuration.
 
     Args:
-        tg_node: The traffic generator node where the created traffic generator will be running.
         traffic_generator_config: The traffic generator config.
+        node: The node where the created traffic generator will be running.
 
     Returns:
         A traffic generator capable of capturing received packets.
+
+    Raises:
+        ConfigurationError: If an unknown traffic generator has been setup.
     """
     match traffic_generator_config:
         case ScapyTrafficGeneratorConfig():
-            return ScapyTrafficGenerator(tg_node, traffic_generator_config, privileged=True)
+            return ScapyTrafficGenerator(node, traffic_generator_config, privileged=True)
         case _:
             raise ConfigurationError(f"Unknown traffic generator: {traffic_generator_config.type}")

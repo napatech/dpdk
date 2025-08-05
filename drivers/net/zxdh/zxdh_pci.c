@@ -27,6 +27,23 @@
 		1ULL << ZXDH_F_NOTIFICATION_DATA | \
 		1ULL << ZXDH_NET_F_MAC)
 
+#define ZXDH_PMD_DEFAULT_HOST_FEATURES   \
+	(1ULL << ZXDH_NET_F_MRG_RXBUF | \
+	 1ULL << ZXDH_NET_F_STATUS    | \
+	 1ULL << ZXDH_NET_F_MQ        | \
+	 1ULL << ZXDH_F_ANY_LAYOUT    | \
+	 1ULL << ZXDH_F_VERSION_1   | \
+	 1ULL << ZXDH_F_RING_PACKED | \
+	 1ULL << ZXDH_F_IN_ORDER    | \
+	 1ULL << ZXDH_F_NOTIFICATION_DATA |\
+	 1ULL << ZXDH_NET_F_MAC | \
+	 1ULL << ZXDH_NET_F_CSUM |\
+	 1ULL << ZXDH_NET_F_GUEST_CSUM |\
+	 1ULL << ZXDH_NET_F_GUEST_TSO4 |\
+	 1ULL << ZXDH_NET_F_GUEST_TSO6 |\
+	 1ULL << ZXDH_NET_F_HOST_TSO4 |\
+	 1ULL << ZXDH_NET_F_HOST_TSO6)
+
 static void
 zxdh_read_dev_config(struct zxdh_hw *hw, size_t offset,
 		void *dst, int32_t length)
@@ -159,7 +176,7 @@ zxdh_setup_queue(struct zxdh_hw *hw, struct zxdh_virtqueue *vq)
 
 	desc_addr = vq->vq_ring_mem;
 	avail_addr = desc_addr + vq->vq_nentries * sizeof(struct zxdh_vring_desc);
-	if (vtpci_packed_queue(vq->hw)) {
+	if (zxdh_pci_packed_queue(vq->hw)) {
 		used_addr = RTE_ALIGN_CEIL((avail_addr +
 				sizeof(struct zxdh_vring_packed_desc_event)),
 				ZXDH_PCI_VRING_ALIGN);
@@ -202,6 +219,26 @@ zxdh_del_queue(struct zxdh_hw *hw, struct zxdh_virtqueue *vq)
 	rte_write16(0, &hw->common_cfg->queue_enable);
 }
 
+static void
+zxdh_notify_queue(struct zxdh_hw *hw, struct zxdh_virtqueue *vq)
+{
+	uint32_t notify_data = 0;
+
+	if (!zxdh_pci_with_feature(hw, ZXDH_F_NOTIFICATION_DATA)) {
+		rte_write16(vq->vq_queue_index, vq->notify_addr);
+		return;
+	}
+
+	notify_data = ((uint32_t)vq->vq_avail_idx << 16) | vq->vq_queue_index;
+	if (zxdh_pci_with_feature(hw, ZXDH_F_RING_PACKED) &&
+			(vq->vq_packed.cached_flags & ZXDH_VRING_PACKED_DESC_F_AVAIL))
+		notify_data |= RTE_BIT32(31);
+
+	PMD_DRV_LOG(DEBUG, "queue:%d notify_data 0x%x notify_addr 0x%p",
+				 vq->vq_queue_index, notify_data, vq->notify_addr);
+	rte_write32(notify_data, vq->notify_addr);
+}
+
 const struct zxdh_pci_ops zxdh_dev_pci_ops = {
 	.read_dev_cfg   = zxdh_read_dev_config,
 	.write_dev_cfg  = zxdh_write_dev_config,
@@ -216,6 +253,7 @@ const struct zxdh_pci_ops zxdh_dev_pci_ops = {
 	.set_queue_num  = zxdh_set_queue_num,
 	.setup_queue    = zxdh_setup_queue,
 	.del_queue      = zxdh_del_queue,
+	.notify_queue   = zxdh_notify_queue,
 };
 
 uint8_t
@@ -233,7 +271,7 @@ zxdh_pci_get_features(struct zxdh_hw *hw)
 void
 zxdh_pci_reset(struct zxdh_hw *hw)
 {
-	PMD_DRV_LOG(INFO, "port %u device start reset, just wait...", hw->port_id);
+	PMD_DRV_LOG(INFO, "port %u device start reset, just wait", hw->port_id);
 	uint32_t retry = 0;
 
 	ZXDH_VTPCI_OPS(hw)->set_status(hw, ZXDH_CONFIG_STATUS_RESET);
@@ -358,7 +396,7 @@ next:
 	}
 	if (hw->common_cfg == NULL || hw->notify_base == NULL ||
 		hw->dev_cfg == NULL || hw->isr == NULL) {
-		PMD_DRV_LOG(ERR, "no zxdh pci device found.");
+		PMD_DRV_LOG(ERR, "no zxdh pci device found");
 		return -1;
 	}
 	return 0;
@@ -370,14 +408,18 @@ zxdh_pci_read_dev_config(struct zxdh_hw *hw, size_t offset, void *dst, int32_t l
 	ZXDH_VTPCI_OPS(hw)->read_dev_cfg(hw, offset, dst, length);
 }
 
+void zxdh_pci_write_dev_config(struct zxdh_hw *hw, size_t offset, const void *src, int32_t length)
+{
+	ZXDH_VTPCI_OPS(hw)->write_dev_cfg(hw, offset, src, length);
+}
+
 void
 zxdh_get_pci_dev_config(struct zxdh_hw *hw)
 {
 	uint64_t guest_features = 0;
 	uint64_t nego_features = 0;
-	uint32_t max_queue_pairs = 0;
 
-	hw->host_features = zxdh_pci_get_features(hw);
+	hw->host_features = ZXDH_PMD_DEFAULT_HOST_FEATURES;
 
 	guest_features = (uint64_t)ZXDH_PMD_DEFAULT_GUEST_FEATURES;
 	nego_features = guest_features & hw->host_features;
@@ -390,15 +432,6 @@ zxdh_get_pci_dev_config(struct zxdh_hw *hw)
 	} else {
 		rte_eth_random_addr(&hw->mac_addr[0]);
 	}
-
-	zxdh_pci_read_dev_config(hw, offsetof(struct zxdh_net_config, max_virtqueue_pairs),
-			&max_queue_pairs, sizeof(max_queue_pairs));
-
-	if (max_queue_pairs == 0)
-		hw->max_queue_pairs = ZXDH_RX_QUEUES_MAX;
-	else
-		hw->max_queue_pairs = RTE_MIN(ZXDH_RX_QUEUES_MAX, max_queue_pairs);
-	PMD_DRV_LOG(DEBUG, "set max queue pairs %d", hw->max_queue_pairs);
 }
 
 enum zxdh_msix_status zxdh_pci_msix_detect(struct rte_pci_device *dev)

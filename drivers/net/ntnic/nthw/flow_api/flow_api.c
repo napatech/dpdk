@@ -147,9 +147,9 @@ static const struct {
 static_assert(RTE_DIM(err_msg) == ERR_MSG_END,
 	"The list of error messages is not fully completed.");
 
-void flow_nic_set_error(enum flow_nic_err_msg_e msg, struct rte_flow_error *error)
+void nthw_flow_nic_set_error(enum flow_nic_err_msg_e msg, struct rte_flow_error *error)
 {
-	assert(msg < ERR_MSG_NO_MSG);
+	RTE_ASSERT(msg < ERR_MSG_NO_MSG);
 
 	if (error) {
 		error->message = err_msg[msg].message;
@@ -162,7 +162,7 @@ void flow_nic_set_error(enum flow_nic_err_msg_e msg, struct rte_flow_error *erro
  * Resources
  */
 
-int flow_nic_alloc_resource(struct flow_nic_dev *ndev, enum res_type_e res_type,
+int nthw_flow_nic_alloc_resource(struct flow_nic_dev *ndev, enum res_type_e res_type,
 	uint32_t alignment)
 {
 	for (unsigned int i = 0; i < ndev->res[res_type].resource_count; i += alignment) {
@@ -176,7 +176,7 @@ int flow_nic_alloc_resource(struct flow_nic_dev *ndev, enum res_type_e res_type,
 	return -1;
 }
 
-int flow_nic_alloc_resource_config(struct flow_nic_dev *ndev, enum res_type_e res_type,
+int nthw_flow_nic_alloc_resource_config(struct flow_nic_dev *ndev, enum res_type_e res_type,
 	unsigned int num, uint32_t alignment)
 {
 	unsigned int idx_offs;
@@ -204,16 +204,16 @@ int flow_nic_alloc_resource_config(struct flow_nic_dev *ndev, enum res_type_e re
 	return -1;
 }
 
-void flow_nic_free_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int idx)
+void nthw_flow_nic_free_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int idx)
 {
 	flow_nic_mark_resource_unused(ndev, res_type, idx);
 }
 
-int flow_nic_ref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int index)
+int nthw_flow_nic_ref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int index)
 {
-	NT_LOG(DBG, FILTER, "Reference resource %s idx %i (before ref cnt %i)",
+	NT_LOG(DBG, FILTER, "Reference resource %s idx %i (before ref cnt %" PRIu32 ")",
 		dbg_res_descr[res_type], index, ndev->res[res_type].ref[index]);
-	assert(flow_nic_is_resource_used(ndev, res_type, index));
+	RTE_ASSERT(flow_nic_is_resource_used(ndev, res_type, index));
 
 	if (ndev->res[res_type].ref[index] == (uint32_t)-1)
 		return -1;
@@ -222,17 +222,17 @@ int flow_nic_ref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, i
 	return 0;
 }
 
-int flow_nic_deref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int index)
+int nthw_flow_nic_deref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int index)
 {
-	NT_LOG(DBG, FILTER, "De-reference resource %s idx %i (before ref cnt %i)",
+	NT_LOG(DBG, FILTER, "De-reference resource %s idx %i (before ref cnt %" PRIu32 ")",
 		dbg_res_descr[res_type], index, ndev->res[res_type].ref[index]);
-	assert(flow_nic_is_resource_used(ndev, res_type, index));
-	assert(ndev->res[res_type].ref[index]);
+	RTE_ASSERT(flow_nic_is_resource_used(ndev, res_type, index));
+	RTE_ASSERT(ndev->res[res_type].ref[index]);
 	/* deref */
 	ndev->res[res_type].ref[index]--;
 
 	if (!ndev->res[res_type].ref[index])
-		flow_nic_free_resource(ndev, res_type, index);
+		nthw_flow_nic_free_resource(ndev, res_type, index);
 
 	return !!ndev->res[res_type].ref[index];/* if 0 resource has been freed */
 }
@@ -385,8 +385,10 @@ static void flow_ndev_reset(struct flow_nic_dev *ndev)
 	}
 
 	/* Delete all eth-port devices created on this NIC device */
-	while (ndev->eth_base)
-		flow_delete_eth_dev(ndev->eth_base);
+	while (ndev->eth_base) {
+		nthw_flow_delete_eth_dev(ndev->eth_base);
+		ndev->eth_base = NULL;
+	}
 
 	/* Error check */
 	while (ndev->flow_base) {
@@ -423,7 +425,7 @@ static void flow_ndev_reset(struct flow_nic_dev *ndev)
 			int used = flow_nic_is_resource_used(ndev, i, ii);
 
 			if (ref || used) {
-				NT_LOG(DBG, FILTER, "  [%i]: ref cnt %i, used %i", ii, ref,
+				NT_LOG(DBG, FILTER, "  [%u]: ref cnt %i, used %i", ii, ref,
 					used);
 				err = 1;
 			}
@@ -432,10 +434,9 @@ static void flow_ndev_reset(struct flow_nic_dev *ndev)
 		if (err)
 			NT_LOG(DBG, FILTER, "ERROR - some resources not freed");
 	}
-
 }
 
-int flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
+int nthw_flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
 {
 	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
 
@@ -518,7 +519,7 @@ int flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
 static int init_resource_elements(struct flow_nic_dev *ndev, enum res_type_e res_type,
 	uint32_t count)
 {
-	assert(ndev->res[res_type].alloc_bm == NULL);
+	RTE_ASSERT(ndev->res[res_type].alloc_bm == NULL);
 	/* allocate bitmap and ref counter */
 	ndev->res[res_type].alloc_bm =
 		calloc(1, BIT_CONTAINER_8_ALIGN(count) + count * sizeof(uint32_t));
@@ -535,7 +536,7 @@ static int init_resource_elements(struct flow_nic_dev *ndev, enum res_type_e res
 
 static void done_resource_elements(struct flow_nic_dev *ndev, enum res_type_e res_type)
 {
-	assert(ndev);
+	RTE_ASSERT(ndev);
 
 	free(ndev->res[res_type].alloc_bm);
 }
@@ -596,7 +597,7 @@ static struct flow_eth_dev *flow_get_eth_dev(uint8_t adapter_no, uint8_t port_no
 		adapter_no, port_no, port_id, alloc_rx_queues, flow_profile);
 
 	if (MAX_OUTPUT_DEST < FLOW_MAX_QUEUES) {
-		assert(0);
+		RTE_ASSERT(0);
 		NT_LOG(ERR, FILTER,
 			"ERROR: Internal array for multiple queues too small for API");
 	}
@@ -631,7 +632,7 @@ static struct flow_eth_dev *flow_get_eth_dev(uint8_t adapter_no, uint8_t port_no
 	if (eth_dev) {
 		NT_LOG(DBG, FILTER, "Re-opening existing NIC port device: NIC DEV: %i Port %i",
 			adapter_no, port_no);
-		flow_delete_eth_dev(eth_dev);
+		nthw_flow_delete_eth_dev(eth_dev);
 		eth_dev = NULL;
 	}
 
@@ -726,8 +727,8 @@ err_exit0:
 	return NULL;	/* Error exit */
 }
 
-struct flow_nic_dev *flow_api_create(uint8_t adapter_no, const struct flow_api_backend_ops *be_if,
-	void *be_dev)
+struct flow_nic_dev *nthw_flow_api_create(uint8_t adapter_no,
+	const struct flow_api_backend_ops *be_if, void *be_dev)
 {
 	(void)adapter_no;
 
@@ -750,7 +751,7 @@ struct flow_nic_dev *flow_api_create(uint8_t adapter_no, const struct flow_api_b
 	 */
 	be_if->set_debug_mode(be_dev, FLOW_BACKEND_DEBUG_MODE_NONE);
 
-	if (flow_api_backend_init(&ndev->be, be_if, be_dev) != 0)
+	if (nthw_flow_api_backend_init(&ndev->be, be_if, be_dev) != 0)
 		goto err_exit;
 
 	ndev->adapter_no = adapter_no;
@@ -819,7 +820,7 @@ struct flow_nic_dev *flow_api_create(uint8_t adapter_no, const struct flow_api_b
 
 	/* check all defined has been initialized */
 	for (int i = 0; i < RES_COUNT; i++)
-		assert(ndev->res[i].alloc_bm);
+		RTE_ASSERT(ndev->res[i].alloc_bm);
 
 	rte_spinlock_init(&ndev->mtx);
 	list_insert_flow_nic(ndev);
@@ -828,14 +829,13 @@ struct flow_nic_dev *flow_api_create(uint8_t adapter_no, const struct flow_api_b
 
 err_exit:
 
-	if (ndev)
-		flow_api_done(ndev);
+	nthw_flow_api_done(ndev);
 
 	NT_LOG(DBG, FILTER, "ERR: %s", __func__);
 	return NULL;
 }
 
-int flow_api_done(struct flow_nic_dev *ndev)
+int nthw_flow_api_done(struct flow_nic_dev *ndev)
 {
 	NT_LOG(DBG, FILTER, "FLOW API DONE");
 
@@ -846,7 +846,7 @@ int flow_api_done(struct flow_nic_dev *ndev)
 		for (int i = 0; i < RES_COUNT; i++)
 			done_resource_elements(ndev, i);
 
-		flow_api_backend_done(&ndev->be);
+		nthw_flow_api_backend_done(&ndev->be);
 		list_remove_flow_nic(ndev);
 		free(ndev);
 	}
@@ -854,7 +854,7 @@ int flow_api_done(struct flow_nic_dev *ndev)
 	return 0;
 }
 
-void *flow_api_get_be_dev(struct flow_nic_dev *ndev)
+void *nthw_flow_api_get_be_dev(struct flow_nic_dev *ndev)
 {
 	if (!ndev) {
 		NT_LOG(DBG, FILTER, "ERR: %s", __func__);
@@ -1007,55 +1007,6 @@ int sprint_nt_rss_mask(char *str, uint16_t str_len, const char *prefix, uint64_t
 	return 0;
 }
 
-/*
- * Hash
- */
-
-int flow_nic_set_hasher(struct flow_nic_dev *ndev, int hsh_idx, enum flow_nic_hash_e algorithm)
-{
-	hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_PRESET_ALL, hsh_idx, 0, 0);
-
-	switch (algorithm) {
-	case HASH_ALGO_5TUPLE:
-		/* need to create an IPv6 hashing and enable the adaptive ip mask bit */
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_LOAD_DIST_TYPE, hsh_idx, 0, 2);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_QW0_PE, hsh_idx, 0, DYN_FINAL_IP_DST);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_QW0_OFS, hsh_idx, 0, -16);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_QW4_PE, hsh_idx, 0, DYN_FINAL_IP_DST);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_QW4_OFS, hsh_idx, 0, 0);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_W8_PE, hsh_idx, 0, DYN_L4);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_W8_OFS, hsh_idx, 0, 0);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_W9_PE, hsh_idx, 0, 0);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_W9_OFS, hsh_idx, 0, 0);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_W9_P, hsh_idx, 0, 0);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_P_MASK, hsh_idx, 0, 1);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 0, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 1, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 2, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 3, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 4, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 5, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 6, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 7, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 8, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_WORD_MASK, hsh_idx, 9, 0);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_SEED, hsh_idx, 0, 0xffffffff);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_HSH_VALID, hsh_idx, 0, 1);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_HSH_TYPE, hsh_idx, 0, HASH_5TUPLE);
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_AUTO_IPV4_MASK, hsh_idx, 0, 1);
-
-		NT_LOG(DBG, FILTER, "Set IPv6 5-tuple hasher with adaptive IPv4 hashing");
-		break;
-
-	default:
-	case HASH_ALGO_ROUND_ROBIN:
-		/* zero is round-robin */
-		break;
-	}
-
-	return 0;
-}
-
 static int flow_dev_dump(struct flow_eth_dev *dev,
 	struct flow_handle *flow,
 	uint16_t caller_id,
@@ -1070,19 +1021,6 @@ static int flow_dev_dump(struct flow_eth_dev *dev,
 	}
 
 	return profile_inline_ops->flow_dev_dump_profile_inline(dev, flow, caller_id, file, error);
-}
-
-int flow_nic_set_hasher_fields(struct flow_nic_dev *ndev, int hsh_idx,
-	struct nt_eth_rss_conf rss_conf)
-{
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
-
-	if (profile_inline_ops == NULL) {
-		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
-		return -1;
-	}
-
-	return profile_inline_ops->flow_nic_set_hasher_fields_inline(ndev, hsh_idx, rss_conf);
 }
 
 static int flow_get_aged_flows(struct flow_eth_dev *dev,
@@ -1273,7 +1211,7 @@ static int flow_async_destroy(struct flow_eth_dev *dev, uint32_t queue_id,
 	return profile_inline_ops->flow_async_destroy_profile_inline(dev, queue_id, op_attr, flow,
 			user_data, error);
 }
-int flow_get_flm_stats(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size)
+int nthw_flow_get_flm_stats(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size)
 {
 	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
 
@@ -1286,9 +1224,24 @@ int flow_get_flm_stats(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size)
 	return -1;
 }
 
+int nthw_flow_get_ifr_stats(struct flow_nic_dev *ndev, uint64_t *data, uint8_t port_count)
+{
+	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+
+	if (profile_inline_ops == NULL)
+		return -1;
+
+	if (ndev->flow_profile == FLOW_ETH_DEV_PROFILE_INLINE) {
+		return profile_inline_ops->flow_get_ifr_stats_profile_inline(ndev, data,
+				port_count);
+	}
+
+	return -1;
+}
+
 static const struct flow_filter_ops ops = {
-	.flow_filter_init = flow_filter_init,
-	.flow_filter_done = flow_filter_done,
+	.nthw_flow_filter_init = nthw_flow_filter_init,
+	.nthw_flow_filter_done = nthw_flow_filter_done,
 	/*
 	 * Device Management API
 	 */
@@ -1301,7 +1254,8 @@ static const struct flow_filter_ops ops = {
 	.flow_flush = flow_flush,
 	.flow_actions_update = flow_actions_update,
 	.flow_dev_dump = flow_dev_dump,
-	.flow_get_flm_stats = flow_get_flm_stats,
+	.nthw_flow_get_flm_stats = nthw_flow_get_flm_stats,
+	.nthw_flow_get_ifr_stats = nthw_flow_get_ifr_stats,
 	.flow_get_aged_flows = flow_get_aged_flows,
 
 	/*
@@ -1322,10 +1276,9 @@ static const struct flow_filter_ops ops = {
 	 * Other
 	 */
 	 .hw_mod_hsh_rcp_flush = hw_mod_hsh_rcp_flush,
-	 .flow_nic_set_hasher_fields = flow_nic_set_hasher_fields,
 };
 
-void init_flow_filter(void)
+void nthw_init_flow_filter(void)
 {
 	register_flow_filter_ops(&ops);
 }

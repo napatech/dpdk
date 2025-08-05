@@ -25,9 +25,7 @@
 
 #include "../gve_logs.h"
 
-#ifdef RTE_EXEC_ENV_LINUX
 #include <sys/utsname.h>
-#endif
 
 #ifndef u8
 #define u8 uint8_t
@@ -96,7 +94,7 @@
 #define ____cacheline_aligned	__rte_cache_aligned
 #endif
 #ifndef __packed
-#define __packed		__rte_packed
+#define __packed		__attribute__((__packed__))
 #endif
 #define __iomem
 
@@ -131,15 +129,33 @@ writeb(u8 value, volatile void *addr)
 }
 
 static __rte_always_inline void
+writew(u16 value, volatile void *addr)
+{
+	rte_write16(value, addr);
+}
+
+static __rte_always_inline void
 writel(u32 value, volatile void *addr)
 {
 	rte_write32(value, addr);
+}
+
+static __rte_always_inline u16
+ioread16be(const volatile void *addr)
+{
+	return rte_be_to_cpu_16(rte_read16(addr));
 }
 
 static __rte_always_inline u32
 ioread32be(const volatile void *addr)
 {
 	return rte_be_to_cpu_32(rte_read32(addr));
+}
+
+static __rte_always_inline void
+iowrite16be(u16 value, volatile void *addr)
+{
+	writew(rte_cpu_to_be_16(value), addr);
 }
 
 static __rte_always_inline void

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/queue.h>
+#include <eal_export.h>
 #include <rte_errno.h>
 #include <rte_interrupts.h>
 #include <rte_log.h>
@@ -32,6 +33,7 @@
 
 #define SYSFS_PCI_DEVICES "/sys/bus/pci/devices"
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_pci_get_sysfs_path)
 const char *rte_pci_get_sysfs_path(void)
 {
 	const char *path = NULL;
@@ -99,20 +101,10 @@ pci_common_set(struct rte_pci_device *dev)
 	/* Each device has its internal, canonical name set. */
 	rte_pci_device_name(&dev->addr,
 			dev->name, sizeof(dev->name));
+	dev->device.name = dev->name;
+
 	devargs = pci_devargs_lookup(&dev->addr);
 	dev->device.devargs = devargs;
-
-	/* When using a blocklist, only blocked devices will have
-	 * an rte_devargs. Allowed devices won't have one.
-	 */
-	if (devargs != NULL)
-		/* If an rte_devargs exists, the generic rte_device uses the
-		 * given name as its name.
-		 */
-		dev->device.name = dev->device.devargs->name;
-	else
-		/* Otherwise, it uses the internal, canonical form. */
-		dev->device.name = dev->name;
 
 	if (dev->bus_info != NULL ||
 			asprintf(&dev->bus_info, "vendor_id=%"PRIx16", device_id=%"PRIx16,
@@ -459,6 +451,7 @@ free:
 		rte_intr_instance_free(dev->vfio_req_intr_handle);
 		dev->vfio_req_intr_handle = NULL;
 
+		TAILQ_REMOVE(&rte_pci_bus.device_list, dev, next);
 		pci_free(RTE_PCI_DEVICE_INTERNAL(dev));
 	}
 
@@ -486,6 +479,7 @@ pci_dump_one_device(FILE *f, struct rte_pci_device *dev)
 }
 
 /* dump devices on the bus */
+RTE_EXPORT_SYMBOL(rte_pci_dump)
 void
 rte_pci_dump(FILE *f)
 {
@@ -510,6 +504,7 @@ pci_parse(const char *name, void *addr)
 }
 
 /* register a driver */
+RTE_EXPORT_INTERNAL_SYMBOL(rte_pci_register)
 void
 rte_pci_register(struct rte_pci_driver *driver)
 {
@@ -517,6 +512,7 @@ rte_pci_register(struct rte_pci_driver *driver)
 }
 
 /* unregister a driver */
+RTE_EXPORT_INTERNAL_SYMBOL(rte_pci_unregister)
 void
 rte_pci_unregister(struct rte_pci_driver *driver)
 {
@@ -804,6 +800,7 @@ rte_pci_get_iommu_class(void)
 	return iova_mode;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_has_capability_list, 23.11)
 bool
 rte_pci_has_capability_list(const struct rte_pci_device *dev)
 {
@@ -815,12 +812,14 @@ rte_pci_has_capability_list(const struct rte_pci_device *dev)
 	return (status & RTE_PCI_STATUS_CAP_LIST) != 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_find_capability, 23.11)
 off_t
 rte_pci_find_capability(const struct rte_pci_device *dev, uint8_t cap)
 {
 	return rte_pci_find_next_capability(dev, cap, 0);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_find_next_capability, 23.11)
 off_t
 rte_pci_find_next_capability(const struct rte_pci_device *dev, uint8_t cap,
 	off_t offset)
@@ -858,6 +857,7 @@ rte_pci_find_next_capability(const struct rte_pci_device *dev, uint8_t cap,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_find_ext_capability, 20.11)
 off_t
 rte_pci_find_ext_capability(const struct rte_pci_device *dev, uint32_t cap)
 {
@@ -900,6 +900,7 @@ rte_pci_find_ext_capability(const struct rte_pci_device *dev, uint32_t cap)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pci_set_bus_master, 21.08)
 int
 rte_pci_set_bus_master(const struct rte_pci_device *dev, bool enable)
 {
@@ -928,6 +929,7 @@ rte_pci_set_bus_master(const struct rte_pci_device *dev, bool enable)
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_pci_pasid_set_state)
 int
 rte_pci_pasid_set_state(const struct rte_pci_device *dev,
 		off_t offset, bool enable)

@@ -56,22 +56,22 @@ static const struct rte_ether_addr ether_multicast = {
 };
 
 /* Structs used for PTP handling. */
-struct tstamp {
+struct __rte_packed_begin tstamp {
 	uint16_t   sec_msb;
 	uint32_t   sec_lsb;
 	uint32_t   ns;
-}  __rte_packed;
+} __rte_packed_end;
 
 struct clock_id {
 	uint8_t id[8];
 };
 
-struct port_id {
+struct __rte_packed_begin port_id {
 	struct clock_id        clock_id;
 	uint16_t               port_number;
-}  __rte_packed;
+} __rte_packed_end;
 
-struct ptp_header {
+struct __rte_packed_begin ptp_header {
 	uint8_t              msg_type;
 	uint8_t              ver;
 	uint16_t             message_length;
@@ -84,39 +84,39 @@ struct ptp_header {
 	uint16_t             seq_id;
 	uint8_t              control;
 	int8_t               log_message_interval;
-} __rte_packed;
+} __rte_packed_end;
 
-struct sync_msg {
+struct __rte_packed_begin sync_msg {
 	struct ptp_header   hdr;
 	struct tstamp       origin_tstamp;
-} __rte_packed;
+} __rte_packed_end;
 
-struct follow_up_msg {
+struct __rte_packed_begin follow_up_msg {
 	struct ptp_header   hdr;
 	struct tstamp       precise_origin_tstamp;
 	uint8_t             suffix[];
-} __rte_packed;
+} __rte_packed_end;
 
-struct delay_req_msg {
+struct __rte_packed_begin delay_req_msg {
 	struct ptp_header   hdr;
 	struct tstamp       origin_tstamp;
-} __rte_packed;
+} __rte_packed_end;
 
-struct delay_resp_msg {
+struct __rte_packed_begin delay_resp_msg {
 	struct ptp_header    hdr;
 	struct tstamp        rx_tstamp;
 	struct port_id       req_port_id;
 	uint8_t              suffix[];
-} __rte_packed;
+} __rte_packed_end;
 
 struct ptp_message {
-	union {
+	union __rte_packed_begin {
 		struct ptp_header          header;
 		struct sync_msg            sync;
 		struct delay_req_msg       delay_req;
 		struct follow_up_msg       follow_up;
 		struct delay_resp_msg      delay_resp;
-	} __rte_packed;
+	} __rte_packed_end;
 };
 
 struct ptpv2_time_receiver_ordinary {
@@ -363,13 +363,11 @@ parse_sync(struct ptpv2_time_receiver_ordinary *ptp_data, uint16_t rx_tstamp_idx
 	ptp_data->seqID_SYNC = rte_be_to_cpu_16(ptp_hdr->seq_id);
 
 	if (ptp_data->ptpset == 0) {
-		rte_memcpy(&ptp_data->transmitter_clock_id,
-				&ptp_hdr->source_port_id.clock_id,
-				sizeof(struct clock_id));
+		ptp_data->transmitter_clock_id = ptp_hdr->source_port_id.clock_id;
 		ptp_data->ptpset = 1;
 	}
 
-	if (memcmp(&ptp_hdr->source_port_id.clock_id,
+	if (memcmp(&ptp_data->transmitter_clock_id,
 			&ptp_hdr->source_port_id.clock_id,
 			sizeof(struct clock_id)) == 0) {
 
@@ -470,9 +468,7 @@ parse_fup(struct ptpv2_time_receiver_ordinary *ptp_data)
 		client_clkid->id[6] = eth_hdr->src_addr.addr_bytes[4];
 		client_clkid->id[7] = eth_hdr->src_addr.addr_bytes[5];
 
-		rte_memcpy(&ptp_data->client_clock_id,
-			   client_clkid,
-			   sizeof(struct clock_id));
+		ptp_data->client_clock_id = *client_clkid;
 
 		/* Enable flag for hardware timestamping. */
 		created_pkt->ol_flags |= RTE_MBUF_F_TX_IEEE1588_TMST;

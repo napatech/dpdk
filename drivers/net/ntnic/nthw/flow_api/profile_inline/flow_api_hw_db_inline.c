@@ -2,13 +2,15 @@
  * Copyright(c) 2023 Napatech A/S
  */
 
+#include "rte_common.h"
 
 #include "hw_mod_backend.h"
 #include "flow_api_engine.h"
 
 #include "flow_api_hw_db_inline.h"
 #include "flow_api_profile_inline_config.h"
-#include "rte_common.h"
+#include "flow_hsh_cfg.h"
+#include "ntlog.h"
 
 #define HW_DB_INLINE_ACTION_SET_NB 512
 #define HW_DB_INLINE_MATCH_SET_NB 512
@@ -422,38 +424,51 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 		case HW_DB_IDX_TYPE_MATCH_SET: {
 			const struct hw_db_inline_match_set_data *data =
 					&db->match_set[idxs[i].ids].data;
-			fprintf(file, "  MATCH_SET %d, priority %d\n", idxs[i].ids,
-				(int)data->priority);
-			fprintf(file, "    CAT id %d, KM id %d, KM_FT id %d, ACTION_SET id %d\n",
+			fprintf(file, "  MATCH_SET %" PRIu32 ", priority %u\n", idxs[i].ids,
+				(unsigned int)data->priority);
+			fprintf(file, "    CAT id %" PRIu32 ", KM id %" PRIu32
+				", KM_FT id %" PRIu32 ", ACTION_SET id %" PRIu32 "\n",
 				data->cat.ids, data->km.id1, data->km_ft.id1,
 				data->action_set.ids);
 
-			if (data->jump)
-				fprintf(file, "    Jumps to %d\n", data->jump);
-
+			if (data->jump) {
+				uint32_t group_orig = 0;
+				if (nthw_flow_group_translate_get_orig_group(ndev->group_handle,
+					data->jump, &group_orig) < 0)
+					fprintf(file, "    Jumps to %d (encoded)\n", data->jump);
+				else
+					fprintf(file, "    Jumps to %" PRIu32 "\n", group_orig);
+			}
 			break;
 		}
 
 		case HW_DB_IDX_TYPE_ACTION_SET: {
 			const struct hw_db_inline_action_set_data *data =
 					&db->action_set[idxs[i].ids].data;
-			fprintf(file, "  ACTION_SET %d\n", idxs[i].ids);
+			fprintf(file, "  ACTION_SET %" PRIu32 "\n", idxs[i].ids);
 
-			if (data->contains_jump)
-				fprintf(file, "    Jumps to %d\n", data->jump);
+			if (data->contains_jump) {
+				uint32_t group_orig = 0;
+				if (nthw_flow_group_translate_get_orig_group(ndev->group_handle,
+					data->jump, &group_orig) < 0)
+					fprintf(file, "    Jumps to %d (encoded)\n", data->jump);
 
-			else
+				else
+					fprintf(file, "    Jumps to %d\n", group_orig);
+			} else {
 				fprintf(file,
-					"    COT id %d, QSL id %d, SLC_LR id %d, TPE id %d, HSH id %d, SCRUB id %d\n",
+					"    COT id %" PRIu32 ", QSL id %" PRIu32 ", SLC_LR id %"
+					PRIu32 ", TPE id %" PRIu32 ", HSH id %" PRIu32 ", SCRUB id %"
+					PRIu32 "\n",
 					data->cot.ids, data->qsl.ids, data->slc_lr.ids,
 					data->tpe.ids, data->hsh.ids, data->scrub.ids);
-
+			}
 			break;
 		}
 
 		case HW_DB_IDX_TYPE_CAT: {
 			const struct hw_db_inline_cat_data *data = &db->cat[idxs[i].ids].data;
-			fprintf(file, "  CAT %d\n", idxs[i].ids);
+			fprintf(file, "  CAT %" PRIu32 "\n", idxs[i].ids);
 			fprintf(file, "    Port msk 0x%02x, VLAN msk 0x%02x\n",
 				(int)data->mac_port_mask, (int)data->vlan_mask);
 			fprintf(file,
@@ -468,7 +483,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 
 		case HW_DB_IDX_TYPE_QSL: {
 			const struct hw_db_inline_qsl_data *data = &db->qsl[idxs[i].ids].data;
-			fprintf(file, "  QSL %d\n", idxs[i].ids);
+			fprintf(file, "  QSL %" PRIu32 "\n", idxs[i].ids);
 
 			if (data->discard) {
 				fprintf(file, "    Discard\n");
@@ -480,7 +495,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 				break;
 			}
 
-			fprintf(file, "    Table size %d\n", data->table_size);
+			fprintf(file, "    Table size %" PRIu32 "\n", data->table_size);
 
 			for (uint32_t i = 0;
 				i < data->table_size && i < HW_DB_INLINE_MAX_QST_PER_QSL; ++i) {
@@ -495,7 +510,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 
 		case HW_DB_IDX_TYPE_COT: {
 			const struct hw_db_inline_cot_data *data = &db->cot[idxs[i].ids].data;
-			fprintf(file, "  COT %d\n", idxs[i].ids);
+			fprintf(file, "  COT %" PRIu32 "\n", idxs[i].ids);
 			fprintf(file, "    Color contrib %d, frag rcp %d\n",
 				(int)data->matcher_color_contrib, (int)data->frag_rcp);
 			break;
@@ -504,7 +519,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 		case HW_DB_IDX_TYPE_SLC_LR: {
 			const struct hw_db_inline_slc_lr_data *data =
 					&db->slc_lr[idxs[i].ids].data;
-			fprintf(file, "  SLC_LR %d\n", idxs[i].ids);
+			fprintf(file, "  SLC_LR %" PRIu32 "\n", idxs[i].ids);
 			fprintf(file, "    Enable %u, dyn %u, ofs %u\n", data->head_slice_en,
 				data->head_slice_dyn, data->head_slice_ofs);
 			break;
@@ -512,7 +527,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 
 		case HW_DB_IDX_TYPE_TPE: {
 			const struct hw_db_inline_tpe_data *data = &db->tpe[idxs[i].ids].data;
-			fprintf(file, "  TPE %d\n", idxs[i].ids);
+			fprintf(file, "  TPE %" PRIu32 "\n", idxs[i].ids);
 			fprintf(file, "    Insert len %u, new outer %u, calc eth %u\n",
 				data->insert_len, data->new_outer,
 				data->calc_eth_type_from_inner_ip);
@@ -546,7 +561,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 			const struct hw_db_inline_tpe_ext_data *data =
 					&db->tpe_ext[idxs[i].ids].data;
 			const int rpl_rpl_length = ((int)data->size + 15) / 16;
-			fprintf(file, "  TPE_EXT %d\n", idxs[i].ids);
+			fprintf(file, "  TPE_EXT %" PRIu32 "\n", idxs[i].ids);
 			fprintf(file, "    Encap data, size %u\n", data->size);
 
 			for (int i = 0; i < rpl_rpl_length; ++i) {
@@ -564,25 +579,33 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 
 		case HW_DB_IDX_TYPE_FLM_RCP: {
 			const struct hw_db_inline_flm_rcp_data *data = &db->flm[idxs[i].id1].data;
-			fprintf(file, "  FLM_RCP %d\n", idxs[i].id1);
-			fprintf(file, "    QW0 dyn %u, ofs %u, QW4 dyn %u, ofs %u\n",
-				data->qw0_dyn, data->qw0_ofs, data->qw4_dyn, data->qw4_ofs);
-			fprintf(file, "    SW8 dyn %u, ofs %u, SW9 dyn %u, ofs %u\n",
-				data->sw8_dyn, data->sw8_ofs, data->sw9_dyn, data->sw9_ofs);
-			fprintf(file, "    Outer prot %u, inner prot  %u\n", data->outer_prot,
-				data->inner_prot);
+			fprintf(file, "  FLM_RCP %" PRIu32 "\n", idxs[i].id1);
+			fprintf(file, "    QW0 dyn %" PRIu64 ", ofs %" PRIu64
+				 ", QW4 dyn %" PRIu64 ", ofs %" PRIu64 "\n",
+				(uint64_t)data->qw0_dyn, (uint64_t)data->qw0_ofs,
+				(uint64_t)data->qw4_dyn, (uint64_t)data->qw4_ofs);
+			fprintf(file, "    SW8 dyn %" PRIu64 ", ofs %" PRIu64
+				 ", SW9 dyn %" PRIu64 ", ofs %" PRIu64 "\n",
+				(uint64_t)data->sw8_dyn, (uint64_t)data->sw8_ofs,
+				(uint64_t)data->sw9_dyn, (uint64_t)data->sw9_ofs);
+			fprintf(file, "    Outer prot  %" PRIu64 ", inner prot   %" PRIu64 "\n",
+				(uint64_t)data->outer_prot, (uint64_t)data->inner_prot);
 			fprintf(file, "    Mask:\n");
-			fprintf(file, "      %08x %08x %08x %08x %08x\n", data->mask[0],
-				data->mask[1], data->mask[2], data->mask[3], data->mask[4]);
-			fprintf(file, "      %08x %08x %08x %08x %08x\n", data->mask[5],
-				data->mask[6], data->mask[7], data->mask[8], data->mask[9]);
+			fprintf(file, "      %08x %08x %08x %08x %08x\n",
+				(uint32_t)data->mask[0], (uint32_t)data->mask[1],
+				(uint32_t)data->mask[2], (uint32_t)data->mask[3],
+				(uint32_t)data->mask[4]);
+			fprintf(file, "      %08x %08x %08x %08x %08x\n",
+				(uint32_t)data->mask[5], (uint32_t)data->mask[6],
+				(uint32_t)data->mask[7], (uint32_t)data->mask[8],
+				(uint32_t)data->mask[9]);
 			break;
 		}
 
 		case HW_DB_IDX_TYPE_FLM_FT: {
 			const struct hw_db_inline_flm_ft_data *data =
 					&db->flm[idxs[i].id2].ft[idxs[i].id1].data;
-			fprintf(file, "  FLM_FT %d\n", idxs[i].id1);
+			fprintf(file, "  FLM_FT %" PRIu32 "\n", idxs[i].id1);
 
 			if (data->is_group_zero)
 				fprintf(file, "    Jump to %d\n", data->jump);
@@ -596,7 +619,7 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 
 		case HW_DB_IDX_TYPE_KM_RCP: {
 			const struct hw_db_inline_km_rcp_data *data = &db->km[idxs[i].id1].data;
-			fprintf(file, "  KM_RCP %d\n", idxs[i].id1);
+			fprintf(file, "  KM_RCP %" PRIu32 "\n", idxs[i].id1);
 			fprintf(file, "    HW id %u\n", data->rcp);
 			break;
 		}
@@ -604,25 +627,25 @@ void hw_db_inline_dump(struct flow_nic_dev *ndev, void *db_handle, const struct 
 		case HW_DB_IDX_TYPE_KM_FT: {
 			const struct hw_db_inline_km_ft_data *data =
 					&db->km[idxs[i].id2].ft[idxs[i].id1].data;
-			fprintf(file, "  KM_FT %d\n", idxs[i].id1);
+			fprintf(file, "  KM_FT %" PRIu32 "\n", idxs[i].id1);
 			fprintf(file, "    ACTION_SET id %d\n", data->action_set.ids);
-			fprintf(file, "    KM_RCP id %d\n", data->km.ids);
-			fprintf(file, "    CAT id %d\n", data->cat.ids);
+			fprintf(file, "    KM_RCP id %" PRIu32 "\n", data->km.ids);
+			fprintf(file, "    CAT id %" PRIu32 "\n", data->cat.ids);
 			break;
 		}
 
 		case HW_DB_IDX_TYPE_FLM_SCRUB: {
 			const struct hw_db_inline_scrub_data *data = &db->scrub[idxs[i].ids].data;
-			fprintf(file, "  FLM_RCP %d\n", idxs[i].id1);
-			fprintf(file, "  SCRUB %d\n", idxs[i].ids);
-			fprintf(file, "    Timeout: %d, encoded timeout: %d\n",
+			fprintf(file, "  FLM_RCP %" PRIu32 "\n", idxs[i].id1);
+			fprintf(file, "  SCRUB %" PRIu32 "\n", idxs[i].ids);
+			fprintf(file, "    Timeout: %" PRIu32 ", encoded timeout: %" PRIu32 "\n",
 				hw_mod_flm_scrub_timeout_decode(data->timeout), data->timeout);
 			break;
 		}
 
 		case HW_DB_IDX_TYPE_HSH: {
 			const struct hw_db_inline_hsh_data *data = &db->hsh[idxs[i].ids].data;
-			fprintf(file, "  HSH %d\n", idxs[i].ids);
+			fprintf(file, "  HSH %" PRIu32 "\n", idxs[i].ids);
 
 			switch (data->func) {
 			case RTE_ETH_HASH_FUNCTION_DEFAULT:
@@ -1332,9 +1355,11 @@ static int hw_db_inline_alloc_prioritized_cfn(struct flow_nic_dev *ndev,
 	struct {
 		uint64_t priority;
 		uint32_t idx;
-	} sorted_priority[db->nb_cat];
+	} *sorted_priority;
 
-	memset(sorted_priority, 0x0, sizeof(sorted_priority));
+	sorted_priority = calloc(db->nb_cat, sizeof(*sorted_priority));
+	if (!sorted_priority)
+		return -1;
 
 	uint32_t in_use_count = 0;
 
@@ -1349,13 +1374,16 @@ static int hw_db_inline_alloc_prioritized_cfn(struct flow_nic_dev *ndev,
 		}
 	}
 
-	if (in_use_count >= db->nb_cat - 1)
+	if (in_use_count >= db->nb_cat - 1) {
+		free(sorted_priority);
 		return -1;
+	}
 
 	if (in_use_count == 0) {
 		db->cfn[db_cfn_idx].ref = 1;
 		db->cfn[db_cfn_idx].cfn_hw = 1;
 		db->cfn[db_cfn_idx].priority = priority;
+		free(sorted_priority);
 		return db_cfn_idx;
 	}
 
@@ -1389,6 +1417,7 @@ static int hw_db_inline_alloc_prioritized_cfn(struct flow_nic_dev *ndev,
 		db->cfn[db_cfn_idx].ref = 1;
 		db->cfn[db_cfn_idx].cfn_hw = goal;
 		db->cfn[db_cfn_idx].priority = priority;
+		free(sorted_priority);
 		return db_cfn_idx;
 	}
 
@@ -1414,6 +1443,7 @@ static int hw_db_inline_alloc_prioritized_cfn(struct flow_nic_dev *ndev,
 	db->cfn[db_cfn_idx].ref = 1;
 	db->cfn[db_cfn_idx].cfn_hw = goal;
 	db->cfn[db_cfn_idx].priority = priority;
+	free(sorted_priority);
 
 	return db_cfn_idx;
 }
@@ -1784,7 +1814,7 @@ struct hw_db_qsl_idx hw_db_inline_qsl_add(struct flow_nic_dev *ndev, void *db_ha
 		}
 	}
 
-	res = flow_nic_alloc_resource(ndev, RES_QSL_RCP, 1);
+	res = nthw_flow_nic_alloc_resource(ndev, RES_QSL_RCP, 1);
 
 	if (res < 0) {
 		qsl_idx.error = 1;
@@ -1794,10 +1824,10 @@ struct hw_db_qsl_idx hw_db_inline_qsl_add(struct flow_nic_dev *ndev, void *db_ha
 	qsl_idx.ids = res & 0xff;
 
 	if (data->table_size > 0) {
-		res = flow_nic_alloc_resource_config(ndev, RES_QSL_QST, data->table_size, 1);
+		res = nthw_flow_nic_alloc_resource_config(ndev, RES_QSL_QST, data->table_size, 1);
 
 		if (res < 0) {
-			flow_nic_deref_resource(ndev, RES_QSL_RCP, qsl_idx.ids);
+			nthw_flow_nic_deref_resource(ndev, RES_QSL_RCP, qsl_idx.ids);
 			qsl_idx.error = 1;
 			return qsl_idx;
 		}
@@ -1859,7 +1889,7 @@ void hw_db_inline_qsl_ref(struct flow_nic_dev *ndev, void *db_handle, struct hw_
 	(void)db_handle;
 
 	if (!idx.error && idx.ids != 0)
-		flow_nic_ref_resource(ndev, RES_QSL_RCP, idx.ids);
+		nthw_flow_nic_ref_resource(ndev, RES_QSL_RCP, idx.ids);
 }
 
 void hw_db_inline_qsl_deref(struct flow_nic_dev *ndev, void *db_handle, struct hw_db_qsl_idx idx)
@@ -1869,7 +1899,7 @@ void hw_db_inline_qsl_deref(struct flow_nic_dev *ndev, void *db_handle, struct h
 	if (idx.error || idx.ids == 0)
 		return;
 
-	if (flow_nic_deref_resource(ndev, RES_QSL_RCP, idx.ids) == 0) {
+	if (nthw_flow_nic_deref_resource(ndev, RES_QSL_RCP, idx.ids) == 0) {
 		const int table_size = (int)db->qsl[idx.ids].data.table_size;
 
 		hw_mod_qsl_rcp_set(&ndev->be, HW_QSL_RCP_PRESET_ALL, idx.ids, 0x0);
@@ -1881,7 +1911,7 @@ void hw_db_inline_qsl_deref(struct flow_nic_dev *ndev, void *db_handle, struct h
 			for (int i = 0; i < (int)table_size; ++i) {
 				hw_mod_qsl_qst_set(&ndev->be, HW_QSL_QST_PRESET_ALL,
 					table_start + i, 0x0);
-				flow_nic_free_resource(ndev, RES_QSL_QST, table_start + i);
+				nthw_flow_nic_free_resource(ndev, RES_QSL_QST, table_start + i);
 			}
 
 			hw_mod_qsl_qst_flush(&ndev->be, table_start, table_size);
@@ -2234,7 +2264,7 @@ struct hw_db_tpe_ext_idx hw_db_inline_tpe_ext_add(struct flow_nic_dev *ndev, voi
 		return idx;
 	}
 
-	rpl_rpl_index = flow_nic_alloc_resource_config(ndev, RES_TPE_RPL, rpl_rpl_length, 1);
+	rpl_rpl_index = nthw_flow_nic_alloc_resource_config(ndev, RES_TPE_RPL, rpl_rpl_length, 1);
 
 	if (rpl_rpl_index < 0) {
 		idx.error = 1;
@@ -2292,7 +2322,7 @@ void hw_db_inline_tpe_ext_deref(struct flow_nic_dev *ndev, void *db_handle,
 			uint32_t rpl_zero[] = { 0, 0, 0, 0 };
 			hw_mod_tpe_rpl_rpl_set(&ndev->be, HW_TPE_RPL_RPL_VALUE, rpl_rpl_index + i,
 				rpl_zero);
-			flow_nic_free_resource(ndev, RES_TPE_RPL, rpl_rpl_index + i);
+			nthw_flow_nic_free_resource(ndev, RES_TPE_RPL, rpl_rpl_index + i);
 		}
 
 		hw_mod_tpe_rpl_rpl_flush(&ndev->be, rpl_rpl_index, rpl_rpl_length);
@@ -2844,7 +2874,7 @@ struct hw_db_hsh_idx hw_db_inline_hsh_add(struct flow_nic_dev *ndev, void *db_ha
 	tmp_rss_conf.rss_hf = data->hash_mask;
 	memcpy(tmp_rss_conf.rss_key, data->key, MAX_RSS_KEY_LEN);
 	tmp_rss_conf.algorithm = data->func;
-	int res = flow_nic_set_hasher_fields(ndev, idx.ids, tmp_rss_conf);
+	int res = hsh_set(ndev, idx.ids, tmp_rss_conf);
 
 	if (res != 0) {
 		idx.error = 1;
@@ -2885,11 +2915,13 @@ void hw_db_inline_hsh_deref(struct flow_nic_dev *ndev, void *db_handle, struct h
 		 * it is not used by any flow
 		 */
 		if (idx.ids > 0) {
-			hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_PRESET_ALL, idx.ids, 0, 0x0);
+			int res = hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_PRESET_ALL,
+				idx.ids, 0, 0x0);
+			NT_LOG(ERR, FILTER, "Failed to preset HSH RCP %u: %d", idx.ids, res);
 			hw_mod_hsh_rcp_flush(&ndev->be, idx.ids, 1);
 
 			memset(&db->hsh[idx.ids].data, 0x0, sizeof(struct hw_db_inline_hsh_data));
-			flow_nic_free_resource(ndev, RES_HSH_RCP, idx.ids);
+			nthw_flow_nic_free_resource(ndev, RES_HSH_RCP, idx.ids);
 		}
 
 		db->hsh[idx.ids].ref = 0;
@@ -2992,7 +3024,7 @@ void hw_db_inline_scrub_deref(struct flow_nic_dev *ndev, void *db_handle,
 
 			memset(&db->scrub[idx.ids].data, 0x0,
 				sizeof(struct hw_db_inline_scrub_data));
-			flow_nic_free_resource(ndev, RES_SCRUB_RCP, idx.ids);
+			nthw_flow_nic_free_resource(ndev, RES_SCRUB_RCP, idx.ids);
 		}
 
 		db->scrub[idx.ids].ref = 0;

@@ -22,7 +22,7 @@
 #include <ena_eth_io_defs.h>
 
 #define DRV_MODULE_VER_MAJOR	2
-#define DRV_MODULE_VER_MINOR	11
+#define DRV_MODULE_VER_MINOR	13
 #define DRV_MODULE_VER_SUBMINOR	0
 
 #define __MERGE_64B_H_L(h, l) (((uint64_t)h << 32) | l)
@@ -30,6 +30,8 @@
 #define GET_L4_HDR_LEN(mbuf)					\
 	((rte_pktmbuf_mtod_offset(mbuf,	struct rte_tcp_hdr *,	\
 		mbuf->l3_len + mbuf->l2_len)->data_off) >> 4)
+#define CLAMP_VAL(val, min, max)					\
+	(RTE_MIN(RTE_MAX((val), (typeof(val))(min)), (typeof(val))(max)))
 
 #define ETH_GSTRING_LEN	32
 
@@ -106,6 +108,13 @@ struct ena_stats {
  * driver.
  */
 #define ENA_DEVARG_CONTROL_PATH_POLL_INTERVAL "control_path_poll_interval"
+
+/*
+ * Toggles fragment bypass mode. Fragmented egress packets are rate limited by
+ * EC2 per ENI; this devarg bypasses the PPS limit but may impact performance.
+ * Disabled by default.
+ */
+#define ENA_DEVARG_ENABLE_FRAG_BYPASS "enable_frag_bypass"
 
 /*
  * Each rte_memzone should have unique name.
@@ -306,6 +315,9 @@ static int ena_xstats_get_by_id(struct rte_eth_dev *dev,
 static int ena_process_llq_policy_devarg(const char *key,
 			const char *value,
 			void *opaque);
+static int ena_process_bool_devarg(const char *key,
+				   const char *value,
+				   void *opaque);
 static int ena_parse_devargs(struct ena_adapter *adapter,
 			     struct rte_devargs *devargs);
 static void ena_copy_customer_metrics(struct ena_adapter *adapter,
@@ -603,7 +615,7 @@ __extension__ ({
 	ENA_TOUCH(ena_dev);
 	if (ind_tbl != adapter->indirect_table)
 		rte_memcpy(ind_tbl, adapter->indirect_table,
-			   sizeof(adapter->indirect_table));
+			   sizeof(u32) * adapter->indirect_table_size);
 }),
 	struct ena_com_dev *ena_dev, u32 *ind_tbl);
 
@@ -889,6 +901,13 @@ err:
 	ena_com_delete_debug_area(&adapter->ena_dev);
 }
 
+static inline void ena_indirect_table_release(struct ena_adapter *adapter)
+{
+	if (likely(adapter->indirect_table)) {
+		rte_free(adapter->indirect_table);
+		adapter->indirect_table = NULL;
+	}
+}
 static int ena_close(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
@@ -920,6 +939,7 @@ static int ena_close(struct rte_eth_dev *dev)
 	ena_rx_queue_release_all(dev);
 	ena_tx_queue_release_all(dev);
 
+	ena_indirect_table_release(adapter);
 	rte_free(adapter->drv_stats);
 	adapter->drv_stats = NULL;
 
@@ -1328,6 +1348,11 @@ static int ena_start(struct rte_eth_dev *dev)
 	if (rc)
 		goto err_start_tx;
 
+	if (adapter->enable_frag_bypass) {
+		rc = ena_com_set_frag_bypass(&adapter->ena_dev, true);
+		if (rc)
+			PMD_DRV_LOG_LINE(WARNING, "Failed to enable frag bypass, rc: %d", rc);
+	}
 	if (adapter->edev_data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG) {
 		rc = ena_rss_configure(adapter);
 		if (rc)
@@ -1413,7 +1438,6 @@ static int ena_create_io_queue(struct rte_eth_dev *dev, struct ena_ring *ring)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ena_com_create_io_ctx ctx =
-		/* policy set to _HOST just to satisfy icc compiler */
 		{ ENA_ADMIN_PLACEMENT_POLICY_HOST,
 		  0, 0, 0, 0, 0 };
 	uint16_t ena_qid;
@@ -1828,7 +1852,7 @@ static int ena_populate_rx_queue(struct ena_ring *rxq, unsigned int count)
 	/* When we submitted free resources to device... */
 	if (likely(i > 0)) {
 		/* ...let HW know that it can fill buffers with data. */
-		ena_com_write_sq_doorbell(rxq->ena_com_io_sq);
+		ena_com_write_rx_sq_doorbell(rxq->ena_com_io_sq);
 
 		rxq->next_to_use = next_to_use;
 	}
@@ -1916,10 +1940,7 @@ static int ena_device_init(struct ena_adapter *adapter,
 	}
 
 	aenq_groups = BIT(ENA_ADMIN_LINK_CHANGE) |
-		      BIT(ENA_ADMIN_NOTIFICATION) |
 		      BIT(ENA_ADMIN_KEEP_ALIVE) |
-		      BIT(ENA_ADMIN_FATAL_ERROR) |
-		      BIT(ENA_ADMIN_WARNING) |
 		      BIT(ENA_ADMIN_CONF_NOTIFICATIONS);
 
 	aenq_groups &= get_feat_ctx->aenq.supported_groups;
@@ -2278,6 +2299,7 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 	int rc;
 	static int adapters_found;
 	bool disable_meta_caching;
+	size_t indirect_table_size;
 
 	eth_dev->dev_ops = &ena_dev_ops;
 	eth_dev->rx_pkt_burst = &eth_ena_recv_pkts;
@@ -2330,6 +2352,7 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* Assign default devargs values */
 	adapter->missing_tx_completion_to = ENA_TX_TIMEOUT;
+	adapter->llq_header_policy = ENA_LLQ_POLICY_RECOMMENDED;
 
 	/* Get user bypass */
 	rc = ena_parse_devargs(adapter, pci_dev->device.devargs);
@@ -2412,12 +2435,24 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 			get_feat_ctx.dev_attr.mac_addr,
 			(struct rte_ether_addr *)adapter->mac_addr);
 
-	rc = ena_com_rss_init(ena_dev, ENA_RX_RSS_TABLE_LOG_SIZE);
+	rc = ena_com_rss_init(ena_dev);
 	if (unlikely(rc != 0)) {
 		PMD_DRV_LOG_LINE(ERR, "Failed to initialize RSS in ENA device");
 		goto err_delete_debug_area;
 	}
 
+	indirect_table_size = ena_rss_get_indirection_table_size(adapter);
+	if (indirect_table_size) {
+		adapter->indirect_table = rte_zmalloc("adapter RSS indirection table",
+						sizeof(u32) * indirect_table_size,
+						RTE_CACHE_LINE_SIZE);
+		if (!adapter->indirect_table) {
+			PMD_DRV_LOG_LINE(ERR,
+				"Failed to allocate memory for RSS indirection table");
+			rc = -ENOMEM;
+			goto err_rss_destroy;
+		}
+	}
 	adapter->drv_stats = rte_zmalloc("adapter stats",
 					 sizeof(*adapter->drv_stats),
 					 RTE_CACHE_LINE_SIZE);
@@ -2425,15 +2460,23 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 		PMD_DRV_LOG_LINE(ERR,
 			"Failed to allocate memory for adapter statistics");
 		rc = -ENOMEM;
-		goto err_rss_destroy;
+		goto err_indirect_table_destroy;
 	}
 
 	rte_spinlock_init(&adapter->admin_lock);
 
 	if (!adapter->control_path_poll_interval) {
 		/* Control path interrupt mode */
-		rte_intr_callback_register(intr_handle, ena_control_path_handler, eth_dev);
-		rte_intr_enable(intr_handle);
+		rc = rte_intr_callback_register(intr_handle, ena_control_path_handler, eth_dev);
+		if (unlikely(rc < 0)) {
+			PMD_DRV_LOG_LINE(ERR, "Failed to register control path interrupt");
+			goto err_stats_destroy;
+		}
+		rc = rte_intr_enable(intr_handle);
+		if (unlikely(rc < 0)) {
+			PMD_DRV_LOG_LINE(ERR, "Failed to enable control path interrupt");
+			goto err_control_path_destroy;
+		}
 		ena_com_set_admin_polling_mode(ena_dev, false);
 	} else {
 		/* Control path polling mode */
@@ -2452,7 +2495,17 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 
 	return 0;
 err_control_path_destroy:
+	if (!adapter->control_path_poll_interval) {
+		rc = rte_intr_callback_unregister_sync(intr_handle,
+					ena_control_path_handler,
+					eth_dev);
+		if (unlikely(rc < 0))
+			PMD_INIT_LOG_LINE(ERR, "Failed to unregister interrupt handler");
+	}
+err_stats_destroy:
 	rte_free(adapter->drv_stats);
+err_indirect_table_destroy:
+	ena_indirect_table_release(adapter);
 err_rss_destroy:
 	ena_com_rss_destroy(ena_dev);
 err_delete_debug_area:
@@ -2642,7 +2695,7 @@ static int ena_infos_get(struct rte_eth_dev *dev,
 
 	dev_info->max_rx_queues = adapter->max_num_io_queues;
 	dev_info->max_tx_queues = adapter->max_num_io_queues;
-	dev_info->reta_size = ENA_RX_RSS_TABLE_SIZE;
+	dev_info->reta_size = adapter->indirect_table_size;
 
 	dev_info->rx_desc_lim.nb_max = adapter->max_rx_ring_size;
 	dev_info->rx_desc_lim.nb_min = ENA_MIN_RING_DESC;
@@ -3026,29 +3079,6 @@ eth_ena_prep_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	return i;
 }
 
-static void ena_update_hints(struct ena_adapter *adapter,
-			     struct ena_admin_ena_hw_hints *hints)
-{
-	if (hints->admin_completion_tx_timeout)
-		adapter->ena_dev.admin_queue.completion_timeout =
-			hints->admin_completion_tx_timeout * 1000;
-
-	if (hints->mmio_read_timeout)
-		/* convert to usec */
-		adapter->ena_dev.mmio_read.reg_read_to =
-			hints->mmio_read_timeout * 1000;
-
-	if (hints->driver_watchdog_timeout) {
-		if (hints->driver_watchdog_timeout == ENA_HW_HINTS_NO_TIMEOUT)
-			adapter->keep_alive_timeout = ENA_HW_HINTS_NO_TIMEOUT;
-		else
-			// Convert msecs to ticks
-			adapter->keep_alive_timeout =
-				(hints->driver_watchdog_timeout *
-				rte_get_timer_hz()) / 1000;
-	}
-}
-
 static void ena_tx_map_mbuf(struct ena_ring *tx_ring,
 	struct ena_tx_buffer *tx_info,
 	struct rte_mbuf *mbuf,
@@ -3166,7 +3196,7 @@ static int ena_xmit_mbuf(struct ena_ring *tx_ring, struct rte_mbuf *mbuf)
 		PMD_TX_LOG_LINE(DEBUG,
 			"LLQ Tx max burst size of queue %d achieved, writing doorbell to send burst",
 			tx_ring->id);
-		ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
+		ena_com_write_tx_sq_doorbell(tx_ring->ena_com_io_sq);
 		tx_ring->tx_stats.doorbells++;
 		tx_ring->pkts_without_db = false;
 	}
@@ -3299,7 +3329,7 @@ static uint16_t eth_ena_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	/* If there are ready packets to be xmitted... */
 	if (likely(tx_ring->pkts_without_db)) {
 		/* ...let HW do its best :-) */
-		ena_com_write_sq_doorbell(tx_ring->ena_com_io_sq);
+		ena_com_write_tx_sq_doorbell(tx_ring->ena_com_io_sq);
 		tx_ring->tx_stats.doorbells++;
 		tx_ring->pkts_without_db = false;
 	}
@@ -3728,25 +3758,19 @@ static int ena_process_uint_devarg(const char *key,
 				uint64_value * rte_get_timer_hz();
 		}
 	} else if (strcmp(key, ENA_DEVARG_CONTROL_PATH_POLL_INTERVAL) == 0) {
-		if (uint64_value > ENA_MAX_CONTROL_PATH_POLL_INTERVAL_MSEC) {
-			PMD_INIT_LOG_LINE(ERR,
-				"Control path polling interval is too long: %" PRIu64 " msecs. "
-				"Maximum allowed: %d msecs.",
-				uint64_value, ENA_MAX_CONTROL_PATH_POLL_INTERVAL_MSEC);
-			return -EINVAL;
-		} else if (uint64_value == 0) {
+		if (uint64_value == 0) {
 			PMD_INIT_LOG_LINE(INFO,
-				"Control path polling interval is set to zero. Operating in "
-				"interrupt mode.");
-				adapter->control_path_poll_interval = 0;
+				"Control path polling is disabled - Operating in interrupt mode");
 		} else {
+			uint64_value = CLAMP_VAL(uint64_value,
+				ENA_MIN_CONTROL_PATH_POLL_INTERVAL_MSEC,
+				ENA_MAX_CONTROL_PATH_POLL_INTERVAL_MSEC);
 			PMD_INIT_LOG_LINE(INFO,
-				"Control path polling interval is set to %" PRIu64 " msecs.",
+				"Control path polling interval is %" PRIu64 " msec",
 				uint64_value);
-				adapter->control_path_poll_interval = uint64_value * USEC_PER_MSEC;
 		}
+		adapter->control_path_poll_interval = uint64_value * (USEC_PER_MSEC);
 	}
-
 	return 0;
 }
 
@@ -3767,6 +3791,31 @@ static int ena_process_llq_policy_devarg(const char *key, const char *value, voi
 	PMD_INIT_LOG_LINE(INFO,
 		"LLQ policy is %u [0 - disabled, 1 - device recommended, 2 - normal, 3 - large]",
 		adapter->llq_header_policy);
+
+	return 0;
+}
+
+static int ena_process_bool_devarg(const char *key, const char *value, void *opaque)
+{
+	struct ena_adapter *adapter = opaque;
+	bool bool_value;
+
+	/* Parse the value. */
+	if (strcmp(value, "1") == 0) {
+		bool_value = true;
+	} else if (strcmp(value, "0") == 0) {
+		bool_value = false;
+	} else {
+		PMD_INIT_LOG_LINE(ERR,
+			"Invalid value: '%s' for key '%s'. Accepted: '0' or '1'",
+			value, key);
+		return -EINVAL;
+	}
+
+	/* Now, assign it to the proper adapter field. */
+	if (strcmp(key, ENA_DEVARG_ENABLE_FRAG_BYPASS) == 0)
+		adapter->enable_frag_bypass = bool_value;
+
 	return 0;
 }
 
@@ -3776,6 +3825,7 @@ static int ena_parse_devargs(struct ena_adapter *adapter, struct rte_devargs *de
 		ENA_DEVARG_LLQ_POLICY,
 		ENA_DEVARG_MISS_TXC_TO,
 		ENA_DEVARG_CONTROL_PATH_POLL_INTERVAL,
+		ENA_DEVARG_ENABLE_FRAG_BYPASS,
 		NULL,
 	};
 	struct rte_kvargs *kvlist;
@@ -3800,6 +3850,10 @@ static int ena_parse_devargs(struct ena_adapter *adapter, struct rte_devargs *de
 		goto exit;
 	rc = rte_kvargs_process(kvlist, ENA_DEVARG_CONTROL_PATH_POLL_INTERVAL,
 		ena_process_uint_devarg, adapter);
+	if (rc != 0)
+		goto exit;
+	rc = rte_kvargs_process(kvlist, ENA_DEVARG_ENABLE_FRAG_BYPASS,
+		ena_process_bool_devarg, adapter);
 	if (rc != 0)
 		goto exit;
 
@@ -4023,7 +4077,8 @@ RTE_PMD_REGISTER_KMOD_DEP(net_ena, "* igb_uio | uio_pci_generic | vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(net_ena,
 	ENA_DEVARG_LLQ_POLICY "=<0|1|2|3> "
 	ENA_DEVARG_MISS_TXC_TO "=<uint>"
-	ENA_DEVARG_CONTROL_PATH_POLL_INTERVAL "=<0-1000>");
+	ENA_DEVARG_CONTROL_PATH_POLL_INTERVAL "= 0|<500-1000> "
+	ENA_DEVARG_ENABLE_FRAG_BYPASS "=<0|1> ");
 RTE_LOG_REGISTER_SUFFIX(ena_logtype_init, init, NOTICE);
 RTE_LOG_REGISTER_SUFFIX(ena_logtype_driver, driver, NOTICE);
 #ifdef RTE_ETHDEV_DEBUG_RX
@@ -4052,30 +4107,6 @@ static void ena_update_on_link_change(void *adapter_data,
 
 	ena_link_update(eth_dev, 0);
 	rte_eth_dev_callback_process(eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL);
-}
-
-static void ena_notification(void *adapter_data,
-			     struct ena_admin_aenq_entry *aenq_e)
-{
-	struct rte_eth_dev *eth_dev = adapter_data;
-	struct ena_adapter *adapter = eth_dev->data->dev_private;
-	struct ena_admin_ena_hw_hints *hints;
-
-	if (aenq_e->aenq_common_desc.group != ENA_ADMIN_NOTIFICATION)
-		PMD_DRV_LOG_LINE(WARNING, "Invalid AENQ group: %x. Expected: %x",
-			aenq_e->aenq_common_desc.group,
-			ENA_ADMIN_NOTIFICATION);
-
-	switch (aenq_e->aenq_common_desc.syndrome) {
-	case ENA_ADMIN_UPDATE_HINTS:
-		hints = (struct ena_admin_ena_hw_hints *)
-			(&aenq_e->inline_data_w4);
-		ena_update_hints(adapter, hints);
-		break;
-	default:
-		PMD_DRV_LOG_LINE(ERR, "Invalid AENQ notification link state: %d",
-			aenq_e->aenq_common_desc.syndrome);
-	}
 }
 
 static void ena_keep_alive(void *adapter_data,
@@ -4132,7 +4163,6 @@ static void unimplemented_aenq_handler(__rte_unused void *data,
 static struct ena_aenq_handlers aenq_handlers = {
 	.handlers = {
 		[ENA_ADMIN_LINK_CHANGE] = ena_update_on_link_change,
-		[ENA_ADMIN_NOTIFICATION] = ena_notification,
 		[ENA_ADMIN_KEEP_ALIVE] = ena_keep_alive,
 		[ENA_ADMIN_CONF_NOTIFICATIONS] = ena_suboptimal_configuration
 	},

@@ -105,6 +105,7 @@ enum mcfg {
 	CFG_METHOD_69,
 	CFG_METHOD_70,
 	CFG_METHOD_71,
+	CFG_METHOD_91,
 	CFG_METHOD_MAX,
 	CFG_METHOD_DEFAULT = 0xFF
 };
@@ -355,16 +356,16 @@ enum RTL_register_content {
 	/* Config3 register */
 	Isolate_en  = (1UL << 12), /* Isolate enable */
 	MagicPacket = (1UL << 5),  /* Wake up when receives a magic packet */
-	LinkUp      = (1UL << 4),  /* This bit is reserved in RTL8125B. */
+	LinkUp      = (1UL << 4),
 
 	/* Wake up when the cable connection is re-established */
-	ECRCEN      = (1UL << 3), /* This bit is reserved in RTL8125B. */
-	Jumbo_En0   = (1UL << 2), /* This bit is reserved in RTL8125B. */
-	RDY_TO_L23  = (1UL << 1), /* This bit is reserved in RTL8125B. */
-	Beacon_en   = (1UL << 0), /* This bit is reserved in RTL8125B. */
+	ECRCEN      = (1UL << 3),
+	Jumbo_En0   = (1UL << 2),
+	RDY_TO_L23  = (1UL << 1),
+	Beacon_en   = (1UL << 0),
 
 	/* Config4 register */
-	Jumbo_En1   = (1UL << 1), /* This bit is reserved in RTL8125B. */
+	Jumbo_En1   = (1UL << 1),
 
 	/* Config5 register */
 	BWF         = (1UL << 6), /* Accept broadcast wakeup frame */
@@ -380,8 +381,8 @@ enum RTL_register_content {
 	Force_halfdup   = (1UL << 12),
 	Force_rxflow_en = (1UL << 11),
 	Force_txflow_en = (1UL << 10),
-	Cxpl_dbg_sel    = (1UL << 9), /* This bit is reserved in RTL8125B. */
-	ASF             = (1UL << 8), /* This bit is reserved in RTL8125C. */
+	Cxpl_dbg_sel    = (1UL << 9),
+	ASF             = (1UL << 8),
 	PktCntrDisable  = (1UL << 7),
 	RxVlan          = (1UL << 6),
 	RxChkSum        = (1UL << 5),
@@ -393,8 +394,13 @@ enum RTL_register_content {
 
 	/* PHY status */
 	PowerSaveStatus = 0x80,
+	_1000bpsL       = 0x80000,
+	_10000bpsF      = 0x4000,
+	_10000bpsL      = 0x2000,
 	_5000bpsF       = 0x1000,
+	_5000bpsL       = 0x800,
 	_2500bpsF       = 0x400,
+	_2500bpsL       = 0x200,
 	TxFlowCtrl      = 0x40,
 	RxFlowCtrl      = 0x20,
 	_1000bpsF       = 0x10,
@@ -429,6 +435,7 @@ enum RTL_register_content {
 	EPHYAR_Reg_Mask_v2 = 0x7f,
 	EPHYAR_Reg_shift   = 16,
 	EPHYAR_Data_Mask   = 0xffff,
+	EPHYAR_EXT_ADDR    = 0x0ffe,
 
 	/* CSI access */
 	CSIAR_Flag         = 0x80000000,
@@ -507,7 +514,14 @@ enum RTL_chipset_name {
 	RTL8168KB,
 	RTL8125BP,
 	RTL8125D,
+	RTL8125CP,
 	RTL8126A,
+	RTL8168EP,
+	RTL8168FP,
+	RTL8168G,
+	RTL8168H,
+	RTL8168M,
+	RTL8127,
 	UNKNOWN
 };
 
@@ -540,34 +554,34 @@ enum RTL_chipset_name {
 #define InterFrameGap       0x03    /* 3 means InterFrameGap = the shortest one */
 #define Rx_Fetch_Number_8  (1 << 30)
 #define Rx_Close_Multiple  (1 << 21)
+#define RxEarly_off_V2	   (1 << 11)
+#define Rx_Single_fetch_V2 (1 << 14)
 
 #define TRUE  1
 #define FALSE 0
 
-#define SPEED_10	10
-#define SPEED_100	100
-#define SPEED_1000	1000
-#define SPEED_2500	2500
-#define SPEED_5000	5000
+#define SPEED_10     10
+#define SPEED_100    100
+#define SPEED_1000   1000
+#define SPEED_2500   2500
+#define SPEED_5000   5000
+#define SPEED_10000  10000
 
-#define DUPLEX_HALF	1
-#define DUPLEX_FULL	2
+#define DUPLEX_HALF 1
+#define DUPLEX_FULL 2
 
-#define AUTONEG_ENABLE	1
-#define AUTONEG_DISABLE	0
+#define AUTONEG_ENABLE  1
+#define AUTONEG_DISABLE 0
 
-#define ADVERTISE_10_HALF     0x0001
-#define ADVERTISE_10_FULL     0x0002
-#define ADVERTISE_100_HALF    0x0004
-#define ADVERTISE_100_FULL    0x0008
-#define ADVERTISE_1000_HALF   0x0010 /* Not used, just FYI */
-#define ADVERTISE_1000_FULL   0x0020
-#define ADVERTISE_2500_HALF   0x0040 /* NOT used, just FYI */
-#define ADVERTISE_2500_FULL   0x0080
-#define ADVERTISE_5000_HALF   0x0100 /* NOT used, just FYI */
-#define ADVERTISE_5000_FULL   0x0200
-
-#define MAC_ADDR_LEN    RTE_ETHER_ADDR_LEN
+#define ADVERTISE_10_HALF     RTE_BIT64(0)
+#define ADVERTISE_10_FULL     RTE_BIT64(1)
+#define ADVERTISE_100_HALF    RTE_BIT64(2)
+#define ADVERTISE_100_FULL    RTE_BIT64(3)
+#define ADVERTISE_1000_HALF   RTE_BIT64(4)
+#define ADVERTISE_1000_FULL   RTE_BIT64(5)
+#define ADVERTISE_2500_FULL   RTE_BIT64(15)
+#define ADVERTISE_5000_FULL   RTE_BIT64(48)
+#define ADVERTISE_10000_FULL  RTE_BIT64(12)
 
 #define RTL_MAX_TX_DESC 4096
 #define RTL_MAX_RX_DESC 4096

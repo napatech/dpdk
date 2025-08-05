@@ -21,7 +21,7 @@
 #define _fml_dbg(...) \
 	RTE_LOG_LINE_PREFIX(DEBUG, DPAA_PMD, "%s: ", __func__, __VA_ARGS__)
 #else
-	#define _fml_dbg(arg...)
+	#define _fml_dbg(...)
 #endif
 
 /*#define FM_IOCTL_DBG*/
@@ -30,7 +30,7 @@
 	#define _fm_ioctl_dbg(...) \
 	RTE_LOG_LINE_PREFIX(DEBUG, DPAA_PMD, "%s: ", __func__, __VA_ARGS__)
 #else
-	#define _fm_ioctl_dbg(arg...)
+	#define _fm_ioctl_dbg(...)
 #endif
 
 /*
@@ -76,7 +76,7 @@ typedef enum e_fm_port_type {
 /*
  * @Description   Parse results memory layout
  */
-typedef struct t_fm_prs_result {
+typedef struct __rte_packed_begin t_fm_prs_result {
 	volatile uint8_t	lpid;		/**< Logical port id */
 	volatile uint8_t	shimr;		/**< Shim header result  */
 	volatile uint16_t	l2r;		/**< Layer 2 result */
@@ -109,7 +109,7 @@ typedef struct t_fm_prs_result {
 	volatile uint8_t	gre_off;	/**< GRE offset */
 	volatile uint8_t	l4_off;		/**< Layer 4 offset */
 	volatile uint8_t	nxthdr_off;	/**< Parser end point */
-} __rte_packed t_fm_prs_result;
+} __rte_packed_end t_fm_prs_result;
 
 /*
  * @Collection   FM Parser results

@@ -882,8 +882,8 @@ hns3_unmap_rx_interrupt(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct hns3_adapter *hns = dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
-	uint8_t base = RTE_INTR_VEC_ZERO_OFFSET;
-	uint8_t vec = RTE_INTR_VEC_ZERO_OFFSET;
+	uint16_t base = RTE_INTR_VEC_ZERO_OFFSET;
+	uint16_t vec = RTE_INTR_VEC_ZERO_OFFSET;
 	uint16_t q_id;
 
 	if (dev->data->dev_conf.intr_conf.rxq == 0)
@@ -944,9 +944,8 @@ hns3_get_pci_revision_id(struct hns3_hw *hw, uint8_t *revision_id)
 
 	eth_dev = &rte_eth_devices[hw->data->port_id];
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	ret = rte_pci_read_config(pci_dev, &revision, HNS3_PCI_REVISION_ID_LEN,
-				  HNS3_PCI_REVISION_ID);
-	if (ret != HNS3_PCI_REVISION_ID_LEN) {
+	ret = rte_pci_read_config(pci_dev, &revision, 1, RTE_PCI_REVISION_ID);
+	if (ret != 1) {
 		hns3_err(hw, "failed to read pci revision id, ret = %d", ret);
 		return -EIO;
 	}

@@ -1871,72 +1871,6 @@ hns3_remove_mc_mac_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 }
 
 static int
-hns3_check_mq_mode(struct rte_eth_dev *dev)
-{
-	enum rte_eth_rx_mq_mode rx_mq_mode = dev->data->dev_conf.rxmode.mq_mode;
-	enum rte_eth_tx_mq_mode tx_mq_mode = dev->data->dev_conf.txmode.mq_mode;
-	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	struct rte_eth_dcb_rx_conf *dcb_rx_conf;
-	struct rte_eth_dcb_tx_conf *dcb_tx_conf;
-	uint8_t num_tc;
-	int max_tc = 0;
-	int i;
-
-	if (((uint32_t)rx_mq_mode & RTE_ETH_MQ_RX_VMDQ_FLAG) ||
-	    (tx_mq_mode == RTE_ETH_MQ_TX_VMDQ_DCB ||
-	     tx_mq_mode == RTE_ETH_MQ_TX_VMDQ_ONLY)) {
-		hns3_err(hw, "VMDQ is not supported, rx_mq_mode = %d, tx_mq_mode = %d.",
-			 rx_mq_mode, tx_mq_mode);
-		return -EOPNOTSUPP;
-	}
-
-	dcb_rx_conf = &dev->data->dev_conf.rx_adv_conf.dcb_rx_conf;
-	dcb_tx_conf = &dev->data->dev_conf.tx_adv_conf.dcb_tx_conf;
-	if ((uint32_t)rx_mq_mode & RTE_ETH_MQ_RX_DCB_FLAG) {
-		if (dcb_rx_conf->nb_tcs > pf->tc_max) {
-			hns3_err(hw, "nb_tcs(%u) > max_tc(%u) driver supported.",
-				 dcb_rx_conf->nb_tcs, pf->tc_max);
-			return -EINVAL;
-		}
-
-		if (!(dcb_rx_conf->nb_tcs == HNS3_4_TCS ||
-		      dcb_rx_conf->nb_tcs == HNS3_8_TCS)) {
-			hns3_err(hw, "on RTE_ETH_MQ_RX_DCB_RSS mode, "
-				 "nb_tcs(%d) != %d or %d in rx direction.",
-				 dcb_rx_conf->nb_tcs, HNS3_4_TCS, HNS3_8_TCS);
-			return -EINVAL;
-		}
-
-		if (dcb_rx_conf->nb_tcs != dcb_tx_conf->nb_tcs) {
-			hns3_err(hw, "num_tcs(%d) of tx is not equal to rx(%d)",
-				 dcb_tx_conf->nb_tcs, dcb_rx_conf->nb_tcs);
-			return -EINVAL;
-		}
-
-		for (i = 0; i < HNS3_MAX_USER_PRIO; i++) {
-			if (dcb_rx_conf->dcb_tc[i] != dcb_tx_conf->dcb_tc[i]) {
-				hns3_err(hw, "dcb_tc[%d] = %u in rx direction, "
-					 "is not equal to one in tx direction.",
-					 i, dcb_rx_conf->dcb_tc[i]);
-				return -EINVAL;
-			}
-			if (dcb_rx_conf->dcb_tc[i] > max_tc)
-				max_tc = dcb_rx_conf->dcb_tc[i];
-		}
-
-		num_tc = max_tc + 1;
-		if (num_tc > dcb_rx_conf->nb_tcs) {
-			hns3_err(hw, "max num_tc(%u) mapped > nb_tcs(%u)",
-				 num_tc, dcb_rx_conf->nb_tcs);
-			return -EINVAL;
-		}
-	}
-
-	return 0;
-}
-
-static int
 hns3_bind_ring_with_vector(struct hns3_hw *hw, uint16_t vector_id, bool en,
 			   enum hns3_ring_type queue_type, uint16_t queue_id)
 {
@@ -2034,7 +1968,7 @@ hns3_check_dev_conf(struct rte_eth_dev *dev)
 	struct rte_eth_conf *conf = &dev->data->dev_conf;
 	int ret;
 
-	ret = hns3_check_mq_mode(dev);
+	ret = hns3_check_dev_mq_mode(dev);
 	if (ret)
 		return ret;
 
@@ -2544,6 +2478,10 @@ hns3_query_pf_resource(struct hns3_hw *hw)
 	req = (struct hns3_pf_res_cmd *)desc.data;
 	hw->total_tqps_num = rte_le_to_cpu_16(req->tqp_num) +
 			     rte_le_to_cpu_16(req->ext_tqp_num);
+	if (hw->total_tqps_num == 0) {
+		PMD_INIT_LOG(ERR, "the total tqp number of the port is 0.");
+		return -EINVAL;
+	}
 	ret = hns3_get_pf_max_tqp_num(hw);
 	if (ret)
 		return ret;
@@ -2739,6 +2677,7 @@ hns3_get_capability(struct hns3_hw *hw)
 		hw->udp_cksum_mode = HNS3_SPECIAL_PORT_SW_CKSUM_MODE;
 		pf->support_multi_tc_pause = false;
 		hw->rx_dma_addr_align = HNS3_RX_DMA_ADDR_ALIGN_64;
+		hw->strip_crc_ptype = HNS3_STRIP_CRC_PTYPE_TCP;
 		return 0;
 	}
 
@@ -2760,6 +2699,7 @@ hns3_get_capability(struct hns3_hw *hw)
 	hw->udp_cksum_mode = HNS3_SPECIAL_PORT_HW_CKSUM_MODE;
 	pf->support_multi_tc_pause = true;
 	hw->rx_dma_addr_align = HNS3_RX_DMA_ADDR_ALIGN_128;
+	hw->strip_crc_ptype = HNS3_STRIP_CRC_PTYPE_IP;
 
 	return 0;
 }
@@ -2795,6 +2735,7 @@ hns3_check_media_type(struct hns3_hw *hw, uint8_t media_type)
 static int
 hns3_get_board_configuration(struct hns3_hw *hw)
 {
+#define HNS3_RSS_SIZE_MAX_DEFAULT	64
 	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
 	struct hns3_pf *pf = &hns->pf;
 	struct hns3_cfg cfg;
@@ -2813,6 +2754,11 @@ hns3_get_board_configuration(struct hns3_hw *hw)
 
 	hw->mac.media_type = cfg.media_type;
 	hw->rss_size_max = cfg.rss_size_max;
+	if (hw->rss_size_max == 0) {
+		PMD_INIT_LOG(WARNING, "rss_size_max is 0, already adjust to %u.",
+			     HNS3_RSS_SIZE_MAX_DEFAULT);
+		hw->rss_size_max = HNS3_RSS_SIZE_MAX_DEFAULT;
+	}
 	memcpy(hw->mac.mac_addr, cfg.mac_addr, RTE_ETHER_ADDR_LEN);
 	hw->mac.phy_addr = cfg.phy_addr;
 	hw->dcb_info.num_pg = 1;
@@ -2825,25 +2771,25 @@ hns3_get_board_configuration(struct hns3_hw *hw)
 		return ret;
 	}
 
-	pf->tc_max = cfg.tc_num;
-	if (pf->tc_max > HNS3_MAX_TC_NUM || pf->tc_max < 1) {
+	hw->dcb_info.tc_max = cfg.tc_num;
+	if (hw->dcb_info.tc_max > HNS3_MAX_TC_NUM || hw->dcb_info.tc_max < 1) {
 		PMD_INIT_LOG(WARNING,
 			     "Get TC num(%u) from flash, set TC num to 1",
-			     pf->tc_max);
-		pf->tc_max = 1;
+			     hw->dcb_info.tc_max);
+		hw->dcb_info.tc_max = 1;
 	}
 
 	/* Dev does not support DCB */
 	if (!hns3_dev_get_support(hw, DCB)) {
-		pf->tc_max = 1;
-		pf->pfc_max = 0;
+		hw->dcb_info.tc_max = 1;
+		hw->dcb_info.pfc_max = 0;
 	} else
-		pf->pfc_max = pf->tc_max;
+		hw->dcb_info.pfc_max = hw->dcb_info.tc_max;
 
 	hw->dcb_info.num_tc = 1;
 	hw->alloc_rss_size = RTE_MIN(hw->rss_size_max,
 				     hw->tqps_num / hw->dcb_info.num_tc);
-	hns3_set_bit(hw->hw_tc_map, 0, 1);
+	hns3_set_bit(hw->dcb_info.hw_tc_map, 0, 1);
 	pf->tx_sch_mode = HNS3_FLAG_TC_BASE_SCH_MODE;
 
 	pf->wanted_umv_size = cfg.umv_space;
@@ -3013,7 +2959,7 @@ hns3_tx_buffer_calc(struct hns3_hw *hw, struct hns3_pkt_buf_alloc *buf_alloc)
 	for (i = 0; i < HNS3_MAX_TC_NUM; i++) {
 		priv = &buf_alloc->priv_buf[i];
 
-		if (hw->hw_tc_map & BIT(i)) {
+		if (hw->dcb_info.hw_tc_map & BIT(i)) {
 			if (total_size < pf->tx_buf_size)
 				return -ENOMEM;
 
@@ -3064,7 +3010,7 @@ hns3_get_tc_num(struct hns3_hw *hw)
 	uint8_t i;
 
 	for (i = 0; i < HNS3_MAX_TC_NUM; i++)
-		if (hw->hw_tc_map & BIT(i))
+		if (hw->dcb_info.hw_tc_map & BIT(i))
 			cnt++;
 	return cnt;
 }
@@ -3124,7 +3070,7 @@ hns3_get_no_pfc_priv_num(struct hns3_hw *hw,
 
 	for (i = 0; i < HNS3_MAX_TC_NUM; i++) {
 		priv = &buf_alloc->priv_buf[i];
-		if (hw->hw_tc_map & BIT(i) &&
+		if (hw->dcb_info.hw_tc_map & BIT(i) &&
 		    !(hw->dcb_info.hw_pfc_map & BIT(i)) && priv->enable)
 			cnt++;
 	}
@@ -3223,7 +3169,7 @@ hns3_rx_buf_calc_all(struct hns3_hw *hw, bool max,
 		priv->wl.high = 0;
 		priv->buf_size = 0;
 
-		if (!(hw->hw_tc_map & BIT(i)))
+		if (!(hw->dcb_info.hw_tc_map & BIT(i)))
 			continue;
 
 		priv->enable = 1;
@@ -3262,7 +3208,7 @@ hns3_drop_nopfc_buf_till_fit(struct hns3_hw *hw,
 	for (i = HNS3_MAX_TC_NUM - 1; i >= 0; i--) {
 		priv = &buf_alloc->priv_buf[i];
 		mask = BIT((uint8_t)i);
-		if (hw->hw_tc_map & mask &&
+		if (hw->dcb_info.hw_tc_map & mask &&
 		    !(hw->dcb_info.hw_pfc_map & mask)) {
 			/* Clear the no pfc TC private buffer */
 			priv->wl.low = 0;
@@ -3299,7 +3245,7 @@ hns3_drop_pfc_buf_till_fit(struct hns3_hw *hw,
 	for (i = HNS3_MAX_TC_NUM - 1; i >= 0; i--) {
 		priv = &buf_alloc->priv_buf[i];
 		mask = BIT((uint8_t)i);
-		if (hw->hw_tc_map & mask && hw->dcb_info.hw_pfc_map & mask) {
+		if (hw->dcb_info.hw_tc_map & mask && hw->dcb_info.hw_pfc_map & mask) {
 			/* Reduce the number of pfc TC with private buffer */
 			priv->wl.low = 0;
 			priv->enable = 0;
@@ -3357,7 +3303,7 @@ hns3_only_alloc_priv_buff(struct hns3_hw *hw,
 		priv->wl.high = 0;
 		priv->buf_size = 0;
 
-		if (!(hw->hw_tc_map & BIT(i)))
+		if (!(hw->dcb_info.hw_tc_map & BIT(i)))
 			continue;
 
 		priv->enable = 1;
@@ -4852,7 +4798,7 @@ hns3_get_link_duplex(uint32_t link_speeds)
 }
 
 static int
-hns3_set_copper_port_link_speed(struct hns3_hw *hw,
+hns3_copper_port_link_speed_cfg(struct hns3_hw *hw,
 				struct hns3_set_link_speed_cfg *cfg)
 {
 	struct hns3_cmd_desc desc[HNS3_PHY_PARAM_CFG_BD_NUM];
@@ -4884,6 +4830,33 @@ hns3_set_copper_port_link_speed(struct hns3_hw *hw,
 	}
 
 	return hns3_cmd_send(hw, desc, HNS3_PHY_PARAM_CFG_BD_NUM);
+}
+
+static int
+hns3_set_copper_port_link_speed(struct hns3_hw *hw,
+				struct hns3_set_link_speed_cfg *cfg)
+{
+#define HNS3_PHY_PARAM_CFG_RETRY_TIMES		10
+#define HNS3_PHY_PARAM_CFG_RETRY_DELAY_MS	100
+	uint32_t retry_cnt = 0;
+	int ret;
+
+	/*
+	 * The initialization of copper port contains the following two steps.
+	 * 1. Configure firmware takeover the PHY. The firmware will start an
+	 *    asynchronous task to initialize the PHY chip.
+	 * 2. Configure work speed and duplex.
+	 * In earlier versions of the firmware, when the asynchronous task is not
+	 * finished, the firmware will return -ENOTBLK in the second step. And this
+	 * will lead to driver failed to initialize. Here add retry for this case.
+	 */
+	ret = hns3_copper_port_link_speed_cfg(hw, cfg);
+	while (ret == -ENOTBLK && retry_cnt++ < HNS3_PHY_PARAM_CFG_RETRY_TIMES) {
+		rte_delay_ms(HNS3_PHY_PARAM_CFG_RETRY_DELAY_MS);
+		ret = hns3_copper_port_link_speed_cfg(hw, cfg);
+	}
+
+	return ret;
 }
 
 static int
@@ -5095,7 +5068,7 @@ hns3_dev_start(struct rte_eth_dev *dev)
 	 */
 	ret = hns3_start_all_txqs(dev);
 	if (ret)
-		goto map_rx_inter_err;
+		goto start_all_txqs_fail;
 
 	ret = hns3_start_all_rxqs(dev);
 	if (ret)
@@ -5128,6 +5101,8 @@ hns3_dev_start(struct rte_eth_dev *dev)
 
 start_all_rxqs_fail:
 	hns3_stop_all_txqs(dev);
+start_all_txqs_fail:
+	hns3_unmap_rx_interrupt(dev);
 map_rx_inter_err:
 	(void)hns3_do_stop(hns);
 do_start_fail:
@@ -5180,20 +5155,23 @@ hns3_dev_stop(struct rte_eth_dev *dev)
 	struct hns3_hw *hw = &hns->hw;
 
 	PMD_INIT_FUNC_TRACE();
+	if (rte_atomic_load_explicit(&hw->reset.resetting, rte_memory_order_relaxed) != 0) {
+		hns3_warn(hw, "device is resetting, stop operation is not allowed.");
+		return -EBUSY;
+	}
+
 	dev->data->dev_started = 0;
 
 	hw->adapter_state = HNS3_NIC_STOPPING;
 	hns3_stop_rxtx_datapath(dev);
 
 	rte_spinlock_lock(&hw->lock);
-	if (rte_atomic_load_explicit(&hw->reset.resetting, rte_memory_order_relaxed) == 0) {
-		hns3_tm_dev_stop_proc(hw);
-		hns3_config_mac_tnl_int(hw, false);
-		hns3_stop_tqps(hw);
-		hns3_do_stop(hns);
-		hns3_unmap_rx_interrupt(dev);
-		hw->adapter_state = HNS3_NIC_CONFIGURED;
-	}
+	hns3_tm_dev_stop_proc(hw);
+	hns3_config_mac_tnl_int(hw, false);
+	hns3_stop_tqps(hw);
+	hns3_do_stop(hns);
+	hns3_unmap_rx_interrupt(dev);
+	hw->adapter_state = HNS3_NIC_CONFIGURED;
 	hns3_rx_scattered_reset(dev);
 	rte_eal_alarm_cancel(hns3_service_handler, dev);
 	hns3_stop_report_lse(dev);
@@ -5282,18 +5260,18 @@ hns3_get_current_fc_mode(struct rte_eth_dev *dev)
 	struct hns3_mac *mac = &hw->mac;
 
 	/*
-	 * When the flow control mode is obtained, the device may not complete
-	 * auto-negotiation. It is necessary to wait for link establishment.
-	 */
-	(void)hns3_dev_link_update(dev, 1);
-
-	/*
 	 * If the link auto-negotiation of the nic is disabled, or the flow
 	 * control auto-negotiation is not supported, the forced flow control
 	 * mode is used.
 	 */
 	if (mac->link_autoneg == 0 || !pf->support_fc_autoneg)
 		return hw->requested_fc_mode;
+
+	/*
+	 * When the flow control mode is obtained, the device may not complete
+	 * auto-negotiation. It is necessary to wait for link establishment.
+	 */
+	(void)hns3_dev_link_update(dev, 1);
 
 	return hns3_get_autoneg_fc_mode(hw);
 }
@@ -5388,7 +5366,7 @@ hns3_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		return -EOPNOTSUPP;
 	}
 
-	if (hw->num_tc > 1 && !pf->support_multi_tc_pause) {
+	if (hw->dcb_info.num_tc > 1 && !pf->support_multi_tc_pause) {
 		hns3_err(hw, "in multi-TC scenarios, MAC pause is not supported.");
 		return -EOPNOTSUPP;
 	}
@@ -5444,38 +5422,6 @@ hns3_priority_flow_ctrl_set(struct rte_eth_dev *dev,
 	rte_spinlock_unlock(&hw->lock);
 
 	return ret;
-}
-
-static int
-hns3_get_dcb_info(struct rte_eth_dev *dev, struct rte_eth_dcb_info *dcb_info)
-{
-	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct hns3_pf *pf = HNS3_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	enum rte_eth_rx_mq_mode mq_mode = dev->data->dev_conf.rxmode.mq_mode;
-	int i;
-
-	rte_spinlock_lock(&hw->lock);
-	if ((uint32_t)mq_mode & RTE_ETH_MQ_RX_DCB_FLAG)
-		dcb_info->nb_tcs = pf->local_max_tc;
-	else
-		dcb_info->nb_tcs = 1;
-
-	for (i = 0; i < HNS3_MAX_USER_PRIO; i++)
-		dcb_info->prio_tc[i] = hw->dcb_info.prio_tc[i];
-	for (i = 0; i < dcb_info->nb_tcs; i++)
-		dcb_info->tc_bws[i] = hw->dcb_info.pg_info[0].tc_dwrr[i];
-
-	for (i = 0; i < hw->num_tc; i++) {
-		dcb_info->tc_queue.tc_rxq[0][i].base = hw->alloc_rss_size * i;
-		dcb_info->tc_queue.tc_txq[0][i].base =
-						hw->tc_queue[i].tqp_offset;
-		dcb_info->tc_queue.tc_rxq[0][i].nb_queue = hw->alloc_rss_size;
-		dcb_info->tc_queue.tc_txq[0][i].nb_queue =
-						hw->tc_queue[i].tqp_count;
-	}
-	rte_spinlock_unlock(&hw->lock);
-
-	return 0;
 }
 
 static int

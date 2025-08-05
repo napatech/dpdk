@@ -66,7 +66,7 @@ static int nthw_iic_reg_tx_fifo_write(nthw_iic_t *p, uint32_t data, bool start, 
 
 static int nthw_iic_reg_read_i2c_rx_fifo(nthw_iic_t *p, uint8_t *p_data)
 {
-	assert(p_data);
+	RTE_ASSERT(p_data);
 
 	*p_data = (uint8_t)nthw_field_get_updated(p->mp_fld_rx_fifo_rxdata);
 
@@ -91,7 +91,7 @@ static int nthw_iic_reg_enable(nthw_iic_t *p)
 
 static int nthw_iic_reg_busbusy(nthw_iic_t *p, bool *pb_flag)
 {
-	assert(pb_flag);
+	RTE_ASSERT(pb_flag);
 
 	*pb_flag = nthw_field_get_updated(p->mp_fld_sr_bb) ? true : false;
 
@@ -100,7 +100,7 @@ static int nthw_iic_reg_busbusy(nthw_iic_t *p, bool *pb_flag)
 
 static int nthw_iic_reg_rxfifo_empty(nthw_iic_t *p, bool *pb_flag)
 {
-	assert(pb_flag);
+	RTE_ASSERT(pb_flag);
 
 	*pb_flag = nthw_field_get_updated(p->mp_fld_sr_rxfifo_empty) ? true : false;
 
@@ -239,7 +239,7 @@ int nthw_iic_init(nthw_iic_t *p, nthw_fpga_t *p_fpga, int n_iic_instance,
 
 	/* Setup controller timing */
 	if (p->mn_iic_cycle_time) {
-		NT_LOG(DBG, NTHW, "%s: I2C%d: cycletime=%d", p_adapter_id_str,
+		NT_LOG(DBG, NTHW, "%s: I2C%d: cycletime=%" PRIu32 "", p_adapter_id_str,
 			p->mn_iic_instance, p->mn_iic_cycle_time);
 		nthw_iic_reg_set_timing(p, p->mn_iic_cycle_time);
 	}
@@ -253,10 +253,7 @@ int nthw_iic_init(nthw_iic_t *p, nthw_fpga_t *p_fpga, int n_iic_instance,
 
 void nthw_iic_delete(nthw_iic_t *p)
 {
-	if (p) {
-		memset(p, 0, sizeof(nthw_iic_t));
-		free(p);
-	}
+	free(p);
 }
 
 int nthw_iic_set_retry_params(nthw_iic_t *p, const int n_poll_delay, const int n_bus_ready_retry,

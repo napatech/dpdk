@@ -27,9 +27,9 @@ supports dynamic configuration of its queues.
 import random
 from typing import Callable, ClassVar, MutableSet
 
-from scapy.layers.inet import IP  # type: ignore[import-untyped]
-from scapy.layers.l2 import Ether  # type: ignore[import-untyped]
-from scapy.packet import Raw  # type: ignore[import-untyped]
+from scapy.layers.inet import IP
+from scapy.layers.l2 import Ether
+from scapy.packet import Raw
 
 from framework.exception import InteractiveCommandExecutionError
 from framework.params.testpmd import PortTopology, SimpleForwardingModes
@@ -84,7 +84,6 @@ def setup_and_teardown_test(
             queues_to_config.add(random.randint(1, self.number_of_queues - 1))
         unchanged_queues = set(range(self.number_of_queues)) - queues_to_config
         with TestPmdShell(
-            self.sut_node,
             port_topology=PortTopology.chained,
             rx_queues=self.number_of_queues,
             tx_queues=self.number_of_queues,
@@ -93,7 +92,14 @@ def setup_and_teardown_test(
                 testpmd.stop_port_queue(port_id, q, is_rx_testing)
             testpmd.set_forward_mode(SimpleForwardingModes.mac)
 
-            test_meth(self, port_id, queues_to_config, unchanged_queues, testpmd, is_rx_testing)
+            test_meth(
+                self,
+                port_id,
+                queues_to_config,
+                unchanged_queues,
+                testpmd,
+                is_rx_testing,
+            )
 
             for queue_id in queues_to_config:
                 testpmd.start_port_queue(port_id, queue_id, is_rx_testing)
@@ -111,6 +117,7 @@ def setup_and_teardown_test(
     return wrap
 
 
+@requires(NicCapability.PHYSICAL_FUNCTION)
 class TestDynamicQueueConf(TestSuite):
     """DPDK dynamic queue configuration test suite.
 

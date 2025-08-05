@@ -158,11 +158,9 @@ ulp_sc_mgr_deinit(struct bnxt_ulp_context *ctxt)
 	if (!ulp_sc_info)
 		return -EINVAL;
 
-	if (ulp_sc_info->stats_cache_tbl)
-		rte_free(ulp_sc_info->stats_cache_tbl);
+	rte_free(ulp_sc_info->stats_cache_tbl);
 
-	if (ulp_sc_info->read_data)
-		rte_free(ulp_sc_info->read_data);
+	rte_free(ulp_sc_info->read_data);
 
 	rte_free(ulp_sc_info);
 
@@ -224,6 +222,7 @@ static uint32_t ulp_stats_cache_main_loop(void *arg)
 			if (bnxt_ulp_cntxt_acquire_fdb_lock(ctxt))
 				break;
 
+			batch_info.enabled = false;
 			rc = tfc_mpc_batch_start(&batch_info);
 			if (unlikely(rc)) {
 				PMD_DRV_LOG_LINE(ERR,

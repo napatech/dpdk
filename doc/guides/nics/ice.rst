@@ -5,8 +5,14 @@ ICE Poll Mode Driver
 ======================
 
 The ice PMD (**librte_net_ice**) provides poll mode driver support for
-10/25/50/100 Gbps Intel® Ethernet 800 Series Network Adapters based on
-the Intel Ethernet Controller E810 and Intel Ethernet Connection E822/E823.
+10/25/50/100/200 Gbps Intel® Ethernet 800 Series Network Adapters based on
+the following controllers,
+
+- Intel Ethernet Controller E810
+- Intel Ethernet Connection E822
+- Intel Ethernet Connection E823
+- Intel Ethernet Connection E825
+- Intel Ethernet Controller E830
 
 Linux Prerequisites
 -------------------
@@ -52,6 +58,8 @@ The full list of in-tree and out-of-tree Linux kernel drivers from kernel.org
 and Linux distributions that were tested and verified
 are listed in the Tested Platforms section of the Release Notes for each release.
 
+For E810,
+
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    DPDK   | Kernel Driver | OS Default DDP  | COMMS DDP | Wireless DDP | Firmware  |
    +===========+===============+=================+===========+==============+===========+
@@ -83,6 +91,19 @@ are listed in the Tested Platforms section of the Release Notes for each release
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    24.11  |     1.15.4    |      1.3.36     |  1.3.46   |    1.3.14    |    4.6    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    25.03  |     1.16.3    |      1.3.39     |  1.3.53   |    1.3.14    |    4.7    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    25.07  |     2.2.8     |      1.3.43     |  1.3.55   |    1.3.23    |    4.8    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+
+For E830,
+
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    DPDK   | Kernel Driver | OS Default DDP  | COMMS DDP | Wireless DDP | Firmware  |
+   +===========+===============+=================+===========+==============+===========+
+   |    25.07  |     2.2.8     |      1.3.43     |  1.3.55   |    1.3.23    |    1.0    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+
 
 Dynamic Device Personalization (DDP) package loading
 ----------------------------------------------------
@@ -187,7 +208,7 @@ Runtime Configuration
 
   .. code-block:: console
 
-    dpdk-testpmd -c 0xff -- -i
+    dpdk-testpmd -l 0-7 -- -i
     port stop 0
     port detach 0
     port attach 18:00.0,proto_xtr='[(1,2-3,8-9):tcp,10-13:vlan]',field_offs=92,field_name=pmd_dyn
@@ -198,7 +219,7 @@ Runtime Configuration
 
   .. code-block:: console
 
-    dpdk-testpmd -c 0xff -- -i
+    dpdk-testpmd -l 0-7 -- -i
     port stop 0
     port detach 0
     port attach 18:00.0,proto_xtr=vlan,proto_xtr='[(1,2-3,8-9):tcp,10-23:ipv6]', \
@@ -291,7 +312,7 @@ Runtime Configuration
 
     -a 0000:88:00.0,hw_debug_mask=0x80 --log-level=pmd.net.ice.driver:8
 
-  These ICE_DBG_XXX are defined in ``drivers/net/ice/base/ice_type.h``.
+  These ICE_DBG_XXX are defined in ``drivers/net/intel/ice/base/ice_type.h``.
 
 - ``1PPS out support``
 
@@ -411,7 +432,35 @@ and add the ``--force-max-simd-bitwidth=64`` startup parameter to disable vector
 
 .. code-block:: console
 
-   examples/dpdk-ptpclient -c f -n 3 -a 0000:ec:00.1 --force-max-simd-bitwidth=64 -- -T 1 -p 0x1 -c 1
+   examples/dpdk-ptpclient -l 0-3 -n 3 -a 0000:ec:00.1 --force-max-simd-bitwidth=64 -- -T 1 -p 0x1 -c 1
+
+Tx Packet Pacing
+~~~~~~~~~~~~~~~~
+
+In order to deliver the timestamp with every packet,
+a special type of Tx Host Queue is used, the TS Queue.
+This feature is currently supported only in E830 adapters.
+
+The flag ``RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP`` is used to enable the feature.
+In order to deliver timestamps internally ``set txtimes`` is used,
+where inter burst and intra burst time interval in nsecs is provided.
+For example:
+
+.. code-block:: console
+
+   dpdk-testpmd -a 0000:31:00.0 -l 0-3 -- -i --tx-offloads=0x200000
+   set fwd txonly
+   set txtimes <inter_burst>,<intra_burst>
+   start
+
+Based on the Tx offload initialised during port configuration time,
+Tx Time Queue will be enabled during ``ice_tx_queue_setup()`` only for E830 adapters.
+The initial time should be fetched using ``rte_eth_read_clock()``.
+Further the timestamps should be calculated based on the inter burst and intra burst times,
+then storing it into proper format (refer to ``struct tx_timestamp`` in ``tx_only.c``),
+as to be placed in packet header.
+The timestamps should be copied to packet mbufs
+and manually adjust packet header length accordingly.
 
 Generic Flow Support
 ~~~~~~~~~~~~~~~~~~~~
@@ -511,7 +560,7 @@ Additional Options
 
 #. Bind the VF0, and run testpmd with 'cap=dcf' with port representor for VF 1 and 2::
 
-      dpdk-testpmd -l 22-25 -n 4 -a 18:01.0,cap=dcf,representor=vf[1-2] -- -i
+      dpdk-testpmd -l 22-25 -a 18:01.0,cap=dcf,representor=vf[1-2] -- -i
 
 #. Monitor the VF2 interface network traffic::
 
@@ -540,7 +589,7 @@ To start ``testpmd``, and add vlan 10 to port 0:
 
 .. code-block:: console
 
-    ./app/dpdk-testpmd -l 0-15 -n 4 -- -i
+    ./app/dpdk-testpmd -l 0-15 -- -i
     ...
 
     testpmd> rx_vlan add 10 0

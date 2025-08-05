@@ -22,7 +22,7 @@ struct hfu_nthw *hfu_nthw_new(void)
 	struct hfu_nthw *p = malloc(sizeof(struct hfu_nthw));
 
 	if (p)
-		(void)memset(p, 0, sizeof(*p));
+		memset(p, 0, sizeof(*p));
 
 	return p;
 }
@@ -30,7 +30,7 @@ struct hfu_nthw *hfu_nthw_new(void)
 void hfu_nthw_delete(struct hfu_nthw *p)
 {
 	if (p) {
-		(void)memset(p, 0, sizeof(*p));
+		memset(p, 0, sizeof(*p));
 		free(p);
 	}
 }
@@ -40,7 +40,7 @@ int hfu_nthw_init(struct hfu_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
 	const char *const p_adapter_id_str = p_fpga->p_fpga_info->mp_adapter_id_str;
 	nthw_module_t *p_mod = nthw_fpga_query_module(p_fpga, MOD_HFU, n_instance);
 
-	assert(n_instance >= 0 && n_instance < 256);
+	RTE_ASSERT(n_instance >= 0 && n_instance < 256);
 
 	if (p == NULL)
 		return p_mod == NULL ? -1 : 0;

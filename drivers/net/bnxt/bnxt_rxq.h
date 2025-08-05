@@ -8,6 +8,7 @@
 
 /* Maximum receive burst supported in vector mode. */
 #define RTE_BNXT_MAX_RX_BURST		64U
+#define RTE_BNXT_MAX_RX_BURST_TH2	296U
 
 /* Drop by default when receive desc is not available. */
 #define BNXT_DEFAULT_RX_DROP_EN		1
@@ -29,6 +30,7 @@ struct bnxt_rx_queue {
 	uint16_t		rxrearm_nb; /* number of descs to reinit. */
 	uint16_t		rxrearm_start; /* next desc index to reinit. */
 #endif
+	uint32_t		epoch;
 	uint16_t		port_id; /* Device port identifier */
 	uint8_t			crc_len; /* 0 if CRC stripped, 4 otherwise */
 	uint8_t			rx_deferred_start; /* not in global dev start */

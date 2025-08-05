@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2021 NXP
+ *   Copyright 2016-2021,2023-2024 NXP
  *
  */
 
 #include <time.h>
 #include <net/if.h>
 
+#include <eal_export.h>
 #include <rte_mbuf.h>
 #include <ethdev_driver.h>
 #include <rte_malloc.h>
@@ -28,6 +29,7 @@ dpaa2_distset_to_dpkg_profile_cfg(
 		uint64_t req_dist_set,
 		struct dpkg_profile_cfg *kg_cfg);
 
+RTE_EXPORT_SYMBOL(rte_pmd_dpaa2_set_custom_hash)
 int
 rte_pmd_dpaa2_set_custom_hash(uint16_t port_id,
 	uint16_t offset, uint8_t size)
@@ -490,7 +492,21 @@ dpaa2_attach_bp_list(struct dpaa2_dev_priv *priv,
 	 */
 
 	/* ... rx buffer layout ... */
-	tot_size = RTE_PKTMBUF_HEADROOM;
+	if (priv->flags & DPAA2_TX_DYNAMIC_CONF_ENABLE) {
+		int out_min_hdr_room, in_min_hdr_room;
+		/** Additional headroom layout for IPSec with TX configure
+		 * dynamic enabled.
+		 */
+		in_min_hdr_room = DPAA2_RX_MIN_FD_OFFSET +
+			DPAA2_SEC_SIMPLE_FD_IB_MIN;
+		out_min_hdr_room = DPAA2_DYN_TX_MIN_FD_OFFSET +
+			DPAA2_SEC_SIMPLE_FD_OB_MIN;
+		tot_size = RTE_MAX(in_min_hdr_room, out_min_hdr_room);
+		if (tot_size < RTE_PKTMBUF_HEADROOM)
+			tot_size = RTE_PKTMBUF_HEADROOM;
+	} else {
+		tot_size = RTE_PKTMBUF_HEADROOM;
+	}
 	tot_size = RTE_ALIGN_CEIL(tot_size, DPAA2_PACKET_LAYOUT_ALIGN);
 
 	memset(&layout, 0, sizeof(struct dpni_buffer_layout));

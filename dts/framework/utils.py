@@ -23,8 +23,8 @@ from enum import Enum, Flag
 from pathlib import Path
 from typing import Any, Callable
 
-from scapy.layers.inet import IP, TCP, UDP, Ether  # type: ignore[import-untyped]
-from scapy.packet import Packet  # type: ignore[import-untyped]
+from scapy.layers.inet import IP, TCP, UDP, Ether
+from scapy.packet import Packet
 
 from .exception import InternalError
 
@@ -32,7 +32,12 @@ REGEX_FOR_PCI_ADDRESS: str = r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}.[0-9
 _REGEX_FOR_COLON_OR_HYPHEN_SEP_MAC: str = r"(?:[\da-fA-F]{2}[:-]){5}[\da-fA-F]{2}"
 _REGEX_FOR_DOT_SEP_MAC: str = r"(?:[\da-fA-F]{4}.){2}[\da-fA-F]{4}"
 REGEX_FOR_MAC_ADDRESS: str = rf"{_REGEX_FOR_COLON_OR_HYPHEN_SEP_MAC}|{_REGEX_FOR_DOT_SEP_MAC}"
-REGEX_FOR_BASE64_ENCODING: str = "[-a-zA-Z0-9+\\/]*={0,3}"
+REGEX_FOR_IDENTIFIER: str = r"\w+(?:[\w -]*\w+)?"
+REGEX_FOR_PORT_LINK: str = (
+    rf"(?:(sut|tg)\.)?({REGEX_FOR_IDENTIFIER})"  # left side
+    r"\s+<->\s+"
+    rf"(?:(sut|tg)\.)?({REGEX_FOR_IDENTIFIER})"  # right side
+)
 
 
 def expand_range(range_str: str) -> list[int]:
@@ -177,7 +182,9 @@ def create_tarball(
         The path to the created tarball.
     """
 
-    def create_filter_function(exclude_patterns: str | list[str] | None) -> Callable | None:
+    def create_filter_function(
+        exclude_patterns: str | list[str] | None,
+    ) -> Callable | None:
         """Create a filter function based on the provided exclude patterns.
 
         Args:
@@ -268,7 +275,7 @@ def generate_random_packets(
     if payload_size < 0:
         raise InternalError(f"An invalid payload_size of {payload_size} was given.")
 
-    l4_factories = []
+    l4_factories: list[type[Packet]] = []
     if protocols & PacketProtocols.TCP:
         l4_factories.append(TCP)
     if protocols & PacketProtocols.UDP:
@@ -289,20 +296,6 @@ def generate_random_packets(
         return packet / random.randbytes(usable_payload_size)
 
     return [_make_packet() for _ in range(number_of)]
-
-
-class MultiInheritanceBaseClass:
-    """A base class for classes utilizing multiple inheritance.
-
-    This class enables it's subclasses to support both single and multiple inheritance by acting as
-    a stopping point in the tree of calls to the constructors of superclasses. This class is able
-    to exist at the end of the Method Resolution Order (MRO) so that subclasses can call
-    :meth:`super.__init__` without repercussion.
-    """
-
-    def __init__(self, *args, **kwargs) -> None:
-        """Call the init method of :class:`object`."""
-        super().__init__()
 
 
 def to_pascal_case(text: str) -> str:

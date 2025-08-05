@@ -8,7 +8,7 @@
 #include <fcntl.h>
 
 
-#include <linux/vduse.h>
+#include <uapi/linux/vduse.h>
 #include <linux/virtio_net.h>
 
 #include <sys/ioctl.h>
@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 
 #include <rte_common.h>
+#include <rte_eal_paging.h>
 #include <rte_thread.h>
 
 #include "fd_man.h"
@@ -117,7 +118,7 @@ static struct vhost_backend_ops vduse_backend_ops = {
 };
 
 static void
-vduse_control_queue_event(int fd, void *arg, int *remove __rte_unused)
+vduse_control_queue_event(int fd, void *arg, int *close __rte_unused)
 {
 	struct virtio_net *dev = arg;
 	uint64_t buf;
@@ -318,7 +319,8 @@ vduse_device_start(struct virtio_net *dev, bool reconnect)
 
 	dev->flags |= VIRTIO_DEV_READY;
 
-	if (dev->notify_ops->new_device(dev->vid) == 0)
+	if (!dev->notify_ops->new_device ||
+		dev->notify_ops->new_device(dev->vid) == 0)
 		dev->flags |= VIRTIO_DEV_RUNNING;
 
 	for (i = 0; i < dev->nr_vring; i++) {
@@ -350,7 +352,7 @@ vduse_device_stop(struct virtio_net *dev)
 }
 
 static void
-vduse_events_handler(int fd, void *arg, int *remove __rte_unused)
+vduse_events_handler(int fd, void *arg, int *close __rte_unused)
 {
 	struct virtio_net *dev = arg;
 	struct vduse_dev_request req;
@@ -563,14 +565,13 @@ vduse_reconnect_log_check(struct virtio_net *dev, uint64_t features, uint32_t to
 }
 
 static void
-vduse_reconnect_handler(int fd, void *arg, int *remove)
+vduse_reconnect_handler(int fd __rte_unused, void *arg, int *close)
 {
 	struct virtio_net *dev = arg;
 
 	vduse_device_start(dev, true);
 
-	close(fd);
-	*remove = 1;
+	*close = 1;
 }
 
 static int
@@ -690,7 +691,7 @@ vduse_device_create(const char *path, bool compliant_ol_flags)
 		dev_config->vendor_id = 0;
 		dev_config->features = features;
 		dev_config->vq_num = total_queues;
-		dev_config->vq_align = sysconf(_SC_PAGE_SIZE);
+		dev_config->vq_align = rte_mem_page_size();
 		dev_config->config_size = sizeof(struct virtio_net_config);
 		memcpy(dev_config->config, &vnet_config, sizeof(vnet_config));
 

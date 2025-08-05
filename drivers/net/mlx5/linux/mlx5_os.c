@@ -973,7 +973,7 @@ mlx5_queue_counter_id_prepare(struct rte_eth_dev *dev)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	void *ctx = priv->sh->cdev->ctx;
 
-	priv->q_counters = mlx5_devx_cmd_queue_counter_alloc(ctx);
+	priv->q_counters = mlx5_devx_cmd_queue_counter_alloc(ctx, NULL);
 	if (!priv->q_counters) {
 		struct ibv_cq *cq = mlx5_glue->create_cq(ctx, 1, NULL, NULL, 0);
 		struct ibv_wq *wq;
@@ -981,7 +981,6 @@ mlx5_queue_counter_id_prepare(struct rte_eth_dev *dev)
 		DRV_LOG(DEBUG, "Port %d queue counter object cannot be created "
 			"by DevX - fall-back to use the kernel driver global "
 			"queue counter.", dev->data->port_id);
-		priv->q_counters_allocation_failure = 1;
 
 		/* Create WQ by kernel and query its queue counter ID. */
 		if (cq) {
@@ -1268,7 +1267,7 @@ err_secondary:
 		/* IB doesn't allow more than 255 ports, must be Ethernet. */
 		err = mlx5_nl_port_state(nl_rdma,
 			spawn->phys_dev_name,
-			spawn->phys_port);
+			spawn->phys_port, &spawn->cdev->dev_info);
 		if (err < 0) {
 			DRV_LOG(INFO, "Failed to get netlink port state: %s",
 				strerror(rte_errno));
@@ -1604,7 +1603,8 @@ err_secondary:
 	eth_dev->rx_queue_count = mlx5_rx_queue_count;
 	/* Register MAC address. */
 	claim_zero(mlx5_mac_addr_add(eth_dev, &mac, 0, 0));
-	if (sh->dev_cap.vf && sh->config.vf_nl_en)
+	/* Sync mac addresses for PF or VF/SF if vf_nl_en is true */
+	if ((!sh->dev_cap.vf && !sh->dev_cap.sf) || sh->config.vf_nl_en)
 		mlx5_nl_mac_addr_sync(priv->nl_socket_route,
 				      mlx5_ifindex(eth_dev),
 				      eth_dev->data->mac_addrs,
@@ -1708,6 +1708,22 @@ err_secondary:
 	LIST_INIT(&priv->hw_ext_ctrl_flows);
 	if (priv->sh->config.dv_flow_en == 2) {
 #ifdef HAVE_MLX5_HWS_SUPPORT
+		/*
+		 * Unified FDB flag is only needed for the actions created on the transfer
+		 * port. proxy port. It is not needed on the following ports:
+		 *   1. NIC PF / VF / SF
+		 *   2. in Verbs or DV/DR mode
+		 *   3. with unsupported FW
+		 *   4. all representors in HWS
+		 */
+		priv->unified_fdb_en = !!priv->master && sh->cdev->config.hca_attr.fdb_unified_en;
+		/* Jump FDB Rx works only with unified FDB enabled. */
+		if (priv->unified_fdb_en)
+			priv->jump_fdb_rx_en = sh->cdev->config.hca_attr.jump_fdb_rx_en;
+		DRV_LOG(DEBUG, "port %u: unified FDB %s enabled, jump_fdb_rx %s enabled.",
+			eth_dev->data->port_id,
+			priv->unified_fdb_en ? "is" : "isn't",
+			priv->jump_fdb_rx_en ? "is" : "isn't");
 		if (priv->sh->config.dv_esw_en) {
 			uint32_t usable_bits;
 			uint32_t required_bits;
@@ -1897,6 +1913,8 @@ mlx5_dev_spawn_data_cmp(const void *a, const void *b)
  *   Netlink RDMA group socket handle.
  * @param[in] owner
  *   Representor owner PF index.
+ * @param[in] dev_info
+ *   Cached mlx5 device information.
  * @param[out] bond_info
  *   Pointer to bonding information.
  *
@@ -1908,6 +1926,7 @@ static int
 mlx5_device_bond_pci_match(const char *ibdev_name,
 			   const struct rte_pci_addr *pci_dev,
 			   int nl_rdma, uint16_t owner,
+			   struct mlx5_dev_info *dev_info,
 			   struct mlx5_bond_info *bond_info)
 {
 	char ifname[IF_NAMESIZE + 1];
@@ -1928,7 +1947,7 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 		return -1;
 	if (!strstr(ibdev_name, "bond"))
 		return -1;
-	np = mlx5_nl_portnum(nl_rdma, ibdev_name);
+	np = mlx5_nl_portnum(nl_rdma, ibdev_name, dev_info);
 	if (!np)
 		return -1;
 	if (mlx5_get_device_guid(pci_dev, cur_guid, sizeof(cur_guid)) < 0)
@@ -1940,7 +1959,7 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 	 */
 	for (i = 1; i <= np; ++i) {
 		/* Check whether Infiniband port is populated. */
-		ifindex = mlx5_nl_ifindex(nl_rdma, ibdev_name, i);
+		ifindex = mlx5_nl_ifindex(nl_rdma, ibdev_name, i, dev_info);
 		if (!ifindex)
 			continue;
 		if (!if_indextoname(ifindex, ifname))
@@ -1978,9 +1997,13 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 		if (!file)
 			break;
 		info.name_type = MLX5_PHYS_PORT_NAME_TYPE_NOTSET;
-		if (fscanf(file, "%32s", tmp_str) == 1)
+		if (fscanf(file, "%32s", tmp_str) == 1) {
 			mlx5_translate_port_name(tmp_str, &info);
-		fclose(file);
+			fclose(file);
+		} else {
+			fclose(file);
+			break;
+		}
 		/* Only process PF ports. */
 		if (info.name_type != MLX5_PHYS_PORT_NAME_TYPE_LEGACY &&
 		    info.name_type != MLX5_PHYS_PORT_NAME_TYPE_UPLINK)
@@ -2003,8 +2026,8 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 		if (ret != 1)
 			break;
 		/* Save bonding info. */
-		strncpy(bond_info->ports[info.port_name].ifname, ifname,
-			sizeof(bond_info->ports[0].ifname));
+		snprintf(bond_info->ports[info.port_name].ifname,
+			 sizeof(bond_info->ports[0].ifname), "%s", ifname);
 		bond_info->ports[info.port_name].pci_addr = pci_addr;
 		bond_info->ports[info.port_name].ifindex = ifindex;
 		bond_info->n_port++;
@@ -2033,6 +2056,7 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 		      pci_addr.function == owner)))
 			pf = info.port_name;
 	}
+	fclose(bond_file);
 	if (pf >= 0) {
 		/* Get bond interface info */
 		ret = mlx5_sysfs_bond_info(ifindex, &bond_info->ifindex,
@@ -2084,7 +2108,8 @@ close_nlsk_fd:
 #define SYSFS_MPESW_PARAM_MAX_LEN 16
 
 static int
-mlx5_sysfs_esw_multiport_get(struct ibv_device *ibv, struct rte_pci_addr *pci_addr, int *enabled)
+mlx5_sysfs_esw_multiport_get(struct ibv_device *ibv, struct rte_pci_addr *pci_addr, int *enabled,
+			     struct mlx5_dev_info *dev_info)
 {
 	int nl_rdma;
 	unsigned int n_ports;
@@ -2096,7 +2121,7 @@ mlx5_sysfs_esw_multiport_get(struct ibv_device *ibv, struct rte_pci_addr *pci_ad
 	nl_rdma = mlx5_nl_init(NETLINK_RDMA, 0);
 	if (nl_rdma < 0)
 		return nl_rdma;
-	n_ports = mlx5_nl_portnum(nl_rdma, ibv->name);
+	n_ports = mlx5_nl_portnum(nl_rdma, ibv->name, dev_info);
 	if (!n_ports) {
 		ret = -rte_errno;
 		goto close_nl_rdma;
@@ -2104,12 +2129,12 @@ mlx5_sysfs_esw_multiport_get(struct ibv_device *ibv, struct rte_pci_addr *pci_ad
 	for (i = 1; i <= n_ports; ++i) {
 		unsigned int ifindex;
 		char ifname[IF_NAMESIZE + 1];
-		struct rte_pci_addr if_pci_addr;
+		struct rte_pci_addr if_pci_addr = { 0 };
 		char mpesw[SYSFS_MPESW_PARAM_MAX_LEN + 1];
 		FILE *sysfs;
 		int n;
 
-		ifindex = mlx5_nl_ifindex(nl_rdma, ibv->name, i);
+		ifindex = mlx5_nl_ifindex(nl_rdma, ibv->name, i, dev_info);
 		if (!ifindex)
 			continue;
 		if (!if_indextoname(ifindex, ifname))
@@ -2151,7 +2176,8 @@ close_nl_rdma:
 }
 
 static int
-mlx5_is_mpesw_enabled(struct ibv_device *ibv, struct rte_pci_addr *ibv_pci_addr, int *enabled)
+mlx5_is_mpesw_enabled(struct ibv_device *ibv, struct rte_pci_addr *ibv_pci_addr, int *enabled,
+		      struct mlx5_dev_info *dev_info)
 {
 	/*
 	 * Try getting Multiport E-Switch state through netlink interface
@@ -2159,7 +2185,7 @@ mlx5_is_mpesw_enabled(struct ibv_device *ibv, struct rte_pci_addr *ibv_pci_addr,
 	 * assume that Multiport E-Switch is disabled and return an error.
 	 */
 	if (mlx5_nl_esw_multiport_get(ibv_pci_addr, enabled) >= 0 ||
-	    mlx5_sysfs_esw_multiport_get(ibv, ibv_pci_addr, enabled) >= 0)
+	    mlx5_sysfs_esw_multiport_get(ibv, ibv_pci_addr, enabled, dev_info) >= 0)
 		return 0;
 	DRV_LOG(DEBUG, "Unable to check MPESW state for IB device %s "
 		       "(PCI: " PCI_PRI_FMT ")",
@@ -2173,7 +2199,7 @@ mlx5_is_mpesw_enabled(struct ibv_device *ibv, struct rte_pci_addr *ibv_pci_addr,
 static int
 mlx5_device_mpesw_pci_match(struct ibv_device *ibv,
 			    const struct rte_pci_addr *owner_pci,
-			    int nl_rdma)
+			    int nl_rdma, struct mlx5_dev_info *dev_info)
 {
 	struct rte_pci_addr ibdev_pci_addr = { 0 };
 	char ifname[IF_NAMESIZE + 1] = { 0 };
@@ -2197,24 +2223,24 @@ mlx5_device_mpesw_pci_match(struct ibv_device *ibv,
 		return -1;
 	}
 	/* Check if IB device has MPESW enabled. */
-	if (mlx5_is_mpesw_enabled(ibv, &ibdev_pci_addr, &enabled))
+	if (mlx5_is_mpesw_enabled(ibv, &ibdev_pci_addr, &enabled, dev_info))
 		return -1;
 	if (!enabled)
 		return -1;
 	/* Iterate through IB ports to find MPESW master uplink port. */
 	if (nl_rdma < 0)
 		return -1;
-	np = mlx5_nl_portnum(nl_rdma, ibv->name);
+	np = mlx5_nl_portnum(nl_rdma, ibv->name, dev_info);
 	if (!np)
 		return -1;
 	for (i = 1; i <= np; ++i) {
-		struct rte_pci_addr pci_addr;
+		struct rte_pci_addr pci_addr = { 0 };
 		FILE *file;
 		char port_name[IF_NAMESIZE + 1];
 		struct mlx5_switch_info	info;
 
 		/* Check whether IB port has a corresponding netdev. */
-		ifindex = mlx5_nl_ifindex(nl_rdma, ibv->name, i);
+		ifindex = mlx5_nl_ifindex(nl_rdma, ibv->name, i, dev_info);
 		if (!ifindex)
 			continue;
 		if (!if_indextoname(ifindex, ifname))
@@ -2321,16 +2347,30 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 	 * matching ones, gathering into the list.
 	 */
 	struct ibv_device *ibv_match[ret + 1];
+	struct mlx5_dev_info *info, tmp_info[ret];
 	int nl_route = mlx5_nl_init(NETLINK_ROUTE, 0);
 	int nl_rdma = mlx5_nl_init(NETLINK_RDMA, 0);
 	unsigned int i;
 
+	memset(tmp_info, 0, sizeof(tmp_info));
 	while (ret-- > 0) {
 		struct rte_pci_addr pci_addr;
 
+		if (cdev->config.probe_opt && cdev->dev_info.port_num) {
+			if (strcmp(ibv_list[ret]->name, cdev->dev_info.ibname)) {
+				DRV_LOG(INFO, "Unmatched caching device \"%s\" \"%s\"",
+					cdev->dev_info.ibname, ibv_list[ret]->name);
+				continue;
+			}
+			info = &cdev->dev_info;
+		} else {
+			info = &tmp_info[ret];
+		}
 		DRV_LOG(DEBUG, "Checking device \"%s\"", ibv_list[ret]->name);
 		bd = mlx5_device_bond_pci_match(ibv_list[ret]->name, &owner_pci,
-						nl_rdma, owner_id, &bond_info);
+						nl_rdma, owner_id,
+						info,
+						&bond_info);
 		if (bd >= 0) {
 			/*
 			 * Bonding device detected. Only one match is allowed,
@@ -2356,7 +2396,8 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 			ibv_match[nd++] = ibv_list[ret];
 			break;
 		}
-		mpesw = mlx5_device_mpesw_pci_match(ibv_list[ret], &owner_pci, nl_rdma);
+		mpesw = mlx5_device_mpesw_pci_match(ibv_list[ret], &owner_pci, nl_rdma,
+						    info);
 		if (mpesw >= 0) {
 			/*
 			 * MPESW device detected. Only one matching IB device is allowed,
@@ -2380,10 +2421,18 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 		}
 		/* Bonding or MPESW device was not found. */
 		if (mlx5_get_pci_addr(ibv_list[ret]->ibdev_path,
-					&pci_addr))
+					&pci_addr)) {
+			if (tmp_info[ret].port_info != NULL)
+				mlx5_free(tmp_info[ret].port_info);
+			memset(&tmp_info[ret], 0, sizeof(tmp_info[0]));
 			continue;
-		if (rte_pci_addr_cmp(&owner_pci, &pci_addr) != 0)
+		}
+		if (rte_pci_addr_cmp(&owner_pci, &pci_addr) != 0) {
+			if (tmp_info[ret].port_info != NULL)
+				mlx5_free(tmp_info[ret].port_info);
+			memset(&tmp_info[ret], 0, sizeof(tmp_info[0]));
 			continue;
+		}
 		DRV_LOG(INFO, "PCI information matches for device \"%s\"",
 			ibv_list[ret]->name);
 		ibv_match[nd++] = ibv_list[ret];
@@ -2401,13 +2450,21 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 		goto exit;
 	}
 	if (nd == 1) {
+		if (!cdev->dev_info.port_num) {
+			for (i = 0; i < RTE_DIM(tmp_info); i++) {
+				if (tmp_info[i].port_num) {
+					cdev->dev_info = tmp_info[i];
+					break;
+				}
+			}
+		}
 		/*
 		 * Found single matching device may have multiple ports.
 		 * Each port may be representor, we have to check the port
 		 * number and check the representors existence.
 		 */
 		if (nl_rdma >= 0)
-			np = mlx5_nl_portnum(nl_rdma, ibv_match[0]->name);
+			np = mlx5_nl_portnum(nl_rdma, ibv_match[0]->name, &cdev->dev_info);
 		if (!np)
 			DRV_LOG(WARNING,
 				"Cannot get IB device \"%s\" ports number.",
@@ -2424,6 +2481,14 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 			ret = -rte_errno;
 			goto exit;
 		}
+	} else {
+		/* Can't handle one common device with multiple IB devices caching */
+		for (i = 0; i < RTE_DIM(tmp_info); i++) {
+			if (tmp_info[i].port_info != NULL)
+				mlx5_free(tmp_info[i].port_info);
+			memset(&tmp_info[i], 0, sizeof(tmp_info[0]));
+		}
+		DRV_LOG(INFO, "Cannot handle multiple IB devices info caching in single common device.");
 	}
 	/* Now we can determine the maximal amount of devices to be spawned. */
 	list = mlx5_malloc(MLX5_MEM_ZERO,
@@ -2457,7 +2522,7 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 			list[ns].mpesw_port = MLX5_MPESW_PORT_INVALID;
 			list[ns].ifindex = mlx5_nl_ifindex(nl_rdma,
 							   ibv_match[0]->name,
-							   i);
+							   i, &cdev->dev_info);
 			if (!list[ns].ifindex) {
 				/*
 				 * No network interface index found for the
@@ -2588,7 +2653,7 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 				list[ns].ifindex = mlx5_nl_ifindex
 							    (nl_rdma,
 							     ibv_match[i]->name,
-							     1);
+							     1, &cdev->dev_info);
 			if (!list[ns].ifindex) {
 				char ifname[IF_NAMESIZE];
 
@@ -2777,6 +2842,11 @@ exit:
 		mlx5_free(list);
 	MLX5_ASSERT(ibv_list);
 	mlx5_glue->free_device_list(ibv_list);
+	if (ret) {
+		if (cdev->dev_info.port_info != NULL)
+			mlx5_free(cdev->dev_info.port_info);
+		memset(&cdev->dev_info, 0, sizeof(cdev->dev_info));
+	}
 	return ret;
 }
 
@@ -2963,6 +3033,7 @@ mlx5_os_dev_shared_handler_install(struct mlx5_dev_ctx_shared *sh)
 {
 	struct ibv_context *ctx = sh->cdev->ctx;
 	int nlsk_fd;
+	uint8_t rdma_monitor_supp = 0;
 
 	sh->intr_handle = mlx5_os_interrupt_handler_create
 		(RTE_INTR_INSTANCE_F_SHARED, true,
@@ -2970,6 +3041,35 @@ mlx5_os_dev_shared_handler_install(struct mlx5_dev_ctx_shared *sh)
 	if (!sh->intr_handle) {
 		DRV_LOG(ERR, "Failed to allocate intr_handle.");
 		return;
+	}
+	if (sh->cdev->config.probe_opt &&
+	    sh->cdev->dev_info.port_num > 1 &&
+	    !sh->rdma_monitor_supp) {
+		nlsk_fd = mlx5_nl_rdma_monitor_init();
+		if (nlsk_fd < 0) {
+			DRV_LOG(ERR, "Failed to create a socket for RDMA Netlink events: %s",
+				rte_strerror(rte_errno));
+			return;
+		}
+		if (mlx5_nl_rdma_monitor_cap_get(nlsk_fd, &rdma_monitor_supp)) {
+			DRV_LOG(ERR, "Failed to query RDMA monitor support: %s",
+				rte_strerror(rte_errno));
+			close(nlsk_fd);
+			return;
+		}
+		sh->rdma_monitor_supp = rdma_monitor_supp;
+		if (sh->rdma_monitor_supp) {
+			sh->intr_handle_ib = mlx5_os_interrupt_handler_create
+				(RTE_INTR_INSTANCE_F_SHARED, true,
+				 nlsk_fd, mlx5_dev_interrupt_handler_ib, sh);
+			if (sh->intr_handle_ib == NULL) {
+				DRV_LOG(ERR, "Fail to allocate intr_handle");
+				close(nlsk_fd);
+				return;
+			}
+		} else {
+			close(nlsk_fd);
+		}
 	}
 	nlsk_fd = mlx5_nl_init(NETLINK_ROUTE, RTMGRP_LINK);
 	if (nlsk_fd < 0) {
@@ -3017,16 +3117,26 @@ mlx5_os_dev_shared_handler_install(struct mlx5_dev_ctx_shared *sh)
 void
 mlx5_os_dev_shared_handler_uninstall(struct mlx5_dev_ctx_shared *sh)
 {
+	int fd;
+
 	mlx5_os_interrupt_handler_destroy(sh->intr_handle,
 					  mlx5_dev_interrupt_handler, sh);
+	fd = rte_intr_fd_get(sh->intr_handle_nl);
 	mlx5_os_interrupt_handler_destroy(sh->intr_handle_nl,
 					  mlx5_dev_interrupt_handler_nl, sh);
+	if (fd >= 0)
+		close(fd);
 #ifdef HAVE_IBV_DEVX_ASYNC
 	mlx5_os_interrupt_handler_destroy(sh->intr_handle_devx,
 					  mlx5_dev_interrupt_handler_devx, sh);
 	if (sh->devx_comp)
 		mlx5_glue->devx_destroy_cmd_comp(sh->devx_comp);
 #endif
+	fd = rte_intr_fd_get(sh->intr_handle_ib);
+	mlx5_os_interrupt_handler_destroy(sh->intr_handle_ib,
+				  mlx5_dev_interrupt_handler_ib, sh);
+	if (fd >= 0)
+		close(fd);
 }
 
 /**
@@ -3052,23 +3162,11 @@ mlx5_os_read_dev_stat(struct mlx5_priv *priv, const char *ctr_name,
 	if (priv->sh) {
 		if (priv->q_counters != NULL &&
 		    strcmp(ctr_name, "out_of_buffer") == 0) {
-			if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-				DRV_LOG(WARNING, "DevX out_of_buffer counter is not supported in the secondary process");
-				rte_errno = ENOTSUP;
-				return 1;
-			}
-			return mlx5_devx_cmd_queue_counter_query
-					(priv->q_counters, 0, (uint32_t *)stat);
+			return mlx5_read_queue_counter(priv->q_counters, ctr_name, stat);
 		}
-		if (priv->q_counters_hairpin != NULL &&
+		if (priv->q_counter_hairpin != NULL &&
 		    strcmp(ctr_name, "hairpin_out_of_buffer") == 0) {
-			if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
-				DRV_LOG(WARNING, "DevX out_of_buffer counter is not supported in the secondary process");
-				rte_errno = ENOTSUP;
-				return 1;
-			}
-			return mlx5_devx_cmd_queue_counter_query
-					(priv->q_counters_hairpin, 0, (uint32_t *)stat);
+			return mlx5_read_queue_counter(priv->q_counter_hairpin, ctr_name, stat);
 		}
 		MKSTR(path, "%s/ports/%d/hw_counters/%s",
 		      priv->sh->ibdev_path,

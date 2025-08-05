@@ -28,7 +28,7 @@ static struct rte_flow nt_flows[MAX_RTE_FLOWS];
 rte_spinlock_t flow_lock = RTE_SPINLOCK_INITIALIZER;
 static struct rte_flow nt_flows[MAX_RTE_FLOWS];
 
-int interpret_raw_data(uint8_t *data, uint8_t *preserve, int size, struct rte_flow_item *out)
+int nthw_interpret_raw_data(uint8_t *data, uint8_t *preserve, int size, struct rte_flow_item *out)
 {
 	int hdri = 0;
 	int pkti = 0;
@@ -246,25 +246,13 @@ interpret_end:
 	return hdri + 1;
 }
 
-int convert_error(struct rte_flow_error *error, struct rte_flow_error *rte_flow_error)
+int nthw_create_attr(struct cnv_attr_s *attribute, const struct rte_flow_attr *attr)
 {
-	if (error) {
-		error->cause = NULL;
-		error->message = rte_flow_error->message;
-
-		if (rte_flow_error->type == RTE_FLOW_ERROR_TYPE_NONE ||
-			rte_flow_error->type == RTE_FLOW_ERROR_TYPE_NONE)
-			error->type = RTE_FLOW_ERROR_TYPE_NONE;
-
-		else
-			error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
+	if (!attribute) {
+		NT_LOG(ERR, FILTER, "ERROR no attribute to iterate!");
+		return -1;
 	}
 
-	return 0;
-}
-
-int create_attr(struct cnv_attr_s *attribute, const struct rte_flow_attr *attr)
-{
 	memset(&attribute->attr, 0x0, sizeof(struct rte_flow_attr));
 
 	if (attr) {
@@ -275,7 +263,7 @@ int create_attr(struct cnv_attr_s *attribute, const struct rte_flow_attr *attr)
 	return 0;
 }
 
-int create_match_elements(struct cnv_match_s *match, const struct rte_flow_item items[],
+int nthw_create_match_elements(struct cnv_match_s *match, const struct rte_flow_item items[],
 	int max_elem)
 {
 	int eidx = 0;
@@ -325,7 +313,7 @@ int create_match_elements(struct cnv_match_s *match, const struct rte_flow_item 
 	return (type >= 0) ? 0 : -1;
 }
 
-int create_action_elements_inline(struct cnv_action_s *action,
+int nthw_create_action_elements_inline(struct cnv_action_s *action,
 	const struct rte_flow_action actions[],
 	int max_elem,
 	uint32_t queue_offset)
@@ -372,8 +360,8 @@ int create_action_elements_inline(struct cnv_action_s *action,
 				case RTE_ETH_HASH_FUNCTION_MAX:
 				default:
 					NT_LOG(ERR, FILTER,
-						"RTE ACTION RSS - unsupported function: %u",
-						rss->func);
+						"RTE ACTION RSS - unsupported function: %i",
+						(int)rss->func);
 					return -1;
 				}
 
@@ -419,8 +407,8 @@ int create_action_elements_inline(struct cnv_action_s *action,
 				const struct rte_flow_action_raw_decap *decap =
 					(const struct rte_flow_action_raw_decap *)actions[aidx]
 					.conf;
-				int item_count = interpret_raw_data(decap->data, NULL, decap->size,
-					action->decap.items);
+				int item_count = nthw_interpret_raw_data(decap->data, NULL,
+					decap->size, action->decap.items);
 
 				if (item_count < 0)
 					return item_count;
@@ -435,8 +423,8 @@ int create_action_elements_inline(struct cnv_action_s *action,
 				const struct rte_flow_action_raw_encap *encap =
 					(const struct rte_flow_action_raw_encap *)actions[aidx]
 					.conf;
-				int item_count = interpret_raw_data(encap->data, encap->preserve,
-					encap->size, action->encap.items);
+				int item_count = nthw_interpret_raw_data(encap->data,
+					encap->preserve, encap->size, action->encap.items);
 
 				if (item_count < 0)
 					return item_count;
@@ -495,20 +483,18 @@ static int convert_flow(struct rte_eth_dev *eth_dev,
 	struct rte_flow_error *error)
 {
 	struct pmd_internals *internals = eth_dev->data->dev_private;
-	struct fpga_info_s *fpga_info = &internals->p_drv->ntdrv.adapter_info.fpga_info;
-
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE, .message = "none" };
-	uint32_t queue_offset = 0;
-
-	/* Set initial error */
-	convert_error(error, &flow_error);
 
 	if (!internals) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 			"Missing eth_dev");
 		return -1;
 	}
+
+	struct fpga_info_s *fpga_info = &internals->p_drv->ntdrv.adapter_info.fpga_info;
+
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
+	uint32_t queue_offset = 0;
 
 	if (internals->type == PORT_TYPE_OVERRIDE && internals->vpq_nb_vq > 0) {
 		/*
@@ -519,19 +505,19 @@ static int convert_flow(struct rte_eth_dev *eth_dev,
 		queue_offset = internals->vpq[0].id;
 	}
 
-	if (create_attr(attribute, attr) != 0) {
+	if (nthw_create_attr(attribute, attr) != 0) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ATTR, NULL, "Error in attr");
 		return -1;
 	}
 
-	if (create_match_elements(match, items, MAX_ELEMENTS) != 0) {
+	if (nthw_create_match_elements(match, items, MAX_ELEMENTS) != 0) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM, NULL,
 			"Error in items");
 		return -1;
 	}
 
 	if (fpga_info->profile == FPGA_INFO_PROFILE_INLINE) {
-		if (create_action_elements_inline(action, actions,
+		if (nthw_create_action_elements_inline(action, actions,
 			MAX_ACTIONS, queue_offset) != 0) {
 			rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 				"Error in actions");
@@ -559,23 +545,19 @@ eth_flow_destroy(struct rte_eth_dev *eth_dev, struct rte_flow *flow, struct rte_
 
 	struct pmd_internals *internals = eth_dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE, .message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 	int res = 0;
-	/* Set initial error */
-	convert_error(error, &flow_error);
 
 	if (!flow)
 		return 0;
 
 	if (is_flow_handle_typecast(flow)) {
-		res = flow_filter_ops->flow_destroy(internals->flw_dev, (void *)flow, &flow_error);
-		convert_error(error, &flow_error);
+		res = flow_filter_ops->flow_destroy(internals->flw_dev, (void *)flow, error);
 
 	} else {
 		res = flow_filter_ops->flow_destroy(internals->flw_dev, flow->flw_hdl,
-			&flow_error);
-		convert_error(error, &flow_error);
+			error);
 
 		rte_spinlock_lock(&flow_lock);
 		flow->used = 0;
@@ -606,8 +588,8 @@ static struct rte_flow *eth_flow_create(struct rte_eth_dev *eth_dev,
 	struct cnv_match_s match = { 0 };
 	struct cnv_action_s action = { 0 };
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE, .message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 	uint32_t flow_stat_id = 0;
 
 	if (convert_flow(eth_dev, attr, items, actions, &attribute, &match, &action, error) < 0)
@@ -620,8 +602,7 @@ static struct rte_flow *eth_flow_create(struct rte_eth_dev *eth_dev,
 		void *flw_hdl = flow_filter_ops->flow_create(internals->flw_dev, &attribute.attr,
 			attribute.forced_vlan_vid, attribute.caller_id,
 			match.rte_flow_item, action.flow_actions,
-			&flow_error);
-		convert_error(error, &flow_error);
+			error);
 		return (struct rte_flow *)flw_hdl;
 	}
 
@@ -648,8 +629,7 @@ static struct rte_flow *eth_flow_create(struct rte_eth_dev *eth_dev,
 		flow->flw_hdl = flow_filter_ops->flow_create(internals->flw_dev, &attribute.attr,
 			attribute.forced_vlan_vid, attribute.caller_id,
 			match.rte_flow_item, action.flow_actions,
-			&flow_error);
-		convert_error(error, &flow_error);
+			error);
 
 		if (!flow->flw_hdl) {
 			rte_spinlock_lock(&flow_lock);
@@ -678,14 +658,14 @@ static int eth_flow_flush(struct rte_eth_dev *eth_dev, struct rte_flow_error *er
 
 	struct pmd_internals *internals = eth_dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE, .message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 	int res = 0;
 	/* Main application caller_id is port_id shifted above VDPA ports */
 	uint16_t caller_id = get_caller_id(eth_dev->data->port_id);
 
 	if (internals->flw_dev) {
-		res = flow_filter_ops->flow_flush(internals->flw_dev, caller_id, &flow_error);
+		res = flow_filter_ops->flow_flush(internals->flw_dev, caller_id, error);
 		rte_spinlock_lock(&flow_lock);
 
 		for (int flow = 0; flow < MAX_RTE_FLOWS; flow++) {
@@ -701,8 +681,6 @@ static int eth_flow_flush(struct rte_eth_dev *eth_dev, struct rte_flow_error *er
 
 		rte_spinlock_unlock(&flow_lock);
 	}
-
-	convert_error(error, &flow_error);
 
 	return res;
 }
@@ -721,8 +699,8 @@ static int eth_flow_actions_update(struct rte_eth_dev *eth_dev,
 
 	struct pmd_internals *internals = eth_dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 	int res = -1;
 
 	if (internals->flw_dev) {
@@ -744,7 +722,7 @@ static int eth_flow_actions_update(struct rte_eth_dev *eth_dev,
 				queue_offset = dev_private->vpq[0].id;
 			}
 
-			if (create_action_elements_inline(&action, actions, MAX_ACTIONS,
+			if (nthw_create_action_elements_inline(&action, actions, MAX_ACTIONS,
 					queue_offset) != 0) {
 				rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					"Error in actions");
@@ -756,17 +734,15 @@ static int eth_flow_actions_update(struct rte_eth_dev *eth_dev,
 			res = flow_filter_ops->flow_actions_update(internals->flw_dev,
 					(void *)flow,
 					action.flow_actions,
-					&flow_error);
+					error);
 
 		} else {
 			res = flow_filter_ops->flow_actions_update(internals->flw_dev,
 					flow->flw_hdl,
 					action.flow_actions,
-					&flow_error);
+					error);
 		}
 	}
-
-	convert_error(error, &flow_error);
 
 	return res;
 }
@@ -785,17 +761,16 @@ static int eth_flow_dev_dump(struct rte_eth_dev *eth_dev,
 
 	struct pmd_internals *internals = eth_dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE, .message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	uint16_t caller_id = get_caller_id(eth_dev->data->port_id);
 
 	int res = flow_filter_ops->flow_dev_dump(internals->flw_dev,
 			is_flow_handle_typecast(flow) ? (void *)flow
 			: flow->flw_hdl,
-			caller_id, file, &flow_error);
+			caller_id, file, error);
 
-	convert_error(error, &flow_error);
 	return res;
 }
 
@@ -813,16 +788,14 @@ static int eth_flow_get_aged_flows(struct rte_eth_dev *eth_dev,
 
 	struct pmd_internals *internals = eth_dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	uint16_t caller_id = get_caller_id(eth_dev->data->port_id);
 
 	int res = flow_filter_ops->flow_get_aged_flows(internals->flw_dev, caller_id, context,
-			nb_contexts, &flow_error);
+			nb_contexts, error);
 
-	convert_error(error, &flow_error);
 	return res;
 }
 
@@ -842,17 +815,15 @@ static int eth_flow_info_get(struct rte_eth_dev *dev, struct rte_flow_port_info 
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	int res = flow_filter_ops->flow_info_get(internals->flw_dev,
 			get_caller_id(dev->data->port_id),
 			(struct rte_flow_port_info *)port_info,
 			(struct rte_flow_queue_info *)queue_info,
-			&flow_error);
+			error);
 
-	convert_error(error, &flow_error);
 	return res;
 }
 
@@ -869,18 +840,16 @@ static int eth_flow_configure(struct rte_eth_dev *dev, const struct rte_flow_por
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = {
-		.type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	int res = flow_filter_ops->flow_configure(internals->flw_dev,
 			get_caller_id(dev->data->port_id),
 			(const struct rte_flow_port_attr *)port_attr,
 			nb_queue,
 			(const struct rte_flow_queue_attr **)queue_attr,
-			&flow_error);
+			error);
 
-	convert_error(error, &flow_error);
 	return res;
 }
 
@@ -897,8 +866,8 @@ static struct rte_flow_pattern_template *eth_flow_pattern_template_create(struct
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	struct cnv_match_s match = { 0 };
 	struct rte_flow_pattern_template_attr attr = {
@@ -910,7 +879,7 @@ static struct rte_flow_pattern_template *eth_flow_pattern_template_create(struct
 
 	uint16_t caller_id = get_caller_id(dev->data->port_id);
 
-	if (create_match_elements(&match, pattern, MAX_ELEMENTS) != 0) {
+	if (nthw_create_match_elements(&match, pattern, MAX_ELEMENTS) != 0) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM, NULL,
 			"Error in pattern");
 		return NULL;
@@ -918,9 +887,8 @@ static struct rte_flow_pattern_template *eth_flow_pattern_template_create(struct
 
 	struct flow_pattern_template *res =
 		flow_filter_ops->flow_pattern_template_create(internals->flw_dev, &attr, caller_id,
-			match.rte_flow_item, &flow_error);
+			match.rte_flow_item, error);
 
-	convert_error(error, &flow_error);
 	return (struct rte_flow_pattern_template *)res;
 }
 
@@ -937,15 +905,14 @@ static int eth_flow_pattern_template_destroy(struct rte_eth_dev *dev,
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	int res = flow_filter_ops->flow_pattern_template_destroy(internals->flw_dev,
 			(struct flow_pattern_template *)
 			pattern_template,
-			&rte_flow_error);
+			error);
 
-	convert_error(error, &rte_flow_error);
 	return res;
 }
 
@@ -964,8 +931,8 @@ static struct rte_flow_actions_template *eth_flow_actions_template_create(struct
 	struct pmd_internals *internals = dev->data->dev_private;
 
 	struct fpga_info_s *fpga_info = &internals->p_drv->ntdrv.adapter_info.fpga_info;
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	struct cnv_action_s action = { 0 };
 	struct cnv_action_s mask = { 0 };
@@ -982,14 +949,16 @@ static struct rte_flow_actions_template *eth_flow_actions_template_create(struct
 		if (internals->type == PORT_TYPE_OVERRIDE && internals->vpq_nb_vq > 0)
 			queue_offset = internals->vpq[0].id;
 
-		if (create_action_elements_inline(&action, actions, MAX_ACTIONS, queue_offset) !=
-			0) {
+		if (nthw_create_action_elements_inline(&action, actions,
+				MAX_ACTIONS,
+				queue_offset) != 0) {
 			rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 				"Error in actions");
 			return NULL;
 		}
 
-		if (create_action_elements_inline(&mask, masks, MAX_ACTIONS, queue_offset) != 0) {
+		if (nthw_create_action_elements_inline(&mask, masks,
+				MAX_ACTIONS, queue_offset) != 0) {
 			rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 				"Error in masks");
 			return NULL;
@@ -1004,9 +973,8 @@ static struct rte_flow_actions_template *eth_flow_actions_template_create(struct
 	struct flow_actions_template *res =
 		flow_filter_ops->flow_actions_template_create(internals->flw_dev, &attr, caller_id,
 			action.flow_actions,
-			mask.flow_actions, &rte_flow_error);
+			mask.flow_actions, error);
 
-	convert_error(error, &rte_flow_error);
 	return (struct rte_flow_actions_template *)res;
 }
 
@@ -1023,15 +991,14 @@ static int eth_flow_actions_template_destroy(struct rte_eth_dev *dev,
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	int res = flow_filter_ops->flow_actions_template_destroy(internals->flw_dev,
 			(struct flow_actions_template *)
 			actions_template,
-			&rte_flow_error);
+			error);
 
-	convert_error(error, &rte_flow_error);
 	return res;
 }
 
@@ -1050,8 +1017,8 @@ static struct rte_flow_template_table *eth_flow_template_table_create(struct rte
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	struct rte_flow_template_table_attr attr = {
 		.flow_attr = {
@@ -1071,9 +1038,8 @@ static struct rte_flow_template_table *eth_flow_template_table_create(struct rte
 			forced_vlan_vid, caller_id,
 			(struct flow_pattern_template **)pattern_templates,
 			nb_pattern_templates, (struct flow_actions_template **)actions_templates,
-			nb_actions_templates, &rte_flow_error);
+			nb_actions_templates, error);
 
-	convert_error(error, &rte_flow_error);
 	return (struct rte_flow_template_table *)res;
 }
 
@@ -1090,15 +1056,14 @@ static int eth_flow_template_table_destroy(struct rte_eth_dev *dev,
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	int res = flow_filter_ops->flow_template_table_destroy(internals->flw_dev,
 			(struct flow_template_table *)
 			template_table,
-			&rte_flow_error);
+			error);
 
-	convert_error(error, &rte_flow_error);
 	return res;
 }
 
@@ -1118,13 +1083,13 @@ static struct rte_flow *eth_flow_async_create(struct rte_eth_dev *dev, uint32_t 
 	struct pmd_internals *internals = dev->data->dev_private;
 
 	struct fpga_info_s *fpga_info = &internals->p_drv->ntdrv.adapter_info.fpga_info;
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	struct cnv_action_s action = { 0 };
 	struct cnv_match_s match = { 0 };
 
-	if (create_match_elements(&match, pattern, MAX_ELEMENTS) != 0) {
+	if (nthw_create_match_elements(&match, pattern, MAX_ELEMENTS) != 0) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM, NULL,
 			"Error in pattern");
 		return NULL;
@@ -1136,8 +1101,8 @@ static struct rte_flow *eth_flow_async_create(struct rte_eth_dev *dev, uint32_t 
 		if (internals->type == PORT_TYPE_OVERRIDE && internals->vpq_nb_vq > 0)
 			queue_offset = internals->vpq[0].id;
 
-		if (create_action_elements_inline(&action, actions, MAX_ACTIONS, queue_offset) !=
-			0) {
+		if (nthw_create_action_elements_inline(&action, actions,
+				MAX_ACTIONS, queue_offset) != 0) {
 			rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 				"Error in actions");
 			return NULL;
@@ -1159,9 +1124,8 @@ static struct rte_flow *eth_flow_async_create(struct rte_eth_dev *dev, uint32_t 
 			action.flow_actions,
 			actions_template_index,
 			user_data,
-			&rte_flow_error);
+			error);
 
-	convert_error(error, &rte_flow_error);
 	return (struct rte_flow *)res;
 }
 
@@ -1178,17 +1142,16 @@ static int eth_flow_async_destroy(struct rte_eth_dev *dev, uint32_t queue_id,
 
 	struct pmd_internals *internals = dev->data->dev_private;
 
-	static struct rte_flow_error rte_flow_error = { .type = RTE_FLOW_ERROR_TYPE_NONE,
-		.message = "none" };
+	error->type = RTE_FLOW_ERROR_TYPE_NONE;
+	error->message = "none";
 
 	int res = flow_filter_ops->flow_async_destroy(internals->flw_dev,
 			queue_id,
 			(const struct rte_flow_op_attr *)op_attr,
 			(struct flow_handle *)flow,
 			user_data,
-			&rte_flow_error);
+			error);
 
-	convert_error(error, &rte_flow_error);
 	return res;
 }
 
@@ -1198,13 +1161,13 @@ static int poll_statistics(struct pmd_internals *internals)
 	struct drv_s *p_drv = internals->p_drv;
 	struct ntdrv_4ga_s *p_nt_drv = &p_drv->ntdrv;
 	nt4ga_stat_t *p_nt4ga_stat = &p_nt_drv->adapter_info.nt4ga_stat;
-	const int if_index = internals->n_intf_no;
+	const int n_intf_no = internals->n_intf_no;
 	uint64_t last_stat_rtc = 0;
 
-	if (!p_nt4ga_stat || if_index < 0 || if_index > NUM_ADAPTER_PORTS_MAX)
+	if (!p_nt4ga_stat || n_intf_no < 0 || n_intf_no >= NUM_ADAPTER_PORTS_MAX)
 		return -1;
 
-	assert(rte_tsc_freq > 0);
+	RTE_ASSERT(rte_tsc_freq > 0);
 
 	rte_spinlock_lock(&hwlock);
 
@@ -1227,36 +1190,36 @@ static int poll_statistics(struct pmd_internals *internals)
 	 * Add the RX statistics increments since last time we polled.
 	 * (No difference if physical or virtual port)
 	 */
-	internals->rxq_scg[0].rx_pkts += p_nt4ga_stat->a_port_rx_packets_total[if_index] -
-		p_nt4ga_stat->a_port_rx_packets_base[if_index];
-	internals->rxq_scg[0].rx_bytes += p_nt4ga_stat->a_port_rx_octets_total[if_index] -
-		p_nt4ga_stat->a_port_rx_octets_base[if_index];
+	internals->rxq_scg[0].rx_pkts += p_nt4ga_stat->a_port_rx_packets_total[n_intf_no] -
+		p_nt4ga_stat->a_port_rx_packets_base[n_intf_no];
+	internals->rxq_scg[0].rx_bytes += p_nt4ga_stat->a_port_rx_octets_total[n_intf_no] -
+		p_nt4ga_stat->a_port_rx_octets_base[n_intf_no];
 	internals->rxq_scg[0].err_pkts += 0;
-	internals->rx_missed += p_nt4ga_stat->a_port_rx_drops_total[if_index] -
-		p_nt4ga_stat->a_port_rx_drops_base[if_index];
+	internals->rx_missed += p_nt4ga_stat->a_port_rx_drops_total[n_intf_no] -
+		p_nt4ga_stat->a_port_rx_drops_base[n_intf_no];
 
 	/* Update the increment bases */
-	p_nt4ga_stat->a_port_rx_packets_base[if_index] =
-		p_nt4ga_stat->a_port_rx_packets_total[if_index];
-	p_nt4ga_stat->a_port_rx_octets_base[if_index] =
-		p_nt4ga_stat->a_port_rx_octets_total[if_index];
-	p_nt4ga_stat->a_port_rx_drops_base[if_index] =
-		p_nt4ga_stat->a_port_rx_drops_total[if_index];
+	p_nt4ga_stat->a_port_rx_packets_base[n_intf_no] =
+		p_nt4ga_stat->a_port_rx_packets_total[n_intf_no];
+	p_nt4ga_stat->a_port_rx_octets_base[n_intf_no] =
+		p_nt4ga_stat->a_port_rx_octets_total[n_intf_no];
+	p_nt4ga_stat->a_port_rx_drops_base[n_intf_no] =
+		p_nt4ga_stat->a_port_rx_drops_total[n_intf_no];
 
 	/* Tx (here we must distinguish between physical and virtual ports) */
 	if (internals->type == PORT_TYPE_PHYSICAL) {
 		/* Add the statistics increments since last time we polled */
-		internals->txq_scg[0].tx_pkts += p_nt4ga_stat->a_port_tx_packets_total[if_index] -
-			p_nt4ga_stat->a_port_tx_packets_base[if_index];
-		internals->txq_scg[0].tx_bytes += p_nt4ga_stat->a_port_tx_octets_total[if_index] -
-			p_nt4ga_stat->a_port_tx_octets_base[if_index];
+		internals->txq_scg[0].tx_pkts += p_nt4ga_stat->a_port_tx_packets_total[n_intf_no] -
+			p_nt4ga_stat->a_port_tx_packets_base[n_intf_no];
+		internals->txq_scg[0].tx_bytes += p_nt4ga_stat->a_port_tx_octets_total[n_intf_no] -
+			p_nt4ga_stat->a_port_tx_octets_base[n_intf_no];
 		internals->txq_scg[0].err_pkts += 0;
 
 		/* Update the increment bases */
-		p_nt4ga_stat->a_port_tx_packets_base[if_index] =
-			p_nt4ga_stat->a_port_tx_packets_total[if_index];
-		p_nt4ga_stat->a_port_tx_octets_base[if_index] =
-			p_nt4ga_stat->a_port_tx_octets_total[if_index];
+		p_nt4ga_stat->a_port_tx_packets_base[n_intf_no] =
+			p_nt4ga_stat->a_port_tx_packets_total[n_intf_no];
+		p_nt4ga_stat->a_port_tx_octets_base[n_intf_no] =
+			p_nt4ga_stat->a_port_tx_octets_total[n_intf_no];
 	}
 
 	/* Globally only once a second */
@@ -1330,7 +1293,7 @@ static const struct rte_flow_ops dev_flow_ops = {
 	.template_table_destroy = eth_flow_template_table_destroy,
 };
 
-void dev_flow_init(void)
+void nthw_dev_flow_init(void)
 {
 	register_dev_flow_ops(&dev_flow_ops);
 }
@@ -1340,7 +1303,7 @@ static struct rte_flow_fp_ops async_dev_flow_ops = {
 	.async_destroy = eth_flow_async_destroy,
 };
 
-void dev_fp_flow_init(void)
+void nthw_dev_fp_flow_init(void)
 {
 	register_dev_fp_flow_ops(&async_dev_flow_ops);
 }

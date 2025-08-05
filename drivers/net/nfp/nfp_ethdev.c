@@ -472,6 +472,9 @@ nfp_net_start(struct rte_eth_dev *dev)
 	if ((cap_extend & NFP_NET_CFG_CTRL_FLOW_STEER) != 0)
 		ctrl_extend |= NFP_NET_CFG_CTRL_FLOW_STEER;
 
+	if ((cap_extend & NFP_NET_CFG_CTRL_MULTI_PF) != 0 && pf_dev->multi_pf.enabled)
+		ctrl_extend |= NFP_NET_CFG_CTRL_MULTI_PF;
+
 	update = NFP_NET_CFG_UPDATE_GEN;
 	if (nfp_ext_reconfig(hw, ctrl_extend, update) != 0)
 		return -EIO;
@@ -985,6 +988,8 @@ static const struct eth_dev_ops nfp_net_eth_dev_ops = {
 	.get_module_eeprom      = nfp_net_get_module_eeprom,
 	.dev_led_on             = nfp_net_led_on,
 	.dev_led_off            = nfp_net_led_off,
+	.rx_burst_mode_get      = nfp_net_rx_burst_mode_get,
+	.tx_burst_mode_get      = nfp_net_tx_burst_mode_get,
 };
 
 static inline void
@@ -1529,16 +1534,16 @@ nfp_fw_reload_for_single_pf(struct nfp_nsp *nsp,
 {
 	int ret;
 
-	if (policy == NFP_NSP_APP_FW_LOAD_FLASH && nfp_nsp_has_stored_fw_load(nsp)) {
-		ret = nfp_fw_reload_from_flash(nsp);
-		if (ret != 0) {
-			PMD_DRV_LOG(ERR, "Load single PF firmware from flash failed.");
-			return ret;
-		}
-	} else if (fw_name[0] != 0) {
+	if (fw_name[0] != 0 && policy != NFP_NSP_APP_FW_LOAD_FLASH) {
 		ret = nfp_fw_reload_for_single_pf_from_disk(nsp, fw_name, pf_dev, reset);
 		if (ret != 0) {
 			PMD_DRV_LOG(ERR, "Load single PF firmware from disk failed.");
+			return ret;
+		}
+	} else if (policy != NFP_NSP_APP_FW_LOAD_DISK && nfp_nsp_has_stored_fw_load(nsp)) {
+		ret = nfp_fw_reload_from_flash(nsp);
+		if (ret != 0) {
+			PMD_DRV_LOG(ERR, "Load single PF firmware from flash failed.");
 			return ret;
 		}
 	} else {
@@ -1605,17 +1610,17 @@ nfp_fw_reload_for_multi_pf(struct nfp_nsp *nsp,
 		goto keepalive_uninit;
 	}
 
-	if (policy == NFP_NSP_APP_FW_LOAD_FLASH && nfp_nsp_has_stored_fw_load(nsp)) {
-		err = nfp_fw_reload_from_flash(nsp);
-		if (err != 0) {
-			PMD_DRV_LOG(ERR, "Load multi PF firmware from flash failed.");
-			goto keepalive_stop;
-		}
-	} else if (fw_name[0] != 0) {
+	if (fw_name[0] != 0 && policy != NFP_NSP_APP_FW_LOAD_FLASH) {
 		err = nfp_fw_reload_for_multi_pf_from_disk(nsp, fw_name, dev_info,
 				pf_dev, reset);
 		if (err != 0) {
 			PMD_DRV_LOG(ERR, "Load multi PF firmware from disk failed.");
+			goto keepalive_stop;
+		}
+	} else if (policy != NFP_NSP_APP_FW_LOAD_DISK && nfp_nsp_has_stored_fw_load(nsp)) {
+		err = nfp_fw_reload_from_flash(nsp);
+		if (err != 0) {
+			PMD_DRV_LOG(ERR, "Load multi PF firmware from flash failed.");
 			goto keepalive_stop;
 		}
 	} else {
@@ -1723,8 +1728,8 @@ nfp_fw_setup(struct nfp_pf_dev *pf_dev,
 	if (policy != NFP_NSP_APP_FW_LOAD_FLASH) {
 		err = nfp_fw_get_name(pf_dev, fw_name, sizeof(fw_name));
 		if (err != 0) {
-			PMD_DRV_LOG(ERR, "Can not find suitable firmware.");
-			goto close_nsp;
+			fw_name[0] = 0;
+			PMD_DRV_LOG(DEBUG, "Can not find suitable firmware.");
 		}
 	}
 
@@ -1749,24 +1754,25 @@ nfp_check_multi_pf_from_fw(uint32_t total_vnics)
 	return false;
 }
 
-static inline bool
+static inline int
 nfp_check_multi_pf_from_nsp(struct rte_pci_device *pci_dev,
-		struct nfp_cpp *cpp)
+		struct nfp_cpp *cpp,
+		bool *flag)
 {
-	bool flag;
 	struct nfp_nsp *nsp;
 
 	nsp = nfp_nsp_open(cpp);
 	if (nsp == NULL) {
 		PMD_DRV_LOG(ERR, "NFP error when obtaining NSP handle.");
-		return false;
+		return -EIO;
 	}
 
-	flag = (nfp_nsp_get_abi_ver_major(nsp) > 0) &&
+	*flag = (nfp_nsp_get_abi_ver_major(nsp) > 0) &&
 			(pci_dev->id.device_id == PCI_DEVICE_ID_NFP3800_PF_NIC);
 
 	nfp_nsp_close(nsp);
-	return flag;
+
+	return 0;
 }
 
 static int
@@ -2432,8 +2438,13 @@ nfp_pf_init(struct rte_pci_device *pci_dev)
 		goto eth_table_cleanup;
 	}
 
+	ret = nfp_check_multi_pf_from_nsp(pci_dev, cpp, &pf_dev->multi_pf.enabled);
+	if (ret != 0) {
+		PMD_INIT_LOG(ERR, "Failed to check multi pf from NSP.");
+		goto eth_table_cleanup;
+	}
+
 	pf_dev->nfp_eth_table = nfp_eth_table;
-	pf_dev->multi_pf.enabled = nfp_check_multi_pf_from_nsp(pci_dev, cpp);
 	pf_dev->multi_pf.function_id = function_id;
 	pf_dev->total_phyports = nfp_net_get_phyports_from_nsp(pf_dev);
 
@@ -2538,7 +2549,7 @@ nfp_pf_init(struct rte_pci_device *pci_dev)
 	ret = nfp_net_vf_config_init(pf_dev);
 	if (ret != 0) {
 		PMD_INIT_LOG(ERR, "Failed to init VF config.");
-		goto vf_cfg_tbl_cleanup;
+		goto mac_stats_cleanup;
 	}
 
 	hw_priv->is_pf = true;
@@ -2546,7 +2557,7 @@ nfp_pf_init(struct rte_pci_device *pci_dev)
 	if (!nfp_net_recv_pkt_meta_check_register(hw_priv)) {
 		PMD_INIT_LOG(ERR, "PF register meta check function failed.");
 		ret = -EIO;
-		goto hw_priv_free;
+		goto vf_cfg_tbl_cleanup;
 	}
 
 	/*

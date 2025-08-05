@@ -3,7 +3,6 @@
  * Copyright(c) 2023 Napatech A/S
  */
 
-#include <assert.h>
 #include <stdlib.h>
 
 #include "hw_mod_backend.h"
@@ -85,6 +84,10 @@ void km_attach_ndev_resource_management(struct km_flow_def_s *km, void **handle)
 		*handle = calloc(1,
 			(size_t)CAM_ENTRIES + sizeof(uint32_t) + (size_t)TCAM_ENTRIES +
 			sizeof(struct hasher_s));
+		if (!*handle) {
+			NT_LOG(ERR, FILTER, "Failed to allocate CAM and TCAM record manager");
+			return;
+		}
 		NT_LOG(DBG, FILTER, "Allocate NIC DEV CAM and TCAM record manager");
 	}
 
@@ -94,7 +97,7 @@ void km_attach_ndev_resource_management(struct km_flow_def_s *km, void **handle)
 		(struct tcam_distrib_s *)((char *)km->cam_dist + CAM_ENTRIES + sizeof(uint32_t));
 
 	km->hsh = (struct hasher_s *)((char *)km->tcam_dist + TCAM_ENTRIES);
-	init_hasher(km->hsh, km->be->km.nb_cam_banks, km->be->km.nb_cam_records);
+	nthw_init_hasher(km->hsh, km->be->km.nb_cam_banks, km->be->km.nb_cam_records);
 }
 
 void km_free_ndev_resource_management(void **handle)
@@ -118,7 +121,7 @@ int km_add_match_elem(struct km_flow_def_s *km, uint32_t e_word[4], uint32_t e_m
 	}
 
 	if (word_len < 1 || word_len > 4) {
-		assert(0);
+		RTE_ASSERT(0);
 		return -1;
 	}
 
@@ -284,7 +287,7 @@ int km_key_create(struct km_flow_def_s *km, uint32_t port_id)
 		}
 	}
 
-	assert(next == km->num_ftype_elem);
+	RTE_ASSERT(next == km->num_ftype_elem);
 
 	km->key_word_size = idx;
 	km->port_id = port_id;
@@ -581,7 +584,7 @@ int km_rcp_set(struct km_flow_def_s *km, int index)
 				}
 
 				NT_LOG(DBG, FILTER,
-					"Set KM QW0 sel A: dyn: %i, offs: %i, size: %i",
+					"Set KM QW0 sel A: dyn: %i, offs: %i, size: %" PRIu32 "",
 					km->match_map[i]->extr_start_offs_id,
 					km->match_map[i]->rel_offs, km->match_map[i]->word_len);
 
@@ -612,7 +615,7 @@ int km_rcp_set(struct km_flow_def_s *km, int index)
 				}
 
 				NT_LOG(DBG, FILTER,
-					"Set KM QW4 sel A: dyn: %i, offs: %i, size: %i",
+					"Set KM QW4 sel A: dyn: %i, offs: %i, size: %" PRIu32 "",
 					km->match_map[i]->extr_start_offs_id,
 					km->match_map[i]->rel_offs, km->match_map[i]->word_len);
 
@@ -670,7 +673,7 @@ int km_rcp_set(struct km_flow_def_s *km, int index)
 			return -1;
 		}
 
-		assert((uint32_t)(km->tcam_start_bank + km->key_word_size) <=
+		RTE_ASSERT((uint32_t)(km->tcam_start_bank + km->key_word_size) <=
 			km->be->km.nb_tcam_banks);
 
 		for (int i = 0; i < km->key_word_size; i++) {
@@ -705,7 +708,7 @@ static int cam_populate(struct km_flow_def_s *km, int bank)
 	km->cam_dist[CAM_KM_DIST_IDX(bank)].km_owner = km;
 
 	if (cnt) {
-		assert(km->cam_paired);
+		RTE_ASSERT(km->cam_paired);
 
 		for (uint32_t i = 0; i < km->be->km.nb_cam_record_words && cnt; i++, cnt--) {
 			res |= hw_mod_km_cam_set(km->be, HW_KM_CAM_W0 + i, bank,
@@ -738,7 +741,7 @@ static int cam_reset_entry(struct km_flow_def_s *km, int bank)
 	km->cam_dist[CAM_KM_DIST_IDX(bank)].km_owner = NULL;
 
 	if (cnt) {
-		assert(km->cam_paired);
+		RTE_ASSERT(km->cam_paired);
 
 		for (uint32_t i = 0; i < km->be->km.nb_cam_record_words && cnt; i++, cnt--) {
 			res |= hw_mod_km_cam_set(km->be, HW_KM_CAM_W0 + i, bank,
@@ -756,7 +759,7 @@ static int cam_reset_entry(struct km_flow_def_s *km, int bank)
 
 static int move_cuckoo_index(struct km_flow_def_s *km)
 {
-	assert(km->cam_dist[CAM_KM_DIST_IDX(km->bank_used)].km_owner);
+	RTE_ASSERT(km->cam_dist[CAM_KM_DIST_IDX(km->bank_used)].km_owner);
 
 	for (uint32_t bank = 0; bank < km->be->km.nb_cam_banks; bank++) {
 		/* It will not select itself */
@@ -789,7 +792,7 @@ static int move_cuckoo_index(struct km_flow_def_s *km)
 				km->cam_dist[CAM_KM_DIST_IDX(km->bank_used) + 1].km_owner = NULL;
 
 			NT_LOG(DBG, FILTER,
-				"KM Cuckoo hash moved from bank %i to bank %i (%04X => %04X)",
+				"KM Cuckoo hash moved from bank %i to bank %" PRIu32 " (%04X => %04X)",
 				km->bank_used, bank, CAM_KM_DIST_IDX(km->bank_used),
 				CAM_KM_DIST_IDX(bank));
 			km->bank_used = bank;
@@ -806,7 +809,7 @@ static int move_cuckoo_index_level(struct km_flow_def_s *km_parent, int bank_idx
 {
 	struct km_flow_def_s *km = km_parent->cam_dist[bank_idx].km_owner;
 
-	assert(levels <= CUCKOO_MOVE_MAX_DEPTH);
+	RTE_ASSERT(levels <= CUCKOO_MOVE_MAX_DEPTH);
 
 	/*
 	 * Only move if same pairness
@@ -821,7 +824,7 @@ static int move_cuckoo_index_level(struct km_flow_def_s *km_parent, int bank_idx
 	if (levels <= 1)
 		return 0;
 
-	assert(cam_adr_list_len < CUCKOO_MOVE_MAX_DEPTH);
+	RTE_ASSERT(cam_adr_list_len < CUCKOO_MOVE_MAX_DEPTH);
 
 	cam_addr_reserved_stack[cam_adr_list_len++] = bank_idx;
 
@@ -845,7 +848,7 @@ static int move_cuckoo_index_level(struct km_flow_def_s *km_parent, int bank_idx
 			if (move_cuckoo_index(km))
 				return 1;
 
-			assert(0);
+			RTE_ASSERT(0);
 		}
 	}
 
@@ -856,11 +859,11 @@ static int km_write_data_to_cam(struct km_flow_def_s *km)
 {
 	int res = 0;
 	int val[MAX_BANKS];
-	assert(km->be->km.nb_cam_banks <= MAX_BANKS);
-	assert(km->cam_dist);
+	RTE_ASSERT(km->be->km.nb_cam_banks <= MAX_BANKS);
+	RTE_ASSERT(km->cam_dist);
 
 	/* word list without info set */
-	gethash(km->hsh, km->entry_word, val);
+	nthw_gethash(km->hsh, km->entry_word, val);
 
 	for (uint32_t i = 0; i < km->be->km.nb_cam_banks; i++) {
 		/* if paired we start always on an even address - reset bit 0 */
@@ -967,7 +970,7 @@ static int tcam_write_word(struct km_flow_def_s *km, int bank, int record, uint3
 	int rec_bit_shft = record % 32;
 	uint32_t rec_bit = (1 << rec_bit_shft);
 
-	assert((km->be->km.nb_tcam_bank_width + 31) / 32 <= 3);
+	RTE_ASSERT((km->be->km.nb_tcam_bank_width + 31) / 32 <= 3);
 
 	for (int byte = 0; byte < 4; byte++) {
 		uint8_t a = (uint8_t)((word >> (24 - (byte * 8))) & 0xff);
@@ -994,7 +997,7 @@ static int tcam_write_word(struct km_flow_def_s *km, int bank, int record, uint3
 	err |= hw_mod_km_tcam_flush(km->be, bank, ALL_BANK_ENTRIES);
 
 	if (err == 0) {
-		assert(km->tcam_dist[TCAM_DIST_IDX(bank, record)].km_owner == NULL);
+		RTE_ASSERT(km->tcam_dist[TCAM_DIST_IDX(bank, record)].km_owner == NULL);
 		km->tcam_dist[TCAM_DIST_IDX(bank, record)].km_owner = km;
 	}
 
@@ -1044,7 +1047,7 @@ static int tcam_reset_bank(struct km_flow_def_s *km, int bank, int record)
 	int rec_bit_shft = record % 32;
 	uint32_t rec_bit = (1 << rec_bit_shft);
 
-	assert((km->be->km.nb_tcam_bank_width + 31) / 32 <= 3);
+	RTE_ASSERT((km->be->km.nb_tcam_bank_width + 31) / 32 <= 3);
 
 	for (int byte = 0; byte < 4; byte++) {
 		for (int val = 0; val < 256; val++) {
@@ -1141,7 +1144,7 @@ int km_clear_data_match_entry(struct km_flow_def_s *km)
 			km->cam_dist[CAM_KM_DIST_IDX(km->bank_used)].km_owner = km->reference;
 
 			if (km->key_word_size + !!km->info_set > 1) {
-				assert(km->cam_paired);
+				RTE_ASSERT(km->cam_paired);
 				km->cam_dist[CAM_KM_DIST_IDX(km->bank_used) + 1].km_owner =
 					km->reference;
 			}

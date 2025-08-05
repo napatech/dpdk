@@ -523,19 +523,22 @@ struct rte_dma_port_param {
 		 * and capabilities.
 		 */
 		__extension__
-		struct {
-			uint64_t coreid : 4; /**< PCIe core id used. */
-			uint64_t pfid : 8; /**< PF id used. */
-			uint64_t vfen : 1; /**< VF enable bit. */
-			uint64_t vfid : 16; /**< VF id used. */
-			/** The pasid filed in TLP packet. */
-			uint64_t pasid : 20;
-			/** The attributes filed in TLP packet. */
-			uint64_t attr : 3;
-			/** The processing hint filed in TLP packet. */
-			uint64_t ph : 2;
-			/** The steering tag filed in TLP packet. */
-			uint64_t st : 16;
+		union {
+			struct {
+				uint64_t coreid : 4; /**< PCIe core id used. */
+				uint64_t pfid : 8; /**< PF id used. */
+				uint64_t vfen : 1; /**< VF enable bit. */
+				uint64_t vfid : 16; /**< VF id used. */
+				/** The pasid filed in TLP packet. */
+				uint64_t pasid : 20;
+				/** The attributes filed in TLP packet. */
+				uint64_t attr : 3;
+				/** The processing hint filed in TLP packet. */
+				uint64_t ph : 2;
+				/** The steering tag filed in TLP packet. */
+				uint64_t st : 16;
+			};
+			uint64_t val;
 		} pcie;
 	};
 	uint64_t reserved[2]; /**< Reserved for future fields. */
@@ -869,11 +872,11 @@ rte_dma_copy(int16_t dev_id, uint16_t vchan, rte_iova_t src, rte_iova_t dst,
 #ifdef RTE_DMADEV_DEBUG
 	if (!rte_dma_is_valid(dev_id) || length == 0)
 		return -EINVAL;
-	if (*obj->copy == NULL)
+	if (obj->copy == NULL)
 		return -ENOTSUP;
 #endif
 
-	ret = (*obj->copy)(obj->dev_private, vchan, src, dst, length, flags);
+	ret = obj->copy(obj->dev_private, vchan, src, dst, length, flags);
 	rte_dma_trace_copy(dev_id, vchan, src, dst, length, flags, ret);
 
 	return ret;
@@ -921,12 +924,11 @@ rte_dma_copy_sg(int16_t dev_id, uint16_t vchan, struct rte_dma_sge *src,
 	if (!rte_dma_is_valid(dev_id) || src == NULL || dst == NULL ||
 	    nb_src == 0 || nb_dst == 0)
 		return -EINVAL;
-	if (*obj->copy_sg == NULL)
+	if (obj->copy_sg == NULL)
 		return -ENOTSUP;
 #endif
 
-	ret = (*obj->copy_sg)(obj->dev_private, vchan, src, dst, nb_src,
-			      nb_dst, flags);
+	ret = obj->copy_sg(obj->dev_private, vchan, src, dst, nb_src, nb_dst, flags);
 	rte_dma_trace_copy_sg(dev_id, vchan, src, dst, nb_src, nb_dst, flags,
 			      ret);
 
@@ -969,12 +971,11 @@ rte_dma_fill(int16_t dev_id, uint16_t vchan, uint64_t pattern,
 #ifdef RTE_DMADEV_DEBUG
 	if (!rte_dma_is_valid(dev_id) || length == 0)
 		return -EINVAL;
-	if (*obj->fill == NULL)
+	if (obj->fill == NULL)
 		return -ENOTSUP;
 #endif
 
-	ret = (*obj->fill)(obj->dev_private, vchan, pattern, dst, length,
-			   flags);
+	ret = obj->fill(obj->dev_private, vchan, pattern, dst, length, flags);
 	rte_dma_trace_fill(dev_id, vchan, pattern, dst, length, flags, ret);
 
 	return ret;
@@ -1003,11 +1004,11 @@ rte_dma_submit(int16_t dev_id, uint16_t vchan)
 #ifdef RTE_DMADEV_DEBUG
 	if (!rte_dma_is_valid(dev_id))
 		return -EINVAL;
-	if (*obj->submit == NULL)
+	if (obj->submit == NULL)
 		return -ENOTSUP;
 #endif
 
-	ret = (*obj->submit)(obj->dev_private, vchan);
+	ret = obj->submit(obj->dev_private, vchan);
 	rte_dma_trace_submit(dev_id, vchan, ret);
 
 	return ret;
@@ -1046,7 +1047,7 @@ rte_dma_completed(int16_t dev_id, uint16_t vchan, const uint16_t nb_cpls,
 #ifdef RTE_DMADEV_DEBUG
 	if (!rte_dma_is_valid(dev_id) || nb_cpls == 0)
 		return 0;
-	if (*obj->completed == NULL)
+	if (obj->completed == NULL)
 		return 0;
 #endif
 
@@ -1064,8 +1065,7 @@ rte_dma_completed(int16_t dev_id, uint16_t vchan, const uint16_t nb_cpls,
 		has_error = &err;
 
 	*has_error = false;
-	ret = (*obj->completed)(obj->dev_private, vchan, nb_cpls, last_idx,
-				has_error);
+	ret = obj->completed(obj->dev_private, vchan, nb_cpls, last_idx, has_error);
 	rte_dma_trace_completed(dev_id, vchan, nb_cpls, last_idx, has_error,
 				ret);
 
@@ -1109,15 +1109,14 @@ rte_dma_completed_status(int16_t dev_id, uint16_t vchan,
 #ifdef RTE_DMADEV_DEBUG
 	if (!rte_dma_is_valid(dev_id) || nb_cpls == 0 || status == NULL)
 		return 0;
-	if (*obj->completed_status == NULL)
+	if (obj->completed_status == NULL)
 		return 0;
 #endif
 
 	if (last_idx == NULL)
 		last_idx = &idx;
 
-	ret = (*obj->completed_status)(obj->dev_private, vchan, nb_cpls,
-				       last_idx, status);
+	ret = obj->completed_status(obj->dev_private, vchan, nb_cpls, last_idx, status);
 	rte_dma_trace_completed_status(dev_id, vchan, nb_cpls, last_idx, status,
 				       ret);
 
@@ -1145,10 +1144,10 @@ rte_dma_burst_capacity(int16_t dev_id, uint16_t vchan)
 #ifdef RTE_DMADEV_DEBUG
 	if (!rte_dma_is_valid(dev_id))
 		return 0;
-	if (*obj->burst_capacity == NULL)
+	if (obj->burst_capacity == NULL)
 		return 0;
 #endif
-	ret = (*obj->burst_capacity)(obj->dev_private, vchan);
+	ret = obj->burst_capacity(obj->dev_private, vchan);
 	rte_dma_trace_burst_capacity(dev_id, vchan, ret);
 
 	return ret;

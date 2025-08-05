@@ -32,6 +32,16 @@ Deprecation Notices
   are renamed to ``rte_tel_data_add_array_uint`` and ``rte_tel_data_add_dict_uint`` respectively.
   As such, the old function names are deprecated and will be removed in a future release.
 
+* eal: The ``-c <coremask>`` commandline parameter is deprecated
+  and will be removed in a future release.
+  Use the ``-l <corelist>`` or ``--lcores=<corelist>`` parameters instead
+  to specify the cores to be used when running a DPDK application.
+
+* eal: The ``-s <service-coremask>`` commandline parameter is deprecated
+  and will be removed in a future release.
+  Use the ``-S <service-corelist>`` parameter instead
+  to specify the cores to be used for background services in DPDK.
+
 * rte_atomicNN_xxx: These APIs do not take memory order parameter. This does
   not allow for writing optimized code for all the CPU architectures supported
   in DPDK. DPDK has adopted the atomic operations from
@@ -46,6 +56,10 @@ Deprecation Notices
   operations and a new wrapper ``rte_atomic_thread_fence`` instead of
   ``__atomic_thread_fence`` must be used for patches that need to be merged in
   20.08 onwards. This change will not introduce any performance degradation.
+
+* lib: Multiple issues relating to unaligned accesses have been detected using the UBSan checker.
+  As part of resolving those issues, alignment in some structures will be updated in 25.11,
+  namely (but not exhaustively): ``struct rte_stack_lf_head`` and ``struct rte_mp_msg``.
 
 * lib: will fix extending some enum/define breaking the ABI. There are multiple
   samples in DPDK that enum/define terminated with a ``.*MAX.*`` value which is
@@ -138,3 +152,26 @@ Deprecation Notices
   will be deprecated and subsequently removed in DPDK 24.11 release.
   Before this, the new port library API (functions rte_swx_port_*)
   will gradually transition from experimental to stable status.
+
+* bus/vmbus: Starting DPDK 25.11, all the vmbus API defined in
+  ``drivers/bus/vmbus/rte_bus_vmbus.h`` will become internal to DPDK.
+  Those API functions are used internally by DPDK core and netvsc PMD.
+
+* net/intel: Drivers that have an SSE vector path alongside other vector paths,
+  namely i40e, iavf and ice, will have their SSE vector paths removed in DPDK 25.11.
+  Modern x86 systems all support AVX2, if not AVX-512,
+  so the SSE path is no longer widely used.
+  This change will not result in any feature loss,
+  as the fallback scalar paths which have feature parity with SSE
+  will be used in the cases where the SSE paths would have been used.
+
+* net/mlx5: ``repr_matching_en`` device argument is deprecated
+  and will be removed in DPDK 25.11 release.
+  With disabled representor matching, behavior of Rx datapath in mlx5 PMD
+  is incompatible with current DPDK representor model.
+  Packets from any E-Switch port can arrive on any representor,
+  depending only on created flow rules.
+  Such working model should be exposed directly in DPDK ethdev API,
+  without relying on flow API.
+  Currently there is no alternative API
+  providing the same functionality as with ``repr_matching_en`` set to 0.

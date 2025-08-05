@@ -5,17 +5,11 @@
 #include "../r8169_ethdev.h"
 #include "../r8169_hw.h"
 #include "../r8169_phy.h"
-#include "rtl8125b_mcu.h"
+#include "rtl8125b.h"
 
 /* For RTL8125B, CFG_METHOD_50,51 */
 
 /* ------------------------------------MAC 8125B------------------------------------- */
-
-void
-rtl_set_mac_mcu_8125b_1(struct rtl_hw *hw)
-{
-	rtl_hw_disable_mac_mcu_bps(hw);
-}
 
 void
 rtl_set_mac_mcu_8125b_2(struct rtl_hw *hw)
@@ -37,8 +31,6 @@ rtl_set_mac_mcu_8125b_2(struct rtl_hw *hw)
 		0x0000, 0xC602, 0xBE00, 0x0000, 0xC602, 0xBE00, 0x0000, 0xC602, 0xBE00,
 		0x0000, 0xC602, 0xBE00, 0x0000
 	};
-
-	rtl_hw_disable_mac_mcu_bps(hw);
 
 	rtl_write_mac_mcu_ram_code(hw, mcu_patch_code_8125b_2,
 				   ARRAY_SIZE(mcu_patch_code_8125b_2));

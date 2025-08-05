@@ -85,12 +85,12 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 	fpga_info_t *fpga_info = &p_adapter_info->fpga_info;
 	hw_info_t *p_hw_info = &p_adapter_info->hw_info;
 
+	RTE_ASSERT(fpga_info);
+
 	/*
 	 * IMPORTANT: Most variables cannot be determined before nthw fpga model is instantiated
 	 * (nthw_fpga_init())
 	 */
-	int n_phy_ports = -1;
-	int n_nim_ports = -1;
 	int res = -1;
 	nthw_fpga_t *p_fpga = NULL;
 
@@ -126,7 +126,7 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 			PCIIDENT_TO_BUSNR(p_adapter_info->fpga_info.pciident),
 			PCIIDENT_TO_DEVNR(p_adapter_info->fpga_info.pciident),
 			PCIIDENT_TO_FUNCNR(p_adapter_info->fpga_info.pciident));
-		NT_LOG(DBG, NTNIC, "%s: %s", p_adapter_id_str, p_dev_name);
+		NT_LOG(DBG, NTNIC, "%s: %s", p_adapter_id_str, p_dev_name ? p_dev_name : "NA");
 	}
 
 	{
@@ -147,24 +147,23 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 	res = nthw_fpga_init(&p_adapter_info->fpga_info);
 
 	if (res) {
-		NT_LOG_DBGX(ERR, NTNIC, "%s: %s: FPGA=%04d res=x%08X", p_adapter_id_str,
-			p_dev_name, fpga_info->n_fpga_prod_id, res);
+		NT_LOG_DBGX(ERR, NTNIC, "%s: %s: FPGA=%04d res=x%08X",
+			p_adapter_id_str ? p_adapter_id_str : "NA",
+			p_dev_name ? p_dev_name : "NA", fpga_info->n_fpga_prod_id, res);
 		return res;
 	}
 
-	assert(fpga_info);
+	RTE_ASSERT(fpga_info->n_phy_ports >= 1);
+	RTE_ASSERT(fpga_info->n_nims >= 1);
+
 	p_fpga = fpga_info->mp_fpga;
-	assert(p_fpga);
-	n_phy_ports = fpga_info->n_phy_ports;
-	assert(n_phy_ports >= 1);
-	n_nim_ports = fpga_info->n_nims;
-	assert(n_nim_ports >= 1);
+	RTE_ASSERT(p_fpga);
 
 	/* Nt4ga Init Filter */
 	nt4ga_filter_t *p_filter = &p_adapter_info->nt4ga_filter;
 
 	if (flow_filter_ops != NULL) {
-		res = flow_filter_ops->flow_filter_init(p_fpga, &p_filter->mp_flow_device,
+		res = flow_filter_ops->nthw_flow_filter_init(p_fpga, &p_filter->mp_flow_device,
 				p_adapter_info->adapter_no);
 
 		if (res != 0) {
@@ -176,7 +175,7 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 	{
 		int i;
 		const struct link_ops_s *link_ops = NULL;
-		assert(fpga_info->n_fpga_prod_id > 0);
+		RTE_ASSERT(fpga_info->n_fpga_prod_id > 0);
 
 		for (i = 0; i < NUM_ADAPTER_PORTS_MAX; i++) {
 			/* Disable all ports. Must be enabled later */
@@ -194,6 +193,15 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 				break;
 			}
 
+			res = link_ops->link_init(p_adapter_info, p_fpga);
+			break;
+		case 9574: /* NT400D13 (Intel Agilex FPGA) */
+			link_ops = get_agx_100g_link_ops();
+			if (link_ops == NULL) {
+				NT_LOG(ERR, NTNIC, "NT400D11 100G link module uninitialized");
+				res = -1;
+				break;
+			}
 			res = link_ops->link_init(p_adapter_info, p_fpga);
 			break;
 
@@ -253,7 +261,7 @@ static int nt4ga_adapter_deinit(struct adapter_info_s *p_adapter_info)
 	nt4ga_filter_t *p_filter = &p_adapter_info->nt4ga_filter;
 
 	if (flow_filter_ops != NULL) {
-		res = flow_filter_ops->flow_filter_done(p_filter->mp_flow_device);
+		res = flow_filter_ops->nthw_flow_filter_done(p_filter->mp_flow_device);
 
 		if (res != 0) {
 			NT_LOG(ERR, NTNIC, "Cannot deinitialize filter");
@@ -296,7 +304,7 @@ static const struct adapter_ops ops = {
 	.show_info = nt4ga_adapter_show_info,
 };
 
-void adapter_init(void)
+void nthw_adapter_init(void)
 {
 	register_adapter_ops(&ops);
 }

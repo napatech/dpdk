@@ -105,7 +105,8 @@ hns3_get_dev_feature_capability(FILE *file, struct hns3_hw *hw)
 		{HNS3_DEV_SUPPORT_TM_B, "TM"},
 		{HNS3_DEV_SUPPORT_VF_VLAN_FLT_MOD_B, "VF VLAN FILTER MOD"},
 		{HNS3_DEV_SUPPORT_FC_AUTO_B, "FC AUTO"},
-		{HNS3_DEV_SUPPORT_GRO_B, "GRO"}
+		{HNS3_DEV_SUPPORT_GRO_B, "GRO"},
+		{HNS3_DEV_SUPPORT_VF_MULTI_TCS_B, "VF MULTI TCS"},
 	};
 	uint32_t i;
 
@@ -209,6 +210,7 @@ hns3_get_device_basic_info(FILE *file, struct rte_eth_dev *dev)
 		"  - Device Base Info:\n"
 		"\t  -- name: %s\n"
 		"\t  -- adapter_state=%s\n"
+		"\t  -- tc_max=%u tc_num=%u dwrr[%u %u %u %u]\n"
 		"\t  -- nb_rx_queues=%u nb_tx_queues=%u\n"
 		"\t  -- total_tqps_num=%u tqps_num=%u intr_tqps_num=%u\n"
 		"\t  -- rss_size_max=%u alloc_rss_size=%u tx_qnum_per_tc=%u\n"
@@ -221,6 +223,11 @@ hns3_get_device_basic_info(FILE *file, struct rte_eth_dev *dev)
 		"\t  -- intr_conf: lsc=%u rxq=%u\n",
 		dev->data->name,
 		hns3_get_adapter_state_name(hw->adapter_state),
+		hw->dcb_info.tc_max, hw->dcb_info.num_tc,
+		hw->dcb_info.pg_info[0].tc_dwrr[0],
+		hw->dcb_info.pg_info[0].tc_dwrr[1],
+		hw->dcb_info.pg_info[0].tc_dwrr[2],
+		hw->dcb_info.pg_info[0].tc_dwrr[3],
 		dev->data->nb_rx_queues, dev->data->nb_tx_queues,
 		hw->total_tqps_num, hw->tqps_num, hw->intr_tqps_num,
 		hw->rss_size_max, hw->alloc_rss_size, hw->tx_qnum_per_tc,
@@ -693,6 +700,10 @@ hns3_get_vlan_tx_offload_cfg(FILE *file, struct hns3_hw *hw)
 static void
 hns3_get_port_pvid_info(FILE *file, struct hns3_hw *hw)
 {
+	struct hns3_adapter *hns = HNS3_DEV_HW_TO_ADAPTER(hw);
+	if (hns->is_vf)
+		return;
+
 	fprintf(file, "  - pvid status: %s\n",
 		hw->port_base_vlan_cfg.state ? "On" : "Off");
 }
@@ -910,7 +921,7 @@ hns3_is_link_fc_mode(struct hns3_adapter *hns)
 	if (hw->current_fc_status == HNS3_FC_STATUS_PFC)
 		return false;
 
-	if (hw->num_tc > 1 && !pf->support_multi_tc_pause)
+	if (hw->dcb_info.num_tc > 1 && !pf->support_multi_tc_pause)
 		return false;
 
 	return true;

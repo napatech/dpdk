@@ -100,6 +100,8 @@ static int nt4ga_stat_init(struct adapter_info_s *p_adapter_info)
 
 		p_nt4ga_stat->mn_rx_ports = p_nthw_stat->m_nb_rx_ports;
 		p_nt4ga_stat->mn_tx_ports = p_nthw_stat->m_nb_tx_ports;
+
+		p_nt4ga_stat->mn_ifr_counters = p_nthw_stat->m_nb_ifr_counters;
 	}
 
 	return 0;
@@ -205,6 +207,9 @@ static int nt4ga_stat_setup(struct adapter_info_s *p_adapter_info)
 		p_nt4ga_stat->mp_stat_structs_flm->max_lps =
 			nthw_fpga_get_product_param(p_adapter_info->fpga_info.mp_fpga,
 				NT_FLM_LOAD_LPS_MAX, 0);
+
+		p_nt4ga_stat->mp_stat_structs_ifr =
+			calloc(1, sizeof(struct ifr_counters) * p_nt4ga_stat->mn_ifr_counters);
 	}
 
 	p_nt4ga_stat->mp_port_load =
@@ -215,16 +220,7 @@ static int nt4ga_stat_setup(struct adapter_info_s *p_adapter_info)
 		return -1;
 	}
 
-#ifdef NIM_TRIGGER
-	uint64_t max_bps_speed = nt_get_max_link_speed(p_adapter_info->nt4ga_link.speed_capa);
-
-	if (max_bps_speed == 0)
-		max_bps_speed = DEFAULT_MAX_BPS_SPEED;
-
-#else
 	uint64_t max_bps_speed = DEFAULT_MAX_BPS_SPEED;
-	NT_LOG(ERR, NTNIC, "NIM module not included");
-#endif
 
 	for (int p = 0; p < NUM_ADAPTER_PORTS_MAX; p++) {
 		p_nt4ga_stat->mp_port_load[p].rx_bps_max = max_bps_speed;
@@ -250,7 +246,7 @@ static int nt4ga_stat_collect_cap_v1_stats(struct adapter_info_s *p_adapter_info
 	(void)p_adapter_info;
 	const struct flow_filter_ops *flow_filter_ops = get_flow_filter_ops();
 
-	if (flow_filter_ops == NULL)
+	if (flow_filter_ops == NULL || p_nt4ga_stat == NULL)
 		return -1;
 
 	nthw_stat_t *p_nthw_stat = p_nt4ga_stat->mp_nthw_stat;
@@ -260,7 +256,7 @@ static int nt4ga_stat_collect_cap_v1_stats(struct adapter_info_s *p_adapter_info
 	const int n_tx_ports = p_nt4ga_stat->mn_tx_ports;
 	int c, h, p;
 
-	if (!p_nthw_stat || !p_nt4ga_stat)
+	if (p_nthw_stat == NULL)
 		return -1;
 
 	if (p_nthw_stat->mn_stat_layout_version < 6) {
@@ -562,8 +558,14 @@ static int nt4ga_stat_collect_cap_v1_stats(struct adapter_info_s *p_adapter_info
 	}
 
 	/* Update and get FLM stats */
-	flow_filter_ops->flow_get_flm_stats(ndev, (uint64_t *)p_nt4ga_stat->mp_stat_structs_flm,
+	flow_filter_ops->nthw_flow_get_flm_stats(ndev,
+		(uint64_t *)p_nt4ga_stat->mp_stat_structs_flm,
 		sizeof(struct flm_counters_v1) / sizeof(uint64_t));
+
+	/* Update and get IFR stats */
+	flow_filter_ops->nthw_flow_get_ifr_stats(ndev,
+		(uint64_t *)p_nt4ga_stat->mp_stat_structs_ifr,
+		p_nt4ga_stat->mn_ifr_counters - 1);
 
 	/*
 	 * Calculate correct load values:

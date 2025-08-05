@@ -603,6 +603,9 @@ struct rte_eth_rss_conf {
 #define RTE_ETH_RSS_L2TPV2             RTE_BIT64(36)
 #define RTE_ETH_RSS_IPV6_FLOW_LABEL    RTE_BIT64(37)
 
+/** RSS with RoCE InfiniBand BTH (Base Transport Header) */
+#define RTE_ETH_RSS_IB_BTH             RTE_BIT64(38)
+
 /*
  * We use the following macros to combine with above RTE_ETH_RSS_* for
  * more specific input set selection. These bits are defined starting
@@ -1612,8 +1615,10 @@ struct rte_eth_conf {
 #define RTE_ETH_TX_OFFLOAD_MULTI_SEGS       RTE_BIT64(15)
 /**
  * Device supports optimization for fast release of mbufs.
- * When set application must guarantee that per-queue all mbufs comes from
- * the same mempool and has refcnt = 1.
+ * When set application must guarantee that per-queue all mbufs come from the same mempool,
+ * are direct, have refcnt=1, next=NULL and nb_segs=1, as done by rte_pktmbuf_prefree_seg().
+ *
+ * @see rte_mbuf_raw_free_bulk()
  */
 #define RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE   RTE_BIT64(16)
 #define RTE_ETH_TX_OFFLOAD_SECURITY         RTE_BIT64(17)
@@ -3387,6 +3392,37 @@ int rte_eth_xstats_get_id_by_name(uint16_t port_id, const char *xstat_name,
 		uint64_t *id);
 
 /**
+ * Enable/Disable the xstat counter of the given id.
+ *
+ * @param port_id The port to look up statistics from
+ * @param id The ID of the counter to enable
+ * @param on_off The state to set the counter to.
+ * @return
+ *    - (0) on success
+ *    - (-EEXIST) counter already enabled
+ *    - (-ENOTSUP) enable/disable is not implemented
+ *    - (-EINVAL) xstat id is invalid
+ *    - (-EPERM) enabling this counter is not permitted
+ *    - (-ENOSPC) no resources
+ */
+__rte_experimental
+int rte_eth_xstats_set_counter(uint16_t port_id, uint64_t id, int on_off);
+
+/**
+ * Query the state of the xstat counter.
+ *
+ * @param port_id The port to look up statistics from
+ * @param id The ID of the counter to query
+ * @return
+ *    - (0) xstat is enabled
+ *    - (1) xstat is disabled
+ *    - (-ENOTSUP) enable/disabling is not implemented
+ *    - (-EINVAL) xstat id is invalid
+ */
+__rte_experimental
+int rte_eth_xstats_query_state(uint16_t port_id, uint64_t id);
+
+/**
  * Reset extended statistics of an Ethernet device.
  *
  * @param port_id
@@ -4128,7 +4164,13 @@ enum rte_eth_event_type {
 	RTE_ETH_EVENT_VF_MBOX,  /**< message from the VF received by PF */
 	RTE_ETH_EVENT_MACSEC,   /**< MACsec offload related event */
 	RTE_ETH_EVENT_INTR_RMV, /**< device removal event */
-	RTE_ETH_EVENT_NEW,      /**< port is probed */
+	/**
+	 * The port is being probed, i.e. allocated and not yet available.
+	 * It is too early to check validity, query infos, and configure
+	 * the port. But some functions, like rte_eth_dev_socket_id() and
+	 * rte_eth_dev_owner_*() are available to the application.
+	 */
+	RTE_ETH_EVENT_NEW,
 	RTE_ETH_EVENT_DESTROY,  /**< port is released */
 	RTE_ETH_EVENT_IPSEC,    /**< IPsec offload related event */
 	RTE_ETH_EVENT_FLOW_AGED,/**< New aged-out flows is detected */
@@ -6360,9 +6402,9 @@ rte_eth_rx_queue_count(uint16_t port_id, uint16_t queue_id)
 		return -EINVAL;
 #endif
 
-	if (*p->rx_queue_count == NULL)
+	if (p->rx_queue_count == NULL)
 		return -ENOTSUP;
-	return (int)(*p->rx_queue_count)(qd);
+	return (int)p->rx_queue_count(qd);
 }
 
 /**@{@name Rx hardware descriptor states
@@ -6432,9 +6474,9 @@ rte_eth_rx_descriptor_status(uint16_t port_id, uint16_t queue_id,
 	if (qd == NULL)
 		return -ENODEV;
 #endif
-	if (*p->rx_descriptor_status == NULL)
+	if (p->rx_descriptor_status == NULL)
 		return -ENOTSUP;
-	return (*p->rx_descriptor_status)(qd, offset);
+	return p->rx_descriptor_status(qd, offset);
 }
 
 /**@{@name Tx hardware descriptor states
@@ -6503,9 +6545,9 @@ static inline int rte_eth_tx_descriptor_status(uint16_t port_id,
 	if (qd == NULL)
 		return -ENODEV;
 #endif
-	if (*p->tx_descriptor_status == NULL)
+	if (p->tx_descriptor_status == NULL)
 		return -ENOTSUP;
-	return (*p->tx_descriptor_status)(qd, offset);
+	return p->tx_descriptor_status(qd, offset);
 }
 
 /**

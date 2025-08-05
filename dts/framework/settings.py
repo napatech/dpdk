@@ -14,10 +14,20 @@ followed by the default value defined in this module.
 
 The command line arguments along with the supported environment variables are:
 
-.. option:: --config-file
-.. envvar:: DTS_CFG_FILE
+.. option:: --test-run-config-file
+.. envvar:: DTS_TEST_RUN_CFG_FILE
 
-    The path to the YAML test run configuration file.
+    The path to the YAML configuration file of the test run.
+
+.. option:: --nodes-config-file
+.. envvar:: DTS_NODES_CFG_FILE
+
+    The path to the YAML configuration file of the nodes.
+
+.. option:: --tests-config-file
+.. envvar:: DTS_TESTS_CFG_FILE
+
+    The path to the YAML configuration file of the test suites.
 
 .. option:: --output-dir, --output
 .. envvar:: DTS_OUTPUT_DIR
@@ -88,6 +98,7 @@ Attributes:
 Typical usage example::
 
   from framework.settings import SETTINGS
+
   foo = SETTINGS.foo
 """
 
@@ -101,7 +112,7 @@ from typing import Callable
 
 from pydantic import ValidationError
 
-from .config import (
+from .config.test_run import (
     DPDKLocation,
     LocalDPDKTarballLocation,
     LocalDPDKTreeLocation,
@@ -119,7 +130,11 @@ class Settings:
     """
 
     #:
-    config_file_path: Path = Path(__file__).parent.parent.joinpath("conf.yaml")
+    test_run_config_path: Path = Path(__file__).parent.parent.joinpath("test_run.yaml")
+    #:
+    nodes_config_path: Path = Path(__file__).parent.parent.joinpath("nodes.yaml")
+    #:
+    tests_config_path: Path | None = None
     #:
     output_dir: str = "output"
     #:
@@ -315,14 +330,34 @@ def _get_parser() -> _DTSArgumentParser:
     )
 
     action = parser.add_argument(
-        "--config-file",
-        default=SETTINGS.config_file_path,
+        "--test-run-config-file",
+        default=SETTINGS.test_run_config_path,
         type=Path,
-        help="The configuration file that describes the test cases, SUTs and DPDK build configs.",
+        help="The configuration file that describes the test cases and DPDK build options.",
         metavar="FILE_PATH",
-        dest="config_file_path",
+        dest="test_run_config_path",
     )
-    _add_env_var_to_action(action, "CFG_FILE")
+    _add_env_var_to_action(action, "TEST_RUN_CFG_FILE")
+
+    action = parser.add_argument(
+        "--nodes-config-file",
+        default=SETTINGS.nodes_config_path,
+        type=Path,
+        help="The configuration file that describes the SUT and TG nodes.",
+        metavar="FILE_PATH",
+        dest="nodes_config_path",
+    )
+    _add_env_var_to_action(action, "NODES_CFG_FILE")
+
+    action = parser.add_argument(
+        "--tests-config-file",
+        default=SETTINGS.tests_config_path,
+        type=Path,
+        help="Configuration file used to override variable values inside specific test suites.",
+        metavar="FILE_PATH",
+        dest="tests_config_path",
+    )
+    _add_env_var_to_action(action, "TESTS_CFG_FILE")
 
     action = parser.add_argument(
         "--output-dir",
@@ -461,6 +496,7 @@ def _process_dpdk_location(
     any valid :class:`DPDKLocation` with the provided parameters if validation is successful.
 
     Args:
+        parser: The instance of the arguments parser.
         dpdk_tree: The path to the DPDK source tree directory.
         tarball: The path to the DPDK tarball.
         remote: If :data:`True`, `dpdk_tree` or `tarball` is located on the SUT node, instead of the
@@ -512,6 +548,7 @@ def _process_test_suites(
     """Process the given argument to a list of :class:`TestSuiteConfig` to execute.
 
     Args:
+        parser: The instance of the arguments parser.
         args: The arguments to process. The args is a string from an environment variable
               or a list of from the user input containing tests suites with tests cases,
               each of which is a list of [test_suite, test_case, test_case, ...].

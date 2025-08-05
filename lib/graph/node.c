@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <eal_export.h>
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_errno.h>
@@ -15,9 +16,56 @@
 #include "graph_private.h"
 
 static struct node_head node_list = STAILQ_HEAD_INITIALIZER(node_list);
-static rte_node_t node_id;
 
-#define NODE_ID_CHECK(id) ID_CHECK(id, node_id)
+static struct node *
+node_from_id(rte_node_t id)
+{
+	struct node *node = NULL;
+
+	graph_spinlock_lock();
+	rte_errno = EINVAL;
+	STAILQ_FOREACH(node, &node_list, next) {
+		if (node->id == id) {
+			rte_errno = 0;
+			goto exit;
+		}
+	}
+exit:
+	graph_spinlock_unlock();
+	return node;
+}
+
+static rte_node_t
+next_next_free_id(void)
+{
+	struct node *node;
+	rte_node_t id = 0;
+
+	STAILQ_FOREACH(node, &node_list, next) {
+		if (id < node->id)
+			break;
+		id = node->id + 1;
+	}
+	return id;
+}
+
+static void
+node_insert_ordered(struct node *node)
+{
+	struct node *after, *g;
+
+	after = NULL;
+	STAILQ_FOREACH(g, &node_list, next) {
+		if (g->id < node->id)
+			after = g;
+		else if (g->id > node->id)
+			break;
+	}
+	if (after == NULL)
+		STAILQ_INSERT_HEAD(&node_list, node, next);
+	else
+		STAILQ_INSERT_AFTER(&node_list, after, node, next);
+}
 
 /* Private functions */
 struct node_head *
@@ -54,6 +102,7 @@ node_has_duplicate_entry(const char *name)
 }
 
 /* Public functions */
+RTE_EXPORT_SYMBOL(__rte_node_register)
 rte_node_t
 __rte_node_register(const struct rte_node_register *reg)
 {
@@ -116,10 +165,10 @@ __rte_node_register(const struct rte_node_register *reg)
 	}
 
 	node->lcore_id = RTE_MAX_LCORE;
-	node->id = node_id++;
+	node->id = next_next_free_id();
 
-	/* Add the node at tail */
-	STAILQ_INSERT_TAIL(&node_list, node, next);
+	/* Add the node in ordered list */
+	node_insert_ordered(node);
 	graph_spinlock_unlock();
 
 	return node->id;
@@ -189,12 +238,15 @@ fail:
 	return rc;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_clone)
 rte_node_t
 rte_node_clone(rte_node_t id, const char *name)
 {
 	struct node *node;
 
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
+
 	STAILQ_FOREACH(node, &node_list, next)
 		if (node->id == id)
 			return node_clone(node, name);
@@ -203,6 +255,7 @@ fail:
 	return RTE_NODE_ID_INVALID;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_from_name)
 rte_node_t
 rte_node_from_name(const char *name)
 {
@@ -215,12 +268,14 @@ rte_node_from_name(const char *name)
 	return RTE_NODE_ID_INVALID;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_id_to_name)
 char *
 rte_node_id_to_name(rte_node_t id)
 {
 	struct node *node;
 
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
 	STAILQ_FOREACH(node, &node_list, next)
 		if (node->id == id)
 			return node->name;
@@ -229,12 +284,14 @@ fail:
 	return NULL;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_edge_count)
 rte_edge_t
 rte_node_edge_count(rte_node_t id)
 {
 	struct node *node;
 
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
 	STAILQ_FOREACH(node, &node_list, next)
 		if (node->id == id)
 			return node->nb_edges;
@@ -297,13 +354,15 @@ fail:
 	return count;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_edge_shrink)
 rte_edge_t
 rte_node_edge_shrink(rte_node_t id, rte_edge_t size)
 {
 	rte_edge_t rc = RTE_EDGE_ID_INVALID;
 	struct node *node;
 
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
 	graph_spinlock_lock();
 
 	STAILQ_FOREACH(node, &node_list, next) {
@@ -323,6 +382,7 @@ fail:
 	return rc;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_edge_update)
 rte_edge_t
 rte_node_edge_update(rte_node_t id, rte_edge_t from, const char **next_nodes,
 		     uint16_t nb_edges)
@@ -330,7 +390,8 @@ rte_node_edge_update(rte_node_t id, rte_edge_t from, const char **next_nodes,
 	rte_edge_t rc = RTE_EDGE_ID_INVALID;
 	struct node *n, *prev;
 
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
 	graph_spinlock_lock();
 
 	prev = NULL;
@@ -358,13 +419,15 @@ node_copy_edges(struct node *node, char *next_nodes[])
 	return i;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_edge_get)
 rte_node_t
 rte_node_edge_get(rte_node_t id, char *next_nodes[])
 {
 	rte_node_t rc = RTE_NODE_ID_INVALID;
 	struct node *node;
 
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
 	graph_spinlock_lock();
 
 	STAILQ_FOREACH(node, &node_list, next) {
@@ -388,7 +451,8 @@ node_scan_dump(FILE *f, rte_node_t id, bool all)
 	struct node *node;
 
 	RTE_ASSERT(f != NULL);
-	NODE_ID_CHECK(id);
+	if (node_from_id(id) == NULL)
+		goto fail;
 
 	STAILQ_FOREACH(node, &node_list, next) {
 		if (all == true) {
@@ -402,20 +466,79 @@ fail:
 	return;
 }
 
+RTE_EXPORT_SYMBOL(rte_node_dump)
 void
 rte_node_dump(FILE *f, rte_node_t id)
 {
 	node_scan_dump(f, id, false);
 }
 
+RTE_EXPORT_SYMBOL(rte_node_list_dump)
 void
 rte_node_list_dump(FILE *f)
 {
 	node_scan_dump(f, 0, true);
 }
 
+RTE_EXPORT_SYMBOL(rte_node_max_count)
 rte_node_t
 rte_node_max_count(void)
 {
+	rte_node_t node_id = 0;
+	struct node *node;
+
+	STAILQ_FOREACH(node, &node_list, next) {
+		if (node_id < node->id)
+			node_id = node->id;
+	}
 	return node_id;
+}
+
+int
+node_override_process_func(rte_node_t id, rte_node_process_t process)
+{
+	struct node *node;
+
+	if (node_from_id(id) == NULL)
+		goto fail;
+	graph_spinlock_lock();
+
+	STAILQ_FOREACH(node, &node_list, next) {
+		if (node->id == id) {
+			node->process = process;
+			graph_spinlock_unlock();
+			return 0;
+		}
+	}
+
+	graph_spinlock_unlock();
+
+fail:
+	return -1;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_node_free, 25.07)
+int
+rte_node_free(rte_node_t id)
+{
+	struct node *node;
+	int rc = -1;
+
+	if (node_from_id(id) == NULL)
+		goto fail;
+
+	graph_spinlock_lock();
+	STAILQ_FOREACH(node, &node_list, next) {
+		if (id == node->id) {
+			if (!graph_is_node_active_in_graph(node)) {
+				STAILQ_REMOVE(&node_list, node, node, next);
+				free(node);
+				rc = 0;
+			}
+			break;
+		}
+	}
+	graph_spinlock_unlock();
+fail:
+	return rc;
 }

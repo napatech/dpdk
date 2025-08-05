@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <pthread.h>
 
+#include <eal_export.h>
 #include <rte_common.h>
 #include <rte_errno.h>
 #include <rte_branch_prediction.h>
@@ -22,9 +23,11 @@
 #define FLOW_LOG RTE_ETHDEV_LOG_LINE
 
 /* Mbuf dynamic field name for metadata. */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_dynf_metadata_offs, 19.11)
 int32_t rte_flow_dynf_metadata_offs = -1;
 
 /* Mbuf dynamic field flag bit number for metadata. */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_dynf_metadata_mask, 19.11)
 uint64_t rte_flow_dynf_metadata_mask;
 
 /**
@@ -279,6 +282,7 @@ static const struct rte_flow_desc_data rte_flow_desc_action[] = {
 	MK_FLOW_ACTION(JUMP_TO_TABLE_INDEX, sizeof(struct rte_flow_action_jump_to_table_index)),
 };
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_dynf_metadata_register, 19.11)
 int
 rte_flow_dynf_metadata_register(void)
 {
@@ -367,6 +371,7 @@ rte_flow_ops_get(uint16_t port_id, struct rte_flow_error *error)
 }
 
 /* Check whether a flow rule can be created on a given port. */
+RTE_EXPORT_SYMBOL(rte_flow_validate)
 int
 rte_flow_validate(uint16_t port_id,
 		  const struct rte_flow_attr *attr,
@@ -403,6 +408,7 @@ rte_flow_validate(uint16_t port_id,
 }
 
 /* Create a flow rule on a given port. */
+RTE_EXPORT_SYMBOL(rte_flow_create)
 struct rte_flow *
 rte_flow_create(uint16_t port_id,
 		const struct rte_flow_attr *attr,
@@ -433,6 +439,7 @@ rte_flow_create(uint16_t port_id,
 }
 
 /* Destroy a flow rule on a given port. */
+RTE_EXPORT_SYMBOL(rte_flow_destroy)
 int
 rte_flow_destroy(uint16_t port_id,
 		 struct rte_flow *flow,
@@ -459,6 +466,7 @@ rte_flow_destroy(uint16_t port_id,
 				  NULL, rte_strerror(ENOSYS));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_actions_update, 23.07)
 int
 rte_flow_actions_update(uint16_t port_id,
 			struct rte_flow *flow,
@@ -486,6 +494,7 @@ rte_flow_actions_update(uint16_t port_id,
 }
 
 /* Destroy all flow rules associated with a port. */
+RTE_EXPORT_SYMBOL(rte_flow_flush)
 int
 rte_flow_flush(uint16_t port_id,
 	       struct rte_flow_error *error)
@@ -512,6 +521,7 @@ rte_flow_flush(uint16_t port_id,
 }
 
 /* Query an existing flow rule. */
+RTE_EXPORT_SYMBOL(rte_flow_query)
 int
 rte_flow_query(uint16_t port_id,
 	       struct rte_flow *flow,
@@ -541,6 +551,7 @@ rte_flow_query(uint16_t port_id,
 }
 
 /* Restrict ingress traffic to the defined flow rules. */
+RTE_EXPORT_SYMBOL(rte_flow_isolate)
 int
 rte_flow_isolate(uint16_t port_id,
 		 int set,
@@ -568,6 +579,7 @@ rte_flow_isolate(uint16_t port_id,
 }
 
 /* Initialize flow error structure. */
+RTE_EXPORT_SYMBOL(rte_flow_error_set)
 int
 rte_flow_error_set(struct rte_flow_error *error,
 		   int code,
@@ -1103,6 +1115,7 @@ rte_flow_conv_name(int is_action,
 }
 
 /** Helper function to convert flow API objects. */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_conv, 18.11)
 int
 rte_flow_conv(enum rte_flow_conv_op op,
 	      void *dst,
@@ -1174,6 +1187,7 @@ rte_flow_conv(enum rte_flow_conv_op op,
 }
 
 /** Store a full rte_flow description. */
+RTE_EXPORT_SYMBOL(rte_flow_copy)
 size_t
 rte_flow_copy(struct rte_flow_desc *desc, size_t len,
 	      const struct rte_flow_attr *attr,
@@ -1228,6 +1242,7 @@ rte_flow_copy(struct rte_flow_desc *desc, size_t len,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_dev_dump, 20.02)
 int
 rte_flow_dev_dump(uint16_t port_id, struct rte_flow *flow,
 			FILE *file, struct rte_flow_error *error)
@@ -1249,6 +1264,7 @@ rte_flow_dev_dump(uint16_t port_id, struct rte_flow *flow,
 				  NULL, rte_strerror(ENOSYS));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_get_aged_flows, 20.05)
 int
 rte_flow_get_aged_flows(uint16_t port_id, void **contexts,
 		    uint32_t nb_contexts, struct rte_flow_error *error)
@@ -1274,6 +1290,7 @@ rte_flow_get_aged_flows(uint16_t port_id, void **contexts,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_get_q_aged_flows, 22.11)
 int
 rte_flow_get_q_aged_flows(uint16_t port_id, uint32_t queue_id, void **contexts,
 			  uint32_t nb_contexts, struct rte_flow_error *error)
@@ -1301,6 +1318,7 @@ rte_flow_get_q_aged_flows(uint16_t port_id, uint32_t queue_id, void **contexts,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_handle_create, 21.05)
 struct rte_flow_action_handle *
 rte_flow_action_handle_create(uint16_t port_id,
 			      const struct rte_flow_indir_action_conf *conf,
@@ -1328,6 +1346,7 @@ rte_flow_action_handle_create(uint16_t port_id,
 	return handle;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_handle_destroy, 21.05)
 int
 rte_flow_action_handle_destroy(uint16_t port_id,
 			       struct rte_flow_action_handle *handle,
@@ -1351,6 +1370,7 @@ rte_flow_action_handle_destroy(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_handle_update, 21.05)
 int
 rte_flow_action_handle_update(uint16_t port_id,
 			      struct rte_flow_action_handle *handle,
@@ -1375,6 +1395,7 @@ rte_flow_action_handle_update(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_handle_query, 21.05)
 int
 rte_flow_action_handle_query(uint16_t port_id,
 			     const struct rte_flow_action_handle *handle,
@@ -1399,6 +1420,7 @@ rte_flow_action_handle_query(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_tunnel_decap_set, 20.11)
 int
 rte_flow_tunnel_decap_set(uint16_t port_id,
 			  struct rte_flow_tunnel *tunnel,
@@ -1428,6 +1450,7 @@ rte_flow_tunnel_decap_set(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_tunnel_match, 20.11)
 int
 rte_flow_tunnel_match(uint16_t port_id,
 		      struct rte_flow_tunnel *tunnel,
@@ -1457,6 +1480,7 @@ rte_flow_tunnel_match(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_get_restore_info, 20.11)
 int
 rte_flow_get_restore_info(uint16_t port_id,
 			  struct rte_mbuf *m,
@@ -1491,6 +1515,7 @@ static struct {
 	.desc = { .name = "RTE_MBUF_F_RX_RESTORE_INFO", },
 };
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_restore_info_dynflag, 23.07)
 uint64_t
 rte_flow_restore_info_dynflag(void)
 {
@@ -1511,6 +1536,7 @@ rte_flow_restore_info_dynflag_register(void)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_tunnel_action_decap_release, 20.11)
 int
 rte_flow_tunnel_action_decap_release(uint16_t port_id,
 				     struct rte_flow_action *actions,
@@ -1540,6 +1566,7 @@ rte_flow_tunnel_action_decap_release(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_tunnel_item_release, 20.11)
 int
 rte_flow_tunnel_item_release(uint16_t port_id,
 			     struct rte_flow_item *items,
@@ -1567,6 +1594,7 @@ rte_flow_tunnel_item_release(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_SYMBOL(rte_flow_pick_transfer_proxy)
 int
 rte_flow_pick_transfer_proxy(uint16_t port_id, uint16_t *proxy_port_id,
 			     struct rte_flow_error *error)
@@ -1594,6 +1622,7 @@ rte_flow_pick_transfer_proxy(uint16_t port_id, uint16_t *proxy_port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_flex_item_create, 21.11)
 struct rte_flow_item_flex_handle *
 rte_flow_flex_item_create(uint16_t port_id,
 			  const struct rte_flow_item_flex_conf *conf,
@@ -1620,6 +1649,7 @@ rte_flow_flex_item_create(uint16_t port_id,
 	return handle;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_flex_item_release, 21.11)
 int
 rte_flow_flex_item_release(uint16_t port_id,
 			   const struct rte_flow_item_flex_handle *handle,
@@ -1641,6 +1671,7 @@ rte_flow_flex_item_release(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_info_get, 22.03)
 int
 rte_flow_info_get(uint16_t port_id,
 		  struct rte_flow_port_info *port_info,
@@ -1677,6 +1708,7 @@ rte_flow_info_get(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_configure, 22.03)
 int
 rte_flow_configure(uint16_t port_id,
 		   const struct rte_flow_port_attr *port_attr,
@@ -1694,21 +1726,21 @@ rte_flow_configure(uint16_t port_id,
 		FLOW_LOG(INFO,
 			"Device with port_id=%"PRIu16" is not configured.",
 			port_id);
-		return -EINVAL;
+		goto error;
 	}
 	if (dev->data->dev_started != 0) {
 		FLOW_LOG(INFO,
 			"Device with port_id=%"PRIu16" already started.",
 			port_id);
-		return -EINVAL;
+		goto error;
 	}
 	if (port_attr == NULL) {
 		FLOW_LOG(ERR, "Port %"PRIu16" info is NULL.", port_id);
-		return -EINVAL;
+		goto error;
 	}
 	if (queue_attr == NULL) {
 		FLOW_LOG(ERR, "Port %"PRIu16" queue info is NULL.", port_id);
-		return -EINVAL;
+		goto error;
 	}
 	if ((port_attr->flags & RTE_FLOW_PORT_FLAG_SHARE_INDIRECT) &&
 	     !rte_eth_dev_is_valid_port(port_attr->host_port_id)) {
@@ -1729,8 +1761,13 @@ rte_flow_configure(uint16_t port_id,
 	return rte_flow_error_set(error, ENOTSUP,
 				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
 				  NULL, rte_strerror(ENOTSUP));
+error:
+	return rte_flow_error_set(error, EINVAL,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(EINVAL));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_pattern_template_create, 22.03)
 struct rte_flow_pattern_template *
 rte_flow_pattern_template_create(uint16_t port_id,
 		const struct rte_flow_pattern_template_attr *template_attr,
@@ -1787,6 +1824,7 @@ rte_flow_pattern_template_create(uint16_t port_id,
 	return NULL;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_pattern_template_destroy, 22.03)
 int
 rte_flow_pattern_template_destroy(uint16_t port_id,
 		struct rte_flow_pattern_template *pattern_template,
@@ -1817,6 +1855,7 @@ rte_flow_pattern_template_destroy(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_actions_template_create, 22.03)
 struct rte_flow_actions_template *
 rte_flow_actions_template_create(uint16_t port_id,
 			const struct rte_flow_actions_template_attr *template_attr,
@@ -1883,6 +1922,7 @@ rte_flow_actions_template_create(uint16_t port_id,
 	return NULL;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_actions_template_destroy, 22.03)
 int
 rte_flow_actions_template_destroy(uint16_t port_id,
 			struct rte_flow_actions_template *actions_template,
@@ -1913,6 +1953,7 @@ rte_flow_actions_template_destroy(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_template_table_create, 22.03)
 struct rte_flow_template_table *
 rte_flow_template_table_create(uint16_t port_id,
 			const struct rte_flow_template_table_attr *table_attr,
@@ -1986,6 +2027,7 @@ rte_flow_template_table_create(uint16_t port_id,
 	return NULL;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_template_table_destroy, 22.03)
 int
 rte_flow_template_table_destroy(uint16_t port_id,
 				struct rte_flow_template_table *template_table,
@@ -2016,6 +2058,7 @@ rte_flow_template_table_destroy(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_group_set_miss_actions, 23.11)
 int
 rte_flow_group_set_miss_actions(uint16_t port_id,
 				uint32_t group_id,
@@ -2038,6 +2081,7 @@ rte_flow_group_set_miss_actions(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_create, 22.03)
 struct rte_flow *
 rte_flow_async_create(uint16_t port_id,
 		      uint32_t queue_id,
@@ -2079,6 +2123,7 @@ rte_flow_async_create(uint16_t port_id,
 	return flow;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_create_by_index, 23.03)
 struct rte_flow *
 rte_flow_async_create_by_index(uint16_t port_id,
 			       uint32_t queue_id,
@@ -2117,6 +2162,7 @@ rte_flow_async_create_by_index(uint16_t port_id,
 	return flow;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_create_by_index_with_pattern, 24.11)
 struct rte_flow *
 rte_flow_async_create_by_index_with_pattern(uint16_t port_id,
 					    uint32_t queue_id,
@@ -2161,6 +2207,7 @@ rte_flow_async_create_by_index_with_pattern(uint16_t port_id,
 	return flow;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_destroy, 22.03)
 int
 rte_flow_async_destroy(uint16_t port_id,
 		       uint32_t queue_id,
@@ -2191,6 +2238,7 @@ rte_flow_async_destroy(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_actions_update, 23.07)
 int
 rte_flow_async_actions_update(uint16_t port_id,
 			      uint32_t queue_id,
@@ -2225,6 +2273,7 @@ rte_flow_async_actions_update(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_push, 22.03)
 int
 rte_flow_push(uint16_t port_id,
 	      uint32_t queue_id,
@@ -2249,6 +2298,7 @@ rte_flow_push(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_pull, 22.03)
 int
 rte_flow_pull(uint16_t port_id,
 	      uint32_t queue_id,
@@ -2275,6 +2325,7 @@ rte_flow_pull(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_handle_create, 22.03)
 struct rte_flow_action_handle *
 rte_flow_async_action_handle_create(uint16_t port_id,
 		uint32_t queue_id,
@@ -2311,6 +2362,7 @@ rte_flow_async_action_handle_create(uint16_t port_id,
 	return handle;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_handle_destroy, 22.03)
 int
 rte_flow_async_action_handle_destroy(uint16_t port_id,
 		uint32_t queue_id,
@@ -2340,6 +2392,7 @@ rte_flow_async_action_handle_destroy(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_handle_update, 22.03)
 int
 rte_flow_async_action_handle_update(uint16_t port_id,
 		uint32_t queue_id,
@@ -2371,6 +2424,7 @@ rte_flow_async_action_handle_update(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_handle_query, 22.11)
 int
 rte_flow_async_action_handle_query(uint16_t port_id,
 		uint32_t queue_id,
@@ -2402,6 +2456,7 @@ rte_flow_async_action_handle_query(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_handle_query_update, 23.03)
 int
 rte_flow_action_handle_query_update(uint16_t port_id,
 				    struct rte_flow_action_handle *handle,
@@ -2427,6 +2482,7 @@ rte_flow_action_handle_query_update(uint16_t port_id,
 	return flow_err(port_id, ret, error);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_handle_query_update, 23.03)
 int
 rte_flow_async_action_handle_query_update(uint16_t port_id, uint32_t queue_id,
 					  const struct rte_flow_op_attr *attr,
@@ -2453,6 +2509,7 @@ rte_flow_async_action_handle_query_update(uint16_t port_id, uint32_t queue_id,
 								  user_data, error);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_list_handle_create, 23.07)
 struct rte_flow_action_list_handle *
 rte_flow_action_list_handle_create(uint16_t port_id,
 				   const
@@ -2480,6 +2537,7 @@ rte_flow_action_list_handle_create(uint16_t port_id,
 	return handle;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_list_handle_destroy, 23.07)
 int
 rte_flow_action_list_handle_destroy(uint16_t port_id,
 				    struct rte_flow_action_list_handle *handle,
@@ -2502,6 +2560,7 @@ rte_flow_action_list_handle_destroy(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_list_handle_create, 23.07)
 struct rte_flow_action_list_handle *
 rte_flow_async_action_list_handle_create(uint16_t port_id, uint32_t queue_id,
 					 const struct rte_flow_op_attr *attr,
@@ -2538,6 +2597,7 @@ rte_flow_async_action_list_handle_create(uint16_t port_id, uint32_t queue_id,
 	return handle;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_list_handle_destroy, 23.07)
 int
 rte_flow_async_action_list_handle_destroy(uint16_t port_id, uint32_t queue_id,
 				 const struct rte_flow_op_attr *op_attr,
@@ -2565,6 +2625,7 @@ rte_flow_async_action_list_handle_destroy(uint16_t port_id, uint32_t queue_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_action_list_handle_query_update, 23.07)
 int
 rte_flow_action_list_handle_query_update(uint16_t port_id,
 			 const struct rte_flow_action_list_handle *handle,
@@ -2591,6 +2652,7 @@ rte_flow_action_list_handle_query_update(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_action_list_handle_query_update, 23.07)
 int
 rte_flow_async_action_list_handle_query_update(uint16_t port_id, uint32_t queue_id,
 			 const struct rte_flow_op_attr *attr,
@@ -2625,6 +2687,7 @@ rte_flow_async_action_list_handle_query_update(uint16_t port_id, uint32_t queue_
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_calc_table_hash, 23.11)
 int
 rte_flow_calc_table_hash(uint16_t port_id, const struct rte_flow_template_table *table,
 			 const struct rte_flow_item pattern[], uint8_t pattern_template_index,
@@ -2646,6 +2709,7 @@ rte_flow_calc_table_hash(uint16_t port_id, const struct rte_flow_template_table 
 	return flow_err(port_id, ret, error);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_calc_encap_hash, 24.03)
 int
 rte_flow_calc_encap_hash(uint16_t port_id, const struct rte_flow_item pattern[],
 			 enum rte_flow_encap_hash_field dest_field, uint8_t hash_len,
@@ -2675,6 +2739,7 @@ rte_flow_calc_encap_hash(uint16_t port_id, const struct rte_flow_item pattern[],
 	return flow_err(port_id, ret, error);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_template_table_resizable, 24.03)
 bool
 rte_flow_template_table_resizable(__rte_unused uint16_t port_id,
 				  const struct rte_flow_template_table_attr *tbl_attr)
@@ -2683,6 +2748,7 @@ rte_flow_template_table_resizable(__rte_unused uint16_t port_id,
 		RTE_FLOW_TABLE_SPECIALIZE_RESIZABLE) != 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_template_table_resize, 24.03)
 int
 rte_flow_template_table_resize(uint16_t port_id,
 			       struct rte_flow_template_table *table,
@@ -2706,6 +2772,7 @@ rte_flow_template_table_resize(uint16_t port_id,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_async_update_resized, 24.03)
 int
 rte_flow_async_update_resized(uint16_t port_id, uint32_t queue,
 			      const struct rte_flow_op_attr *attr,
@@ -2730,6 +2797,7 @@ rte_flow_async_update_resized(uint16_t port_id, uint32_t queue,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_flow_template_table_resize_complete, 24.03)
 int
 rte_flow_template_table_resize_complete(uint16_t port_id,
 					struct rte_flow_template_table *table,
@@ -2965,6 +3033,7 @@ rte_flow_dummy_async_action_list_handle_query_update(
 				  rte_strerror(ENOSYS));
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_flow_fp_default_ops)
 struct rte_flow_fp_ops rte_flow_fp_default_ops = {
 	.async_create = rte_flow_dummy_async_create,
 	.async_create_by_index = rte_flow_dummy_async_create_by_index,

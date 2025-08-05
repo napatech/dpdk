@@ -1793,10 +1793,27 @@ int bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 	return bnxt_dev_stop(eth_dev);
 }
 
+static void bnxt_update_max_rx_burst(struct bnxt *bp, struct rte_eth_link *link)
+{
+	if (link->link_speed == RTE_ETH_SPEED_NUM_400G) {
+		uint32_t i;
+
+		/* Faster port speed. Update threshold.  Else use default. */
+		for (i = 0; i < bp->rx_nr_rings; i++) {
+			struct bnxt_rx_queue *rxq = bp->rx_queues[i];
+
+			rxq->rx_free_thresh =
+				RTE_MIN(rte_align32pow2(rxq->nb_rx_desc) / 4,
+					RTE_BNXT_MAX_RX_BURST_TH2);
+		}
+	}
+}
+
 int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
 	uint64_t rx_offloads = eth_dev->data->dev_conf.rxmode.offloads;
+	struct rte_eth_link *link = &eth_dev->data->dev_link;
 	int vlan_mask = 0;
 	int rc, retry_cnt = BNXT_IF_CHANGE_RETRY_COUNT;
 
@@ -1876,6 +1893,8 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 
 	eth_dev->rx_pkt_burst = bnxt_receive_function(eth_dev);
 	eth_dev->tx_pkt_burst = bnxt_transmit_function(eth_dev);
+
+	bnxt_update_max_rx_burst(bp, link);
 
 	bnxt_schedule_fw_health_check(bp);
 
@@ -2114,6 +2133,7 @@ out:
 		rte_eth_linkstatus_set(eth_dev, &new);
 		bnxt_print_link_info(eth_dev);
 	}
+	bnxt_update_max_rx_burst(bp, &new);
 
 	return rc;
 }
@@ -3238,8 +3258,6 @@ static const struct {
 #if defined(RTE_ARCH_X86)
 	{bnxt_crx_pkts_vec,		"Vector SSE"},
 	{bnxt_recv_pkts_vec,		"Vector SSE"},
-#endif
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
 	{bnxt_crx_pkts_vec_avx2,	"Vector AVX2"},
 	{bnxt_recv_pkts_vec_avx2,	"Vector AVX2"},
 #endif
@@ -4567,10 +4585,10 @@ bnxt_check_fw_reset_done(struct bnxt *bp)
 	int rc;
 
 	do {
-		rc = rte_pci_read_config(bp->pdev, &val, sizeof(val), PCI_SUBSYSTEM_ID_OFFSET);
+		rc = rte_pci_read_config(bp->pdev, &val, sizeof(val), RTE_PCI_SUBSYSTEM_ID);
 		if (rc < 0) {
 			PMD_DRV_LOG_LINE(ERR, "Failed to read PCI offset 0x%x",
-				PCI_SUBSYSTEM_ID_OFFSET);
+				RTE_PCI_SUBSYSTEM_ID);
 			return rc;
 		}
 		if (val != 0xffff)
@@ -4805,10 +4823,10 @@ void bnxt_dev_reset_and_resume(void *arg)
 	 * we can poll this config register immediately for the value to revert.
 	 */
 	if (bp->flags & BNXT_FLAG_FATAL_ERROR) {
-		rc = rte_pci_read_config(bp->pdev, &val, sizeof(val), PCI_SUBSYSTEM_ID_OFFSET);
+		rc = rte_pci_read_config(bp->pdev, &val, sizeof(val), RTE_PCI_SUBSYSTEM_ID);
 		if (rc < 0) {
 			PMD_DRV_LOG_LINE(ERR, "Failed to read PCI offset 0x%x",
-				PCI_SUBSYSTEM_ID_OFFSET);
+				RTE_PCI_SUBSYSTEM_ID);
 			return;
 		}
 		if (val == 0xffff) {
@@ -5785,6 +5803,11 @@ try_again:
 	if (rc)
 		return rc;
 
+	if (bnxt_compressed_rx_cqe_mode_enabled(bp)) {
+		PMD_DRV_LOG_LINE(INFO, "Compressed CQE is set. Truflow is disabled.");
+		bp->fw_cap &= ~BNXT_FW_CAP_TRUFLOW_EN;
+	}
+
 	rc = bnxt_hwrm_queue_qportcfg(bp);
 	if (rc)
 		return rc;
@@ -5821,31 +5844,12 @@ try_again:
 static int
 bnxt_init_locks(struct bnxt *bp)
 {
-	int err;
+	pthread_mutex_init(&bp->flow_lock, NULL);
+	pthread_mutex_init(&bp->def_cp_lock, NULL);
+	pthread_mutex_init(&bp->health_check_lock, NULL);
+	pthread_mutex_init(&bp->err_recovery_lock, NULL);
 
-	err = pthread_mutex_init(&bp->flow_lock, NULL);
-	if (err) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize flow_lock");
-		return err;
-	}
-
-	err = pthread_mutex_init(&bp->def_cp_lock, NULL);
-	if (err) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize def_cp_lock");
-		return err;
-	}
-
-	err = pthread_mutex_init(&bp->health_check_lock, NULL);
-	if (err) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize health_check_lock");
-		return err;
-	}
-
-	err = pthread_mutex_init(&bp->err_recovery_lock, NULL);
-	if (err)
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize err_recovery_lock");
-
-	return err;
+	return 0;
 }
 
 /* This should be called after we have queried trusted VF cap */
@@ -6546,8 +6550,8 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev, void *params __rte_unused)
 	eth_dev->rx_queue_count = bnxt_rx_queue_count_op;
 	eth_dev->rx_descriptor_status = bnxt_rx_descriptor_status_op;
 	eth_dev->tx_descriptor_status = bnxt_tx_descriptor_status_op;
-	eth_dev->rx_pkt_burst = &bnxt_recv_pkts;
-	eth_dev->tx_pkt_burst = &bnxt_xmit_pkts;
+	eth_dev->rx_pkt_burst = bnxt_receive_function(eth_dev);
+	eth_dev->tx_pkt_burst = bnxt_transmit_function(eth_dev);
 
 	/*
 	 * For secondary processes, we don't initialise any further
@@ -6746,7 +6750,7 @@ static void bnxt_free_rep_info(struct bnxt *bp)
 
 static int bnxt_init_rep_info(struct bnxt *bp)
 {
-	int i = 0, rc;
+	int i = 0;
 
 	if (bp->rep_info)
 		return 0;
@@ -6770,14 +6774,7 @@ static int bnxt_init_rep_info(struct bnxt *bp)
 	for (i = 0; i < BNXT_MAX_CFA_CODE; i++)
 		bp->cfa_code_map[i] = BNXT_VF_IDX_INVALID;
 
-	rc = pthread_mutex_init(&bp->rep_info->vfr_start_lock, NULL);
-	if (rc) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize vfr_start_lock");
-		bnxt_free_rep_info(bp);
-		return rc;
-	}
-
-	return rc;
+	return pthread_mutex_init(&bp->rep_info->vfr_start_lock, NULL);
 }
 
 static int bnxt_rep_port_probe(struct rte_pci_device *pci_dev,
@@ -7014,6 +7011,8 @@ static int bnxt_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 static int bnxt_pci_remove(struct rte_pci_device *pci_dev)
 {
 	struct rte_eth_dev *eth_dev;
+	uint16_t port_id;
+	int rc = 0;
 
 	eth_dev = rte_eth_dev_allocated(pci_dev->device.name);
 	if (!eth_dev)
@@ -7023,14 +7022,20 @@ static int bnxt_pci_remove(struct rte_pci_device *pci_dev)
 			   * +ve value will at least help in proper cleanup
 			   */
 
-	PMD_DRV_LOG_LINE(DEBUG, "BNXT Port:%d pci remove", eth_dev->data->port_id);
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (rte_eth_dev_is_repr(eth_dev))
-			return rte_eth_dev_destroy(eth_dev,
-						   bnxt_representor_uninit);
-		else
-			return rte_eth_dev_destroy(eth_dev,
-						   bnxt_dev_uninit);
+		RTE_ETH_FOREACH_DEV_OF(port_id, &pci_dev->device) {
+			PMD_DRV_LOG_LINE(DEBUG, "BNXT Port:%d pci remove", port_id);
+			eth_dev = &rte_eth_devices[port_id];
+			if (eth_dev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR)
+				rc = rte_eth_dev_destroy(eth_dev,
+							 bnxt_representor_uninit);
+			else
+				rc = rte_eth_dev_destroy(eth_dev,
+							 bnxt_dev_uninit);
+			if (rc != 0)
+				return rc;
+		}
+		return rc;
 	} else {
 		return rte_eth_dev_pci_generic_remove(pci_dev, NULL);
 	}

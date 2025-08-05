@@ -183,11 +183,19 @@ struct mbox_msghdr {
 	  msg_rsp)                                                             \
 	M(CPT_CTX_CACHE_SYNC, 0xA07, cpt_ctx_cache_sync, msg_req, msg_rsp)     \
 	M(CPT_LF_RESET, 0xA08, cpt_lf_reset, cpt_lf_rst_req, msg_rsp)          \
+	M(CPT_FLT_ENG_INFO, 0xA09, cpt_flt_eng_info, cpt_flt_eng_info_req,	\
+				   cpt_flt_eng_info_rsp)			\
+	M(CPT_RX_INLINE_QALLOC, 0xA0A, cpt_rx_inline_qalloc, msg_req,		\
+				       cpt_rx_inline_qalloc_rsp)		\
+	M(CPT_RX_INL_QUEUE_CFG, 0xA0B, cpt_rx_inl_queue_cfg,			\
+				       cpt_rx_inline_qcfg_req, msg_rsp)        \
 	M(CPT_RX_INLINE_LF_CFG, 0xBFE, cpt_rx_inline_lf_cfg,                   \
 	  cpt_rx_inline_lf_cfg_msg, msg_rsp)                                   \
 	M(CPT_GET_CAPS, 0xBFD, cpt_caps_get, msg_req, cpt_caps_rsp_msg)        \
 	M(CPT_GET_ENG_GRP, 0xBFF, cpt_eng_grp_get, cpt_eng_grp_req,            \
 	  cpt_eng_grp_rsp)                                                     \
+	M(CPT_SET_QUEUE_PRI, 0xBFB, cpt_set_que_pri, cpt_queue_pri_req_msg,	\
+			       msg_rsp)					\
 	/* REE mbox IDs (range 0xE00 - 0xFFF) */                               \
 	M(REE_CONFIG_LF, 0xE01, ree_config_lf, ree_lf_req_msg, msg_rsp)        \
 	M(REE_RD_WR_REGISTER, 0xE02, ree_rd_wr_register, ree_rd_wr_reg_msg,    \
@@ -244,6 +252,22 @@ struct mbox_msghdr {
 	  npc_get_field_hash_info_req, npc_get_field_hash_info_rsp)            \
 	M(NPC_MCAM_GET_HIT_STATUS, 0x6015, npc_mcam_get_hit_status,            \
 	  npc_mcam_get_hit_status_req, npc_mcam_get_hit_status_rsp)            \
+	M(NPC_MCAM_DEFRAG, 0x6016, npc_defrag, msg_req,	msg_rsp)               \
+	M(NPC_CN20K_GET_KEX_CFG, 0x6017, npc_cn20k_get_kex_cfg, msg_req,       \
+	  npc_cn20k_get_kex_cfg_rsp)                                           \
+	M(NPC_CN20K_MCAM_GET_FREE_COUNT, 0x6018, npc_cn20k_get_free_count,     \
+	  msg_req, npc_cn20k_get_free_count_rsp)                               \
+	M(NPC_CN20K_MCAM_WRITE_ENTRY,	0x6019, npc_cn20k_mcam_write_entry,    \
+	  npc_cn20k_mcam_write_entry_req, msg_rsp)	                       \
+	M(NPC_CN20K_MCAM_ALLOC_AND_WRITE_ENTRY, 0x601a,			       \
+	  npc_cn20k_mcam_alloc_and_write_entry,				       \
+	  npc_cn20k_mcam_alloc_and_write_entry_req,			       \
+	  npc_mcam_alloc_and_write_entry_rsp)				       \
+	M(NPC_CN20K_MCAM_READ_ENTRY,	0x601b, npc_cn20k_mcam_read_entry,     \
+	  npc_mcam_read_entry_req, npc_cn20k_mcam_read_entry_rsp)	       \
+	M(NPC_CN20K_MCAM_READ_BASE_RULE, 0x601c,                               \
+	  npc_cn20k_read_base_steer_rule, msg_req,                             \
+	  npc_cn20k_mcam_read_base_rule_rsp)                                   \
 	/* NIX mbox IDs (range 0x8000 - 0xFFFF) */                             \
 	M(NIX_LF_ALLOC, 0x8000, nix_lf_alloc, nix_lf_alloc_req,                \
 	  nix_lf_alloc_rsp)                                                    \
@@ -320,6 +344,15 @@ struct mbox_msghdr {
 	  nix_mcast_grp_update_rsp)                                                                \
 	M(NIX_GET_LF_STATS,    0x802e, nix_get_lf_stats, nix_get_lf_stats_req, nix_lf_stats_rsp)   \
 	M(NIX_CN20K_AQ_ENQ, 0x802f, nix_cn20k_aq_enq, nix_cn20k_aq_enq_req, nix_cn20k_aq_enq_rsp)  \
+	M(NIX_LSO_ALT_FLAGS_CFG, 0x8030, nix_lso_alt_flags_cfg, nix_lso_alt_flags_cfg_req, \
+				nix_lso_alt_flags_cfg_rsp)			\
+	M(NIX_RX_INLINE_PROFILE_CFG, 0x8031, nix_rx_inl_profile_cfg,			\
+				nix_rx_inl_profile_cfg_req,			\
+				nix_rx_inl_profile_cfg_rsp)			\
+	M(NIX_RX_INLINE_LF_CFG, 0x8032, nix_rx_inl_lf_cfg, nix_rx_inl_lf_cfg_req,	\
+				msg_rsp)					\
+	M(NIX_RX_INL_QUEUE_CFG,	0x8033, nix_rx_inl_queue_cfg,				\
+			      nix_rx_inline_qcfg_req, msg_rsp)		\
 	/* MCS mbox IDs (range 0xa000 - 0xbFFF) */                                                 \
 	M(MCS_ALLOC_RESOURCES, 0xa000, mcs_alloc_resources, mcs_alloc_rsrc_req,                    \
 	  mcs_alloc_rsrc_rsp)                                                                      \
@@ -645,7 +678,7 @@ struct cgx_mac_addr_add_req {
  */
 struct cgx_mac_addr_add_rsp {
 	struct mbox_msghdr hdr;
-	uint8_t __io index;
+	uint32_t __io index;
 };
 
 /* Structure for requesting the operation to
@@ -653,7 +686,7 @@ struct cgx_mac_addr_add_rsp {
  */
 struct cgx_mac_addr_del_req {
 	struct mbox_msghdr hdr;
-	uint8_t __io index;
+	uint32_t __io index;
 };
 
 /* Structure for response against the operation to
@@ -661,7 +694,7 @@ struct cgx_mac_addr_del_req {
  */
 struct cgx_max_dmac_entries_get_rsp {
 	struct mbox_msghdr hdr;
-	uint8_t __io max_dmac_filters;
+	uint32_t __io max_dmac_filters;
 };
 
 struct cgx_link_user_info {
@@ -1744,6 +1777,8 @@ struct nix_rss_flowkey_cfg {
 #define FLOW_KEY_TYPE_CH_LEN_90B    BIT(18)
 #define FLOW_KEY_TYPE_CUSTOM0	    BIT(19)
 #define FLOW_KEY_TYPE_VLAN	    BIT(20)
+#define FLOW_KEY_TYPE_ESP	    BIT(23)
+#define FLOW_KEY_TYPE_ROCEV2	    BIT(24)
 #define FLOW_KEY_TYPE_L4_DST	    BIT(28)
 #define FLOW_KEY_TYPE_L4_SRC	    BIT(29)
 #define FLOW_KEY_TYPE_L3_DST	    BIT(30)
@@ -1815,6 +1850,7 @@ struct nix_rx_mode {
 #define NIX_RX_MODE_UCAST    BIT(0)
 #define NIX_RX_MODE_PROMISC  BIT(1)
 #define NIX_RX_MODE_ALLMULTI BIT(2)
+#define NIX_RX_MODE_USE_MCE  BIT(3)
 	uint16_t __io mode;
 };
 
@@ -1943,6 +1979,34 @@ struct nix_mcast_grp_update_rsp {
 	uint32_t __io mce_start_index;
 };
 
+#define IPSEC_GEN_CFG_EGRP   GENMASK_ULL(50, 48)
+#define IPSEC_GEN_CFG_OPCODE GENMASK_ULL(47, 32)
+#define IPSEC_GEN_CFG_PARAM1 GENMASK_ULL(31, 16)
+#define IPSEC_GEN_CFG_PARAM2 GENMASK_ULL(15, 0)
+
+#define CPT_INST_QSEL_BLOCK   GENMASK_ULL(28, 24)
+#define CPT_INST_QSEL_PF_FUNC GENMASK_ULL(23, 8)
+#define CPT_INST_QSEL_SLOT    GENMASK_ULL(7, 0)
+
+#define CPT_INST_CREDIT_HYST GENMASK_ULL(61, 56)
+#define CPT_INST_CREDIT_TH   GENMASK_ULL(53, 32)
+#define CPT_INST_CREDIT_BPID GENMASK_ULL(30, 22)
+#define CPT_INST_CREDIT_CNT  GENMASK_ULL(21, 0)
+
+/* Per queue NIX inline IPSec configuration */
+struct nix_rx_inline_qcfg_req {
+	struct mbox_msghdr hdr;
+	uint32_t __io cpt_credit;
+	uint32_t __io credit_th;
+	uint16_t __io cpt_pf_func;
+	uint16_t __io bpid;
+	uint8_t __io cpt_slot;
+	uint8_t __io rx_queue_id;
+	uint8_t __io enable;
+	uint8_t __io hysteresis;
+	uint8_t __io rsvd[32];
+};
+
 struct nix_get_lf_stats_req {
 	struct mbox_msghdr hdr;
 	uint16_t __io pcifunc;
@@ -1992,6 +2056,32 @@ struct nix_inline_ipsec_cfg {
 	uint32_t __io credit_th;
 };
 
+#define NIX_RX_INL_PROFILE_PROTO_CNT 9
+struct nix_rx_inl_profile_cfg_req {
+	struct mbox_msghdr hdr;
+	uint64_t __io def_cfg;
+	uint64_t __io extract_cfg;
+	uint64_t __io gen_cfg;
+	uint64_t __io prot_field_cfg[NIX_RX_INL_PROFILE_PROTO_CNT];
+	uint64_t __io rsvd[32];		/* reserved fields for future expansion */
+};
+
+struct nix_rx_inl_profile_cfg_rsp {
+	struct mbox_msghdr hdr;
+	uint8_t __io profile_id;
+	uint8_t __io rsvd[32];		/* reserved fields for future expansion */
+};
+
+struct nix_rx_inl_lf_cfg_req {
+	struct mbox_msghdr hdr;
+	uint64_t __io rx_inline_cfg0;
+	uint64_t __io rx_inline_cfg1;
+	uint64_t __io rx_inline_sa_base;
+	uint8_t __io enable;
+	uint8_t __io profile_id;
+	uint8_t __io rsvd[32];		/* reserved fields for future expansion */
+};
+
 /* Per NIX LF inline IPSec configuration */
 struct nix_inline_ipsec_lf_cfg {
 	struct mbox_msghdr hdr;
@@ -2007,6 +2097,10 @@ struct nix_inline_ipsec_lf_cfg {
 		uint8_t __io sa_idx_w;
 	} ipsec_cfg1;
 	uint8_t __io enable;
+	struct {
+		uint8_t __io res_addr_offset;
+		uint8_t __io res_addr_offset_valid;
+	} ipsec_cfg0_ext;
 };
 
 struct nix_hw_info {
@@ -2046,6 +2140,17 @@ struct nix_bandprof_get_hwinfo_rsp {
 	struct mbox_msghdr hdr;
 	uint16_t __io prof_count[NIX_RX_BAND_PROF_LAYER_MAX];
 	uint32_t __io policer_timeunit;
+};
+
+struct nix_lso_alt_flags_cfg_req {
+	struct mbox_msghdr hdr;
+	uint64_t __io cfg;
+	uint64_t __io cfg1;
+};
+
+struct nix_lso_alt_flags_cfg_rsp {
+	struct mbox_msghdr hdr;
+	uint8_t __io lso_alt_flags_idx;
 };
 
 /* SSO mailbox error codes
@@ -2275,6 +2380,34 @@ struct cpt_lf_alloc_req_msg {
 	uint8_t __io rxc_ena_lf_id : 7;
 };
 
+struct cpt_rx_inline_qalloc_rsp {
+	struct mbox_msghdr hdr;
+	uint8_t __io rx_queue_id;
+	uint64_t __io rsvd[8]; /* For future extensions */
+};
+
+struct cpt_queue_pri_req_msg {
+	struct mbox_msghdr hdr;
+	uint32_t __io slot;
+	uint8_t __io queue_pri;
+};
+
+struct cpt_rx_inline_qcfg_req {
+	struct mbox_msghdr hdr;
+	uint16_t __io sso_pf_func; /* inbound path SSO_PF_FUNC */
+	uint16_t __io nix_pf_func; /* outbound path NIX_PF_FUNC */
+	uint16_t __io ctx_pf_func;
+	uint8_t __io eng_grpmsk;
+	uint8_t __io enable;
+	uint8_t __io slot;
+	uint8_t __io rx_queue_id;
+	uint8_t __io ctx_ilen;
+	uint8_t __io pf_func_ctx;
+	uint8_t __io inflight_limit;
+	uint8_t __io queue_pri;
+	uint8_t __io rsvd[32]; /* For future extensions */
+};
+
 #define CPT_INLINE_INBOUND  0
 #define CPT_INLINE_OUTBOUND 1
 
@@ -2342,6 +2475,24 @@ struct cpt_rxc_time_cfg_req {
 	uint16_t __io zombie_limit;
 	uint16_t __io active_thres;
 	uint16_t __io active_limit;
+	uint16_t __io queue_id;
+	uint64_t __io cpt_af_rxc_que_cfg;
+};
+
+/* Mailbox message format to request for CPT faulted engines */
+struct cpt_flt_eng_info_req {
+	struct mbox_msghdr hdr;
+	int __io blkaddr;
+	bool __io reset;
+	uint32_t __io rsvd;
+};
+
+struct cpt_flt_eng_info_rsp {
+	struct mbox_msghdr hdr;
+#define CPT_AF_MAX_FLT_INT_VECS 3
+	uint64_t __io flt_eng_map[CPT_AF_MAX_FLT_INT_VECS];
+	uint64_t __io rcvrd_eng_map[CPT_AF_MAX_FLT_INT_VECS];
+	uint64_t __io rsvd;
 };
 
 struct cpt_rx_inline_lf_cfg_msg {
@@ -2485,6 +2636,14 @@ enum npc_af_status {
 	NPC_MCAM_ALLOC_FAILED = -703,
 	NPC_MCAM_PERM_DENIED = -704,
 	NPC_AF_ERR_HIGIG_CONFIG_FAIL = -705,
+	NPC_AF_ERR_HIGIG_NOT_SUPPORTED = -706,
+	NPC_FLOW_INTF_INVALID = -707,
+	NPC_FLOW_CHAN_INVALID = -708,
+	NPC_FLOW_NO_NIXLF = -709,
+	NPC_FLOW_NOT_SUPPORTED = -710,
+	NPC_FLOW_VF_PERM_DENIED = -711,
+	NPC_FLOW_VF_NOT_INIT = -712,
+	NPC_FLOW_VF_OVERLAP = -713,
 };
 
 struct npc_mcam_alloc_entry_req {
@@ -2494,9 +2653,12 @@ struct npc_mcam_alloc_entry_req {
 #define NPC_MCAM_ANY_PRIO    0
 #define NPC_MCAM_LOWER_PRIO  1
 #define NPC_MCAM_HIGHER_PRIO 2
-	uint8_t __io priority; /* Lower or higher w.r.t ref_entry */
+	uint8_t __io ref_priority; /* Lower or higher w.r.t ref_entry */
 	uint16_t __io ref_entry;
 	uint16_t __io count; /* Number of entries requested */
+	uint8_t __io kw_type; /* Key type */
+	uint8_t __io virt;    /* Request virtual index */
+	uint16_t __io rsvd[16];	/* Reserved */
 };
 
 struct npc_mcam_alloc_entry_rsp {
@@ -2508,6 +2670,7 @@ struct npc_mcam_alloc_entry_rsp {
 	uint16_t __io count;	  /* Number of entries allocated */
 	uint16_t __io free_count; /* Number of entries available */
 	uint16_t __io entry_list[NPC_MAX_NONCONTIG_ENTRIES];
+	uint16_t __io rsvd[16];	/* Reserved */
 };
 
 struct npc_mcam_free_entry_req {
@@ -2532,6 +2695,27 @@ struct npc_mcam_write_entry_req {
 	uint8_t __io intf;	   /* Rx or Tx interface */
 	uint8_t __io enable_entry; /* Enable this MCAM entry ? */
 	uint8_t __io set_cntr;	   /* Set counter for this entry ? */
+};
+
+struct cn20k_mcam_entry {
+#define NPC_CN20K_MAX_KWS_IN_KEY 8 /* Number of keywords in max keywidth */
+	uint64_t __io kw[NPC_CN20K_MAX_KWS_IN_KEY];
+	uint64_t __io kw_mask[NPC_CN20K_MAX_KWS_IN_KEY];
+	uint64_t __io action;
+	uint64_t __io vtag_action;
+	uint64_t __io action2;
+};
+
+struct npc_cn20k_mcam_write_entry_req {
+	struct mbox_msghdr hdr;
+	struct cn20k_mcam_entry entry_data;
+	uint16_t __io entry;	   /* MCAM entry to write this match key */
+	uint16_t __io cntr;	   /* Counter for this MCAM entry */
+	uint8_t __io intf;	   /* Rx or Tx interface */
+	uint8_t __io enable_entry; /* Enable this MCAM entry ? */
+	uint8_t __io hw_prio;	   /* hardware priority, valid for cn20k */
+	uint8_t __io req_kw_type;  /* Type of kw which should be written */
+	uint64_t __io reserved;	   /* reserved for future use */
 };
 
 /* Enable/Disable a given entry */
@@ -2593,10 +2777,23 @@ struct npc_mcam_alloc_and_write_entry_req {
 	struct mbox_msghdr hdr;
 	struct mcam_entry entry_data;
 	uint16_t __io ref_entry;
-	uint8_t __io priority;	   /* Lower or higher w.r.t ref_entry */
+	uint8_t __io ref_priority; /* Lower or higher w.r.t ref_entry */
 	uint8_t __io intf;	   /* Rx or Tx interface */
 	uint8_t __io enable_entry; /* Enable this MCAM entry ? */
 	uint8_t __io alloc_cntr;   /* Allocate counter and map ? */
+};
+
+struct npc_cn20k_mcam_alloc_and_write_entry_req {
+	struct mbox_msghdr hdr;
+	struct cn20k_mcam_entry entry_data;
+	uint16_t __io ref_entry;
+	uint8_t __io ref_prio;	   /* Lower or higher w.r.t ref_entry */
+	uint8_t __io intf;	   /* Rx or Tx interface */
+	uint8_t __io enable_entry; /* Enable this MCAM entry ? */
+	uint8_t __io hw_prio;	   /* hardware priority, valid for cn20k */
+	uint8_t __io virt;	   /* Allocate virtual index */
+	uint8_t __io req_kw_type;  /* Key type to be written */
+	uint16_t __io reserved[4]; /* reserved for future use */
 };
 
 struct npc_mcam_alloc_and_write_entry_rsp {
@@ -2623,6 +2820,48 @@ struct npc_get_kex_cfg_rsp {
 	uint64_t __io intf_ld_flags[NPC_MAX_INTF][NPC_MAX_LD][NPC_MAX_LFL];
 #define MKEX_NAME_LEN 128
 	uint8_t __io mkex_pfl_name[MKEX_NAME_LEN];
+};
+
+struct npc_delete_flow_rsp {
+	struct mbox_msghdr hdr;
+	uint16_t __io cntr_val;
+};
+
+/* Available entries to use */
+struct npc_cn20k_get_free_count_rsp {
+	struct mbox_msghdr hdr;
+	int __io free_x2;
+	int __io free_x4;
+	int __io free_subbanks;
+};
+
+struct npc_cn20k_get_kex_cfg_rsp {
+	struct mbox_msghdr hdr;
+	uint64_t __io rx_keyx_cfg; /* NPC_AF_INTF(0)_KEX_CFG */
+	uint64_t __io tx_keyx_cfg; /* NPC_AF_INTF(1)_KEX_CFG */
+#define NPC_MAX_EXTRACTOR 24
+	/* MKEX Extractor data */
+	uint64_t __io intf_extr[NPC_MAX_INTF][NPC_MAX_EXTRACTOR];
+	/* KEX configuration per extractor */
+	uint64_t __io intf_extr_lt[NPC_MAX_INTF][NPC_MAX_EXTRACTOR][NPC_MAX_LT];
+#define MKEX_NAME_LEN 128
+	uint8_t __io mkex_pfl_name[MKEX_NAME_LEN];
+};
+
+struct npc_get_field_hash_info_req {
+	struct mbox_msghdr hdr;
+	uint8_t __io intf;
+};
+
+struct npc_get_field_hash_info_rsp {
+	struct mbox_msghdr hdr;
+	uint64_t __io secret_key[3];
+#define NPC_MAX_HASH	  2
+#define NPC_MAX_HASH_MASK 2
+	/* NPC_AF_INTF(0..1)_HASH(0..1)_MASK(0..1) */
+	uint64_t __io hash_mask[NPC_MAX_INTF][NPC_MAX_HASH][NPC_MAX_HASH_MASK];
+	/* NPC_AF_INTF(0..1)_HASH(0..1)_RESULT_CTRL */
+	uint64_t __io hash_ctrl[NPC_MAX_INTF][NPC_MAX_HASH];
 };
 
 enum header_fields {
@@ -2714,6 +2953,8 @@ struct npc_install_flow_req {
 	uint8_t __io vtag1_op;
 	/* old counter value */
 	uint16_t __io cntr_val;
+	/* hardware priority, supported for cn20k */
+	uint8_t __io hw_prio;
 };
 
 struct npc_install_flow_rsp {
@@ -2744,9 +2985,22 @@ struct npc_mcam_read_entry_rsp {
 	uint8_t __io enable;
 };
 
+struct npc_cn20k_mcam_read_entry_rsp {
+	struct mbox_msghdr hdr;
+	struct cn20k_mcam_entry entry_data;
+	uint8_t __io intf;
+	uint8_t __io enable;
+	uint8_t __io hw_prio; /* valid for cn20k */
+};
+
 struct npc_mcam_read_base_rule_rsp {
 	struct mbox_msghdr hdr;
 	struct mcam_entry entry_data;
+};
+
+struct npc_cn20k_mcam_read_base_rule_rsp {
+	struct mbox_msghdr hdr;
+	struct cn20k_mcam_entry entry;
 };
 
 struct npc_mcam_get_stats_req {
@@ -2829,22 +3083,6 @@ enum tim_gpio_edge {
 	TIM_GPIO_INVALID,
 };
 
-struct npc_get_field_hash_info_req {
-	struct mbox_msghdr hdr;
-	uint8_t intf;
-};
-
-struct npc_get_field_hash_info_rsp {
-	struct mbox_msghdr hdr;
-	uint64_t __io secret_key[3];
-#define NPC_MAX_HASH	  2
-#define NPC_MAX_HASH_MASK 2
-	/* NPC_AF_INTF(0..1)_HASH(0..1)_MASK(0..1) */
-	uint64_t __io hash_mask[NPC_MAX_INTF][NPC_MAX_HASH][NPC_MAX_HASH_MASK];
-	/* NPC_AF_INTF(0..1)_HASH(0..1)_RESULT_CTRL */
-	uint64_t __io hash_ctrl[NPC_MAX_INTF][NPC_MAX_HASH];
-};
-
 enum ptp_op {
 	PTP_OP_ADJFINE = 0,   /* adjfine(req.scaled_ppm); */
 	PTP_OP_GET_CLOCK = 1, /* rsp.clk = get_clock() */
@@ -2869,6 +3107,8 @@ struct get_hw_cap_rsp {
 	uint8_t __io nix_fixed_txschq_mapping;
 	uint8_t __io nix_shaping;      /* Is shaping and coloring supported */
 	uint8_t __io npc_hash_extract; /* Is hash extract supported */
+#define HW_CAP_MACSEC BIT_ULL(1)
+	uint64_t hw_caps;
 };
 
 struct ndc_sync_op {
@@ -2986,6 +3226,7 @@ struct nix_spi_to_sa_add_req {
 	uint32_t __io spi_index;
 	uint16_t __io match_id;
 	bool __io valid;
+	uint8_t __io inline_profile_id;
 };
 
 struct nix_spi_to_sa_add_rsp {

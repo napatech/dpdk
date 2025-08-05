@@ -468,7 +468,7 @@ static int alloc_link_pbl(struct tfc_ts_mem_cfg *mem_cfg, uint32_t page_size,
 	 * and page tables. The allocation will occur once only per backing
 	 * store and will located by name and reused on subsequent runs.
 	 */
-	total_size = page_size * total_pages;
+	total_size = (uint64_t)page_size * (uint64_t)total_pages;
 
 	if (total_size <= (1024 * 256))
 		mz_size = RTE_MEMZONE_256KB;
@@ -1668,10 +1668,8 @@ int tfc_tbl_scope_cpm_alloc(struct tfc *tfcp, uint8_t tsid,
 	return 0;
 
  cleanup:
-	if (cmm_lkup != NULL)
-		rte_free(cmm_lkup);
-	if (cmm_act != NULL)
-		rte_free(cmm_act);
+	rte_free(cmm_lkup);
+	rte_free(cmm_act);
 
 	return rc;
 }

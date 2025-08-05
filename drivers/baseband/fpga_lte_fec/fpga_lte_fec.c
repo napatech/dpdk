@@ -4,6 +4,7 @@
 
 #include <unistd.h>
 
+#include <eal_export.h>
 #include <rte_common.h>
 #include <rte_log.h>
 #include <dev_driver.h>
@@ -114,7 +115,7 @@ enum {
 };
 
 /* FPGA LTE FEC DMA Encoding Request Descriptor */
-struct __rte_packed fpga_dma_enc_desc {
+struct __rte_packed_begin fpga_dma_enc_desc {
 	uint32_t done:1,
 		rsrvd0:11,
 		error:4,
@@ -148,10 +149,10 @@ struct __rte_packed fpga_dma_enc_desc {
 		uint8_t sw_ctxt[FPGA_RING_DESC_LEN_UNIT_BYTES *
 					(FPGA_RING_DESC_ENTRY_LENGTH - 1)];
 	};
-};
+} __rte_packed_end;
 
 /* FPGA LTE FEC DMA Decoding Request Descriptor */
-struct __rte_packed fpga_dma_dec_desc {
+struct __rte_packed_begin fpga_dma_dec_desc {
 	uint32_t done:1,
 		iter:5,
 		rsrvd0:2,
@@ -188,7 +189,7 @@ struct __rte_packed fpga_dma_dec_desc {
 
 		uint32_t sw_ctxt[8 * (FPGA_RING_DESC_ENTRY_LENGTH - 1)];
 	};
-};
+} __rte_packed_end;
 
 /* FPGA LTE DMA Descriptor */
 union fpga_dma_desc {
@@ -197,7 +198,7 @@ union fpga_dma_desc {
 };
 
 /* FPGA LTE FEC Ring Control Register */
-struct __rte_packed fpga_ring_ctrl_reg {
+struct __rte_packed_begin fpga_ring_ctrl_reg {
 	uint64_t ring_base_addr;
 	uint64_t ring_head_addr;
 	uint16_t ring_size:11;
@@ -216,7 +217,7 @@ struct __rte_packed fpga_ring_ctrl_reg {
 	uint16_t head_point;
 	uint16_t rsrvd4;
 
-};
+} __rte_packed_end;
 
 /* Private data structure for each FPGA FEC device */
 struct fpga_lte_fec_device {
@@ -2452,6 +2453,7 @@ set_default_fpga_conf(struct rte_fpga_lte_fec_conf *def_conf)
 }
 
 /* Initial configuration of FPGA LTE FEC device */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_fpga_lte_fec_configure, 20.11)
 int
 rte_fpga_lte_fec_configure(const char *dev_name,
 		const struct rte_fpga_lte_fec_conf *conf)

@@ -5,7 +5,7 @@
 #include "../r8169_ethdev.h"
 #include "../r8169_hw.h"
 #include "../r8169_phy.h"
-#include "rtl8125a_mcu.h"
+#include "rtl8125a.h"
 
 /* For RTL8125A, CFG_METHOD_48,49 */
 
@@ -139,7 +139,7 @@ rtl_hw_phy_config_8125a_1(struct rtl_hw *hw)
 	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_11);
 }
 
-static void
+void
 rtl_hw_phy_config_8125a_2(struct rtl_hw *hw)
 {
 	u16 adccal_offset_p0;
@@ -380,10 +380,12 @@ hw_mac_mcu_config_8125a(struct rtl_hw *hw)
 	if (hw->NotWrMcuPatchCode)
 		return;
 
+	rtl_hw_disable_mac_mcu_bps(hw);
+
+	/* Get H/W mac mcu patch code version */
+	hw->hw_mcu_patch_code_ver = rtl_get_hw_mcu_patch_code_ver(hw);
+
 	switch (hw->mcfg) {
-	case CFG_METHOD_48:
-		rtl_set_mac_mcu_8125a_1(hw);
-		break;
 	case CFG_METHOD_49:
 		rtl_set_mac_mcu_8125a_2(hw);
 		break;

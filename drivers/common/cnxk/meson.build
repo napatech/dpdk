@@ -25,6 +25,7 @@ sources = files(
         'roc_idev.c',
         'roc_irq.c',
         'roc_ie_ot.c',
+        'roc_ie_ow.c',
         'roc_mbox.c',
         'roc_mcs.c',
         'roc_mcs_sec_cfg.c',
@@ -63,6 +64,7 @@ sources = files(
         'roc_npc_parse.c',
         'roc_npc_utils.c',
         'roc_platform.c',
+        'roc_platform_base_symbols.c',
         'roc_se.c',
         'roc_sso.c',
         'roc_sso_debug.c',
@@ -91,6 +93,8 @@ sources += files('cnxk_telemetry_bphy.c',
                  'cnxk_telemetry_nix.c',
                  'cnxk_telemetry_sso.c',
 )
+
+cflags += no_wvla_cflag
 
 if meson.is_cross_build()
     soc_type = meson.get_external_property('platform', '')

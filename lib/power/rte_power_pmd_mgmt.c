@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 
+#include <eal_export.h>
 #include <rte_lcore.h>
 #include <rte_lcore_var.h>
 #include <rte_cycles.h>
@@ -56,7 +57,7 @@ struct queue_list_entry {
 	const struct rte_eth_rxtx_callback *cb;
 };
 
-struct __rte_cache_aligned pmd_core_cfg {
+struct pmd_core_cfg {
 	TAILQ_HEAD(queue_list_head, queue_list_entry) head;
 	/**< List of queues associated with this lcore */
 	size_t n_queues;
@@ -71,6 +72,22 @@ struct __rte_cache_aligned pmd_core_cfg {
 	/**< Prevent a queue from triggering sleep multiple times */
 };
 static RTE_LCORE_VAR_HANDLE(struct pmd_core_cfg, lcore_cfgs);
+
+static void
+init_lcore_cfgs(void)
+{
+	struct pmd_core_cfg *lcore_cfg;
+	unsigned int lcore_id;
+
+	if (lcore_cfgs != NULL)
+		return;
+
+	RTE_LCORE_VAR_ALLOC(lcore_cfgs);
+
+	/* initialize all tailqs */
+	RTE_LCORE_VAR_FOREACH(lcore_id, lcore_cfg, lcore_cfgs)
+		TAILQ_INIT(&lcore_cfg->head);
+}
 
 static inline bool
 queue_equal(const union queue *l, const union queue *r)
@@ -480,6 +497,7 @@ get_monitor_callback(void)
 		clb_multiwait : clb_umwait;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_ethdev_pmgmt_queue_enable)
 int
 rte_power_ethdev_pmgmt_queue_enable(unsigned int lcore_id, uint16_t port_id,
 		uint16_t queue_id, enum rte_power_pmd_mgmt_type mode)
@@ -517,6 +535,7 @@ rte_power_ethdev_pmgmt_queue_enable(unsigned int lcore_id, uint16_t port_id,
 		goto end;
 	}
 
+	init_lcore_cfgs();
 	lcore_cfg = RTE_LCORE_VAR_LCORE(lcore_id, lcore_cfgs);
 
 	/* check if other queues are stopped as well */
@@ -596,6 +615,7 @@ end:
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_ethdev_pmgmt_queue_disable)
 int
 rte_power_ethdev_pmgmt_queue_disable(unsigned int lcore_id,
 		uint16_t port_id, uint16_t queue_id)
@@ -618,6 +638,8 @@ rte_power_ethdev_pmgmt_queue_disable(unsigned int lcore_id,
 	}
 
 	/* no need to check queue id as wrong queue id would not be enabled */
+
+	init_lcore_cfgs();
 	lcore_cfg = RTE_LCORE_VAR_LCORE(lcore_id, lcore_cfgs);
 
 	/* check if other queues are stopped as well */
@@ -669,18 +691,21 @@ rte_power_ethdev_pmgmt_queue_disable(unsigned int lcore_id,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_set_emptypoll_max)
 void
 rte_power_pmd_mgmt_set_emptypoll_max(unsigned int max)
 {
 	emptypoll_max = max;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_get_emptypoll_max)
 unsigned int
 rte_power_pmd_mgmt_get_emptypoll_max(void)
 {
 	return emptypoll_max;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_set_pause_duration)
 int
 rte_power_pmd_mgmt_set_pause_duration(unsigned int duration)
 {
@@ -693,12 +718,14 @@ rte_power_pmd_mgmt_set_pause_duration(unsigned int duration)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_get_pause_duration)
 unsigned int
 rte_power_pmd_mgmt_get_pause_duration(void)
 {
 	return pause_duration;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_set_scaling_freq_min)
 int
 rte_power_pmd_mgmt_set_scaling_freq_min(unsigned int lcore, unsigned int min)
 {
@@ -716,6 +743,7 @@ rte_power_pmd_mgmt_set_scaling_freq_min(unsigned int lcore, unsigned int min)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_set_scaling_freq_max)
 int
 rte_power_pmd_mgmt_set_scaling_freq_max(unsigned int lcore, unsigned int max)
 {
@@ -737,6 +765,7 @@ rte_power_pmd_mgmt_set_scaling_freq_max(unsigned int lcore, unsigned int max)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_get_scaling_freq_min)
 int
 rte_power_pmd_mgmt_get_scaling_freq_min(unsigned int lcore)
 {
@@ -751,6 +780,7 @@ rte_power_pmd_mgmt_get_scaling_freq_min(unsigned int lcore)
 	return scale_freq_min[lcore];
 }
 
+RTE_EXPORT_SYMBOL(rte_power_pmd_mgmt_get_scaling_freq_max)
 int
 rte_power_pmd_mgmt_get_scaling_freq_max(unsigned int lcore)
 {
@@ -768,15 +798,7 @@ rte_power_pmd_mgmt_get_scaling_freq_max(unsigned int lcore)
 }
 
 RTE_INIT(rte_power_ethdev_pmgmt_init) {
-	unsigned int lcore_id;
-	struct pmd_core_cfg *lcore_cfg;
 	int i;
-
-	RTE_LCORE_VAR_ALLOC(lcore_cfgs);
-
-	/* initialize all tailqs */
-	RTE_LCORE_VAR_FOREACH(lcore_id, lcore_cfg, lcore_cfgs)
-		TAILQ_INIT(&lcore_cfg->head);
 
 	/* initialize config defaults */
 	emptypoll_max = 512;

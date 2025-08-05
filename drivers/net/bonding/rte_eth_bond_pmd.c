@@ -1684,10 +1684,26 @@ member_configure_slow_queue(struct rte_eth_dev *bonding_eth_dev,
 	}
 
 	if (internals->mode4.dedicated_queues.enabled == 1) {
-		/* Configure slow Rx queue */
+		struct rte_eth_dev_info member_info = {};
+		uint16_t nb_rx_desc = SLOW_RX_QUEUE_HW_DEFAULT_SIZE;
+		uint16_t nb_tx_desc = SLOW_TX_QUEUE_HW_DEFAULT_SIZE;
 
+		errval = rte_eth_dev_info_get(member_eth_dev->data->port_id,
+				&member_info);
+		if (errval != 0) {
+			RTE_BOND_LOG(ERR,
+					"rte_eth_dev_info_get: port=%d, err (%d)",
+					member_eth_dev->data->port_id,
+					errval);
+			return errval;
+		}
+
+		if (member_info.rx_desc_lim.nb_min != 0)
+			nb_rx_desc = member_info.rx_desc_lim.nb_min;
+
+		/* Configure slow Rx queue */
 		errval = rte_eth_rx_queue_setup(member_eth_dev->data->port_id,
-				internals->mode4.dedicated_queues.rx_qid, 128,
+				internals->mode4.dedicated_queues.rx_qid, nb_rx_desc,
 				rte_eth_dev_socket_id(member_eth_dev->data->port_id),
 				NULL, port->slow_pool);
 		if (errval != 0) {
@@ -1699,8 +1715,11 @@ member_configure_slow_queue(struct rte_eth_dev *bonding_eth_dev,
 			return errval;
 		}
 
+		if (member_info.tx_desc_lim.nb_min != 0)
+			nb_tx_desc = member_info.tx_desc_lim.nb_min;
+
 		errval = rte_eth_tx_queue_setup(member_eth_dev->data->port_id,
-				internals->mode4.dedicated_queues.tx_qid, 512,
+				internals->mode4.dedicated_queues.tx_qid, nb_tx_desc,
 				rte_eth_dev_socket_id(member_eth_dev->data->port_id),
 				NULL);
 		if (errval != 0) {
@@ -1885,12 +1904,13 @@ member_start(struct rte_eth_dev *bonding_eth_dev,
 		}
 	}
 
-	/* If RSS is enabled for bonding, synchronize RETA */
-	if (bonding_eth_dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS) {
+	/*
+	 * If flow-isolation is not enabled, then check whether RSS is enabled for
+	 * bonding, synchronize RETA
+	 */
+	if (internals->flow_isolated_valid == 0 &&
+		(bonding_eth_dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS)) {
 		int i;
-		struct bond_dev_private *internals;
-
-		internals = bonding_eth_dev->data->dev_private;
 
 		for (i = 0; i < internals->member_count; i++) {
 			if (internals->members[i].port_id == member_port_id) {
@@ -2474,8 +2494,8 @@ bond_ethdev_member_link_status_change_monitor(void *cb_arg)
 			polling_member_found = 1;
 
 			/* Update member link status */
-			(*member_ethdev->dev_ops->link_update)(member_ethdev,
-					internals->members[i].link_status_wait_to_complete);
+			member_ethdev->dev_ops->link_update(member_ethdev,
+					      internals->members[i].link_status_wait_to_complete);
 
 			/* if link status has changed since last checked then call lsc
 			 * event callback */
@@ -2783,6 +2803,7 @@ bond_ethdev_promiscuous_update(struct rte_eth_dev *dev)
 {
 	struct bond_dev_private *internals = dev->data->dev_private;
 	uint16_t port_id = internals->current_primary_port;
+	int ret;
 
 	switch (internals->mode) {
 	case BONDING_MODE_ROUND_ROBIN:
@@ -2802,10 +2823,19 @@ bond_ethdev_promiscuous_update(struct rte_eth_dev *dev)
 		 * mode should be set to new primary member according to bonding
 		 * device.
 		 */
-		if (rte_eth_promiscuous_get(internals->port_id) == 1)
-			rte_eth_promiscuous_enable(port_id);
-		else
-			rte_eth_promiscuous_disable(port_id);
+		if (rte_eth_promiscuous_get(internals->port_id) == 1) {
+			ret = rte_eth_promiscuous_enable(port_id);
+			if (ret != 0)
+				RTE_BOND_LOG(ERR,
+					     "Failed to enable promiscuous mode for port %u: %s",
+					     port_id, rte_strerror(-ret));
+		} else {
+			ret = rte_eth_promiscuous_disable(port_id);
+			if (ret != 0)
+				RTE_BOND_LOG(ERR,
+					     "Failed to disable promiscuous mode for port %u: %s",
+					     port_id, rte_strerror(-ret));
+		}
 	}
 
 	return 0;
@@ -3193,7 +3223,7 @@ bond_ethdev_rss_hash_update(struct rte_eth_dev *dev,
 	struct bond_dev_private *internals = dev->data->dev_private;
 	struct rte_eth_rss_conf bond_rss_conf;
 
-	memcpy(&bond_rss_conf, rss_conf, sizeof(struct rte_eth_rss_conf));
+	bond_rss_conf = *rss_conf;
 
 	bond_rss_conf.rss_hf &= internals->flow_type_rss_offloads;
 
@@ -3246,7 +3276,7 @@ bond_ethdev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 
 	for (i = 0; i < internals->member_count; i++) {
 		member_eth_dev = &rte_eth_devices[internals->members[i].port_id];
-		if (*member_eth_dev->dev_ops->mtu_set == NULL) {
+		if (member_eth_dev->dev_ops->mtu_set == NULL) {
 			rte_spinlock_unlock(&internals->lock);
 			return -ENOTSUP;
 		}
@@ -3296,8 +3326,8 @@ bond_ethdev_mac_addr_add(struct rte_eth_dev *dev,
 
 	for (i = 0; i < internals->member_count; i++) {
 		member_eth_dev = &rte_eth_devices[internals->members[i].port_id];
-		if (*member_eth_dev->dev_ops->mac_addr_add == NULL ||
-			 *member_eth_dev->dev_ops->mac_addr_remove == NULL) {
+		if (member_eth_dev->dev_ops->mac_addr_add == NULL ||
+		    member_eth_dev->dev_ops->mac_addr_remove == NULL) {
 			ret = -ENOTSUP;
 			goto end;
 		}
@@ -3332,7 +3362,7 @@ bond_ethdev_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
 
 	for (i = 0; i < internals->member_count; i++) {
 		member_eth_dev = &rte_eth_devices[internals->members[i].port_id];
-		if (*member_eth_dev->dev_ops->mac_addr_remove == NULL)
+		if (member_eth_dev->dev_ops->mac_addr_remove == NULL)
 			goto end;
 	}
 

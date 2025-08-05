@@ -13,6 +13,7 @@
 #include "zxdh_logs.h"
 #include "zxdh_msg.h"
 #include "zxdh_common.h"
+#include "zxdh_pci.h"
 
 #define ZXDH_MSG_RSP_SIZE_MAX         512
 
@@ -27,22 +28,22 @@
 #define ZXDH_REPS_HEADER_OFFSET       4
 #define ZXDH_TBL_MSG_PRO_SUCCESS      0xaa
 
-struct zxdh_common_msg {
+struct __rte_packed_begin zxdh_common_msg {
 	uint8_t  type;    /* 0:read table 1:write table */
 	uint8_t  field;
 	uint16_t pcie_id;
 	uint16_t slen;    /* Data length for write table */
 	uint16_t reserved;
-} __rte_packed;
+} __rte_packed_end;
 
-struct zxdh_common_rsp_hdr {
+struct __rte_packed_begin zxdh_common_rsp_hdr {
 	uint8_t  rsp_status;
 	uint16_t rsp_len;
 	uint8_t  reserved;
 	uint8_t  payload_status;
 	uint8_t  rsv;
 	uint16_t payload_len;
-} __rte_packed;
+} __rte_packed_end;
 
 struct zxdh_tbl_msg_header {
 	uint8_t  type;
@@ -70,9 +71,8 @@ zxdh_fill_common_msg(struct zxdh_hw *hw, struct zxdh_pci_bar_msg *desc,
 		PMD_DRV_LOG(ERR, "Failed to allocate msg_data");
 		return -ENOMEM;
 	}
-	memset(desc->payload_addr, 0, msg_len);
 	desc->payload_len = msg_len;
-	struct zxdh_common_msg *msg_data = (struct zxdh_common_msg *)desc->payload_addr;
+	struct zxdh_common_msg *msg_data = desc->payload_addr;
 
 	msg_data->type = type;
 	msg_data->field = field;
@@ -216,7 +216,7 @@ zxdh_get_res_info(struct zxdh_res_para *dev, uint8_t field, uint8_t *res, uint16
 
 	if (ret != ZXDH_BAR_MSG_OK) {
 		PMD_DRV_LOG(ERR,
-			"send sync_msg failed. pcieid: 0x%x, ret: %d.", dev->pcie_id, ret);
+			"send sync_msg failed. pcieid: 0x%x, ret: %d", dev->pcie_id, ret);
 		return ret;
 	}
 	struct zxdh_tbl_msg_reps_header *tbl_reps =
@@ -224,7 +224,7 @@ zxdh_get_res_info(struct zxdh_res_para *dev, uint8_t field, uint8_t *res, uint16
 
 	if (tbl_reps->check != ZXDH_TBL_MSG_PRO_SUCCESS) {
 		PMD_DRV_LOG(ERR,
-			"get resource_field failed. pcieid: 0x%x, ret: %d.", dev->pcie_id, ret);
+			"get resource_field failed. pcieid: 0x%x, ret: %d", dev->pcie_id, ret);
 		return ret;
 	}
 	*len = tbl_reps->len;
@@ -253,6 +253,30 @@ zxdh_panelid_get(struct rte_eth_dev *dev, uint8_t *panelid)
 
 	zxdh_fill_res_para(dev, &param);
 	int32_t ret = zxdh_get_res_panel_id(&param, panelid);
+	return ret;
+}
+
+static int
+zxdh_get_res_hash_id(struct zxdh_res_para *in, uint8_t *hash_id)
+{
+	uint8_t reps = 0;
+	uint16_t reps_len = 0;
+
+	if (zxdh_get_res_info(in, ZXDH_TBL_FIELD_HASHID, &reps, &reps_len) != ZXDH_BAR_MSG_OK)
+		return -1;
+
+	*hash_id = reps;
+	return ZXDH_BAR_MSG_OK;
+}
+
+int32_t
+zxdh_hashidx_get(struct rte_eth_dev *dev, uint8_t *hash_idx)
+{
+	struct zxdh_res_para param;
+
+	zxdh_fill_res_para(dev, &param);
+	int32_t ret = zxdh_get_res_hash_id(&param, hash_idx);
+
 	return ret;
 }
 
@@ -374,27 +398,48 @@ int32_t
 zxdh_datach_set(struct rte_eth_dev *dev)
 {
 	struct zxdh_hw *hw = dev->data->dev_private;
-	uint16_t buff_size = (hw->queue_num + 1) * 2;
-	int32_t ret = 0;
-	uint16_t i;
+	uint16_t nr_vq = hw->rx_qnum + hw->tx_qnum;
+	uint16_t buff_size = (nr_vq % ZXDH_QUEUES_NUM_MAX + 1) * sizeof(uint16_t);
+	int ret = 0;
+	uint16_t *pdata, i;
 
 	void *buff = rte_zmalloc(NULL, buff_size, 0);
+
 	if (unlikely(buff == NULL)) {
 		PMD_DRV_LOG(ERR, "Failed to allocate buff");
 		return -ENOMEM;
 	}
-	memset(buff, 0, buff_size);
-	uint16_t *pdata = (uint16_t *)buff;
-	*pdata++ = hw->queue_num;
 
-	for (i = 0; i < hw->queue_num; i++)
-		*(pdata + i) = hw->channel_context[i].ph_chno;
+	pdata = (uint16_t *)buff;
+	*pdata++ = nr_vq;
+	for (i = 0; i < hw->rx_qnum; i++)
+		*(pdata + i) = hw->channel_context[i * 2].ph_chno;
+	for (i = 0; i < hw->tx_qnum; i++)
+		*(pdata + hw->rx_qnum + i) = hw->channel_context[i * 2 + 1].ph_chno;
+	ret = zxdh_common_table_write(hw, ZXDH_COMMON_FIELD_DATACH, (void *)buff, buff_size);
 
-	ret = zxdh_common_table_write(hw, ZXDH_COMMON_FIELD_DATACH,
-						(void *)buff, buff_size);
 	if (ret != 0)
-		PMD_DRV_LOG(ERR, "Failed to setup data channel of common table");
-
+		PMD_DRV_LOG(ERR, "Failed to setup data channel of common table. code:%d", ret);
+	hw->queue_set_flag = 1;
 	rte_free(buff);
+
 	return ret;
+}
+
+bool
+zxdh_rx_offload_enabled(struct zxdh_hw *hw)
+{
+	return zxdh_pci_with_feature(hw, ZXDH_NET_F_GUEST_CSUM) ||
+		   zxdh_pci_with_feature(hw, ZXDH_NET_F_GUEST_TSO4) ||
+		   zxdh_pci_with_feature(hw, ZXDH_NET_F_GUEST_TSO6) ||
+		   (hw->vlan_offload_cfg.vlan_strip == 1);
+}
+
+bool
+zxdh_tx_offload_enabled(struct zxdh_hw *hw)
+{
+	return zxdh_pci_with_feature(hw, ZXDH_NET_F_CSUM) ||
+		   zxdh_pci_with_feature(hw, ZXDH_NET_F_HOST_TSO4) ||
+		   zxdh_pci_with_feature(hw, ZXDH_NET_F_HOST_TSO6) ||
+		   zxdh_pci_with_feature(hw, ZXDH_NET_F_HOST_UFO);
 }

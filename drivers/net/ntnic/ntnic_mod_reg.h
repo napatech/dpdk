@@ -19,6 +19,7 @@
 #include "nthw_drv.h"
 #include "nt4ga_adapter.h"
 #include "ntnic_nthw_fpga_rst_nt200a0x.h"
+#include "ntnic_nthw_fpga_rst_nt400dxx.h"
 #include "ntnic_virt_queue.h"
 #include "create_elements.h"
 
@@ -36,7 +37,8 @@ struct sg_ops_s {
 		uint32_t host_id,
 		uint32_t header,
 		uint32_t vq_type,
-		int irq_vector);
+		int irq_vector,
+		uint8_t rx_deferred_start);
 	struct nthw_virt_queue *(*nthw_setup_tx_virt_queue)(nthw_dbs_t *p_nthw_dbs,
 		uint32_t index,
 		uint16_t start_idx,
@@ -51,7 +53,8 @@ struct sg_ops_s {
 		uint32_t header,
 		uint32_t vq_type,
 		int irq_vector,
-		uint32_t in_order);
+		uint32_t in_order,
+		uint8_t tx_deferred_start);
 	struct nthw_virt_queue *(*nthw_setup_mngd_rx_virt_queue)(nthw_dbs_t *p_nthw_dbs,
 		uint32_t index,
 		uint32_t queue_size,
@@ -69,7 +72,8 @@ struct sg_ops_s {
 		 */
 		struct nthw_memory_descriptor *p_packet_buffers,
 		uint32_t vq_type,
-		int irq_vector);
+		int irq_vector,
+		uint8_t rx_deferred_start);
 	int (*nthw_release_mngd_rx_virt_queue)(struct nthw_virt_queue *rxvq);
 	struct nthw_virt_queue *(*nthw_setup_mngd_tx_virt_queue)(nthw_dbs_t *p_nthw_dbs,
 		uint32_t index,
@@ -91,8 +95,11 @@ struct sg_ops_s {
 		struct nthw_memory_descriptor *p_packet_buffers,
 		uint32_t vq_type,
 		int irq_vector,
-		uint32_t in_order);
+		uint32_t in_order,
+		uint8_t tx_deferred_start);
 	int (*nthw_release_mngd_tx_virt_queue)(struct nthw_virt_queue *txvq);
+	int (*nthw_switch_rx_virt_queue)(nthw_dbs_t *p_nthw_dbs, uint32_t index, uint32_t enable);
+	int (*nthw_switch_tx_virt_queue)(nthw_dbs_t *p_nthw_dbs, uint32_t index, uint32_t enable);
 	/*
 	 * These functions handles both Split and Packed including merged buffers (jumbo)
 	 */
@@ -114,7 +121,7 @@ struct sg_ops_s {
 
 void register_sg_ops(struct sg_ops_s *ops);
 const struct sg_ops_s *get_sg_ops(void);
-void sg_init(void);
+void nthw_sg_init(void);
 
 /* Meter ops section */
 struct meter_ops_s {
@@ -123,7 +130,7 @@ struct meter_ops_s {
 
 void register_meter_ops(struct meter_ops_s *ops);
 const struct meter_ops_s *get_meter_ops(void);
-void meter_init(void);
+void nthw_meter_init(void);
 
 /*
  *
@@ -142,7 +149,11 @@ struct link_ops_s {
 
 void register_100g_link_ops(struct link_ops_s *ops);
 const struct link_ops_s *get_100g_link_ops(void);
-void link_100g_init(void);
+void nthw_link_100g_init(void);
+
+void register_agx_100g_link_ops(struct link_ops_s *ops);
+const struct link_ops_s *get_agx_100g_link_ops(void);
+void link_agx_100g_init(void);
 
 struct port_ops {
 	bool (*get_nim_present)(struct adapter_info_s *p, int port);
@@ -198,7 +209,7 @@ struct port_ops {
 
 void register_port_ops(const struct port_ops *ops);
 const struct port_ops *get_port_ops(void);
-void port_init(void);
+void nthw_port_init(void);
 
 struct nt4ga_stat_ops {
 	int (*nt4ga_stat_init)(struct adapter_info_s *p_adapter_info);
@@ -220,7 +231,7 @@ struct adapter_ops {
 
 void register_adapter_ops(const struct adapter_ops *ops);
 const struct adapter_ops *get_adapter_ops(void);
-void adapter_init(void);
+void nthw_adapter_init(void);
 
 struct clk9563_ops {
 	const int *(*get_n_data_9563_si5340_nt200a02_u23_v5)(void);
@@ -251,15 +262,35 @@ void register_rst9563_ops(struct rst9563_ops *ops);
 struct rst9563_ops *get_rst9563_ops(void);
 void rst9563_ops_init(void);
 
+struct rst9574_ops {
+	int (*nthw_fpga_rst9574_init)(struct fpga_info_s *p_fpga_info,
+		struct nthw_fpga_rst_nt400dxx *const p);
+	int (*nthw_fpga_rst9574_setup)(nthw_fpga_t *p_fpga,
+		struct nthw_fpga_rst_nt400dxx *const p);
+};
+
+void register_rst9574_ops(struct rst9574_ops *ops);
+struct rst9574_ops *get_rst9574_ops(void);
+void rst9574_ops_init(void);
+
+struct rst_nt400dxx_ops {
+	int (*nthw_fpga_rst_nt400dxx_init)(struct fpga_info_s *p_fpga_info);
+	int (*nthw_fpga_rst_nt400dxx_reset)(struct fpga_info_s *p_fpga_info);
+};
+
+void register_rst_nt400dxx_ops(struct rst_nt400dxx_ops *ops);
+struct rst_nt400dxx_ops *get_rst_nt400dxx_ops(void);
+void rst_nt400dxx_ops_init(void);
+
 struct flow_backend_ops {
-	const struct flow_api_backend_ops *(*bin_flow_backend_init)(nthw_fpga_t *p_fpga,
+	const struct flow_api_backend_ops *(*nthw_bin_flow_backend_init)(nthw_fpga_t *p_fpga,
 		void **be_dev);
 	void (*bin_flow_backend_done)(void *be_dev);
 };
 
 void register_flow_backend_ops(const struct flow_backend_ops *ops);
 const struct flow_backend_ops *get_flow_backend_ops(void);
-void flow_backend_init(void);
+void nthw_flow_backend_init(void);
 
 struct profile_inline_ops {
 	/*
@@ -355,16 +386,16 @@ struct profile_inline_ops {
 		struct flow_handle *flow, void *user_data,
 		struct rte_flow_error *error);
 
-	int (*flow_nic_set_hasher_fields_inline)(struct flow_nic_dev *ndev,
-		int hsh_idx,
-		struct nt_eth_rss_conf rss_conf);
-
 	/*
 	 * Stats
 	 */
 	int (*flow_get_flm_stats_profile_inline)(struct flow_nic_dev *ndev,
 		uint64_t *data,
 		uint64_t size);
+
+	int (*flow_get_ifr_stats_profile_inline)(struct flow_nic_dev *ndev,
+		uint64_t *data,
+		uint8_t port_count);
 
 	/*
 	 * NT Flow FLM queue API
@@ -420,9 +451,9 @@ const struct profile_inline_ops *get_profile_inline_ops(void);
 void profile_inline_init(void);
 
 struct flow_filter_ops {
-	int (*flow_filter_init)(nthw_fpga_t *p_fpga, struct flow_nic_dev **p_flow_device,
+	int (*nthw_flow_filter_init)(nthw_fpga_t *p_fpga, struct flow_nic_dev **p_flow_device,
 		int adapter_no);
-	int (*flow_filter_done)(struct flow_nic_dev *dev);
+	int (*nthw_flow_filter_done)(struct flow_nic_dev *dev);
 	/*
 	 * Device Management API
 	 */
@@ -462,13 +493,13 @@ struct flow_filter_ops {
 		const struct rte_flow_action action[],
 		struct rte_flow_error *error);
 
-	int (*flow_get_flm_stats)(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size);
+	int (*nthw_flow_get_flm_stats)(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size);
+	int (*nthw_flow_get_ifr_stats)(struct flow_nic_dev *ndev, uint64_t *data,
+		uint8_t port_count);
 
 	/*
 	 * Other
 	 */
-	int (*flow_nic_set_hasher_fields)(struct flow_nic_dev *ndev, int hsh_idx,
-		struct nt_eth_rss_conf rss_conf);
 	int (*hw_mod_hsh_rcp_flush)(struct flow_api_backend_s *be, int start_idx, int count);
 
 	int (*flow_get_aged_flows)(struct flow_eth_dev *dev,
@@ -530,15 +561,15 @@ struct flow_filter_ops {
 
 void register_dev_fp_flow_ops(const struct rte_flow_fp_ops *ops);
 const struct rte_flow_fp_ops *get_dev_fp_flow_ops(void);
-void dev_fp_flow_init(void);
+void nthw_dev_fp_flow_init(void);
 
 void register_dev_flow_ops(const struct rte_flow_ops *ops);
 const struct rte_flow_ops *get_dev_flow_ops(void);
-void dev_flow_init(void);
+void nthw_dev_flow_init(void);
 
 void register_flow_filter_ops(const struct flow_filter_ops *ops);
 const struct flow_filter_ops *get_flow_filter_ops(void);
-void init_flow_filter(void);
+void nthw_init_flow_filter(void);
 
 struct ntnic_xstats_ops {
 	int (*nthw_xstats_get_names)(nt4ga_stat_t *p_nt4ga_stat,

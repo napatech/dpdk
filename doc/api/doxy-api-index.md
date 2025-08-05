@@ -30,6 +30,7 @@ The public API headers are grouped by topics:
   [event_timer_adapter](@ref rte_event_timer_adapter.h),
   [event_crypto_adapter](@ref rte_event_crypto_adapter.h),
   [event_dma_adapter](@ref rte_event_dma_adapter.h),
+  [event_vector_adapter](@ref rte_event_vector_adapter.h),
   [rawdev](@ref rte_rawdev.h),
   [metrics](@ref rte_metrics.h),
   [bitrate](@ref rte_bitrate.h),
@@ -174,6 +175,7 @@ The public API headers are grouped by topics:
   [mbuf](@ref rte_mbuf.h),
   [mbuf pool ops](@ref rte_mbuf_pool_ops.h),
   [ring](@ref rte_ring.h),
+  [soring](@ref rte_soring.h),
   [stack](@ref rte_stack.h),
   [tailq](@ref rte_tailq.h),
   [bitset](@ref rte_bitset.h),
@@ -212,12 +214,15 @@ The public API headers are grouped by topics:
     [table_em](@ref rte_swx_table_em.h)
     [table_wm](@ref rte_swx_table_wm.h)
   * [graph](@ref rte_graph.h):
-    [graph_worker](@ref rte_graph_worker.h)
+    [graph_worker](@ref rte_graph_worker.h),
+    [graph_feature_arc](@ref rte_graph_feature_arc.h),
+    [graph_feature_arc_worker](@ref rte_graph_feature_arc_worker.h)
   * graph_nodes:
     [eth_node](@ref rte_node_eth_api.h),
     [ip4_node](@ref rte_node_ip4_api.h),
     [ip6_node](@ref rte_node_ip6_api.h),
-    [udp4_input_node](@ref rte_node_udp4_input_api.h)
+    [udp4_input_node](@ref rte_node_udp4_input_api.h),
+    [mbuf_dynfield](@ref rte_node_mbuf_dynfield.h)
 
 - **basic**:
   [bitops](@ref rte_bitops.h),
@@ -234,6 +239,7 @@ The public API headers are grouped by topics:
 - **debug**:
   [jobstats](@ref rte_jobstats.h),
   [telemetry](@ref rte_telemetry.h),
+  [PMU](@ref rte_pmu.h),
   [pcapng](@ref rte_pcapng.h),
   [pdump](@ref rte_pdump.h),
   [hexdump](@ref rte_hexdump.h),
@@ -247,7 +253,6 @@ The public API headers are grouped by topics:
   [EAL config](@ref rte_eal.h),
   [common](@ref rte_common.h),
   [experimental APIs](@ref rte_compat.h),
-  [ABI versioning](@ref rte_function_versioning.h),
   [version](@ref rte_version.h)
 
 - **tests**:

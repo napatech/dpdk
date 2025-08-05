@@ -79,6 +79,7 @@ source_file_deps = {
     'test_event_eth_tx_adapter.c': ['bus_vdev', 'ethdev', 'net_ring', 'eventdev'],
     'test_event_ring.c': ['eventdev'],
     'test_event_timer_adapter.c': ['ethdev', 'eventdev', 'bus_vdev'],
+    'test_event_vector_adapter.c': ['eventdev', 'bus_vdev'],
     'test_eventdev.c': ['eventdev', 'bus_vdev'],
     'test_external_mem.c': [],
     'test_fbarray.c': [],
@@ -89,6 +90,7 @@ source_file_deps = {
     'test_flow_classify.c': ['net', 'acl', 'table', 'ethdev', 'flow_classify'],
     'test_func_reentrancy.c': ['hash', 'lpm'],
     'test_graph.c': ['graph'],
+    'test_graph_feature_arc.c': ['graph'],
     'test_graph_perf.c': ['graph'],
     'test_hash.c': ['net', 'hash'],
     'test_hash_functions.c': ['hash'],
@@ -142,6 +144,7 @@ source_file_deps = {
     'test_pmd_perf.c': ['ethdev', 'net'] + packet_burst_generator_deps,
     'test_pmd_ring.c': ['net_ring', 'ethdev', 'bus_vdev'],
     'test_pmd_ring_perf.c': ['ethdev', 'net_ring', 'bus_vdev'],
+    'test_pmu.c': ['pmu'],
     'test_power.c': ['power'],
     'test_power_cpufreq.c': ['power'],
     'test_power_intel_uncore.c': ['power'],
@@ -177,6 +180,9 @@ source_file_deps = {
     'test_security_proto.c' : ['cryptodev', 'security'],
     'test_seqlock.c': [],
     'test_service_cores.c': [],
+    'test_soring.c': [],
+    'test_soring_mt_stress.c': [],
+    'test_soring_stress.c': [],
     'test_spinlock.c': [],
     'test_stack.c': ['stack'],
     'test_stack_perf.c': ['stack'],
@@ -247,12 +253,19 @@ foreach d:optional_deps
     endif
 endforeach
 
-if cc.has_argument('-Wno-format-truncation')
-    cflags += '-Wno-format-truncation'
-endif
+cflags += no_wvla_cflag
 
-# Strict-aliasing rules are violated by uint8_t[] to context size casts.
-cflags += '-fno-strict-aliasing'
+extra_flags = [
+        # Strict-aliasing rules are violated by uint8_t[] to context size casts.
+        '-fno-strict-aliasing',
+        '-Wno-format-truncation',
+]
+
+foreach arg: extra_flags
+    if cc.has_argument(arg)
+        cflags += arg
+    endif
+endforeach
 
 # Enable using internal APIs in unit tests
 cflags += '-DALLOW_INTERNAL_API'

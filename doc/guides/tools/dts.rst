@@ -161,6 +161,54 @@ There are two areas that need to be set up on a System Under Test:
 
       sudo usermod -aG sudo <sut_user>
 
+#. **SR-IOV**
+
+   Before configuring virtual functions, SR-IOV support must be enabled in the system BIOS/UEFI:
+
+   #. Reboot the system and enter BIOS/UEFI settings.
+   #. Locate the SR-IOV option (often under PCIe or Advanced settings).
+   #. Set SR-IOV to **Enabled** and save changes.
+
+   For Mellanox environments, the following additional setup steps are required:
+
+   #. **Install mstflint tools** (if not already installed):
+
+      .. code-block:: bash
+
+         sudo apt install mstflint        # On Debian/Ubuntu
+         sudo yum install mstflint        # On RHEL/CentOS
+
+   #. **Start the MST service**:
+
+      .. code-block:: bash
+
+         sudo mst start
+
+   #. **List Mellanox devices**:
+
+      .. code-block:: bash
+
+         sudo mst status
+
+      This will output paths such as ``/dev/mst/mt4121_pciconf0``
+      and possibly additional functions (e.g., ``pciconf0.1``).
+
+   #. **Enable SR-IOV and configure number of VFs**:
+
+      .. code-block:: bash
+
+         sudo mlxconfig -d /dev/mst/mt4121_pciconf0 set SRIOV_EN=1 NUM_OF_VFS=8
+         sudo mlxconfig -d /dev/mst/mt4121_pciconf0.1 set SRIOV_EN=1 NUM_OF_VFS=8
+
+      Replace the device names with those matching your setup (from ``mst status``).
+      The number of VFs can be adjusted as needed.
+
+   #. **Reboot the system**:
+
+      .. code-block:: bash
+
+         sudo reboot now
+
 
 Setting up Traffic Generator Node
 ---------------------------------
@@ -206,12 +254,15 @@ and then run the tests with the newly built binaries.
 Configuring DTS
 ~~~~~~~~~~~~~~~
 
-DTS configuration is split into nodes and test runs,
+DTS configuration is split into nodes and a test run,
 and must respect the model definitions
 as documented in the DTS API docs under the ``config`` page.
 The root of the configuration is represented by the ``Configuration`` model.
-By default, DTS will try to use the ``dts/conf.yaml`` :ref:`config file <configuration_example>`,
-which is a template that illustrates what can be configured in DTS.
+By default, DTS will try to use the ``dts/test_run.example.yaml``
+:ref:`config file <test_run_configuration_example>`,
+and ``dts/nodes.example.yaml``
+:ref:`config file <nodes_configuration_example>`
+which are templates that illustrate what can be configured in DTS.
 
 The user must have :ref:`administrator privileges <sut_admin_user>`
 which don't require password authentication.
@@ -225,16 +276,22 @@ DTS is run with ``main.py`` located in the ``dts`` directory after entering Poet
 .. code-block:: console
 
    (dts-py3.10) $ ./main.py --help
-   usage: main.py [-h] [--config-file FILE_PATH] [--output-dir DIR_PATH] [-t SECONDS] [-v] [--dpdk-tree DIR_PATH | --tarball FILE_PATH] [--remote-source]
-                  [--precompiled-build-dir DIR_NAME] [--compile-timeout SECONDS] [--test-suite TEST_SUITE [TEST_CASES ...]] [--re-run N_TIMES]
-                  [--random-seed NUMBER]
+   usage: main.py [-h] [--test-run-config-file FILE_PATH] [--nodes-config-file FILE_PATH] [--tests-config-file FILE_PATH]
+                  [--output-dir DIR_PATH] [-t SECONDS] [-v] [--dpdk-tree DIR_PATH | --tarball FILE_PATH] [--remote-source]
+                  [--precompiled-build-dir DIR_NAME] [--compile-timeout SECONDS] [--test-suite TEST_SUITE [TEST_CASES ...]]
+                  [--re-run N_TIMES] [--random-seed NUMBER]
 
-   Run DPDK test suites. All options may be specified with the environment variables provided in brackets. Command line arguments have higher priority.
+   Run DPDK test suites. All options may be specified with the environment variables provided in brackets. Command line arguments have higher
+   priority.
 
    options:
      -h, --help            show this help message and exit
-     --config-file FILE_PATH
-                           [DTS_CFG_FILE] The configuration file that describes the test cases, SUTs and DPDK build configs. (default: conf.yaml)
+     --test-run-config-file FILE_PATH
+                           [DTS_TEST_RUN_CFG_FILE] The configuration file that describes the test cases and DPDK build options. (default: test-run.conf.yaml)
+     --nodes-config-file FILE_PATH
+                           [DTS_NODES_CFG_FILE] The configuration file that describes the SUT and TG nodes. (default: nodes.conf.yaml)
+     --tests-config-file FILE_PATH
+                           [DTS_TESTS_CFG_FILE] Configuration file used to override variable values inside specific test suites. (default: None)
      --output-dir DIR_PATH, --output DIR_PATH
                            [DTS_OUTPUT_DIR] Output directory where DTS logs and results are saved. (default: output)
      -t SECONDS, --timeout SECONDS
@@ -243,31 +300,31 @@ DTS is run with ``main.py`` located in the ``dts`` directory after entering Poet
      --compile-timeout SECONDS
                            [DTS_COMPILE_TIMEOUT] The timeout for compiling DPDK. (default: 1200)
      --test-suite TEST_SUITE [TEST_CASES ...]
-                           [DTS_TEST_SUITES] A list containing a test suite with test cases. The first parameter is the test suite name, and the rest are
-                           test case names, which are optional. May be specified multiple times. To specify multiple test suites in the environment
-                           variable, join the lists with a comma. Examples: --test-suite suite case case --test-suite suite case ... |
-                           DTS_TEST_SUITES='suite case case, suite case, ...' | --test-suite suite --test-suite suite case ... | DTS_TEST_SUITES='suite,
-                           suite case, ...' (default: [])
+                           [DTS_TEST_SUITES] A list containing a test suite with test cases. The first parameter is the test suite name, and
+                           the rest are test case names, which are optional. May be specified multiple times. To specify multiple test suites
+                           in the environment variable, join the lists with a comma. Examples: --test-suite suite case case --test-suite
+                           suite case ... | DTS_TEST_SUITES='suite case case, suite case, ...' | --test-suite suite --test-suite suite case
+                           ... | DTS_TEST_SUITES='suite, suite case, ...' (default: [])
      --re-run N_TIMES, --re_run N_TIMES
                            [DTS_RERUN] Re-run each test case the specified number of times if a test failure occurs. (default: 0)
-     --random-seed NUMBER  [DTS_RANDOM_SEED] The seed to use with the pseudo-random generator. If not specified, the configuration value is used instead.
-                           If that's also not specified, a random seed is generated. (default: None)
+     --random-seed NUMBER  [DTS_RANDOM_SEED] The seed to use with the pseudo-random generator. If not specified, the configuration value is
+                           used instead. If that's also not specified, a random seed is generated. (default: None)
 
    DPDK Build Options:
-     Arguments in this group (and subgroup) will be applied to a DPDKLocation when the DPDK tree, tarball or revision will be provided, other arguments
-     like remote source and build dir are optional. A DPDKLocation from settings are used instead of from config if construct successful.
+     Arguments in this group (and subgroup) will be applied to a DPDKLocation when the DPDK tree, tarball or revision will be provided,
+     other arguments like remote source and build dir are optional. A DPDKLocation from settings are used instead of from config if
+     construct successful.
 
-     --dpdk-tree DIR_PATH  [DTS_DPDK_TREE] The path to the DPDK source tree directory to test. Cannot be used in conjunction with --tarball. (default:
-                             None)
-     --tarball FILE_PATH, --snapshot FILE_PATH
-                           [DTS_DPDK_TARBALL] The path to the DPDK source tarball to test. DPDK must be contained in a folder with the same name as the
-                           tarball file. Cannot be used in conjunction with --dpdk-tree. (default: None)
-     --remote-source       [DTS_REMOTE_SOURCE] Set this option if either the DPDK source tree or tarball to be used are located on the SUT node. Can only
-                           be used with --dpdk-tree or --tarball. (default: False)
-     --precompiled-build-dir DIR_NAME
-                           [DTS_PRECOMPILED_BUILD_DIR] Define the subdirectory under the DPDK tree root directory where the pre-compiled binaries are
-                           located. If set, DTS will build DPDK under the `build` directory instead. Can only be used with --dpdk-tree or --tarball.
+     --dpdk-tree DIR_PATH  [DTS_DPDK_TREE] The path to the DPDK source tree directory to test. Cannot be used in conjunction with --tarball.
                            (default: None)
+     --tarball FILE_PATH, --snapshot FILE_PATH
+                           [DTS_DPDK_TARBALL] The path to the DPDK source tarball to test. DPDK must be contained in a folder with the same
+                           name as the tarball file. Cannot be used in conjunction with --dpdk-tree. (default: None)
+     --remote-source       [DTS_REMOTE_SOURCE] Set this option if either the DPDK source tree or tarball to be used are located on the SUT
+                           node. Can only be used with --dpdk-tree or --tarball. (default: False)
+     --precompiled-build-dir DIR_NAME
+                           [DTS_PRECOMPILED_BUILD_DIR] Define the subdirectory under the DPDK tree root directory or tarball where the pre-
+                           compiled binaries are located. (default: None)
 
 
 The brackets contain the names of environment variables that set the same thing.
@@ -396,6 +453,12 @@ There are four types of methods that comprise a test suite:
    If there's any functionality or logic missing from the framework,
    it should be implemented so that the test suites can use one of these two ways.
 
+   Test suites may also be configured individually using a file provided at the command line.
+   The file is a simple mapping of test suite names to their corresponding configurations.
+
+   Any test suite can be designed to require custom configuration attributes or optional ones.
+   Any optional attributes should supply a default value for the test suite to use.
+
 #. **Test case verification**
 
    Test case verification should be done with the ``verify`` method, which records the result.
@@ -416,32 +479,21 @@ There are four types of methods that comprise a test suite:
 DTS Developer Tools
 -------------------
 
-There are three tools used in DTS to help with code checking, style and formatting:
+There are two tools used in DTS to help with code checking, style and formatting:
 
-* `isort <https://pycqa.github.io/isort/>`_
+* `ruff <https://astral.sh/ruff/>`_
 
-  Alphabetically sorts python imports within blocks.
-
-* `black <https://github.com/psf/black>`_
-
-  Does most of the actual formatting (whitespaces, comments, line length etc.)
-  and works similarly to clang-format.
-
-* `pylama <https://github.com/klen/pylama>`_
-
-  Runs a collection of python linters and aggregates output.
-  It will run these tools over the repository:
-
-  .. literalinclude:: ../../../dts/pyproject.toml
-     :language: cfg
-     :start-after: [tool.pylama]
-     :end-at: linters
+  An extremely fast all-in-one linting and formatting solution,
+  which covers most if not all the major rules such as:
+  pylama, flake8, pylint etc.
+  Its built-in formatter is also Black-compatible
+  and is able to sort imports automatically like isort would.
 
 * `mypy <https://github.com/python/mypy>`_
 
   Enables static typing for Python, exploiting the type hints in the source code.
 
-These three tools are all used in ``devtools/dts-check-format.sh``,
+These two tools are all used in ``devtools/dts-check-format.sh``,
 the DTS code check and format script.
 Refer to the script for usage: ``devtools/dts-check-format.sh -h``.
 
@@ -479,7 +531,7 @@ The output is generated in ``build/doc/api/dts/html``.
 Configuration Example
 ---------------------
 
-The following example (which can be found in ``dts/conf.yaml``) sets up two nodes:
+The following example configuration files sets up two nodes:
 
 * ``SUT1`` which is already setup with the DPDK build requirements and any other
   required for execution;
@@ -491,6 +543,37 @@ And they both have two network ports which are physically connected to each othe
    This example assumes that you have setup SSH keys in both the system under test
    and traffic generator nodes.
 
-.. literalinclude:: ../../../dts/conf.yaml
+.. _test_run_configuration_example:
+
+``dts/test_run.example.yaml``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. literalinclude:: ../../../dts/test_run.example.yaml
    :language: yaml
-   :start-at: test_runs:
+   :start-at: # Define
+
+.. _nodes_configuration_example:
+
+
+``dts/nodes.example.yaml``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. literalinclude:: ../../../dts/nodes.example.yaml
+   :language: yaml
+   :start-at: # Define
+
+Additionally, an example configuration file is provided
+to demonstrate custom test suite configuration:
+
+.. note::
+   You do not need to supply configurations for all test suites,
+   and not all test suites will support or need additional configuration.
+
+.. _tests_config_example:
+
+``dts/tests_config.example.yaml``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. literalinclude:: ../../../dts/tests_config.example.yaml
+   :language: yaml
+   :start-at: # Define

@@ -40,6 +40,19 @@
 #define  VIRTIO_DUMP_PACKET(m, len) do { } while (0)
 #endif
 
+static const uint32_t vhdr_hash_report_to_mbuf_pkt_type[] = {
+	RTE_PTYPE_UNKNOWN,
+	RTE_PTYPE_L3_IPV4,
+	RTE_PTYPE_L3_IPV4 | RTE_PTYPE_L4_TCP,
+	RTE_PTYPE_L3_IPV4 | RTE_PTYPE_L4_UDP,
+	RTE_PTYPE_L3_IPV6,
+	RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_TCP,
+	RTE_PTYPE_L3_IPV6 | RTE_PTYPE_L4_UDP,
+	RTE_PTYPE_L3_IPV6_EXT,
+	RTE_PTYPE_L3_IPV6_EXT | RTE_PTYPE_L4_TCP,
+	RTE_PTYPE_L3_IPV6_EXT | RTE_PTYPE_L4_UDP,
+};
+
 void
 vq_ring_free_inorder(struct virtqueue *vq, uint16_t desc_idx, uint16_t num)
 {
@@ -654,11 +667,6 @@ virtio_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (rx_conf->rx_deferred_start) {
-		PMD_INIT_LOG(ERR, "Rx deferred start is not supported");
-		return -EINVAL;
-	}
-
 	buf_size = virtio_rx_mem_pool_buf_size(mp);
 	if (!virtio_rx_check_scatter(hw->max_rx_pkt_len, buf_size,
 				     hw->rx_ol_scatter, &error)) {
@@ -819,11 +827,6 @@ virtio_dev_tx_queue_setup(struct rte_eth_dev *dev,
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (tx_conf->tx_deferred_start) {
-		PMD_INIT_LOG(ERR, "Tx deferred start is not supported");
-		return -EINVAL;
-	}
-
 	if (nb_desc == 0 || nb_desc > vq->vq_nentries)
 		nb_desc = vq->vq_nentries;
 	vq->vq_free_cnt = RTE_MIN(vq->vq_free_cnt, nb_desc);
@@ -898,6 +901,16 @@ virtio_discard_rxbuf_inorder(struct virtqueue *vq, struct rte_mbuf *m)
 	if (unlikely(error)) {
 		PMD_DRV_LOG(ERR, "cannot requeue discarded mbuf");
 		rte_pktmbuf_free(m);
+	}
+}
+
+static inline void
+virtio_rx_update_hash_report(struct rte_mbuf *m, struct virtio_net_hdr_hash_report *hdr)
+{
+	if (likely(hdr->hash_report)) {
+		m->packet_type = vhdr_hash_report_to_mbuf_pkt_type[hdr->hash_report];
+		m->hash.rss = hdr->hash_value;
+		m->ol_flags |= RTE_MBUF_F_RX_RSS_HASH;
 	}
 }
 
@@ -1134,6 +1147,9 @@ virtio_recv_pkts_packed(void *rx_queue, struct rte_mbuf **rx_pkts,
 		hdr = (struct virtio_net_hdr *)((char *)rxm->buf_addr +
 			RTE_PKTMBUF_HEADROOM - hdr_size);
 
+		if (hw->has_hash_report)
+			virtio_rx_update_hash_report(rxm,
+						    (struct virtio_net_hdr_hash_report *)hdr);
 		if (hw->vlan_strip)
 			rte_vlan_strip(rxm);
 
@@ -1617,6 +1633,10 @@ virtio_recv_mergeable_pkts_packed(void *rx_queue,
 		if (hw->vlan_strip)
 			rte_vlan_strip(rx_pkts[nb_rx]);
 
+		if (hw->has_hash_report)
+			virtio_rx_update_hash_report(rxm,
+						    (struct virtio_net_hdr_hash_report *)header);
+
 		seg_res = seg_num - 1;
 
 		/* Merge remaining segments */
@@ -2045,7 +2065,8 @@ virtio_xmit_pkts_inorder(void *tx_queue,
 	return nb_tx;
 }
 
-__rte_weak uint16_t
+#ifndef VIRTIO_RXTX_PACKED_VEC
+uint16_t
 virtio_recv_pkts_packed_vec(void *rx_queue __rte_unused,
 			    struct rte_mbuf **rx_pkts __rte_unused,
 			    uint16_t nb_pkts __rte_unused)
@@ -2053,10 +2074,11 @@ virtio_recv_pkts_packed_vec(void *rx_queue __rte_unused,
 	return 0;
 }
 
-__rte_weak uint16_t
+uint16_t
 virtio_xmit_pkts_packed_vec(void *tx_queue __rte_unused,
 			    struct rte_mbuf **tx_pkts __rte_unused,
 			    uint16_t nb_pkts __rte_unused)
 {
 	return 0;
 }
+#endif /* DVIRTIO_RXTX_PACKED_VEC */

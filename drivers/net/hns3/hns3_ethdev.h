@@ -32,10 +32,7 @@
 #define HNS3_DEV_ID_100G_VF			0xA22E
 #define HNS3_DEV_ID_100G_RDMA_PFC_VF		0xA22F
 
-/* PCI Config offsets */
-#define HNS3_PCI_REVISION_ID			0x08
-#define HNS3_PCI_REVISION_ID_LEN		1
-
+/* Revision IDs */
 #define PCI_REVISION_ID_HIP08_B			0x21
 #define PCI_REVISION_ID_HIP09_A			0x30
 
@@ -53,6 +50,10 @@
 
 #define HNS3_SPECIAL_PORT_SW_CKSUM_MODE         0
 #define HNS3_SPECIAL_PORT_HW_CKSUM_MODE         1
+
+#define HNS3_STRIP_CRC_PTYPE_NONE         0
+#define HNS3_STRIP_CRC_PTYPE_TCP          1
+#define HNS3_STRIP_CRC_PTYPE_IP           2
 
 #define HNS3_UC_MACADDR_NUM		128
 #define HNS3_VF_UC_MACADDR_NUM		48
@@ -129,7 +130,11 @@ struct hns3_tc_info {
 };
 
 struct hns3_dcb_info {
-	uint8_t num_tc;
+	uint8_t tc_max;     /* max number of tc driver supported */
+	uint8_t num_tc;     /* Total number of enabled TCs */
+	uint8_t hw_tc_map;
+	uint8_t local_max_tc; /* max number of local tc */
+	uint8_t pfc_max;
 	uint8_t num_pg;     /* It must be 1 if vNET-Base schd */
 	uint8_t pg_dwrr[HNS3_PG_NUM];
 	uint8_t prio_tc[HNS3_MAX_USER_PRIO];
@@ -533,8 +538,6 @@ struct hns3_hw {
 	uint16_t rss_ind_tbl_size;
 	uint16_t rss_key_size;
 
-	uint8_t num_tc;             /* Total number of enabled TCs */
-	uint8_t hw_tc_map;
 	enum hns3_fc_mode requested_fc_mode; /* FC mode requested by user */
 	struct hns3_dcb_info dcb_info;
 	enum hns3_fc_status current_fc_status; /* current flow control status */
@@ -654,6 +657,25 @@ struct hns3_hw {
 	 *     directly calculate the checksum of these UDP packets.
 	 */
 	uint8_t udp_cksum_mode;
+
+	/*
+	 * When KEEP_CRC offload is enabled, the CRC data of some type packets
+	 * whose length is less than or equal to HNS3_KEEP_CRC_OK_MIN_PKT_LEN
+	 * is still be stripped on some network engine. So here has to use this
+	 * field to distinguish the difference between different network engines.
+	 * value range:
+	 *  - HNS3_STRIP_CRC_PTYPE_TCP
+	 *     This value for HIP08 network engine.
+	 *     Indicates that only the IP-TCP packet type is stripped.
+	 *
+	 *  - HNS3_STRIP_CRC_PTYPE_IP
+	 *     This value for HIP09 network engine.
+	 *     Indicates that all IP packet types are stripped.
+	 *
+	 *  - HNS3_STRIP_CRC_PTYPE_NONE
+	 *     Indicates that all packet types are not stripped.
+	 */
+	uint8_t strip_crc_ptype;
 
 	struct hns3_port_base_vlan_config port_base_vlan_cfg;
 
@@ -812,9 +834,6 @@ struct hns3_pf {
 	uint16_t mps; /* Max packet size */
 
 	uint8_t tx_sch_mode;
-	uint8_t tc_max; /* max number of tc driver supported */
-	uint8_t local_max_tc; /* max number of local tc */
-	uint8_t pfc_max;
 	uint16_t pause_time;
 	bool support_fc_autoneg;       /* support FC autonegotiate */
 	bool support_multi_tc_pause;
@@ -897,6 +916,7 @@ enum hns3_dev_cap {
 	HNS3_DEV_SUPPORT_VF_VLAN_FLT_MOD_B,
 	HNS3_DEV_SUPPORT_FC_AUTO_B,
 	HNS3_DEV_SUPPORT_GRO_B,
+	HNS3_DEV_SUPPORT_VF_MULTI_TCS_B,
 };
 
 #define hns3_dev_get_support(hw, _name) \

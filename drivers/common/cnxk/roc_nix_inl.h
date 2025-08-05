@@ -89,7 +89,6 @@ struct roc_nix_inl_dev {
 	bool is_multi_channel;
 	uint16_t channel;
 	uint16_t chan_mask;
-	bool attach_cptlf;
 	uint16_t wqe_skip;
 	uint8_t spb_drop_pc;
 	uint8_t lpb_drop_pc;
@@ -99,9 +98,12 @@ struct roc_nix_inl_dev {
 	uint32_t max_ipsec_rules;
 	uint8_t rx_inj_ena; /* Rx Inject Enable */
 	uint8_t custom_inb_sa;
+	uint8_t nb_inb_cptlfs;
+	int8_t res_addr_offset; /* CPT result address offset */
+
 	/* End of input parameters */
 
-#define ROC_NIX_INL_MEM_SZ (2048)
+#define ROC_NIX_INL_MEM_SZ (6144)
 	uint8_t reserved[ROC_NIX_INL_MEM_SZ] __plt_cache_aligned;
 } __plt_cache_aligned;
 
@@ -109,7 +111,7 @@ struct roc_nix_inl_dev_q {
 	uint32_t nb_desc;
 	uintptr_t rbase;
 	uintptr_t lmt_base;
-	uint64_t *fc_addr;
+	uint64_t __plt_atomic *fc_addr;
 	uint64_t io_addr;
 	int32_t fc_addr_sw;
 } __plt_cache_aligned;
@@ -130,6 +132,7 @@ void __roc_api roc_nix_inl_dev_lock(void);
 void __roc_api roc_nix_inl_dev_unlock(void);
 int __roc_api roc_nix_inl_dev_xaq_realloc(uint64_t aura_handle);
 int __roc_api roc_nix_inl_dev_stats_get(struct roc_nix_stats *stats);
+int __roc_api roc_nix_inl_dev_stats_reset(void);
 int __roc_api roc_nix_inl_dev_cpt_setup(bool use_inl_dev_sso);
 int __roc_api roc_nix_inl_dev_cpt_release(void);
 bool __roc_api roc_nix_inl_dev_is_multi_channel(void);
@@ -140,6 +143,8 @@ int __roc_api roc_nix_inl_inb_fini(struct roc_nix *roc_nix);
 bool __roc_api roc_nix_inl_inb_is_enabled(struct roc_nix *roc_nix);
 uintptr_t __roc_api roc_nix_inl_inb_sa_base_get(struct roc_nix *roc_nix,
 						bool inl_dev_sa);
+uint16_t roc_nix_inl_inb_ipsec_profile_id_get(struct roc_nix *roc_nix, bool inb_inl_dev);
+uint16_t roc_nix_inl_inb_reass_profile_id_get(struct roc_nix *roc_nix, bool inb_inl_dev);
 bool __roc_api roc_nix_inl_inb_rx_inject_enable(struct roc_nix *roc_nix, bool inl_dev_sa);
 uint32_t __roc_api roc_nix_inl_inb_spi_range(struct roc_nix *roc_nix,
 					     bool inl_dev_sa, uint32_t *min,
@@ -154,12 +159,11 @@ int __roc_api roc_nix_inl_dev_rq_get(struct roc_nix_rq *rq, bool ena);
 int __roc_api roc_nix_inl_dev_rq_put(struct roc_nix_rq *rq);
 bool __roc_api roc_nix_inb_is_with_inl_dev(struct roc_nix *roc_nix);
 struct roc_nix_rq *__roc_api roc_nix_inl_dev_rq(struct roc_nix *roc_nix);
-int __roc_api roc_nix_inl_inb_tag_update(struct roc_nix *roc_nix,
-					 uint32_t tag_const, uint8_t tt);
-int __roc_api roc_nix_reassembly_configure(uint32_t max_wait_time,
-					   uint16_t max_frags);
-int __roc_api roc_nix_inl_ts_pkind_set(struct roc_nix *roc_nix, bool ts_ena,
-				       bool inb_inl_dev);
+int __roc_api roc_nix_inl_inb_tag_update(struct roc_nix *roc_nix, uint32_t tag_const, uint8_t tt);
+int __roc_api roc_nix_reassembly_configure(struct roc_cpt_rxc_time_cfg *req_cfg,
+					   uint32_t max_wait_time);
+int __roc_api roc_nix_inl_ts_pkind_set(struct roc_nix *roc_nix, bool ts_ena, bool inb_inl_dev,
+				       uint8_t profile_id);
 int __roc_api roc_nix_inl_rq_ena_dis(struct roc_nix *roc_nix, bool ena);
 int __roc_api roc_nix_inl_meta_aura_check(struct roc_nix *roc_nix, struct roc_nix_rq *rq);
 

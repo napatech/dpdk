@@ -20,7 +20,7 @@ They must be separated from the EAL options, shown in the previous section, with
 
 .. code-block:: console
 
-    sudo ./dpdk-testpmd -l 0-3 -n 4 -- -i --portmask=0x1 --nb-cores=2
+    sudo ./dpdk-testpmd -l 0-3 -- -i --portmask=0x1 --nb-cores=2
 
 The command line options are:
 
@@ -38,6 +38,13 @@ The command line options are:
 *   ``-h, --help``
 
     Display a help message and quit.
+
+*   ``--cmdline-file=filename, --cmdline-file-noecho=filename``
+
+    Read and execute commands from a file.
+    The file should contain the same commands that can be entered interactively.
+    When using ``cmdline-file``, each command is printed as it is executed.
+    When using ``cmdline-file-noecho``, the commands are executed silently.
 
 *   ``-a, --auto-start``
 

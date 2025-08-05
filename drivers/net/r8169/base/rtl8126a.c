@@ -29,7 +29,9 @@ static void
 hw_ephy_config_8126a(struct rtl_hw *hw)
 {
 	switch (hw->mcfg) {
-	case CFG_METHOD_69 ... CFG_METHOD_71:
+	case CFG_METHOD_69:
+	case CFG_METHOD_70:
+	case CFG_METHOD_71:
 		/* nothing to do */
 		break;
 	}
@@ -39,16 +41,12 @@ static void
 rtl_hw_phy_config_8126a_1(struct rtl_hw *hw)
 {
 	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_11);
-
-	RTL_W16(hw, EEE_TXIDLE_TIMER_8125, hw->mtu + RTE_ETHER_HDR_LEN + 0x20);
 }
 
 static void
 rtl_hw_phy_config_8126a_2(struct rtl_hw *hw)
 {
 	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_11);
-
-	RTL_W16(hw, EEE_TXIDLE_TIMER_8125, hw->mtu + RTE_ETHER_HDR_LEN + 0x20);
 
 	rtl_mdio_direct_write_phy_ocp(hw, 0xA436, 0x80BF);
 	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xA438, 0xFF00, 0xED00);
@@ -331,8 +329,6 @@ rtl_hw_phy_config_8126a_3(struct rtl_hw *hw)
 {
 	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_11);
 
-	RTL_W16(hw, EEE_TXIDLE_TIMER_8125, hw->mtu + RTE_ETHER_HDR_LEN + 0x20);
-
 	rtl_mdio_direct_write_phy_ocp(hw, 0xA436, 0x8183);
 	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xA438, 0xFF00, 0x5900);
 	rtl_set_eth_phy_ocp_bit(hw, 0xA654, BIT_11);
@@ -468,7 +464,7 @@ rtl_hw_phy_config_8126a_3(struct rtl_hw *hw)
 	rtl_mdio_direct_write_phy_ocp(hw, 0xB87E, 0x0001);
 	rtl_mdio_direct_write_phy_ocp(hw, 0xB87E, 0x03F1);
 
-	rtl_set_eth_phy_ocp_bit(hw, 0xA430, (BIT_1 | BIT_0));
+	rtl_set_eth_phy_ocp_bit(hw, 0xA430, BIT_1 | BIT_0);
 
 	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xB54C, 0xFFC0, 0x3700);
 }
@@ -494,6 +490,11 @@ hw_mac_mcu_config_8126a(struct rtl_hw *hw)
 {
 	if (hw->NotWrMcuPatchCode)
 		return;
+
+	rtl_hw_disable_mac_mcu_bps(hw);
+
+	/* Get H/W mac mcu patch code version */
+	hw->hw_mcu_patch_code_ver = rtl_get_hw_mcu_patch_code_ver(hw);
 
 	switch (hw->mcfg) {
 	case CFG_METHOD_69:

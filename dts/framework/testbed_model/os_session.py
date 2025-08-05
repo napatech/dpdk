@@ -22,12 +22,14 @@ Example:
     the :attr:`~.node.Node.main_session` translates that to ``rm -rf`` if the node's OS is Linux
     and other commands for other OSs. It also translates the path to match the underlying OS.
 """
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
+from enum import Flag, auto
 from pathlib import Path, PurePath, PurePosixPath
 
-from framework.config import Architecture, NodeConfiguration
+from framework.config.node import NodeConfiguration
 from framework.logger import DTSLogger
 from framework.remote_session import (
     InteractiveRemoteSession,
@@ -39,8 +41,35 @@ from framework.remote_session.remote_session import CommandResult
 from framework.settings import SETTINGS
 from framework.utils import MesonArgs, TarCompressionFormat
 
-from .cpu import LogicalCore
-from .port import Port
+from .cpu import Architecture, LogicalCore
+from .port import Port, PortInfo
+
+
+class FilePermissions(Flag):
+    """The permissions for a file and/or directory."""
+
+    #:
+    OTHERS_EXECUTE = auto()
+    #:
+    OTHERS_WRITE = auto()
+    #:
+    OTHERS_READ = auto()
+    #:
+    GROUP_EXECUTE = auto()
+    #:
+    GROUP_WRITE = auto()
+    #:
+    GROUP_READ = auto()
+    #:
+    OWNER_EXECUTE = auto()
+    #:
+    OWNER_WRITE = auto()
+    #:
+    OWNER_READ = auto()
+
+    def to_octal(self) -> str:
+        """Convert this flag to an octal representation."""
+        return format(self.value, "03o")
 
 
 @dataclass(slots=True, frozen=True)
@@ -195,6 +224,18 @@ class OSSession(ABC):
         """
 
     @abstractmethod
+    def create_tmp_dir(self, template: str = "dts.XXXXX") -> PurePath:
+        """Create a temporary directory on the remote node.
+
+        Args:
+            template: The template to use for the name of the directory. "X"s are treated
+                as placeholder.
+
+        Returns:
+            The path to the created directory.
+        """
+
+    @abstractmethod
     def copy_from(self, source_file: str | PurePath, destination_dir: str | Path) -> None:
         """Copy a file from the remote node to the local filesystem.
 
@@ -301,6 +342,12 @@ class OSSession(ABC):
         """
 
     @abstractmethod
+    def change_permissions(
+        self, remote_path: PurePath, permissions: FilePermissions, recursive: bool = False
+    ) -> None:
+        """Change the permissions of the given path."""
+
+    @abstractmethod
     def remove_remote_file(self, remote_file_path: str | PurePath, force: bool = True) -> None:
         """Remove remote file, by default remove forcefully.
 
@@ -348,17 +395,23 @@ class OSSession(ABC):
         """
 
     @abstractmethod
+    def create_directory(self, path: PurePath) -> None:
+        """Create a directory at a specified `path`."""
+
+    @abstractmethod
     def extract_remote_tarball(
         self,
         remote_tarball_path: str | PurePath,
-        expected_dir: str | PurePath | None = None,
+        destination_path: str | PurePath,
+        strip_root_dir: bool = False,
     ) -> None:
-        """Extract remote tarball in its remote directory.
+        """Extract remote tarball in the given path.
 
         Args:
             remote_tarball_path: The tarball path on the remote node.
-            expected_dir: If non-empty, check whether `expected_dir` exists after extracting
-                the archive.
+            destination_path: The location the tarball will be extracted to.
+            strip_root_dir: If :data:`True` and the root of the tarball is a folder, strip it and
+                extract its contents only.
         """
 
     @abstractmethod
@@ -366,7 +419,7 @@ class OSSession(ABC):
         """Check if the `remote_path` is a directory.
 
         Args:
-            remote_tarball_path: The path to the remote tarball.
+            remote_path: The path to the remote tarball.
 
         Returns:
             If :data:`True` the `remote_path` is a directory, otherwise :data:`False`.
@@ -444,7 +497,7 @@ class OSSession(ABC):
         """
 
     @abstractmethod
-    def get_remote_cpus(self, use_first_core: bool) -> list[LogicalCore]:
+    def get_remote_cpus(self) -> list[LogicalCore]:
         r"""Get the list of :class:`~.cpu.LogicalCore`\s on the remote node.
 
         Args:
@@ -507,16 +560,39 @@ class OSSession(ABC):
         """
 
     @abstractmethod
-    def update_ports(self, ports: list[Port]) -> None:
-        """Get additional information about ports from the operating system and update them.
+    def get_arch_info(self) -> str:
+        """Discover CPU architecture of the remote host.
 
-        The additional information is:
+        Returns:
+            Remote host CPU architecture.
+        """
 
-            * Logical name (e.g. ``enp7s0``) if applicable,
-            * Mac address.
+    @abstractmethod
+    def get_port_info(self, pci_address: str) -> PortInfo:
+        """Get port information.
+
+        Returns:
+            An instance of :class:`PortInfo`.
+
+        Raises:
+            ConfigurationError: If the port could not be found.
+        """
+
+    @abstractmethod
+    def bind_ports_to_driver(self, ports: list[Port], driver_name: str) -> None:
+        """Bind `ports` to the given `driver_name`.
 
         Args:
-            ports: The ports to update.
+            ports: The list of the ports to bind to the driver.
+            driver_name: The name of the driver to bind the ports to.
+        """
+
+    @abstractmethod
+    def bring_up_link(self, ports: Iterable[Port]) -> None:
+        """Send operating system specific command for bringing up link on node interfaces.
+
+        Args:
+            ports: The ports to apply the link up command to.
         """
 
     @abstractmethod
@@ -526,4 +602,46 @@ class OSSession(ABC):
         Args:
             mtu: Desired MTU value.
             port: Port to set `mtu` on.
+        """
+
+    @abstractmethod
+    def create_vfs(self, pf_port: Port) -> None:
+        """Creates virtual functions for `pf_port`.
+
+        Checks how many virtual functions (VFs) `pf_port` supports, and creates that
+        number of VFs on the port.
+
+        Args:
+            pf_port: The port to create virtual functions on.
+
+        Raises:
+            InternalError: If the number of VFs is greater than 0 but less than the
+            maximum for `pf_port`.
+        """
+
+    @abstractmethod
+    def delete_vfs(self, pf_port: Port) -> None:
+        """Deletes virtual functions for `pf_port`.
+
+        Checks how many virtual functions (VFs) `pf_port` supports, and deletes that
+        number of VFs on the port.
+
+        Args:
+            pf_port: The port to delete virtual functions on.
+
+        Raises:
+            InternalError: If the number of VFs is greater than 0 but less than the
+            maximum for `pf_port`.
+        """
+
+    @abstractmethod
+    def get_pci_addr_of_vfs(self, pf_port: Port) -> list[str]:
+        """Find the PCI addresses of all virtual functions (VFs) on the port `pf_port`.
+
+        Args:
+            pf_port: The port to find the VFs on.
+
+        Returns:
+            A list containing all of the PCI addresses of the VFs on the port. If the port has no
+            VFs then the list will be empty.
         """

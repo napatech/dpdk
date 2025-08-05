@@ -31,13 +31,16 @@
 nthw_rac_t *nthw_rac_new(void)
 {
 	nthw_rac_t *p = malloc(sizeof(nthw_rac_t));
-	memset(p, 0, sizeof(nthw_rac_t));
+
+	if (p)
+		memset(p, 0, sizeof(nthw_rac_t));
+
 	return p;
 }
 
 int nthw_rac_init(nthw_rac_t *p, nthw_fpga_t *p_fpga, struct fpga_info_s *p_fpga_info)
 {
-	assert(p_fpga_info);
+	RTE_ASSERT(p_fpga_info);
 
 	const char *const p_adapter_id_str = p_fpga_info->mp_adapter_id_str;
 	nthw_module_t *p_mod = nthw_fpga_query_module(p_fpga, MOD_RAC, 0);
@@ -74,8 +77,8 @@ int nthw_rac_init(nthw_rac_t *p, nthw_fpga_t *p_fpga, struct fpga_info_s *p_fpga
 	p->mn_fld_rab_init_mask = nthw_field_get_mask(p->mp_fld_rab_init);
 
 	/* RAC_RAB_INIT_RAB reg/field sanity checks: */
-	assert(p->mn_fld_rab_init_mask == ((1UL << p->mn_fld_rab_init_bw) - 1));
-	assert(p->mn_fld_rab_init_bw == p->mn_param_rac_rab_interfaces);
+	RTE_ASSERT(p->mn_fld_rab_init_mask == ((1UL << p->mn_fld_rab_init_bw) - 1));
+	RTE_ASSERT(p->mn_fld_rab_init_bw == p->mn_param_rac_rab_interfaces);
 
 	p->mp_reg_dbg_ctrl = nthw_module_query_register(p->mp_mod_rac, RAC_DBG_CTRL);
 
@@ -89,9 +92,6 @@ int nthw_rac_init(nthw_rac_t *p, nthw_fpga_t *p_fpga, struct fpga_info_s *p_fpga
 
 	if (p->mp_reg_dbg_data)
 		p->mp_fld_dbg_data = nthw_register_query_field(p->mp_reg_dbg_data, RAC_DBG_DATA_D);
-
-	else
-		p->mp_reg_dbg_data = NULL;
 
 	p->mp_reg_rab_ib_data = nthw_module_get_register(p->mp_mod_rac, RAC_RAB_IB_DATA);
 	p->mp_fld_rab_ib_data = nthw_register_get_field(p->mp_reg_rab_ib_data, RAC_RAB_IB_DATA_D);
@@ -262,7 +262,7 @@ static inline int _nthw_rac_wait_for_rab_done(const nthw_rac_t *p, uint32_t addr
 	}
 
 	if (used < word_cnt) {
-		NT_LOG(ERR, NTHW, "%s: Fail rab bus r/w addr=0x%08X used=%x wordcount=%d",
+		NT_LOG(ERR, NTHW, "%s: Fail rab bus r/w addr=0x%08X used=%x wordcount=%" PRIu32 "",
 			p_adapter_id_str, address, used, word_cnt);
 		return -1;
 	}
@@ -309,8 +309,8 @@ int nthw_rac_rab_reset(nthw_rac_t *p)
 
 	NT_LOG(DBG, NTHW, "%s: NT_RAC_RAB_INTERFACES=%d (0x%02X)", p_adapter_id_str,
 		n_rac_rab_bus_count, n_rac_rab_bus_mask);
-	assert(n_rac_rab_bus_count);
-	assert(n_rac_rab_bus_mask);
+	RTE_ASSERT(n_rac_rab_bus_count);
+	RTE_ASSERT(n_rac_rab_bus_mask);
 
 	/* RAC RAB bus "flip/flip" reset first stage - new impl (ref RMT#37020) */
 	nthw_rac_rab_init(p, 0);
@@ -452,7 +452,7 @@ uint32_t nthw_rac_rab_get_free(nthw_rac_t *p)
 {
 	if (!p->m_dma_active) {
 		/* Expecting mutex not to be locked! */
-		assert(0);      /* alert developer that something is wrong */
+		RTE_ASSERT(0);      /* alert developer that something is wrong */
 		return -1;
 	}
 
@@ -467,9 +467,10 @@ int nthw_rac_rab_write32_dma(nthw_rac_t *p, nthw_rab_bus_id_t bus_id, uint32_t a
 
 	if (word_cnt == 0 || word_cnt > 256) {
 		NT_LOG(ERR, NTHW,
-			"%s: Failed rab dma write length check - bus: %d addr: 0x%08X wordcount: %d - inBufFree: 0x%08X",
+			"%s: Failed rab dma write length check - bus: %d addr: 0x%08X wordcount: %"
+			PRIu32 " - inBufFree: 0x%08X",
 			p_adapter_id_str, bus_id, address, word_cnt, p->m_in_free);
-		assert(0);      /* alert developer that something is wrong */
+		RTE_ASSERT(0);      /* alert developer that something is wrong */
 		return -1;
 	}
 
@@ -506,16 +507,10 @@ int nthw_rac_rab_read32_dma(nthw_rac_t *p, nthw_rab_bus_id_t bus_id, uint32_t ad
 
 	if (word_cnt == 0 || word_cnt > 256) {
 		NT_LOG(ERR, NTHW,
-			"%s: Failed rab dma read length check - bus: %d addr: 0x%08X wordcount: %d - inBufFree: 0x%08X",
+			"%s: Failed rab dma read length check - bus: %d addr: 0x%08X wordcount: %"
+			PRIu32 " - inBufFree: 0x%08X",
 			p_adapter_id_str, bus_id, address, word_cnt, p->m_in_free);
-		assert(0);      /* alert developer that something is wrong */
-		return -1;
-	}
-
-	if ((word_cnt + 3) > RAB_DMA_BUF_CNT) {
-		NT_LOG(ERR, NTHW,
-			"%s: Failed rab dma read length check - bus: %d addr: 0x%08X wordcount: %d",
-			p_adapter_id_str, bus_id, address, word_cnt);
+		RTE_ASSERT(0);      /* alert developer that something is wrong */
 		return -1;
 	}
 
@@ -557,19 +552,19 @@ int nthw_rac_rab_write32(nthw_rac_t *p, bool trc, nthw_rab_bus_id_t bus_id, uint
 	int res = 0;
 
 	if (address > (1 << RAB_ADDR_BW)) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal address: value too large %d - max %d",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal address: value too large %" PRIu32 " - max %d",
 			p_adapter_id_str, address, (1 << RAB_ADDR_BW));
 		return -1;
 	}
 
 	if (bus_id > (1 << RAB_BUSID_BW)) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal bus id: value too large %d - max %d",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal bus id: value too large %" PRIu32 " - max %d",
 			p_adapter_id_str, bus_id, (1 << RAB_BUSID_BW));
 		return -1;
 	}
 
 	if (word_cnt == 0) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal word count: value is zero (%d)",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal word count: value is zero (%" PRIu32 ")",
 			p_adapter_id_str, word_cnt);
 		return -1;
 	}
@@ -744,28 +739,28 @@ int nthw_rac_rab_read32(nthw_rac_t *p, bool trc, nthw_rab_bus_id_t bus_id, uint3
 	rte_spinlock_lock(&p->m_mutex);
 
 	if (address > (1 << RAB_ADDR_BW)) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal address: value too large %d - max %d",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal address: value too large %" PRIu32 " - max %d",
 			p_adapter_id_str, address, (1 << RAB_ADDR_BW));
 		res = -1;
 		goto exit_unlock_res;
 	}
 
 	if (bus_id > (1 << RAB_BUSID_BW)) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal bus id: value too large %d - max %d",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal bus id: value too large %" PRIu32 " - max %d",
 			p_adapter_id_str, bus_id, (1 << RAB_BUSID_BW));
 		res = -1;
 		goto exit_unlock_res;
 	}
 
 	if (word_cnt == 0) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal word count: value is zero (%d)",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal word count: value is zero (%" PRIu32 ")",
 			p_adapter_id_str, word_cnt);
 		res = -1;
 		goto exit_unlock_res;
 	}
 
 	if (word_cnt > (1 << RAB_CNT_BW)) {
-		NT_LOG(ERR, NTHW, "%s: RAB: Illegal word count: value too large %d - max %d",
+		NT_LOG(ERR, NTHW, "%s: RAB: Illegal word count: value too large %" PRIu32 " - max %d",
 			p_adapter_id_str, word_cnt, (1 << RAB_CNT_BW));
 		res = -1;
 		goto exit_unlock_res;

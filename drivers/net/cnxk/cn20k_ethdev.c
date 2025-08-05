@@ -2,6 +2,7 @@
  * Copyright(C) 2024 Marvell.
  */
 #include "cn20k_ethdev.h"
+#include "cn20k_flow.h"
 #include "cn20k_rx.h"
 #include "cn20k_tx.h"
 
@@ -247,9 +248,9 @@ cn20k_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid, uint16_t nb_
 		inl_lf = dev->outb.lf_base + crypto_qid;
 
 		txq->cpt_io_addr = inl_lf->io_addr;
-		txq->cpt_fc = inl_lf->fc_addr;
-		txq->cpt_fc_sw = (int32_t *)((uintptr_t)dev->outb.fc_sw_mem +
-					     crypto_qid * RTE_CACHE_LINE_SIZE);
+		txq->cpt_fc = (uint64_t __rte_atomic *)inl_lf->fc_addr;
+		txq->cpt_fc_sw = (int32_t __rte_atomic *)((uintptr_t)dev->outb.fc_sw_mem +
+							  crypto_qid * RTE_CACHE_LINE_SIZE);
 
 		txq->cpt_desc = inl_lf->nb_desc * 0.7;
 		txq->sa_base = (uint64_t)dev->outb.sa_base;
@@ -318,6 +319,8 @@ cn20k_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid, uint16_t nb_
 	/* Data offset from data to start of mbuf is first_skip */
 	rxq->data_off = rq->first_skip;
 	rxq->mbuf_initializer = cnxk_nix_rxq_mbuf_setup(dev);
+	rxq->mp_buf_sz = (mp->elt_size + mp->header_size + mp->trailer_size) & 0xFFFFFFFF;
+	rxq->mp_buf_sz |= (uint64_t)mp->header_size << 32;
 
 	/* Setup security related info */
 	if (dev->rx_offload_flags & NIX_RX_OFFLOAD_SECURITY_F) {
@@ -355,6 +358,18 @@ cn20k_nix_rx_queue_meta_aura_update(struct rte_eth_dev *eth_dev)
 	}
 	/* Store mempool in lookup mem */
 	cnxk_nix_lookup_mem_metapool_set(dev);
+}
+
+static void
+cn20k_nix_rx_queue_bufsize_update(struct rte_eth_dev *eth_dev)
+{
+	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct cn20k_eth_rxq *rxq;
+
+	rxq = eth_dev->data->rx_queues[0];
+
+	/* Store bufsize in lookup mem */
+	cnxk_nix_lookup_mem_bufsize_set(dev, rxq->mp_buf_sz);
 }
 
 static int
@@ -401,6 +416,12 @@ cn20k_nix_configure(struct rte_eth_dev *eth_dev)
 	rc = cnxk_nix_configure(eth_dev);
 	if (rc)
 		return rc;
+
+	if (dev->tx_offloads & RTE_ETH_TX_OFFLOAD_SECURITY ||
+	    dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY) {
+		/* Register callback to handle security error work */
+		roc_nix_inl_cb_register(cn20k_eth_sec_sso_work_cb, NULL);
+	}
 
 	/* Update offload flags */
 	dev->rx_offload_flags = nix_rx_offload_flags(eth_dev);
@@ -583,6 +604,8 @@ cn20k_nix_dev_start(struct rte_eth_dev *eth_dev)
 	if (roc_idev_nix_rx_inject_get(nix->port_id))
 		dev->rx_offload_flags |= NIX_RX_SEC_REASSEMBLY_F;
 
+	cn20k_nix_rx_queue_bufsize_update(eth_dev);
+
 	cn20k_eth_set_tx_function(eth_dev);
 	cn20k_eth_set_rx_function(eth_dev);
 	return 0;
@@ -624,6 +647,7 @@ cn20k_nix_reassembly_conf_set(struct rte_eth_dev *eth_dev,
 			      const struct rte_eth_ip_reassembly_params *conf)
 {
 	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct roc_cpt_rxc_time_cfg rxc_time_cfg = {0};
 	int rc = 0;
 
 	if (!roc_feature_nix_has_reass())
@@ -637,7 +661,7 @@ cn20k_nix_reassembly_conf_set(struct rte_eth_dev *eth_dev,
 		return 0;
 	}
 
-	rc = roc_nix_reassembly_configure(conf->timeout_ms, conf->max_frags);
+	rc = roc_nix_reassembly_configure(&rxc_time_cfg, conf->timeout_ms);
 	if (!rc && dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY) {
 		dev->rx_offload_flags |= NIX_RX_REAS_F;
 		dev->inb.reass_en = true;
@@ -676,7 +700,7 @@ cn20k_rx_descriptor_dump(const struct rte_eth_dev *eth_dev, uint16_t qid, uint16
 	const uint64_t data_off = rxq->data_off;
 	const uint32_t qmask = rxq->qmask;
 	const uintptr_t desc = rxq->desc;
-	struct cpt_parse_hdr_s *cpth;
+	union cpt_parse_hdr_u *cpth;
 	uint32_t head = rxq->head;
 	struct nix_cqe_hdr_s *cq;
 	uint16_t count = 0;
@@ -696,7 +720,7 @@ cn20k_rx_descriptor_dump(const struct rte_eth_dev *eth_dev, uint16_t qid, uint16
 		if (cq_w1 & BIT(11)) {
 			rte_iova_t buff = *((rte_iova_t *)((uint64_t *)cq + 9));
 			struct rte_mbuf *mbuf = (struct rte_mbuf *)(buff - data_off);
-			cpth = (struct cpt_parse_hdr_s *)((uintptr_t)mbuf + (uint16_t)data_off);
+			cpth = (union cpt_parse_hdr_u *)((uintptr_t)mbuf + (uint16_t)data_off);
 			roc_cpt_parse_hdr_dump(file, cpth);
 		} else {
 			roc_nix_cqe_dump(file, cq);
@@ -867,6 +891,9 @@ npc_flow_ops_override(void)
 	init_once = 1;
 
 	/* Update platform specific ops */
+	cnxk_flow_ops.create = cn20k_flow_create;
+	cnxk_flow_ops.destroy = cn20k_flow_destroy;
+	cnxk_flow_ops.info_get = cn20k_flow_info_get;
 }
 
 static int
@@ -891,6 +918,8 @@ cn20k_nix_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	nix_eth_dev_ops_override();
 	nix_tm_ops_override();
 	npc_flow_ops_override();
+
+	cn20k_eth_sec_ops_override();
 
 	/* Common probe */
 	rc = cnxk_nix_probe(pci_drv, pci_dev);
@@ -917,6 +946,9 @@ cn20k_nix_probe(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 	/* Register up msg callbacks for PTP information */
 	roc_nix_ptp_info_cb_register(&dev->nix, cn20k_nix_ptp_info_update_cb);
+
+	/* Use WRITE SA for inline IPsec */
+	dev->nix.use_write_sa = true;
 
 	return 0;
 }

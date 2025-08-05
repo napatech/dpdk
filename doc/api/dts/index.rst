@@ -14,6 +14,7 @@ Packages
    :includehidden:
    :maxdepth: 1
 
+   tests
    framework.testbed_model
    framework.remote_session
    framework.params
@@ -26,9 +27,11 @@ Modules
    :maxdepth: 1
 
    framework.runner
+   framework.test_run
    framework.test_suite
    framework.test_result
    framework.settings
+   framework.context
    framework.logger
    framework.parser
    framework.utils

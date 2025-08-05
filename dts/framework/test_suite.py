@@ -24,25 +24,31 @@ from importlib import import_module
 from ipaddress import IPv4Interface, IPv6Interface, ip_interface
 from pkgutil import iter_modules
 from types import ModuleType
-from typing import ClassVar, Protocol, TypeVar, Union, cast
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypeVar, Union, cast
 
-from scapy.layers.inet import IP  # type: ignore[import-untyped]
-from scapy.layers.l2 import Ether  # type: ignore[import-untyped]
-from scapy.packet import Packet, Padding, raw  # type: ignore[import-untyped]
+from scapy.layers.inet import IP
+from scapy.layers.l2 import Ether
+from scapy.packet import Packet, Padding, raw
 from typing_extensions import Self
 
+from framework.config.common import FrozenModel
 from framework.testbed_model.capability import TestProtocol
-from framework.testbed_model.port import Port
-from framework.testbed_model.sut_node import SutNode
-from framework.testbed_model.tg_node import TGNode
 from framework.testbed_model.topology import Topology
 from framework.testbed_model.traffic_generator.capturing_traffic_generator import (
+    CapturingTrafficGenerator,
     PacketFilteringConfig,
 )
 
-from .exception import ConfigurationError, InternalError, TestCaseVerifyError
+from .exception import ConfigurationError, InternalError, SkippedTestException, TestCaseVerifyError
 from .logger import DTSLogger, get_dts_logger
 from .utils import get_packet_summaries, to_pascal_case
+
+if TYPE_CHECKING:
+    from framework.context import Context
+
+
+class BaseConfig(FrozenModel):
+    """Base for a custom test suite configuration."""
 
 
 class TestSuite(TestProtocol):
@@ -60,7 +66,7 @@ class TestSuite(TestProtocol):
 
     By default, all test cases will be executed. A list of testcase names may be specified
     in the YAML test run configuration file and in the :option:`--test-suite` command line argument
-    or in the :envvar:`DTS_TESTCASES` environment variable to filter which test cases to run.
+    or in the :envvar:`DTS_TEST_SUITES` environment variable to filter which test cases to run.
     The union of both lists will be used. Any unknown test cases from the latter lists
     will be silently ignored.
 
@@ -71,52 +77,49 @@ class TestSuite(TestProtocol):
     properly choose the IP addresses and other configuration that must be tailored to the testbed.
 
     Attributes:
-        sut_node: The SUT node where the test suite is running.
-        tg_node: The TG node where the test suite is running.
+        config: The test suite configuration.
     """
 
-    sut_node: SutNode
-    tg_node: TGNode
+    config: BaseConfig
+
     #: Whether the test suite is blocking. A failure of a blocking test suite
     #: will block the execution of all subsequent test suites in the current test run.
     is_blocking: ClassVar[bool] = False
+    _ctx: "Context"
     _logger: DTSLogger
-    _sut_port_ingress: Port
-    _sut_port_egress: Port
     _sut_ip_address_ingress: Union[IPv4Interface, IPv6Interface]
     _sut_ip_address_egress: Union[IPv4Interface, IPv6Interface]
-    _tg_port_ingress: Port
-    _tg_port_egress: Port
     _tg_ip_address_ingress: Union[IPv4Interface, IPv6Interface]
     _tg_ip_address_egress: Union[IPv4Interface, IPv6Interface]
 
-    def __init__(
-        self,
-        sut_node: SutNode,
-        tg_node: TGNode,
-        topology: Topology,
-    ):
+    def __init__(self, config: BaseConfig):
         """Initialize the test suite testbed information and basic configuration.
 
-        Find links between ports and set up default IP addresses to be used when
-        configuring them.
-
         Args:
-            sut_node: The SUT node where the test suite will run.
-            tg_node: The TG node where the test suite will run.
-            topology: The topology where the test suite will run.
+            config: The test suite configuration.
         """
-        self.sut_node = sut_node
-        self.tg_node = tg_node
+        from framework.context import get_ctx
+
+        self.config = config
+        self._ctx = get_ctx()
         self._logger = get_dts_logger(self.__class__.__name__)
-        self._tg_port_egress = topology.tg_port_egress
-        self._sut_port_ingress = topology.sut_port_ingress
-        self._sut_port_egress = topology.sut_port_egress
-        self._tg_port_ingress = topology.tg_port_ingress
         self._sut_ip_address_ingress = ip_interface("192.168.100.2/24")
         self._sut_ip_address_egress = ip_interface("192.168.101.2/24")
         self._tg_ip_address_egress = ip_interface("192.168.100.3/24")
         self._tg_ip_address_ingress = ip_interface("192.168.101.3/24")
+
+    @property
+    def name(self) -> str:
+        """The name of the test suite."""
+        module_prefix = (
+            f"{TestSuiteSpec.TEST_SUITES_PACKAGE_NAME}.{TestSuiteSpec.TEST_SUITE_MODULE_PREFIX}"
+        )
+        return type(self).__module__[len(module_prefix) :]
+
+    @property
+    def topology(self) -> Topology:
+        """The current topology in use."""
+        return self._ctx.topology
 
     @classmethod
     def get_test_cases(cls) -> list[type["TestCase"]]:
@@ -253,11 +256,15 @@ class TestSuite(TestProtocol):
         Returns:
             A list of received packets.
         """
+        assert isinstance(
+            self._ctx.tg, CapturingTrafficGenerator
+        ), "Cannot capture with a non-capturing traffic generator"
+        # TODO: implement @requires for types of traffic generator
         packets = self._adjust_addresses(packets)
-        return self.tg_node.send_packets_and_capture(
+        return self._ctx.tg.send_packets_and_capture(
             packets,
-            self._tg_port_egress,
-            self._tg_port_ingress,
+            self._ctx.topology.tg_port_egress,
+            self._ctx.topology.tg_port_ingress,
             filter_config,
             duration,
         )
@@ -272,33 +279,53 @@ class TestSuite(TestProtocol):
             packets: Packets to send.
         """
         packets = self._adjust_addresses(packets)
-        self.tg_node.send_packets(packets, self._tg_port_egress)
+        self._ctx.tg.send_packets(packets, self._ctx.topology.tg_port_egress)
 
-    def get_expected_packets(self, packets: list[Packet]) -> list[Packet]:
+    def get_expected_packets(
+        self,
+        packets: list[Packet],
+        sent_from_tg: bool = False,
+    ) -> list[Packet]:
         """Inject the proper L2/L3 addresses into `packets`.
 
         Inject the L2/L3 addresses expected at the receiving end of the traffic generator.
 
         Args:
             packets: The packets to modify.
+            sent_from_tg: If :data:`True` packet was sent from the TG.
 
         Returns:
             `packets` with injected L2/L3 addresses.
         """
-        return self._adjust_addresses(packets, expected=True)
+        return self._adjust_addresses(packets, not sent_from_tg)
 
-    def get_expected_packet(self, packet: Packet) -> Packet:
+    def get_expected_packet(
+        self,
+        packet: Packet,
+        sent_from_tg: bool = False,
+    ) -> Packet:
         """Inject the proper L2/L3 addresses into `packet`.
 
         Inject the L2/L3 addresses expected at the receiving end of the traffic generator.
 
         Args:
             packet: The packet to modify.
+            sent_from_tg: If :data:`True` packet was sent from the TG.
 
         Returns:
             `packet` with injected L2/L3 addresses.
         """
-        return self.get_expected_packets([packet])[0]
+        return self.get_expected_packets([packet], sent_from_tg)[0]
+
+    def log(self, message: str) -> None:
+        """Call the private instance of logger within the TestSuite class.
+
+        Log the given message with the level 'INFO'.
+
+        Args:
+            message: String representing the message to log.
+        """
+        self._logger.info(message)
 
     def _adjust_addresses(self, packets: list[Packet], expected: bool = False) -> list[Packet]:
         """L2 and L3 address additions in both directions.
@@ -322,7 +349,7 @@ class TestSuite(TestProtocol):
         """
         ret_packets = []
         for original_packet in packets:
-            packet = original_packet.copy()
+            packet: Packet = original_packet.copy()
 
             # update l2 addresses
             # If `expected` is :data:`True`, the packet enters the TG from SUT, otherwise the
@@ -332,15 +359,15 @@ class TestSuite(TestProtocol):
             # only be the Ether src/dst.
             if "src" not in packet.fields:
                 packet.src = (
-                    self._sut_port_egress.mac_address
+                    self.topology.sut_port_egress.mac_address
                     if expected
-                    else self._tg_port_egress.mac_address
+                    else self.topology.tg_port_egress.mac_address
                 )
             if "dst" not in packet.fields:
                 packet.dst = (
-                    self._tg_port_ingress.mac_address
+                    self.topology.tg_port_ingress.mac_address
                     if expected
-                    else self._sut_port_ingress.mac_address
+                    else self.topology.sut_port_ingress.mac_address
                 )
 
             # update l3 addresses
@@ -351,12 +378,13 @@ class TestSuite(TestProtocol):
                 # Update the last IP layer if there are multiple (the framework should be modifying
                 # the packet address instead of the tunnel address if there is one).
                 l3_to_use = packet.getlayer(IP, num_ip_layers)
+                assert l3_to_use is not None
                 if "src" not in l3_to_use.fields:
                     l3_to_use.src = self._tg_ip_address_egress.ip.exploded
 
                 if "dst" not in l3_to_use.fields:
                     l3_to_use.dst = self._tg_ip_address_ingress.ip.exploded
-            ret_packets.append(Ether(packet.build()))
+            ret_packets.append(packet)
 
         return ret_packets
 
@@ -379,12 +407,31 @@ class TestSuite(TestProtocol):
 
     def _fail_test_case_verify(self, failure_description: str) -> None:
         self._logger.debug("A test case failed, showing the last 10 commands executed on SUT:")
-        for command_res in self.sut_node.main_session.remote_session.history[-10:]:
+        for command_res in self._ctx.sut_node.main_session.remote_session.history[-10:]:
             self._logger.debug(command_res.command)
         self._logger.debug("A test case failed, showing the last 10 commands executed on TG:")
-        for command_res in self.tg_node.main_session.remote_session.history[-10:]:
+        for command_res in self._ctx.tg_node.main_session.remote_session.history[-10:]:
             self._logger.debug(command_res.command)
         raise TestCaseVerifyError(failure_description)
+
+    def verify_else_skip(self, condition: bool, skip_reason: str) -> None:
+        """Verify `condition` and handle skips.
+
+        When `condition` is :data:`False`, raise a skip exception.
+
+        Args:
+            condition: The condition to check.
+            skip_reason: Description of the reason for skipping.
+
+        Raises:
+            SkippedTestException: `condition` is :data:`False`.
+        """
+        if not condition:
+            self._skip_test_case_verify(skip_reason)
+
+    def _skip_test_case_verify(self, skip_description: str) -> None:
+        self._logger.debug(f"Test case skipped: {skip_description}")
+        raise SkippedTestException(skip_description)
 
     def verify_packets(self, expected_packet: Packet, received_packets: list[Packet]) -> None:
         """Verify that `expected_packet` has been received.
@@ -405,14 +452,17 @@ class TestSuite(TestProtocol):
                 break
         else:
             self._logger.debug(
-                f"The expected packet {get_packet_summaries(expected_packet)} "
+                f"The expected packet {expected_packet.summary()} "
                 f"not found among received {get_packet_summaries(received_packets)}"
             )
             self._fail_test_case_verify("An expected packet not found among received packets.")
 
     def match_all_packets(
-        self, expected_packets: list[Packet], received_packets: list[Packet]
-    ) -> None:
+        self,
+        expected_packets: list[Packet],
+        received_packets: list[Packet],
+        verify: bool = True,
+    ) -> bool:
         """Matches all the expected packets against the received ones.
 
         Matching is performed by counting down the occurrences in a dictionary which keys are the
@@ -422,10 +472,14 @@ class TestSuite(TestProtocol):
         Args:
             expected_packets: The packets we are expecting to receive.
             received_packets: All the packets that were received.
+            verify: If :data:`True`, and there are missing packets an exception will be raised.
 
         Raises:
             TestCaseVerifyError: if and not all the `expected_packets` were found in
                 `received_packets`.
+
+        Returns:
+            :data:`True` If there are no missing packets.
         """
         expected_packets_counters = Counter(map(raw, expected_packets))
         received_packets_counters = Counter(map(raw, received_packets))
@@ -439,10 +493,14 @@ class TestSuite(TestProtocol):
         )
 
         if missing_packets_count != 0:
-            self._fail_test_case_verify(
-                f"Not all packets were received, expected {len(expected_packets)} "
-                f"but {missing_packets_count} were missing."
-            )
+            if verify:
+                self._fail_test_case_verify(
+                    f"Not all packets were received, expected {len(expected_packets)} "
+                    f"but {missing_packets_count} were missing."
+                )
+            return False
+
+        return True
 
     def _compare_packets(self, expected_packet: Packet, received_packet: Packet) -> bool:
         self._logger.debug(
@@ -458,12 +516,13 @@ class TestSuite(TestProtocol):
             self._logger.debug("Comparing payloads:")
             self._logger.debug(f"Received: {received_payload}")
             self._logger.debug(f"Expected: {expected_payload}")
-            if received_payload.__class__ == expected_payload.__class__:
+            if type(received_payload) is type(expected_payload):
                 self._logger.debug("The layers are the same.")
-                if received_payload.__class__ == Ether:
+                if type(received_payload) is Ether:
                     if not self._verify_l2_frame(received_payload, l3):
                         return False
-                elif received_payload.__class__ == IP:
+                elif type(received_payload) is IP:
+                    assert type(expected_payload) is IP
                     if not self._verify_l3_packet(received_payload, expected_payload):
                         return False
             else:
@@ -484,14 +543,14 @@ class TestSuite(TestProtocol):
         self._logger.debug("Looking at the Ether layer.")
         self._logger.debug(
             f"Comparing received dst mac '{received_packet.dst}' "
-            f"with expected '{self._tg_port_ingress.mac_address}'."
+            f"with expected '{self.topology.tg_port_ingress.mac_address}'."
         )
-        if received_packet.dst != self._tg_port_ingress.mac_address:
+        if received_packet.dst != self.topology.tg_port_ingress.mac_address:
             return False
 
-        expected_src_mac = self._tg_port_egress.mac_address
+        expected_src_mac = self.topology.tg_port_egress.mac_address
         if l3:
-            expected_src_mac = self._sut_port_egress.mac_address
+            expected_src_mac = self.topology.sut_port_egress.mac_address
         self._logger.debug(
             f"Comparing received src mac '{received_packet.src}' "
             f"with expected '{expected_src_mac}'."
@@ -561,6 +620,7 @@ class TestCase(TestProtocol, Protocol[TestSuiteMethodType]):
             test_case.topology_type = cls.topology_type
             test_case.topology_type.add_to_required(test_case)
             test_case.test_type = test_case_type
+            test_case.sut_ports_drivers = cls.sut_ports_drivers
             return test_case
 
         return _decorator
@@ -615,7 +675,11 @@ class TestSuiteSpec:
 
     @cached_property
     def class_obj(self) -> type[TestSuite]:
-        """A reference to the test suite's class."""
+        """A reference to the test suite's class.
+
+        Raises:
+            InternalError: If the test suite class is missing from the module.
+        """
 
         def is_test_suite(obj) -> bool:
             """Check whether `obj` is a :class:`TestSuite`.
@@ -642,6 +706,11 @@ class TestSuiteSpec:
         raise InternalError(
             f"Expected class {self.class_name} not found in module {self.module_name}."
         )
+
+    @cached_property
+    def config_obj(self) -> type[BaseConfig]:
+        """A reference to the test suite's configuration class."""
+        return self.class_obj.__annotations__.get("config", BaseConfig)
 
     @classmethod
     def discover_all(

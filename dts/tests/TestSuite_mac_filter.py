@@ -15,9 +15,9 @@ Additionally, testing is done within the PMD itself to ensure that the mac addre
 allow list is behaving as expected.
 """
 
-from scapy.layers.inet import IP  # type: ignore[import-untyped]
-from scapy.layers.l2 import Ether  # type: ignore[import-untyped]
-from scapy.packet import Raw  # type: ignore[import-untyped]
+from scapy.layers.inet import IP
+from scapy.layers.l2 import Ether
+from scapy.packet import Raw
 
 from framework.exception import InteractiveCommandExecutionError
 from framework.remote_session.testpmd_shell import NicCapability, TestPmdShell
@@ -25,6 +25,7 @@ from framework.test_suite import TestSuite, func_test
 from framework.testbed_model.capability import requires
 
 
+@requires(NicCapability.PHYSICAL_FUNCTION)
 class TestMacFilter(TestSuite):
     """Mac address allowlist filtering test suite.
 
@@ -93,18 +94,18 @@ class TestMacFilter(TestSuite):
         the properties applied to the PMD at any given time.
 
         Test:
-            Start TestPMD without promiscuous mode.
-            Send a packet with the port's default mac address. (Should receive)
-            Send a packet with fake mac address. (Should not receive)
-            Add fake mac address to the PMD's address pool.
-            Send a packet with the fake mac address to the PMD. (Should receive)
-            Remove the fake mac address from the PMD's address pool.
-            Send a packet with the fake mac address to the PMD. (Should not receive)
+            * Start TestPMD without promiscuous mode.
+            * Send a packet with the port's default mac address. (Should receive)
+            * Send a packet with fake mac address. (Should not receive)
+            * Add fake mac address to the PMD's address pool.
+            * Send a packet with the fake mac address to the PMD. (Should receive)
+            * Remove the fake mac address from the PMD's address pool.
+            * Send a packet with the fake mac address to the PMD. (Should not receive)
         """
-        with TestPmdShell(self.sut_node) as testpmd:
+        with TestPmdShell() as testpmd:
             testpmd.set_promisc(0, enable=False)
             testpmd.start()
-            mac_address = self._sut_port_ingress.mac_address
+            mac_address = self.topology.sut_port_ingress.mac_address
 
             # Send a packet with NIC default mac address
             self.send_packet_and_verify(mac_address=mac_address, should_receive=True)
@@ -127,19 +128,19 @@ class TestMacFilter(TestSuite):
         built-in hardware address, or exceed their address pools.
 
         Test:
-            Start TestPMD.
-            Attempt to add an invalid mac address. (Should fail)
-            Attempt to remove the device's hardware address with no additional addresses in the
-                address pool. (Should fail)
-            Add a fake mac address to the pool twice in succession. (Should not create any errors)
-            Attempt to remove the device's hardware address with other addresses in the address
-                pool. (Should fail)
-            Determine the device's mac address pool size, and fill the pool with fake addresses.
-            Attempt to add another fake mac address, overloading the address pool. (Should fail)
+            * Start TestPMD.
+            * Attempt to add an invalid mac address. (Should fail)
+            * Attempt to remove the device's hardware address with no additional addresses in the
+              address pool. (Should fail)
+            * Add a fake mac address to the pool twice in succession. (Should not create any errors)
+            * Attempt to remove the device's hardware address with other addresses in the address
+              pool. (Should fail)
+            * Determine the device's mac address pool size, and fill the pool with fake addresses.
+            * Attempt to add another fake mac address, overloading the address pool. (Should fail)
         """
-        with TestPmdShell(self.sut_node) as testpmd:
+        with TestPmdShell() as testpmd:
             testpmd.start()
-            mac_address = self._sut_port_ingress.mac_address
+            mac_address = self.topology.sut_port_ingress.mac_address
             try:
                 testpmd.set_mac_addr(0, "00:00:00:00:00:00", add=True)
                 self.verify(False, "Invalid mac address added.")
@@ -185,13 +186,13 @@ class TestMacFilter(TestSuite):
         to the PMD.
 
         Test:
-            Start TestPMD without promiscuous mode.
-            Add a fake multicast address to the PMD's multicast address pool.
-            Send a packet with the fake multicast address to the PMD. (Should receive)
-            Remove the fake multicast address from the PMDs multicast address filter.
-            Send a packet with the fake multicast address to the PMD. (Should not receive)
+            * Start TestPMD without promiscuous mode.
+            * Add a fake multicast address to the PMD's multicast address pool.
+            * Send a packet with the fake multicast address to the PMD. (Should receive)
+            * Remove the fake multicast address from the PMDs multicast address filter.
+            * Send a packet with the fake multicast address to the PMD. (Should not receive)
         """
-        with TestPmdShell(self.sut_node) as testpmd:
+        with TestPmdShell() as testpmd:
             testpmd.start()
             testpmd.set_promisc(0, enable=False)
             multicast_address = "01:00:5E:00:00:00"

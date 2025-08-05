@@ -26,6 +26,7 @@ sources = files(
         'cnxk_eventdev_stats.c',
         'cnxk_tim_evdev.c',
         'cnxk_tim_worker.c',
+        'cnxk_vector_adptr.c',
 )
 
 disable_template = false
@@ -298,6 +299,8 @@ sources += files(
 )
 endif
 endif
+
+cflags += no_wvla_cflag
 
 extra_flags = ['-flax-vector-conversions', '-Wno-strict-aliasing']
 if cc.get_id() == 'clang'

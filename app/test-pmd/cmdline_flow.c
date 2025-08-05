@@ -62,6 +62,7 @@ enum index {
 	COMMON_ACTIONS_TEMPLATE_ID,
 	COMMON_TABLE_ID,
 	COMMON_QUEUE_ID,
+	COMMON_METER_COLOR_NAME,
 
 	/* TOP-level command. */
 	ADD,
@@ -556,7 +557,6 @@ enum index {
 	ITEM_PPP_PROTO_ID,
 	ITEM_METER,
 	ITEM_METER_COLOR,
-	ITEM_METER_COLOR_NAME,
 	ITEM_QUOTA,
 	ITEM_QUOTA_STATE,
 	ITEM_QUOTA_STATE_NAME,
@@ -642,6 +642,8 @@ enum index {
 	ACTION_METER_COLOR_RED,
 	ACTION_METER_ID,
 	ACTION_METER_MARK,
+	ACTION_METER_MARK_CONF,
+	ACTION_METER_MARK_CONF_COLOR,
 	ACTION_METER_PROFILE,
 	ACTION_METER_PROFILE_ID2PTR,
 	ACTION_METER_POLICY,
@@ -2270,6 +2272,7 @@ static const enum index next_action[] = {
 	ACTION_METER,
 	ACTION_METER_COLOR,
 	ACTION_METER_MARK,
+	ACTION_METER_MARK_CONF,
 	ACTION_OF_DEC_NW_TTL,
 	ACTION_OF_POP_VLAN,
 	ACTION_OF_PUSH_VLAN,
@@ -3234,6 +3237,12 @@ static const struct token token_list[] = {
 		.help = "queue id",
 		.call = parse_int,
 		.comp = comp_queue_id,
+	},
+	[COMMON_METER_COLOR_NAME] = {
+		.name = "color_name",
+		.help = "meter color name",
+		.call = parse_meter_color,
+		.comp = comp_meter_color,
 	},
 	/* Top-level command. */
 	[FLOW] = {
@@ -5582,7 +5591,7 @@ static const struct token token_list[] = {
 		.next = NEXT(item_random, NEXT_ENTRY(COMMON_UNSIGNED),
 			     item_param),
 		.args = ARGS(ARGS_ENTRY_MASK(struct rte_flow_item_random,
-					     value, "\xff\xff")),
+					     value, "\x00\x00\xff\xff")),
 	},
 	[ITEM_GRE_KEY] = {
 		.name = "gre_key",
@@ -6280,16 +6289,10 @@ static const struct token token_list[] = {
 		.name = "color",
 		.help = "meter color",
 		.next = NEXT(item_meter,
-			     NEXT_ENTRY(ITEM_METER_COLOR_NAME),
+			     NEXT_ENTRY(COMMON_METER_COLOR_NAME),
 			     item_param),
 		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_meter_color,
 					color)),
-	},
-	[ITEM_METER_COLOR_NAME] = {
-		.name = "color_name",
-		.help = "meter color name",
-		.call = parse_meter_color,
-		.comp = comp_meter_color,
 	},
 	[ITEM_QUOTA] = {
 		.name = "quota",
@@ -6855,6 +6858,23 @@ static const struct token token_list[] = {
 				    sizeof(struct rte_flow_action_meter_mark)),
 		.next = NEXT(action_meter_mark),
 		.call = parse_vc,
+	},
+	[ACTION_METER_MARK_CONF] = {
+		.name = "meter_mark_conf",
+		.help = "meter mark configuration",
+		.priv = PRIV_ACTION(METER_MARK,
+				    sizeof(struct rte_flow_action_meter_mark)),
+		.next = NEXT(NEXT_ENTRY(ACTION_METER_MARK_CONF_COLOR)),
+		.call = parse_vc,
+	},
+	[ACTION_METER_MARK_CONF_COLOR] = {
+		.name = "mtr_update_init_color",
+		.help = "meter update init color",
+		.next = NEXT(NEXT_ENTRY(ACTION_NEXT),
+			     NEXT_ENTRY(COMMON_METER_COLOR_NAME)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_indirect_update_flow_meter_mark,
+			      init_color)),
 	},
 	[ACTION_METER_PROFILE] = {
 		.name = "mtr_profile",
@@ -8812,8 +8832,6 @@ parse_vc_spec(struct context *ctx, const struct token *token,
 		return -1;
 	/* Parse parameter types. */
 	switch (ctx->curr) {
-		static const enum index prefix[] = NEXT_ENTRY(COMMON_PREFIX);
-
 	case ITEM_PARAM_IS:
 		index = 0;
 		objmask = 1;
@@ -8828,7 +8846,7 @@ parse_vc_spec(struct context *ctx, const struct token *token,
 		/* Modify next token to expect a prefix. */
 		if (ctx->next_num < 2)
 			return -1;
-		ctx->next[ctx->next_num - 2] = prefix;
+		ctx->next[ctx->next_num - 2] = NEXT_ENTRY(COMMON_PREFIX);
 		/* Fall through. */
 	case ITEM_PARAM_MASK:
 		index = 2;
@@ -9270,7 +9288,6 @@ parse_vc_action_rss_type(struct context *ctx, const struct token *token,
 			  const char *str, unsigned int len,
 			  void *buf, unsigned int size)
 {
-	static const enum index next[] = NEXT_ENTRY(ACTION_RSS_TYPE);
 	struct action_rss_data *action_rss_data;
 	unsigned int i;
 
@@ -9296,7 +9313,7 @@ parse_vc_action_rss_type(struct context *ctx, const struct token *token,
 	/* Repeat token. */
 	if (ctx->next_num == RTE_DIM(ctx->next))
 		return -1;
-	ctx->next[ctx->next_num++] = next;
+	ctx->next[ctx->next_num++] = NEXT_ENTRY(ACTION_RSS_TYPE);
 	if (!ctx->object)
 		return len;
 	action_rss_data = ctx->object;
@@ -9314,7 +9331,6 @@ parse_vc_action_rss_queue(struct context *ctx, const struct token *token,
 			  const char *str, unsigned int len,
 			  void *buf, unsigned int size)
 {
-	static const enum index next[] = NEXT_ENTRY(ACTION_RSS_QUEUE);
 	struct action_rss_data *action_rss_data;
 	const struct arg *arg;
 	int ret;
@@ -9347,7 +9363,7 @@ parse_vc_action_rss_queue(struct context *ctx, const struct token *token,
 	/* Repeat token. */
 	if (ctx->next_num == RTE_DIM(ctx->next))
 		return -1;
-	ctx->next[ctx->next_num++] = next;
+	ctx->next[ctx->next_num++] = NEXT_ENTRY(ACTION_RSS_QUEUE);
 end:
 	if (!ctx->object)
 		return len;
@@ -11707,8 +11723,7 @@ parse_hex(struct context *ctx, const struct token *token,
 	char tmp[16]; /* Ought to be enough. */
 	int ret;
 	unsigned int hexlen = len;
-	unsigned int length = 256;
-	uint8_t hex_tmp[length];
+	uint8_t hex_tmp[256];
 
 	/* Arguments are expected. */
 	if (!arg_data)
@@ -11735,7 +11750,7 @@ parse_hex(struct context *ctx, const struct token *token,
 		str += 2;
 		hexlen -= 2;
 	}
-	if (hexlen > length)
+	if (hexlen > RTE_DIM(hex_tmp))
 		goto error;
 	ret = parse_hex_string(str, hex_tmp, &hexlen);
 	if (ret < 0)
@@ -11868,10 +11883,13 @@ parse_ipv4_addr(struct context *ctx, const struct token *token,
 		void *buf, unsigned int size)
 {
 	const struct arg *arg = pop_args(ctx);
-	char str2[len + 1];
+	char str2[INET_ADDRSTRLEN];
 	struct in_addr tmp;
 	int ret;
 
+	/* Length is longer than the max length an IPv4 address can have. */
+	if (len >= INET_ADDRSTRLEN)
+		return -1;
 	/* Argument is expected. */
 	if (!arg)
 		return -1;
@@ -11914,11 +11932,14 @@ parse_ipv6_addr(struct context *ctx, const struct token *token,
 		void *buf, unsigned int size)
 {
 	const struct arg *arg = pop_args(ctx);
-	char str2[len + 1];
+	char str2[INET6_ADDRSTRLEN];
 	struct rte_ipv6_addr tmp;
 	int ret;
 
 	(void)token;
+	/* Length is longer than the max length an IPv6 address can have. */
+	if (len >= INET6_ADDRSTRLEN)
+		return -1;
 	/* Argument is expected. */
 	if (!arg)
 		return -1;
@@ -12370,8 +12391,8 @@ parse_meter_color(struct context *ctx, const struct token *token,
 		  const char *str, unsigned int len, void *buf,
 		  unsigned int size)
 {
-	struct rte_flow_item_meter_color *meter_color;
 	unsigned int i;
+	struct buffer *out = buf;
 
 	(void)token;
 	(void)buf;
@@ -12383,8 +12404,18 @@ parse_meter_color(struct context *ctx, const struct token *token,
 		return -1;
 	if (!ctx->object)
 		return len;
-	meter_color = ctx->object;
-	meter_color->color = (enum rte_color)i;
+	if (ctx->prev == ACTION_METER_MARK_CONF_COLOR) {
+		struct rte_flow_action *action =
+			out->args.vc.actions + out->args.vc.actions_n - 1;
+		const struct arg *arg = pop_args(ctx);
+
+		if (!arg)
+			return -1;
+		*(int *)RTE_PTR_ADD(action->conf, arg->offset) = i;
+	} else {
+		((struct rte_flow_item_meter_color *)
+			ctx->object)->color = (enum rte_color)i;
+	}
 	return len;
 }
 
@@ -13593,7 +13624,8 @@ update_fields(uint8_t *buf, struct rte_flow_item *item, uint16_t next_proto)
 		break;
 	case RTE_FLOW_ITEM_TYPE_VXLAN:
 		vxlan = (struct rte_vxlan_hdr *)buf;
-		vxlan->vx_flags = 0x08;
+		if (!vxlan->flags)
+			vxlan->flags = 0x08;
 		break;
 	case RTE_FLOW_ITEM_TYPE_VXLAN_GPE:
 		gpe = (struct rte_vxlan_gpe_hdr *)buf;
@@ -13929,7 +13961,7 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 			fprintf(stderr, "Error - Not supported action\n");
 			return;
 		}
-		rte_memcpy(data, action, sizeof(struct rte_flow_action));
+		*data = *action;
 		data++;
 	}
 }
@@ -13951,11 +13983,15 @@ cmd_set_raw_parsed(const struct buffer *in)
 	int gtp_psc = -1; /* GTP PSC option index. */
 	const void *src_spec;
 
-	if (in->command == SET_SAMPLE_ACTIONS)
-		return cmd_set_raw_parsed_sample(in);
+	if (in->command == SET_SAMPLE_ACTIONS) {
+		cmd_set_raw_parsed_sample(in);
+		return;
+	}
 	else if (in->command == SET_IPV6_EXT_PUSH ||
-		 in->command == SET_IPV6_EXT_REMOVE)
-		return cmd_set_ipv6_ext_parsed(in);
+			 in->command == SET_IPV6_EXT_REMOVE) {
+		cmd_set_ipv6_ext_parsed(in);
+		return;
+	}
 	RTE_ASSERT(in->command == SET_RAW_ENCAP ||
 		   in->command == SET_RAW_DECAP);
 	if (in->command == SET_RAW_ENCAP) {
