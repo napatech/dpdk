@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -18,7 +17,7 @@
 
 #include <arpa/inet.h>
 
-int nthw_fpga_get_param_info(struct fpga_info_s *p_fpga_info, nthw_fpga_t *p_fpga)
+static int nthw_fpga_get_param_info(struct fpga_info_s *p_fpga_info, nthw_fpga_t *p_fpga)
 {
 	mcu_info_t *p_mcu_info = &p_fpga_info->mcu_info;
 
@@ -388,7 +387,7 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 	p_fpga_mgr = nthw_fpga_mgr_new();
 	if (p_fpga_mgr) {
 		nthw_fpga_mgr_init(p_fpga_mgr, nthw_fpga_instances,
-			(const void *)sa_nthw_fpga_mod_str_map);
+			(const void *)nthw_sa_fpga_mod_str_map);
 		nthw_fpga_mgr_log_dump(p_fpga_mgr);
 		p_fpga = nthw_fpga_mgr_query_fpga(p_fpga_mgr, n_fpga_ident, p_fpga_info);
 		p_fpga_info->mp_fpga = p_fpga;
@@ -431,8 +430,8 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 	nthw_rac_rab_flush(p_nthw_rac);
 	p_fpga_info->mp_nthw_rac = p_nthw_rac;
 
-	struct nt200a0x_ops *nt200a0x_ops = get_nt200a0x_ops();
-	struct nt400dxx_ops *nt400dxx_ops = get_nt400dxx_ops();
+	struct nt200a0x_ops *nt200a0x_ops = nthw_get_nt200a0x_ops();
+	struct nt400dxx_ops *nt400dxx_ops = nthw_get_nt400dxx_ops();
 
 	switch (p_fpga_info->n_nthw_adapter_id) {
 	case NT_HW_ADAPTER_ID_NT200A02:
@@ -440,6 +439,7 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 			res = nt200a0x_ops->nthw_fpga_nt200a0x_init(p_fpga_info);
 		break;
 
+	case NT_HW_ADAPTER_ID_NT400D11:
 	case NT_HW_ADAPTER_ID_NT400D13:
 		if (nt400dxx_ops != NULL)
 			res = nt400dxx_ops->nthw_fpga_nt400dxx_init(p_fpga_info);
@@ -537,7 +537,7 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 			NT_LOG(DBG, NTHW, "%s: TSM time: %016" PRIX64 " %016" PRIX64 "\n",
 				p_adapter_id_str, n_time, n_ts);
 
-			nt_os_wait_usec(1000);
+			nthw_os_wait_usec(1000);
 		}
 	}
 #endif
@@ -557,28 +557,28 @@ int nthw_fpga_shutdown(struct fpga_info_s *p_fpga_info)
 
 static struct nt200a0x_ops *nt200a0x_ops;
 
-void register_nt200a0x_ops(struct nt200a0x_ops *ops)
+void nthw_reg_nt200a0x_ops(struct nt200a0x_ops *ops)
 {
 	nt200a0x_ops = ops;
 }
 
-struct nt200a0x_ops *get_nt200a0x_ops(void)
+struct nt200a0x_ops *nthw_get_nt200a0x_ops(void)
 {
 	if (nt200a0x_ops == NULL)
-		nt200a0x_ops_init();
+		nthw_nt200a0x_ops_init();
 	return nt200a0x_ops;
 }
 
 static struct nt400dxx_ops *nt400dxx_ops;
 
-void register_nt400dxx_ops(struct nt400dxx_ops *ops)
+void nthw_reg_nt400dxx_ops(struct nt400dxx_ops *ops)
 {
 	nt400dxx_ops = ops;
 }
 
-struct nt400dxx_ops *get_nt400dxx_ops(void)
+struct nt400dxx_ops *nthw_get_nt400dxx_ops(void)
 {
 	if (nt400dxx_ops == NULL)
-		nt400dxx_ops_init();
+		nthw_nt400dxx_ops_init();
 	return nt400dxx_ops;
 }

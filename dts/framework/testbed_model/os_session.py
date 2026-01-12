@@ -31,13 +31,8 @@ from pathlib import Path, PurePath, PurePosixPath
 
 from framework.config.node import NodeConfiguration
 from framework.logger import DTSLogger
-from framework.remote_session import (
-    InteractiveRemoteSession,
-    RemoteSession,
-    create_interactive_session,
-    create_remote_session,
-)
-from framework.remote_session.remote_session import CommandResult
+from framework.remote_session.interactive_remote_session import InteractiveRemoteSession
+from framework.remote_session.remote_session import CommandResult, RemoteSession
 from framework.settings import SETTINGS
 from framework.utils import MesonArgs, TarCompressionFormat
 
@@ -115,7 +110,7 @@ class OSSession(ABC):
         node_config: NodeConfiguration,
         name: str,
         logger: DTSLogger,
-    ):
+    ) -> None:
         """Initialize the OS-aware session.
 
         Connect to the node right away and also create an interactive remote session.
@@ -129,8 +124,8 @@ class OSSession(ABC):
         self._config = node_config
         self.name = name
         self._logger = logger
-        self.remote_session = create_remote_session(node_config, name, logger)
-        self.interactive_session = create_interactive_session(node_config, logger)
+        self.remote_session = RemoteSession(node_config, name, logger)
+        self.interactive_session = InteractiveRemoteSession(node_config, logger)
 
     def is_alive(self) -> bool:
         """Check whether the underlying remote session is still responding."""
@@ -593,6 +588,22 @@ class OSSession(ABC):
 
         Args:
             ports: The ports to apply the link up command to.
+        """
+
+    @abstractmethod
+    def set_interface_link_up(self, name: str) -> None:
+        """Send operating system specific command for bringing up link on specified interface.
+
+        Args:
+            name: String representing logical name of port to apply the link up command to.
+        """
+
+    @abstractmethod
+    def delete_interface(self, name: str) -> None:
+        """Send operating system specific command for deleting specified interface.
+
+        Args:
+            name: String representing logical name of interface to delete.
         """
 
     @abstractmethod

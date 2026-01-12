@@ -8,10 +8,12 @@
 
 #include <rte_debug.h>
 #include <rte_malloc.h>
+#include <rte_cpuflags.h>
 #include <rte_errno.h>
 
 #include <rte_rib6.h>
 #include <rte_fib6.h>
+#include "fib_log.h"
 #include "trie.h"
 
 #ifdef CC_AVX512_SUPPORT
@@ -159,6 +161,12 @@ tbl8_alloc(struct rte_trie_tbl *dp, uint64_t nh)
 	uint8_t		*tbl8_ptr;
 
 	tbl8_idx = tbl8_get(dp);
+
+	/* If there are no tbl8 groups try to reclaim one. */
+	if (unlikely(tbl8_idx == -ENOSPC && dp->dq &&
+			!rte_rcu_qsbr_dq_reclaim(dp->dq, 1, NULL, NULL, NULL)))
+		tbl8_idx = tbl8_get(dp);
+
 	if (tbl8_idx < 0)
 		return tbl8_idx;
 	tbl8_ptr = get_tbl_p_by_idx(dp->tbl8,
@@ -167,6 +175,23 @@ tbl8_alloc(struct rte_trie_tbl *dp, uint64_t nh)
 	write_to_dp((void *)tbl8_ptr, nh, dp->nh_sz,
 		TRIE_TBL8_GRP_NUM_ENT);
 	return tbl8_idx;
+}
+
+static void
+tbl8_cleanup_and_free(struct rte_trie_tbl *dp, uint64_t tbl8_idx)
+{
+	uint8_t *ptr = (uint8_t *)dp->tbl8 + (tbl8_idx * TRIE_TBL8_GRP_NUM_ENT << dp->nh_sz);
+
+	memset(ptr, 0, TRIE_TBL8_GRP_NUM_ENT << dp->nh_sz);
+	tbl8_put(dp, tbl8_idx);
+}
+
+static void
+__rcu_qsbr_free_resource(void *p, void *data, unsigned int n __rte_unused)
+{
+	struct rte_trie_tbl *dp = p;
+	uint64_t tbl8_idx = *(uint64_t *)data;
+	tbl8_cleanup_and_free(dp, tbl8_idx);
 }
 
 static void
@@ -190,8 +215,6 @@ tbl8_recycle(struct rte_trie_tbl *dp, void *par, uint64_t tbl8_idx)
 				return;
 		}
 		write_to_dp(par, nh, dp->nh_sz, 1);
-		for (i = 0; i < TRIE_TBL8_GRP_NUM_ENT; i++)
-			ptr16[i] = 0;
 		break;
 	case RTE_FIB6_TRIE_4B:
 		ptr32 = &((uint32_t *)dp->tbl8)[tbl8_idx *
@@ -204,8 +227,6 @@ tbl8_recycle(struct rte_trie_tbl *dp, void *par, uint64_t tbl8_idx)
 				return;
 		}
 		write_to_dp(par, nh, dp->nh_sz, 1);
-		for (i = 0; i < TRIE_TBL8_GRP_NUM_ENT; i++)
-			ptr32[i] = 0;
 		break;
 	case RTE_FIB6_TRIE_8B:
 		ptr64 = &((uint64_t *)dp->tbl8)[tbl8_idx *
@@ -218,11 +239,18 @@ tbl8_recycle(struct rte_trie_tbl *dp, void *par, uint64_t tbl8_idx)
 				return;
 		}
 		write_to_dp(par, nh, dp->nh_sz, 1);
-		for (i = 0; i < TRIE_TBL8_GRP_NUM_ENT; i++)
-			ptr64[i] = 0;
 		break;
 	}
-	tbl8_put(dp, tbl8_idx);
+
+	if (dp->v == NULL) {
+		tbl8_cleanup_and_free(dp, tbl8_idx);
+	} else if (dp->rcu_mode == RTE_FIB6_QSBR_MODE_SYNC) {
+		rte_rcu_qsbr_synchronize(dp->v, RTE_QSBR_THRID_INVALID);
+		tbl8_cleanup_and_free(dp, tbl8_idx);
+	} else { /* RTE_FIB6_QSBR_MODE_DQ */
+		if (rte_rcu_qsbr_dq_enqueue(dp->dq, &tbl8_idx))
+			FIB_LOG(ERR, "Failed to push QSBR FIFO");
+	}
 }
 
 #define BYTE_SIZE	8
@@ -515,7 +543,7 @@ trie_modify(struct rte_fib6 *fib, const struct rte_ipv6_addr *ip,
 	struct rte_rib6_node *tmp = NULL;
 	struct rte_rib6_node *node;
 	struct rte_rib6_node *parent;
-	struct rte_ipv6_addr ip_masked;
+	struct rte_ipv6_addr ip_masked, tmp_ip;
 	int ret = 0;
 	uint64_t par_nh, node_nh;
 	uint8_t tmp_depth, depth_diff = 0, parent_depth = 24;
@@ -534,9 +562,25 @@ trie_modify(struct rte_fib6 *fib, const struct rte_ipv6_addr *ip,
 	if (depth > 24) {
 		tmp = rte_rib6_get_nxt(rib, &ip_masked,
 			RTE_ALIGN_FLOOR(depth, 8), NULL,
-			RTE_RIB6_GET_NXT_COVER);
+			RTE_RIB6_GET_NXT_ALL);
+		if (tmp && op == RTE_FIB6_DEL) {
+			/* in case of delete operation, skip the prefix we are going to delete */
+			rte_rib6_get_ip(tmp, &tmp_ip);
+			rte_rib6_get_depth(tmp, &tmp_depth);
+			if (rte_ipv6_addr_eq(&ip_masked, &tmp_ip) && depth == tmp_depth)
+				tmp = rte_rib6_get_nxt(rib, &ip_masked,
+					RTE_ALIGN_FLOOR(depth, 8), tmp, RTE_RIB6_GET_NXT_ALL);
+		}
+
 		if (tmp == NULL) {
 			tmp = rte_rib6_lookup(rib, ip);
+			/**
+			 * in case of delete operation, lookup returns the prefix
+			 * we are going to delete. Find the parent.
+			 */
+			if (tmp && op == RTE_FIB6_DEL)
+				tmp = rte_rib6_lookup_parent(tmp);
+
 			if (tmp != NULL) {
 				rte_rib6_get_depth(tmp, &tmp_depth);
 				parent_depth = RTE_MAX(tmp_depth, 24);
@@ -559,8 +603,7 @@ trie_modify(struct rte_fib6 *fib, const struct rte_ipv6_addr *ip,
 			return 0;
 		}
 
-		if ((depth > 24) && (dp->rsvd_tbl8s >=
-				dp->number_tbl8s - depth_diff))
+		if ((depth > 24) && (dp->rsvd_tbl8s + depth_diff > dp->number_tbl8s))
 			return -ENOSPC;
 
 		node = rte_rib6_insert(rib, &ip_masked, depth);
@@ -679,7 +722,56 @@ trie_free(void *p)
 {
 	struct rte_trie_tbl *dp = (struct rte_trie_tbl *)p;
 
+	rte_rcu_qsbr_dq_delete(dp->dq);
 	rte_free(dp->tbl8_pool);
 	rte_free(dp->tbl8);
 	rte_free(dp);
+}
+
+int
+trie_rcu_qsbr_add(struct rte_trie_tbl *dp, struct rte_fib6_rcu_config *cfg,
+	const char *name)
+{
+	struct rte_rcu_qsbr_dq_parameters params = {0};
+	char rcu_dq_name[RTE_RCU_QSBR_DQ_NAMESIZE];
+
+	if (dp == NULL || cfg == NULL)
+		return -EINVAL;
+
+	if (dp->v != NULL)
+		return -EEXIST;
+
+	switch (cfg->mode) {
+	case RTE_FIB6_QSBR_MODE_DQ:
+		/* Init QSBR defer queue. */
+		snprintf(rcu_dq_name, sizeof(rcu_dq_name),
+			"FIB_RCU_%s", name);
+		params.name = rcu_dq_name;
+		params.size = cfg->dq_size;
+		if (params.size == 0)
+			params.size = RTE_FIB6_RCU_DQ_RECLAIM_SZ;
+		params.trigger_reclaim_limit = cfg->reclaim_thd;
+		params.max_reclaim_size = cfg->reclaim_max;
+		if (params.max_reclaim_size == 0)
+			params.max_reclaim_size = RTE_FIB6_RCU_DQ_RECLAIM_MAX;
+		params.esize = sizeof(uint64_t);
+		params.free_fn = __rcu_qsbr_free_resource;
+		params.p = dp;
+		params.v = cfg->v;
+		dp->dq = rte_rcu_qsbr_dq_create(&params);
+		if (dp->dq == NULL) {
+			FIB_LOG(ERR, "FIB6 defer queue creation failed");
+			return -ENOMEM;
+		}
+		break;
+	case RTE_FIB6_QSBR_MODE_SYNC:
+		/* No other things to do. */
+		break;
+	default:
+		return -EINVAL;
+	}
+	dp->rcu_mode = cfg->mode;
+	dp->v = cfg->v;
+
+	return 0;
 }

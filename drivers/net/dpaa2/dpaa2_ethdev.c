@@ -1,7 +1,7 @@
 /* * SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2024 NXP
+ *   Copyright 2016-2025 NXP
  *
  */
 
@@ -34,6 +34,7 @@
 #define DRIVER_LOOPBACK_MODE "drv_loopback"
 #define DRIVER_NO_PREFETCH_MODE "drv_no_prefetch"
 #define DRIVER_TX_CONF "drv_tx_conf"
+#define DRIVER_RX_PARSE_ERR_DROP "drv_rx_parse_drop"
 #define DRIVER_ERROR_QUEUE  "drv_err_queue"
 #define CHECK_INTERVAL         100  /* 100ms */
 #define MAX_REPEAT_TIME        90   /* 9s (90 * 100ms) in total */
@@ -73,9 +74,6 @@ bool dpaa2_enable_ts[RTE_MAX_ETHPORTS];
 uint64_t dpaa2_timestamp_rx_dynflag;
 int dpaa2_timestamp_dynfield_offset = -1;
 
-/* Enable error queue */
-bool dpaa2_enable_err_queue;
-
 bool dpaa2_print_parser_result;
 
 #define MAX_NB_RX_DESC		11264
@@ -106,6 +104,92 @@ static const struct rte_dpaa2_xstats_name_off dpaa2_xstats_strings[] = {
 	{"egress_confirmed_frames", 2, 4},
 	{"cgr_reject_frames", 4, 0},
 	{"cgr_reject_bytes", 4, 1},
+	{"TC_0_policer_cnt_red", 5, 0},
+	{"TC_0_policer_cnt_yellow", 5, 1},
+	{"TC_0_policer_cnt_green", 5, 2},
+	{"TC_0_policer_cnt_re_red", 5, 3},
+	{"TC_0_policer_cnt_re_yellow", 5, 4},
+	{"TC_1_policer_cnt_red", 6, 0},
+	{"TC_1_policer_cnt_yellow", 6, 1},
+	{"TC_1_policer_cnt_green", 6, 2},
+	{"TC_1_policer_cnt_re_red", 6, 3},
+	{"TC_1_policer_cnt_re_yellow", 6, 4},
+	{"TC_2_policer_cnt_red", 7, 0},
+	{"TC_2_policer_cnt_yellow", 7, 1},
+	{"TC_2_policer_cnt_green", 7, 2},
+	{"TC_2_policer_cnt_re_red", 7, 3},
+	{"TC_2_policer_cnt_re_yellow", 7, 4},
+	{"TC_3_policer_cnt_red", 8, 0},
+	{"TC_3_policer_cnt_yellow", 8, 1},
+	{"TC_3_policer_cnt_green", 8, 2},
+	{"TC_3_policer_cnt_re_red", 8, 3},
+	{"TC_3_policer_cnt_re_yellow", 8, 4},
+	{"TC_4_policer_cnt_red", 9, 0},
+	{"TC_4_policer_cnt_yellow", 9, 1},
+	{"TC_4_policer_cnt_green", 9, 2},
+	{"TC_4_policer_cnt_re_red", 9, 3},
+	{"TC_4_policer_cnt_re_yellow", 9, 4},
+	{"TC_5_policer_cnt_red", 10, 0},
+	{"TC_5_policer_cnt_yellow", 10, 1},
+	{"TC_5_policer_cnt_green", 10, 2},
+	{"TC_5_policer_cnt_re_red", 10, 3},
+	{"TC_5_policer_cnt_re_yellow", 10, 4},
+	{"TC_6_policer_cnt_red", 11, 0},
+	{"TC_6_policer_cnt_yellow", 11, 1},
+	{"TC_6_policer_cnt_green", 11, 2},
+	{"TC_6_policer_cnt_re_red", 11, 3},
+	{"TC_6_policer_cnt_re_yellow", 11, 4},
+	{"TC_7_policer_cnt_red", 12, 0},
+	{"TC_7_policer_cnt_yellow", 12, 1},
+	{"TC_7_policer_cnt_green", 12, 2},
+	{"TC_7_policer_cnt_re_red", 12, 3},
+	{"TC_7_policer_cnt_re_yellow", 12, 4},
+	{"mac_rx_64 bytes", 0, 0},
+	{"mac_rx_65-127 bytes", 0, 0},
+	{"mac_rx_128-255 bytes", 0, 0},
+	{"mac_rx_256-511 bytes", 0, 0},
+	{"mac_rx_512-1023 bytes", 0, 0},
+	{"mac_rx_1024-1518 bytes", 0, 0},
+	{"mac_rx_1519-max bytes", 0, 0},
+	{"mac_rx_frags", 0, 0},
+	{"mac_rx_jabber", 0, 0},
+	{"mac_rx_frame discards", 0, 0},
+	{"mac_rx_align errors", 0, 0},
+	{"mac_tx_undersized", 0, 0},
+	{"mac_rx_oversized", 0, 0},
+	{"mac_rx_pause", 0, 0},
+	{"mac_tx_b-pause", 0, 0},
+	{"mac_rx_bytes", 0, 0},
+	{"mac_rx_m-cast", 0, 0},
+	{"mac_rx_b-cast", 0, 0},
+	{"mac_rx_all frames", 0, 0},
+	{"mac_rx_u-cast", 0, 0},
+	{"mac_rx_frame errors", 0, 0},
+	{"mac_tx_bytes", 0, 0},
+	{"mac_tx_m-cast", 0, 0},
+	{"mac_tx_b-cast", 0, 0},
+	{"mac_tx_u-cast", 0, 0},
+	{"mac_tx_frame errors", 0, 0},
+	{"mac_rx_frames ok", 0, 0},
+	{"mac_tx_frames ok", 0, 0},
+	{"mac_tx_64 bytes", 0, 0},
+	{"mac_tx_65-127 bytes", 0, 0},
+	{"mac_tx_128-255 bytes", 0, 0},
+	{"mac_tx_256-511 bytes", 0, 0},
+	{"mac_tx_512-1023 bytes", 0, 0},
+	{"mac_tx_1024-1518 bytes", 0, 0},
+	{"mac_tx_1519-max bytes", 0, 0},
+	{"mac_rx_all_bytes", 0, 0},
+	{"mac_rx_fcs_err", 0, 0},
+	{"mac_rx_vlan_frame", 0, 0},
+	{"mac_rx_undersized", 0, 0},
+	{"mac_rx_control_frame", 0, 0},
+	{"mac_rx_frame_discard_not_trunc", 0, 0},
+	{"mac_tx_all_bytes", 0, 0},
+	{"mac_tx_fcs_err", 0, 0},
+	{"mac_tx_vlan_frame", 0, 0},
+	{"mac_tx_all_frame", 0, 0},
+	{"mac_tx_control_frame", 0, 0},
 };
 
 static struct rte_dpaa2_driver rte_dpaa2_pmd;
@@ -244,6 +328,79 @@ dpaa2_fw_version_get(struct rte_eth_dev *dev,
 		return 0;
 }
 
+static uint32_t dpaa2_speed_to_rte_link_speed(enum dpmac_link_speed dpmac_speed)
+{
+	switch (dpmac_speed) {
+	case DPMAC_LINK_SPEED_10M:
+		return RTE_ETH_LINK_SPEED_10M;
+	case DPMAC_LINK_SPEED_100M:
+		return RTE_ETH_LINK_SPEED_100M;
+	case DPMAC_LINK_SPEED_1G:
+		return RTE_ETH_LINK_SPEED_1G;
+	case DPMAC_LINK_SPEED_2_5G:
+		return RTE_ETH_LINK_SPEED_2_5G;
+	case DPMAC_LINK_SPEED_5G:
+		return RTE_ETH_LINK_SPEED_5G;
+	case DPMAC_LINK_SPEED_10G:
+		return RTE_ETH_LINK_SPEED_10G;
+	case DPMAC_LINK_SPEED_25G:
+		return RTE_ETH_LINK_SPEED_25G;
+	case DPMAC_LINK_SPEED_40G:
+		return RTE_ETH_LINK_SPEED_40G;
+	case DPMAC_LINK_SPEED_50G:
+		return RTE_ETH_LINK_SPEED_50G;
+	case DPMAC_LINK_SPEED_100G:
+		return RTE_ETH_LINK_SPEED_100G;
+	default:
+		return 0;
+	}
+}
+
+static uint32_t dpaa2_dev_get_speed_capability(struct rte_eth_dev *dev)
+{
+	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	enum dpmac_link_speed speed;
+	uint32_t dpmac_speed_cap;
+	uint32_t speed_capa = 0;
+	int ret;
+
+	/* The dpni_get_mac_supported_eth_if() API is only available starting
+	 * with DPNI ver 8.6.
+	 */
+	if (dpaa2_dev_cmp_dpni_ver(priv, DPNI_GET_MAC_SUPPORTED_IFS_VER_MAJOR,
+				   DPNI_GET_MAC_SUPPORTED_IFS_VER_MINOR) < 0)
+		goto fallback;
+
+	if (priv->ep_dev_type != DPAA2_MAC)
+		goto fallback;
+
+	ret = dpni_get_mac_speed_capability(dpni, CMD_PRI_LOW, priv->token,
+					    &dpmac_speed_cap);
+	if (ret < 0) {
+		DPAA2_PMD_WARN("dpni_get_mac_speed_capability() failed with %d", ret);
+		goto fallback;
+	}
+	for (speed = DPMAC_LINK_SPEED_10M; speed < DPMAC_LINK_SPEED_MAX; speed++) {
+		if ((dpmac_speed_cap & (1 << speed)) == 0)
+			continue;
+
+		speed_capa |= dpaa2_speed_to_rte_link_speed(speed);
+	}
+
+	return speed_capa;
+
+fallback:
+	speed_capa = RTE_ETH_LINK_SPEED_1G | RTE_ETH_LINK_SPEED_2_5G |
+		RTE_ETH_LINK_SPEED_10G;
+
+	if (dpaa2_svr_family == SVR_LX2160A)
+		speed_capa |= RTE_ETH_LINK_SPEED_25G | RTE_ETH_LINK_SPEED_40G |
+			RTE_ETH_LINK_SPEED_50G | RTE_ETH_LINK_SPEED_100G;
+
+	return speed_capa;
+}
+
 static int
 dpaa2_dev_info_get(struct rte_eth_dev *dev,
 	struct rte_eth_dev_info *dev_info)
@@ -261,9 +418,6 @@ dpaa2_dev_info_get(struct rte_eth_dev *dev,
 					dev_rx_offloads_nodis;
 	dev_info->tx_offload_capa = dev_tx_offloads_sup |
 					dev_tx_offloads_nodis;
-	dev_info->speed_capa = RTE_ETH_LINK_SPEED_1G |
-			RTE_ETH_LINK_SPEED_2_5G |
-			RTE_ETH_LINK_SPEED_10G;
 	dev_info->dev_capa &= ~RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
 
 	dev_info->max_hash_mac_addrs = 0;
@@ -280,12 +434,7 @@ dpaa2_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->default_txportconf.ring_size = CONG_ENTER_TX_THRESHOLD;
 	dev_info->default_rxportconf.ring_size = DPAA2_RX_DEFAULT_NBDESC;
 
-	if (dpaa2_svr_family == SVR_LX2160A) {
-		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_25G |
-				RTE_ETH_LINK_SPEED_40G |
-				RTE_ETH_LINK_SPEED_50G |
-				RTE_ETH_LINK_SPEED_100G;
-	}
+	dev_info->speed_capa = priv->speed_capa;
 
 	return 0;
 }
@@ -396,7 +545,7 @@ dpaa2_alloc_rx_tx_queues(struct rte_eth_dev *dev)
 			goto fail;
 	}
 
-	if (dpaa2_enable_err_queue) {
+	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
 		priv->rx_err_vq = rte_zmalloc("dpni_rx_err",
 			sizeof(struct dpaa2_queue), 0);
 		if (!priv->rx_err_vq) {
@@ -473,13 +622,34 @@ fail:
 		priv->rx_vq[i--] = NULL;
 	}
 
-	if (dpaa2_enable_err_queue) {
+	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
 		dpaa2_q = priv->rx_err_vq;
 		dpaa2_queue_storage_free(dpaa2_q, RTE_MAX_LCORE);
 	}
 
 	rte_free(mc_q);
 	return ret;
+}
+
+static void
+dpaa2_clear_queue_active_dps(struct dpaa2_queue *q, int num_lcores)
+{
+	int i;
+
+	for (i = 0; i < num_lcores; i++) {
+		struct queue_storage_info_t *qs = q->q_storage[i];
+
+		if (!qs)
+			continue;
+
+		if (qs->active_dqs) {
+			while (!qbman_check_command_complete(qs->active_dqs))
+				continue; /* wait */
+
+			clear_swp_active_dqs(qs->active_dpio_id);
+			qs->active_dqs = NULL;
+		}
+	}
 }
 
 static void
@@ -496,13 +666,17 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 		/* cleaning up queue storage */
 		for (i = 0; i < priv->nb_rx_queues; i++) {
 			dpaa2_q = priv->rx_vq[i];
+			dpaa2_clear_queue_active_dps(dpaa2_q,
+						RTE_MAX_LCORE);
 			dpaa2_queue_storage_free(dpaa2_q,
 				RTE_MAX_LCORE);
+			priv->rx_vq[i] = NULL;
 		}
 		/* cleanup tx queue cscn */
 		for (i = 0; i < priv->nb_tx_queues; i++) {
 			dpaa2_q = priv->tx_vq[i];
 			rte_free(dpaa2_q->cscn);
+			priv->tx_vq[i] = NULL;
 		}
 		if (priv->flags & DPAA2_TX_CONF_ENABLE) {
 			/* cleanup tx conf queue storage */
@@ -510,8 +684,14 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 				dpaa2_q = priv->tx_conf_vq[i];
 				dpaa2_queue_storage_free(dpaa2_q,
 					RTE_MAX_LCORE);
+				priv->tx_conf_vq[i] = NULL;
 			}
 		}
+		if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
+			dpaa2_q = priv->rx_err_vq;
+			dpaa2_queue_storage_free(dpaa2_q, RTE_MAX_LCORE);
+		}
+
 		/*free memory for all queues (RX+TX) */
 		rte_free(priv->rx_vq[0]);
 		priv->rx_vq[0] = NULL;
@@ -1047,7 +1227,7 @@ dpaa2_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	}
 }
 
-static uint32_t
+static int
 dpaa2_dev_rx_queue_count(void *rx_queue)
 {
 	int32_t ret;
@@ -1219,7 +1399,7 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		dpaa2_q->fqid = qid.fqid;
 	}
 
-	if (dpaa2_enable_err_queue) {
+	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
 		ret = dpni_get_queue(dpni, CMD_PRI_LOW, priv->token,
 				     DPNI_QUEUE_RX_ERR, 0, 0, &cfg, &qid);
 		if (ret) {
@@ -1240,7 +1420,8 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		err_cfg.errors = DPNI_ERROR_L3CE | DPNI_ERROR_L4CE;
 
 		/* if packet with parse error are not to be dropped */
-		err_cfg.errors |= DPNI_ERROR_PHE;
+		if (!(priv->flags & DPAA2_PARSE_ERR_DROP))
+			err_cfg.errors |= DPNI_ERROR_PHE | DPNI_ERROR_BLE;
 
 		err_cfg.error_action = DPNI_ERROR_ACTION_CONTINUE;
 	}
@@ -1602,7 +1783,7 @@ dpaa2_dev_set_mac_addr(struct rte_eth_dev *dev,
 
 static int
 dpaa2_dev_stats_get(struct rte_eth_dev *dev,
-	struct rte_eth_stats *stats)
+	struct rte_eth_stats *stats, struct eth_queue_stats *qstats)
 {
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = dev->process_private;
@@ -1659,18 +1840,20 @@ dpaa2_dev_stats_get(struct rte_eth_dev *dev,
 	stats->imissed = value.page_2.ingress_nobuffer_discards;
 
 	/* Fill in per queue stats */
-	for (i = 0; (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) &&
-		(i < priv->nb_rx_queues || i < priv->nb_tx_queues); ++i) {
-		dpaa2_rxq = priv->rx_vq[i];
-		dpaa2_txq = priv->tx_vq[i];
-		if (dpaa2_rxq)
-			stats->q_ipackets[i] = dpaa2_rxq->rx_pkts;
-		if (dpaa2_txq)
-			stats->q_opackets[i] = dpaa2_txq->tx_pkts;
+	if (qstats != NULL) {
+		for (i = 0; (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) &&
+			(i < priv->nb_rx_queues || i < priv->nb_tx_queues); ++i) {
+			dpaa2_rxq = priv->rx_vq[i];
+			dpaa2_txq = priv->tx_vq[i];
+			if (dpaa2_rxq)
+				qstats->q_ipackets[i] = dpaa2_rxq->rx_pkts;
+			if (dpaa2_txq)
+				qstats->q_opackets[i] = dpaa2_txq->tx_pkts;
 
-		/* Byte counting is not implemented */
-		stats->q_ibytes[i]   = 0;
-		stats->q_obytes[i]   = 0;
+			/* Byte counting is not implemented */
+			qstats->q_ibytes[i]   = 0;
+			qstats->q_obytes[i]   = 0;
+		}
 	}
 
 	return 0;
@@ -1680,16 +1863,75 @@ err:
 	return retcode;
 };
 
+void
+dpaa2_dev_mac_setup_stats(struct rte_eth_dev *dev)
+{
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	uint32_t *cnt_idx;
+	int i;
+
+	priv->cnt_idx_dma_mem = rte_malloc(NULL, DPAA2_MAC_STATS_INDEX_DMA_SIZE,
+					   RTE_CACHE_LINE_SIZE);
+	if (!priv->cnt_idx_dma_mem) {
+		DPAA2_PMD_ERR("Failure to allocate memory for mac index");
+		goto out;
+	}
+
+	priv->cnt_values_dma_mem = rte_malloc(NULL, DPAA2_MAC_STATS_VALUE_DMA_SIZE,
+					      RTE_CACHE_LINE_SIZE);
+	if (!priv->cnt_values_dma_mem) {
+		DPAA2_PMD_ERR("Failure to allocate memory for mac values");
+		goto err_alloc_values;
+	}
+
+	cnt_idx = priv->cnt_idx_dma_mem;
+	for (i = 0; i < DPAA2_MAC_NUM_STATS; i++)
+		*cnt_idx++ = rte_cpu_to_le_32((uint32_t)i);
+
+	priv->cnt_idx_iova = rte_mem_virt2iova(priv->cnt_idx_dma_mem);
+	if (priv->cnt_idx_iova == RTE_BAD_IOVA) {
+		DPAA2_PMD_ERR("%s: No IOMMU map for count index dma mem(%p)",
+			__func__, priv->cnt_idx_dma_mem);
+		goto err_dma_map;
+	}
+
+	priv->cnt_values_iova = rte_mem_virt2iova(priv->cnt_values_dma_mem);
+	if (priv->cnt_values_iova == RTE_BAD_IOVA) {
+		DPAA2_PMD_ERR("%s: No IOMMU map for count values dma mem(%p)",
+			__func__, priv->cnt_values_dma_mem);
+		goto err_dma_map;
+	}
+
+	return;
+
+err_dma_map:
+	rte_free(priv->cnt_values_dma_mem);
+err_alloc_values:
+	rte_free(priv->cnt_idx_dma_mem);
+out:
+	priv->cnt_idx_dma_mem = NULL;
+	priv->cnt_values_dma_mem = NULL;
+}
+
+/*
+ * dpaa2_dev_xstats_get(): Get counters of dpni and dpmac.
+ * MAC (mac_*) counters are supported on MC version > 10.39.0
+ * TC_x_policer_* counters are supported only when Policer is enable.
+ */
 static int
 dpaa2_dev_xstats_get(struct rte_eth_dev *dev,
 	struct rte_eth_xstat *xstats, unsigned int n)
 {
-	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	struct fsl_mc_io *dpni = (struct fsl_mc_io *)dev->process_private;
-	int32_t retcode;
-	union dpni_statistics value[5] = {};
-	unsigned int i = 0, num = RTE_DIM(dpaa2_xstats_strings);
+	unsigned int i = 0, j = 0, num = RTE_DIM(dpaa2_xstats_strings);
+	struct dpaa2_dev_priv *priv = dev->data->dev_private;
+	union dpni_statistics value[13] = {};
+	struct mc_version mc_ver_info = {0};
+	struct dpni_rx_tc_policing_cfg cfg;
 	uint8_t page_id, stats_id;
+	uint64_t *cnt_values;
+	int32_t retcode;
+	int16_t tc;
 
 	if (n < num)
 		return num;
@@ -1715,8 +1957,8 @@ dpaa2_dev_xstats_get(struct rte_eth_dev *dev,
 	if (retcode)
 		goto err;
 
-	for (i = 0; i < priv->max_cgs; i++) {
-		if (!priv->cgid_in_use[i]) {
+	for (j = 0; j < priv->max_cgs; j++) {
+		if (!priv->cgid_in_use[j]) {
 			/* Get Counters from page_4*/
 			retcode = dpni_get_statistics(dpni, CMD_PRI_LOW,
 						      priv->token,
@@ -1727,12 +1969,74 @@ dpaa2_dev_xstats_get(struct rte_eth_dev *dev,
 		}
 	}
 
-	for (i = 0; i < num; i++) {
+	for (tc = 0; tc < priv->num_rx_tc; tc++) {
+		retcode = dpni_get_rx_tc_policing(dpni, CMD_PRI_LOW,
+						  priv->token, tc,
+						  &cfg);
+		if (retcode) {
+			DPAA2_PMD_ERR("Error to get the policer rule: %d", retcode);
+			goto err;
+		}
+
+		/* get policer stats if policer is enabled */
+		if (cfg.mode != 0) {
+			/* Get Counters from page_5*/
+			retcode = dpni_get_statistics(dpni, CMD_PRI_LOW,
+						      priv->token, 5, tc,
+						      &value[(tc + 5)]);
+			if (retcode)
+				goto err;
+		}
+	}
+
+	while (i < (num - DPAA2_MAC_NUM_STATS)) {
 		xstats[i].id = i;
 		page_id = dpaa2_xstats_strings[i].page_id;
 		stats_id = dpaa2_xstats_strings[i].stats_id;
 		xstats[i].value = value[page_id].raw.counter[stats_id];
+		i++;
 	}
+
+	if (mc_get_version(dpni, CMD_PRI_LOW, &mc_ver_info))
+		DPAA2_PMD_WARN("Unable to obtain MC version");
+
+	/* mac_statistics supported on MC version > 10.39.0 */
+	if (mc_ver_info.major >= MC_VER_MAJOR &&
+	    mc_ver_info.minor >= MC_VER_MINOR &&
+	    mc_ver_info.revision > 0) {
+		dpaa2_dev_mac_setup_stats(dev);
+		retcode = dpni_get_mac_statistics(dpni, CMD_PRI_LOW, priv->token,
+						  priv->cnt_idx_iova,
+						  priv->cnt_values_iova,
+						  DPAA2_MAC_NUM_STATS);
+		if (retcode) {
+			while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
+				xstats[i].id = i;
+				xstats[i].value = 0;
+				i++;
+			}
+		}
+		if (!retcode) {
+			cnt_values = priv->cnt_values_dma_mem;
+			while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
+				/* mac counters value */
+				xstats[i].id = i;
+				xstats[i].value = rte_le_to_cpu_64(*cnt_values++);
+				i++;
+			}
+		}
+		rte_free(priv->cnt_values_dma_mem);
+		rte_free(priv->cnt_idx_dma_mem);
+		priv->cnt_idx_dma_mem = NULL;
+		priv->cnt_values_dma_mem = NULL;
+	} else {
+		while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
+			xstats[i].id = i;
+			xstats[i].value = 0;
+			i++;
+		}
+	}
+
 	return i;
 err:
 	DPAA2_PMD_ERR("Error in obtaining extended stats (%d)", retcode);
@@ -2609,6 +2913,17 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	dpni_dev->regs = dpaa2_get_mcp_ptr(MC_PORTAL_INDEX);
 	eth_dev->process_private = dpni_dev;
 
+	/* RX no prefetch mode? */
+	if (dpaa2_get_devargs(dev->devargs, DRIVER_NO_PREFETCH_MODE)) {
+		priv->flags |= DPAA2_NO_PREFETCH_RX;
+		DPAA2_PMD_INFO("No RX prefetch mode");
+	}
+
+	if (dpaa2_get_devargs(dev->devargs, DRIVER_LOOPBACK_MODE)) {
+		priv->flags |= DPAA2_RX_LOOPBACK_MODE;
+		DPAA2_PMD_INFO("Rx loopback mode");
+	}
+
 	/* For secondary processes, the primary has done all the work */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		/* In case of secondary, only burst and ops API need to be
@@ -2616,10 +2931,9 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		 */
 		eth_dev->dev_ops = &dpaa2_ethdev_ops;
 		eth_dev->rx_queue_count = dpaa2_dev_rx_queue_count;
-		if (dpaa2_get_devargs(dev->devargs, DRIVER_LOOPBACK_MODE))
+		if (priv->flags & DPAA2_RX_LOOPBACK_MODE)
 			eth_dev->rx_pkt_burst = dpaa2_dev_loopback_rx;
-		else if (dpaa2_get_devargs(dev->devargs,
-					DRIVER_NO_PREFETCH_MODE))
+		else if (priv->flags & DPAA2_NO_PREFETCH_RX)
 			eth_dev->rx_pkt_burst = dpaa2_dev_rx;
 		else
 			eth_dev->rx_pkt_burst = dpaa2_dev_prefetch_rx;
@@ -2655,6 +2969,14 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		DPAA2_PMD_ERR(
 			     "Failure in get dpni@%d attribute, err code %d",
 			     hw_id, ret);
+		goto init_err;
+	}
+
+	ret = dpni_get_api_version(dpni_dev, CMD_PRI_LOW, &priv->dpni_ver_major,
+				   &priv->dpni_ver_minor);
+	if (ret) {
+		DPAA2_PMD_ERR("Failure in get dpni@%d API version, err code %d",
+			hw_id, ret);
 		goto init_err;
 	}
 
@@ -2702,8 +3024,14 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	if (dpaa2_get_devargs(dev->devargs, DRIVER_ERROR_QUEUE)) {
-		dpaa2_enable_err_queue = 1;
-		DPAA2_PMD_INFO("Enable DMA error checks");
+		priv->flags |= DPAAX_RX_ERROR_QUEUE_FLAG;
+		DPAA2_PMD_INFO("Enable error queue");
+	}
+
+	/* Packets with parse error to be dropped in hw */
+	if (dpaa2_get_devargs(dev->devargs, DRIVER_RX_PARSE_ERR_DROP)) {
+		priv->flags |= DPAA2_PARSE_ERR_DROP;
+		DPAA2_PMD_INFO("Drop parse error packets in hw");
 	}
 
 	if (getenv("DPAA2_PRINT_RX_PARSER_RESULT"))
@@ -2787,7 +3115,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	/* Init fields w.r.t. classification */
 	memset(&priv->extract.qos_key_extract, 0,
 		sizeof(struct dpaa2_key_extract));
-	priv->extract.qos_extract_param = rte_malloc(NULL,
+	priv->extract.qos_extract_param = rte_zmalloc(NULL,
 		DPAA2_EXTRACT_PARAM_MAX_SIZE,
 		RTE_CACHE_LINE_SIZE);
 	if (!priv->extract.qos_extract_param) {
@@ -2798,7 +3126,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	for (i = 0; i < MAX_TCS; i++) {
 		memset(&priv->extract.tc_key_extract[i], 0,
 			sizeof(struct dpaa2_key_extract));
-		priv->extract.tc_extract_param[i] = rte_malloc(NULL,
+		priv->extract.tc_extract_param[i] = rte_zmalloc(NULL,
 			DPAA2_EXTRACT_PARAM_MAX_SIZE,
 			RTE_CACHE_LINE_SIZE);
 		if (!priv->extract.tc_extract_param[i]) {
@@ -2845,6 +3173,8 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		DPAA2_PMD_INFO("soft parser is loaded");
 	DPAA2_PMD_INFO("%s: netdev created, connected to %s",
 		eth_dev->data->name, dpaa2_dev->ep_name);
+
+	priv->speed_capa = dpaa2_dev_get_speed_capability(eth_dev);
 
 	return 0;
 init_err:
@@ -3021,7 +3351,6 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 
 	eth_dev->device = &dpaa2_dev->device;
 
-	dpaa2_dev->eth_dev = eth_dev;
 	eth_dev->data->rx_mbuf_alloc_failed = 0;
 
 	if (dpaa2_drv->drv_flags & RTE_DPAA2_DRV_INTR_LSC)
@@ -3048,14 +3377,22 @@ static int
 rte_dpaa2_remove(struct rte_dpaa2_device *dpaa2_dev)
 {
 	struct rte_eth_dev *eth_dev;
-	int ret;
+	int ret = 0;
 
-	eth_dev = dpaa2_dev->eth_dev;
-	dpaa2_dev_close(eth_dev);
+	eth_dev = rte_eth_dev_allocated(dpaa2_dev->device.name);
+	if (eth_dev) {
+		ret = dpaa2_dev_close(eth_dev);
+		if (ret)
+			DPAA2_PMD_ERR("dpaa2_dev_close ret= %d", ret);
+
+		ret = rte_eth_dev_release_port(eth_dev);
+	}
+
 	dpaa2_valid_dev--;
-	if (!dpaa2_valid_dev)
+	if (!dpaa2_valid_dev) {
 		rte_mempool_free(dpaa2_tx_sg_pool);
-	ret = rte_eth_dev_release_port(eth_dev);
+		dpaa2_tx_sg_pool = NULL;
+	}
 
 	return ret;
 }
@@ -3072,5 +3409,6 @@ RTE_PMD_REGISTER_PARAM_STRING(NET_DPAA2_PMD_DRIVER_NAME,
 		DRIVER_LOOPBACK_MODE "=<int> "
 		DRIVER_NO_PREFETCH_MODE "=<int>"
 		DRIVER_TX_CONF "=<int>"
+		DRIVER_RX_PARSE_ERR_DROP "=<int>"
 		DRIVER_ERROR_QUEUE "=<int>");
 RTE_LOG_REGISTER_DEFAULT(dpaa2_logtype_pmd, NOTICE);

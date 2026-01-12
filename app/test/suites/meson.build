@@ -7,6 +7,11 @@ timeout_seconds = 600
 timeout_seconds_fast = 10
 timeout_seconds_stress = 900
 
+if arch_subdir == 'riscv'
+    # Current RISC-V machines are too slow to finish fast tests under 10s
+    timeout_seconds_fast = 60
+endif
+
 test_no_huge_args = ['--no-huge', '-m', '2048']
 has_hugepage = run_command(has_hugepages_cmd, check: true).stdout().strip() != '0'
 message('hugepage availability: @0@'.format(has_hugepage))
@@ -72,8 +77,7 @@ foreach suite:test_suites
             elif not has_hugepage
                 continue  #skip this tests
             endif
-            if not asan and (get_option('b_sanitize') == 'address'
-                    or get_option('b_sanitize') == 'address,undefined')
+            if not asan and get_option('b_sanitize').contains('address')
                 continue  # skip this test
             endif
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import scapy.utils
 from scapy.packet import Packet
 
-from framework.settings import SETTINGS
+from api.artifact import Artifact
 from framework.testbed_model.port import Port
 from framework.utils import get_packet_summaries
 
@@ -64,6 +64,40 @@ class CapturingTrafficGenerator(TrafficGenerator):
     def is_capturing(self) -> bool:
         """This traffic generator can capture traffic."""
         return True
+
+    def send_packet(self, packet: Packet, port: Port) -> None:
+        """Send `packet` and block until it is fully sent.
+
+        Send `packet` on `port`, then wait until `packet` is fully sent.
+
+        Args:
+            packet: The packet to send.
+            port: The egress port on the TG node.
+        """
+        self.send_packets([packet], port)
+
+    def send_packets(self, packets: list[Packet], port: Port) -> None:
+        """Send `packets` and block until they are fully sent.
+
+        Send `packets` on `port`, then wait until `packets` are fully sent.
+
+        Args:
+            packets: The packets to send.
+            port: The egress port on the TG node.
+        """
+        self._logger.info(f"Sending packet{'s' if len(packets) > 1 else ''}.")
+        self._logger.debug(get_packet_summaries(packets))
+        self._send_packets(packets, port)
+
+    @abstractmethod
+    def _send_packets(self, packets: list[Packet], port: Port) -> None:
+        """The implementation of :method:`send_packets`.
+
+        The subclasses must implement this method which sends `packets` on `port`.
+        The method should block until all `packets` are fully sent.
+
+        What fully sent means is defined by the traffic generator.
+        """
 
     def send_packets_and_capture(
         self,
@@ -131,6 +165,7 @@ class CapturingTrafficGenerator(TrafficGenerator):
         """
 
     def _write_capture_from_packets(self, capture_name: str, packets: list[Packet]) -> None:
-        file_name = f"{SETTINGS.output_dir}/{capture_name}.pcap"
-        self._logger.debug(f"Writing packets to {file_name}.")
-        scapy.utils.wrpcap(file_name, packets)
+        artifact = Artifact("local", f"{capture_name}.pcap")
+        self._logger.debug(f"Writing packets to {artifact.local_path}.")
+        with artifact.open("wb") as file:
+            scapy.utils.wrpcap(file, packets)

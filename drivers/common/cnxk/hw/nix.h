@@ -2092,21 +2092,25 @@ struct nix_cn20k_sq_ctx_hw_s {
 	uint64_t default_chan : 12;
 	uint64_t sdp_mcast : 1;
 	uint64_t sso_ena : 1;
-	uint64_t dse_rsvd1 : 28;
+	uint64_t dse_rsvd1 : 10;
+	uint64_t update_sq_count : 2;
+	uint64_t seb_count : 16;
 	uint64_t sqb_enqueue_count : 16; /* W4 */
 	uint64_t tail_offset : 6;
 	uint64_t lmt_dis : 1;
 	uint64_t smq_rr_weight : 14;
-	uint64_t dnq_rsvd1 : 27;
+	uint64_t dnq_rsvd1 : 4;
+	uint64_t sq_count_iova_lo : 23;
 	uint64_t tail_sqb : 64; /* W5 */
 	uint64_t next_sqb : 64; /* W6 */
-	uint64_t smq : 11; /* W7 */
+	uint64_t smq : 11;	/* W7 */
 	uint64_t smq_pend : 1;
 	uint64_t smq_next_sq : 20;
 	uint64_t smq_next_sq_vld : 1;
 	uint64_t mnq_dis : 1;
-	uint64_t scm1_rsvd2 : 30;
-	uint64_t smenq_sqb : 64; /* W8 */
+	uint64_t scm1_rsvd2 : 7;
+	uint64_t sq_count_iova_hi : 23;
+	uint64_t smenq_sqb : 64;   /* W8 */
 	uint64_t smenq_offset : 6; /* W9 */
 	uint64_t cq_limit : 8;
 	uint64_t smq_rr_count : 32;
@@ -2122,7 +2126,7 @@ struct nix_cn20k_sq_ctx_hw_s {
 	uint64_t smenq_next_sqb_vld : 1;
 	uint64_t scm_dq_rsvd1 : 9;
 	uint64_t smenq_next_sqb : 64; /* W11 */
-	uint64_t age_drop_octs : 32; /* W12 */
+	uint64_t age_drop_octs : 32;  /* W12 */
 	uint64_t age_drop_pkts : 32;
 	uint64_t drop_pkts : 48; /* W13 */
 	uint64_t drop_octs_lsw : 16;
@@ -2160,19 +2164,20 @@ struct nix_cn20k_sq_ctx_s {
 	uint64_t lmt_dis : 1;
 	uint64_t mnq_dis : 1;
 	uint64_t smq_next_sq : 20;
-	uint64_t smq_lso_segnum :  8;
-	uint64_t tail_offset :  6;
-	uint64_t smenq_offset :  6;
-	uint64_t head_offset :  6;
-	uint64_t smenq_next_sqb_vld :  1;
-	uint64_t smq_pend :  1;
-	uint64_t smq_next_sq_vld :  1;
-	uint64_t reserved_253_255 :  3;
-	uint64_t next_sqb : 64; /* W4 */
-	uint64_t tail_sqb : 64; /* W5 */
-	uint64_t smenq_sqb : 64; /* W6 */
-	uint64_t smenq_next_sqb : 64; /* W7 */
-	uint64_t head_sqb : 64; /* W8 */
+	uint64_t smq_lso_segnum : 8;
+	uint64_t tail_offset : 6;
+	uint64_t smenq_offset : 6;
+	uint64_t head_offset : 6;
+	uint64_t smenq_next_sqb_vld : 1;
+	uint64_t smq_pend : 1;
+	uint64_t smq_next_sq_vld : 1;
+	uint64_t update_sq_count : 2;
+	uint64_t reserved_255_255 : 1;
+	uint64_t next_sqb : 64;	       /* W4 */
+	uint64_t tail_sqb : 64;	       /* W5 */
+	uint64_t smenq_sqb : 64;       /* W6 */
+	uint64_t smenq_next_sqb : 64;  /* W7 */
+	uint64_t head_sqb : 64;	       /* W8 */
 	uint64_t reserved_576_583 : 8; /* W9 */
 	uint64_t vfi_lso_total : 18;
 	uint64_t vfi_lso_sizem1 : 3;
@@ -2183,7 +2188,7 @@ struct nix_cn20k_sq_ctx_s {
 	uint64_t vfi_lso_vld : 1;
 	uint64_t reserved_630_639 : 10;
 	uint64_t scm_lso_rem : 18; /* W10 */
-	uint64_t reserved_658_703 : 46;
+	uint64_t sq_count_iova : 46;
 	uint64_t octs : 48; /* W11 */
 	uint64_t reserved_752_767 : 16;
 	uint64_t pkts : 48; /* W12 */
@@ -2193,7 +2198,7 @@ struct nix_cn20k_sq_ctx_s {
 	uint64_t drop_octs : 48; /* W14 */
 	uint64_t reserved_944_959 : 16;
 	uint64_t drop_pkts : 48; /* W15 */
-	uint64_t reserved_1008_1023 : 16;
+	uint64_t seb_count : 16;
 };
 
 /* [CN10K, .) NIX sq context hardware structure */
@@ -2508,18 +2513,44 @@ struct nix_lso_format {
 	uint64_t sizem1 : 2;
 	uint64_t rsvd_14_15 : 2;
 	uint64_t alg : 3;
-	uint64_t rsvd_19_63 : 45;
+	uint64_t alt_flags : 1;
+	uint64_t alt_flags_index : 2;
+	uint64_t shift : 3;
+	uint64_t rsvd_25_63 : 39;
 };
 
-#define NIX_LSO_FIELD_MAX      (8)
-#define NIX_LSO_FIELD_ALG_MASK GENMASK(18, 16)
-#define NIX_LSO_FIELD_SZ_MASK  GENMASK(13, 12)
-#define NIX_LSO_FIELD_LY_MASK  GENMASK(9, 8)
-#define NIX_LSO_FIELD_OFF_MASK GENMASK(7, 0)
+/* NIX LSO ALT_FLAGS field structure */
+typedef union nix_lso_alt_flg_format {
+	uint64_t u[2];
 
-#define NIX_LSO_FIELD_MASK                                                     \
-	(NIX_LSO_FIELD_OFF_MASK | NIX_LSO_FIELD_LY_MASK |                      \
-	 NIX_LSO_FIELD_SZ_MASK | NIX_LSO_FIELD_ALG_MASK)
+	struct nix_lso_alt_flg_cfg {
+		/* NIX_AF_LSO_ALT_FLAGS_CFG */
+		uint64_t alt_msf_set : 16;
+		uint64_t alt_msf_mask : 16;
+		uint64_t alt_fsf_set : 16;
+		uint64_t alt_fsf_mask : 16;
+
+		/* NIX_AF_LSO_ALT_FLAGS_CFG1 */
+		uint64_t alt_lsf_set : 16;
+		uint64_t alt_lsf_mask : 16;
+		uint64_t alt_ssf_set : 16;
+		uint64_t alt_ssf_mask : 16;
+	} s;
+} nix_lso_alt_flg_format_t;
+
+#define NIX_LSO_FIELD_MAX	       (8)
+#define NIX_LSO_FIELD_SHIFT_MASK       GENMASK(24, 22)
+#define NIX_LSO_FIELD_ALT_FLG_IDX_MASK GENMASK(21, 20)
+#define NIX_LSO_FIELD_ALT_FLG_MASK     BIT_ULL(19)
+#define NIX_LSO_FIELD_ALG_MASK	       GENMASK(18, 16)
+#define NIX_LSO_FIELD_SZ_MASK	       GENMASK(13, 12)
+#define NIX_LSO_FIELD_LY_MASK	       GENMASK(9, 8)
+#define NIX_LSO_FIELD_OFF_MASK	       GENMASK(7, 0)
+
+#define NIX_LSO_FIELD_MASK                                                                         \
+	(NIX_LSO_FIELD_OFF_MASK | NIX_LSO_FIELD_LY_MASK | NIX_LSO_FIELD_SZ_MASK |                  \
+	 NIX_LSO_FIELD_ALG_MASK | NIX_LSO_FIELD_ALT_FLG_MASK | NIX_LSO_FIELD_ALT_FLG_IDX_MASK |    \
+	 NIX_LSO_FIELD_SHIFT_MASK)
 
 #define NIX_CN9K_MAX_HW_FRS 9212UL
 #define NIX_LBK_MAX_HW_FRS  65535UL
@@ -2666,7 +2697,7 @@ struct nix_lso_format {
 #define NIX_LSO_SEG_MAX 256
 #define NIX_LSO_MPS_MAX (BIT_ULL(14) - 1)
 
-/* Software defined LSO base format IDX */
+/* Kernel defined LSO base format IDX */
 #define NIX_LSO_FORMAT_IDX_TSOV4 0
 #define NIX_LSO_FORMAT_IDX_TSOV6 1
 
@@ -2680,5 +2711,87 @@ struct nix_lso_format {
  * which CPT will pass to X2P.
  */
 #define NIX_CHAN_CPT_X2P_MASK (0x7ffull)
+
+/* CGX lmac types defined by firmware */
+enum cgx_lmac_type {
+	CGX_LMAC_TYPE_SGMII = 0,
+	CGX_LMAC_TYPE_XAUI = 1,
+	CGX_LMAC_TYPE_RXAUI = 2,
+	CGX_LMAC_TYPE_10G_R = 3,
+	CGX_LMAC_TYPE_40G_R = 4,
+	CGX_LMAC_TYPE_QSGMII = 6,
+	CGX_LMAC_TYPE_25G_R = 7,
+	CGX_LMAC_TYPE_50G_R = 8,
+	CGX_LMAC_TYPE_100G_R = 9,
+	CGX_LMAC_TYPE_USXGMII = 10,
+	CGX_LMAC_TYPE_USGMII = 11,
+	CGX_LMAC_TYPE_MAX,
+};
+
+/* CGX modes defined by firmware */
+enum cgx_mode {
+	CGX_MODE_SGMII,
+	CGX_MODE_1000_BASEX,
+	CGX_MODE_QSGMII,
+	CGX_MODE_10G_C2C,
+	CGX_MODE_10G_C2M,
+	CGX_MODE_10G_KR,
+	CGX_MODE_20G_C2C,
+	CGX_MODE_25G_C2C,
+	CGX_MODE_25G_C2M,
+	CGX_MODE_25G_2_C2C,
+	CGX_MODE_25G_CR,
+	CGX_MODE_25G_KR,
+	CGX_MODE_40G_C2C,
+	CGX_MODE_40G_C2M,
+	CGX_MODE_40G_CR4,
+	CGX_MODE_40G_KR4,
+	CGX_MODE_40GAUI_C2C,
+	CGX_MODE_50G_C2C,
+	CGX_MODE_50G_C2M,
+	CGX_MODE_50G_4_C2C,
+	CGX_MODE_50G_CR,
+	CGX_MODE_50G_KR,
+	CGX_MODE_80GAUI_C2C,
+	CGX_MODE_100G_C2C,
+	CGX_MODE_100G_C2M,
+	CGX_MODE_100G_CR4,
+	CGX_MODE_100G_KR4,
+	CGX_MODE_LAUI_2_C2C_BIT,
+	CGX_MODE_LAUI_2_C2M_BIT,
+	CGX_MODE_50GBASE_CR2_C_BIT,
+	CGX_MODE_50GBASE_KR2_C_BIT, /* = 30 */
+	CGX_MODE_100GAUI_2_C2C_BIT,
+	CGX_MODE_100GAUI_2_C2M_BIT,
+	CGX_MODE_100GBASE_CR2_BIT,
+	CGX_MODE_100GBASE_KR2_BIT,
+	CGX_MODE_SFI_1G_BIT,
+	CGX_MODE_25GBASE_CR_C_BIT,
+	CGX_MODE_25GBASE_KR_C_BIT,
+	ETH_MODE_SGMII_10M_BIT,
+	ETH_MODE_SGMII_100M_BIT,      /* = 39 */
+	ETH_MODE_2500_BASEX_BIT = 42, /* Mode group 1 */
+	ETH_MODE_5000_BASEX_BIT,
+	ETH_MODE_O_USGMII_BIT,
+	ETH_MODE_Q_USGMII_BIT,
+	ETH_MODE_2_5G_USXGMII_BIT,
+	ETH_MODE_5G_USXGMII_BIT,
+	ETH_MODE_10G_SXGMII_BIT,
+	ETH_MODE_10G_DXGMII_BIT,
+	ETH_MODE_10G_QXGMII_BIT,
+	CGX_MODE_MAX /* = 51 */
+};
+
+/* CGX Port types from kernel */
+enum cgx_port_type {
+	CGX_PORT_TP = 0x0,
+	CGX_PORT_AUI,
+	CGX_PORT_MII,
+	CGX_PORT_FIBRE,
+	CGX_PORT_BNC,
+	CGX_PORT_DA,
+	CGX_PORT_NONE = 0xef,
+	CGX_PORT_OTHER = 0xff,
+};
 
 #endif /* __NIX_HW_H__ */

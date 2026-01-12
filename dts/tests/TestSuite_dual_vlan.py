@@ -18,8 +18,10 @@ from typing import ClassVar
 from scapy.layers.l2 import Dot1Q, Ether
 from scapy.packet import Packet, Raw
 
-from framework.params.testpmd import SimpleForwardingModes
-from framework.remote_session.testpmd_shell import TestPmdShell
+from api.packet import send_packet_and_capture
+from api.test import verify
+from api.testpmd import TestPmd
+from api.testpmd.config import SimpleForwardingModes
 from framework.test_suite import TestSuite, func_test
 
 
@@ -60,7 +62,7 @@ class TestDualVlan(TestSuite):
     #:
     tx_port: ClassVar[int] = 1
 
-    def is_relevant_packet(self, pkt: Packet) -> bool:
+    def _is_relevant_packet(self, pkt: Packet) -> bool:
         """Check if a packet was sent by functions in this suite.
 
         All functions in this test suite send packets with a payload that is packed with 20 "X"
@@ -75,7 +77,7 @@ class TestDualVlan(TestSuite):
         """
         return hasattr(pkt, "load") and "X" * 20 in str(pkt.load)
 
-    def pkt_payload_contains_layers(self, pkt: Packet, *expected_layers: Packet) -> bool:
+    def _pkt_payload_contains_layers(self, pkt: Packet, *expected_layers: Packet) -> bool:
         """Verify that the payload of the packet matches `expected_layers`.
 
         The layers in the payload of `pkt` must match the type and the user-defined fields of the
@@ -102,58 +104,36 @@ class TestDualVlan(TestSuite):
             current_pkt_layer = current_pkt_layer.payload
         return ret
 
-    def verify_vlan_functions(self, send_packet: Packet, options: TestCaseOptions) -> None:
+    def _verify_vlan_functions(self, send_packet: Packet, options: TestCaseOptions) -> None:
         """Send packet and verify the received packet has the expected structure.
 
-        Expected structure is defined by `options` according to the following table:
-        +----------------------------------------------+-----------------------+
-        |                  Configure setting           |       Result          |
-        +=======+=======+========+============+========+=======+=======+=======+
-        | Outer | Inner |  VLAN  |   VLAN     | VLAN   | Pass/ | Outer | Inner |
-        | vlan  | vlan  |  strip |   filter   | insert | Drop  | vlan  | vlan  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |   no   |     no     |   no   | pass  |  0x1  |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |  yes   |     no     |   no   | pass  |  no   |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |   no   |  yes,0x1   |   no   | pass  |  0x1  |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |   no   |  yes,0x2   |   no   | pass  |  0x1  |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |   no   | yes,0x1,0x2|   no   | pass  |  0x1  |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |  yes   |  yes,0x1   |   no   | pass  |  no   |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |  yes   |  yes,0x2   |   no   | pass  |  no   |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
-        |  0x1  |  0x2  |  yes   | yes,0x1,0x2|   no   | pass  |  no   |  0x2  |
-        +-------+-------+--------+------------+--------+-------+-------+-------+
+        If VLAN_STRIP is in `options`, the outer VLAN tag should be stripped from the packet.
 
         Args:
             send_packet: Packet to send for testing.
             options: Flag which defines the currents configured settings in testpmd.
         """
-        recv = self.send_packet_and_capture(send_packet)
-        recv = list(filter(self.is_relevant_packet, recv))
+        recv = send_packet_and_capture(send_packet)
+        recv = list(filter(self._is_relevant_packet, recv))
         expected_layers: list[Packet] = []
 
         if self.TestCaseOptions.VLAN_STRIP not in options:
             expected_layers.append(Dot1Q(vlan=self.outer_vlan_tag))
         expected_layers.append(Dot1Q(vlan=self.inner_vlan_tag))
 
-        self.verify(
+        verify(
             len(recv) > 0,
             f"Expected to receive packet with the payload {expected_layers} but got nothing.",
         )
 
         for pkt in recv:
-            self.verify(
-                self.pkt_payload_contains_layers(pkt, *expected_layers),
+            verify(
+                self._pkt_payload_contains_layers(pkt, *expected_layers),
                 f"Received packet ({pkt.summary()}) did not match the expected sequence of layers "
                 f"{expected_layers} with options {options}.",
             )
 
-    def configure_testpmd(self, shell: TestPmdShell, options: TestCaseOptions, add: bool) -> None:
+    def _configure_testpmd(self, shell: TestPmd, options: TestCaseOptions, add: bool) -> None:
         """Configure VLAN functions in testpmd based on `options`.
 
         Args:
@@ -186,24 +166,25 @@ class TestDualVlan(TestSuite):
         """Test that a packet with a single VLAN can have an additional one inserted into it.
 
         Steps:
-            Set VLAN tag on the tx port.
-            Create a packet with a VLAN tag.
-            Send and receive the packet.
+            * Set VLAN tag on the tx port.
+            * Create a packet with a VLAN tag.
+            * Send and receive the packet.
+
         Verify:
-            Packets are received.
-            Packet contains two VLAN tags.
+            * Packets are received.
+            * Packet contains two VLAN tags.
         """
-        with TestPmdShell(forward_mode=SimpleForwardingModes.mac) as testpmd:
+        with TestPmd(forward_mode=SimpleForwardingModes.mac) as testpmd:
             testpmd.tx_vlan_set(port=self.tx_port, enable=True, vlan=self.vlan_insert_tag)
             testpmd.start()
-            recv = self.send_packet_and_capture(
+            recv = send_packet_and_capture(
                 Ether() / Dot1Q(vlan=self.outer_vlan_tag) / Raw(b"X" * 20)
             )
-            self.verify(len(recv) > 0, "Did not receive any packets when testing VLAN insertion.")
-            self.verify(
+            verify(len(recv) > 0, "Did not receive any packets when testing VLAN insertion.")
+            verify(
                 any(
-                    self.is_relevant_packet(p)
-                    and self.pkt_payload_contains_layers(
+                    self._is_relevant_packet(p)
+                    and self._pkt_payload_contains_layers(
                         p, Dot1Q(vlan=self.vlan_insert_tag), Dot1Q(vlan=self.outer_vlan_tag)
                     )
                     for p in recv
@@ -216,12 +197,13 @@ class TestDualVlan(TestSuite):
         """Test that all combinations of :class:`TestCaseOptions` behave as expected.
 
         Steps:
-            Send packets with VLAN functions disabled.
-            Send packets with a set of combinations of VLAN functions enabled.
-            Disable VLAN function to allow for a clean environment for the next test.
+            * Send packets with VLAN functions disabled.
+            * Send packets with a set of combinations of VLAN functions enabled.
+            * Disable VLAN function to allow for a clean environment for the next test.
+
         Verify:
-            Packet with two VLANs is unchanged without the VLAN modification functions enabled.
-            VLAN functions work as expected.
+            * Packet with two VLANs is unchanged without the VLAN modification functions enabled.
+            * VLAN functions work as expected.
         """
         send_pkt = (
             Ether()
@@ -229,14 +211,14 @@ class TestDualVlan(TestSuite):
             / Dot1Q(vlan=self.inner_vlan_tag)
             / Raw(b"X" * 20)
         )
-        with TestPmdShell(forward_mode=SimpleForwardingModes.mac) as testpmd:
+        with TestPmd(forward_mode=SimpleForwardingModes.mac) as testpmd:
             testpmd.start()
-            recv = self.send_packet_and_capture(send_pkt)
-            self.verify(len(recv) > 0, "Unmodified packet was not received.")
-            self.verify(
+            recv = send_packet_and_capture(send_pkt)
+            verify(len(recv) > 0, "Unmodified packet was not received.")
+            verify(
                 any(
-                    self.is_relevant_packet(p)
-                    and self.pkt_payload_contains_layers(
+                    self._is_relevant_packet(p)
+                    and self._pkt_payload_contains_layers(
                         p, Dot1Q(vlan=self.outer_vlan_tag), Dot1Q(vlan=self.inner_vlan_tag)
                     )
                     for p in recv
@@ -246,22 +228,23 @@ class TestDualVlan(TestSuite):
             testpmd.stop()
             for i in range(2 ** len(self.TestCaseOptions)):
                 options = self.TestCaseOptions(i)
-                self.configure_testpmd(testpmd, options, True)
+                self._configure_testpmd(testpmd, options, True)
                 testpmd.start()
-                self.verify_vlan_functions(send_pkt, options)
+                self._verify_vlan_functions(send_pkt, options)
                 testpmd.stop()
-                self.configure_testpmd(testpmd, options, False)
+                self._configure_testpmd(testpmd, options, False)
 
     @func_test
     def maintains_priority(self) -> None:
         """Test that priorities of multiple VLAN tags are preserved by the PMD.
 
         Steps:
-            Create packets with VLAN tags with priorities.
-            Send and receive packets.
+            * Create packets with VLAN tags with priorities.
+            * Send and receive packets.
+
         Verify:
-            Packets are received.
-            Priorities are unchanged.
+            * Packets are received.
+            * Priorities are unchanged.
         """
         pkt = (
             Ether()
@@ -269,14 +252,14 @@ class TestDualVlan(TestSuite):
             / Dot1Q(vlan=self.inner_vlan_tag, prio=2)
             / Raw(b"X" * 20)
         )
-        with TestPmdShell(forward_mode=SimpleForwardingModes.mac) as testpmd:
+        with TestPmd(forward_mode=SimpleForwardingModes.mac) as testpmd:
             testpmd.start()
-            recv = self.send_packet_and_capture(pkt)
-            self.verify(len(recv) > 0, "Did not receive any packets when testing VLAN priority.")
-            self.verify(
+            recv = send_packet_and_capture(pkt)
+            verify(len(recv) > 0, "Did not receive any packets when testing VLAN priority.")
+            verify(
                 any(
-                    self.is_relevant_packet(p)
-                    and self.pkt_payload_contains_layers(
+                    self._is_relevant_packet(p)
+                    and self._pkt_payload_contains_layers(
                         p,
                         Dot1Q(vlan=self.outer_vlan_tag, prio=1),
                         Dot1Q(vlan=self.inner_vlan_tag, prio=2),

@@ -20,6 +20,7 @@
 #include "bnxt_tf_common.h"
 #include "hsi_struct_def_dpdk.h"
 #include "tf_core.h"
+#include "tfc_util.h"
 #include "tf_ext_flow_handle.h"
 
 #include "ulp_template_db_enum.h"
@@ -32,7 +33,7 @@
 #include "ulp_matcher.h"
 #include "ulp_port_db.h"
 #include "ulp_tun.h"
-#include "ulp_ha_mgr.h"
+#include "ulp_tfc_ha_mgr.h"
 #include "bnxt_tf_pmd_shim.h"
 #include "ulp_template_db_tbl.h"
 #include "tfc_resources.h"
@@ -313,27 +314,27 @@ ulp_tfc_tbl_scope_deinit(struct bnxt *bp)
 	if (rc)
 		return;
 
-	rc = tfc_tbl_scope_cpm_free(tfcp, tsid);
-	if (rc)
-		BNXT_DRV_DBG(ERR, "Failed Freeing CPM TSID:%d FID:%d\n",
-			     tsid, fid);
-	else
-		BNXT_DRV_DBG(DEBUG, "Freed CPM TSID:%d FID: %d\n", tsid, fid);
-
-	rc = tfc_tbl_scope_mem_free(tfcp, fid, tsid);
-	if (rc)
-		BNXT_DRV_DBG(ERR, "Failed freeing tscope mem TSID:%d FID:%d\n",
-			     tsid, fid);
-	else
-		BNXT_DRV_DBG(DEBUG, "Freed tscope mem TSID:%d FID:%d\n",
-			     tsid, fid);
-
 	rc = tfc_tbl_scope_fid_rem(tfcp, fid, tsid, &fid_cnt);
 	if (rc)
-		BNXT_DRV_DBG(ERR, "Failed removing FID from TSID:%d FID:%d\n",
+		BNXT_DRV_DBG(ERR, "Failed removing FID from TSID:%d FID:%d",
 			     tsid, fid);
 	else
-		BNXT_DRV_DBG(DEBUG, "Removed FID from TSID:%d FID:%d\n",
+		BNXT_DRV_DBG(DEBUG, "Removed FID from TSID:%d FID:%d",
+			     tsid, fid);
+
+	rc = tfc_tbl_scope_cpm_free(tfcp, tsid);
+	if (rc)
+		BNXT_DRV_DBG(ERR, "Failed Freeing CPM TSID:%d FID:%d",
+			     tsid, fid);
+	else
+		BNXT_DRV_DBG(DEBUG, "Freed CPM TSID:%d FID: %d", tsid, fid);
+
+	rc = tfc_tbl_scope_mem_free(tfcp, fid, tsid, fid_cnt);
+	if (rc)
+		BNXT_DRV_DBG(ERR, "Failed freeing tscope mem TSID:%d FID:%d",
+			     tsid, fid);
+	else
+		BNXT_DRV_DBG(DEBUG, "Freed tscope mem TSID:%d FID:%d",
 			     tsid, fid);
 }
 
@@ -344,8 +345,11 @@ ulp_tfc_tbl_scope_init(struct bnxt *bp)
 	struct tfc_tbl_scope_size_query_parms qparms =  { 0 };
 	uint16_t max_lkup_sz[CFA_DIR_MAX], max_act_sz[CFA_DIR_MAX];
 	struct tfc_tbl_scope_cpm_alloc_parms cparms;
+	struct tfc_tbl_scope_qcaps_parms qcparms;
 	uint16_t fid, max_pools;
-	bool first = true, shared = false;
+	bool first = true;
+	enum cfa_scope_type scope_type = CFA_SCOPE_TYPE_NON_SHARED;
+	uint64_t feat_bits;
 	uint8_t tsid = 0;
 	struct tfc *tfcp;
 	int32_t rc = 0;
@@ -366,19 +370,37 @@ ulp_tfc_tbl_scope_init(struct bnxt *bp)
 	max_act_sz[CFA_DIR_TX] =
 		bnxt_ulp_cntxt_act_rec_tx_max_sz_get(bp->ulp_ctx);
 
-	shared = bnxt_ulp_cntxt_shared_tbl_scope_enabled(bp->ulp_ctx);
+	if (bnxt_ulp_cntxt_shared_tbl_scope_enabled(bp->ulp_ctx))
+		scope_type = CFA_SCOPE_TYPE_SHARED_APP;
 
-#if (TFC_SHARED_TBL_SCOPE_ENABLE == 1)
-	/* Temporary code for testing shared table scopes until ULP
-	 * usage defined.
-	 */
-	if (!BNXT_PF(bp)) {
-		shared = true;
-		max_pools = 8;
+	feat_bits = bnxt_ulp_feature_bits_get(bp->ulp_ctx);
+	if ((feat_bits & BNXT_ULP_FEATURE_BIT_MULTI_INSTANCE)) {
+		if (!BNXT_PF(bp)) {
+			scope_type = CFA_SCOPE_TYPE_SHARED_APP;
+			max_pools = 32;
+		}
 	}
-#endif
+
+	rc = tfc_tbl_scope_qcaps(tfcp, &qcparms);
+	if (rc) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Failed obtaining table scope capabilities");
+		return rc;
+	}
+
+	if (feat_bits & BNXT_ULP_FEATURE_BIT_SOCKET_DIRECT) {
+		if (qcparms.global_cap) {
+			scope_type = CFA_SCOPE_TYPE_GLOBAL;
+			max_pools = 4;
+		} else {
+			PMD_DRV_LOG_LINE(ERR,
+					 "Socket direct requires global scope");
+			return -EINVAL;
+		}
+	}
+
 	/* Calculate the sizes for setting up memory */
-	qparms.shared = shared;
+	qparms.scope_type = scope_type;
 	qparms.max_pools = max_pools;
 	qparms.factor = bnxt_ulp_cntxt_em_mulitplier_get(bp->ulp_ctx);
 	qparms.flow_cnt[CFA_DIR_RX] =
@@ -393,15 +415,12 @@ ulp_tfc_tbl_scope_init(struct bnxt *bp)
 	if (rc)
 		return rc;
 
-
-
-	rc = tfc_tbl_scope_id_alloc(tfcp, shared, CFA_APP_TYPE_TF, &tsid,
+	rc = tfc_tbl_scope_id_alloc(tfcp, scope_type, CFA_APP_TYPE_TF, &tsid,
 				    &first);
 	if (rc) {
 		BNXT_DRV_DBG(ERR, "Failed to allocate tscope\n");
 		return rc;
 	}
-	BNXT_DRV_DBG(DEBUG, "Allocated tscope TSID:%d\n", tsid);
 
 	rc = bnxt_ulp_cntxt_tsid_set(bp->ulp_ctx, tsid);
 	if (rc)
@@ -409,7 +428,7 @@ ulp_tfc_tbl_scope_init(struct bnxt *bp)
 
 	/* If we are shared and not the first table scope creator
 	 */
-	if (shared && !first) {
+	if (scope_type != CFA_SCOPE_TYPE_NON_SHARED && !first) {
 		bool configured;
 		#define ULP_SHARED_TSID_WAIT_TIMEOUT 5000
 		#define ULP_SHARED_TSID_WAIT_TIME 50
@@ -425,12 +444,12 @@ ulp_tfc_tbl_scope_init(struct bnxt *bp)
 			}
 			timeout -= ULP_SHARED_TSID_WAIT_TIME;
 			BNXT_DRV_DBG(INFO,
-				     "Waiting %d ms for shared tsid(%d)\n",
-				     timeout, tsid);
+				     "Waiting %d ms for %s tsid(%d)",
+				     timeout, tfc_scope_type_2_str(scope_type), tsid);
 		} while (!configured && timeout > 0);
 		if (timeout <= 0) {
-			BNXT_DRV_DBG(ERR, "Timed out on shared tsid(%d)\n",
-				     tsid);
+			BNXT_DRV_DBG(ERR, "Timed out on %s tsid(%d)",
+				     tfc_scope_type_2_str(scope_type), tsid);
 			return -ETIMEDOUT;
 		}
 	}
@@ -456,7 +475,13 @@ ulp_tfc_tbl_scope_init(struct bnxt *bp)
 		qparms.act_pool_sz_exp[CFA_DIR_RX];
 	mem_parms.act_pool_sz_exp[CFA_DIR_TX] =
 		qparms.act_pool_sz_exp[CFA_DIR_TX];
-	mem_parms.local = true;
+	mem_parms.scope_type = scope_type;
+
+	if (scope_type != CFA_SCOPE_TYPE_NON_SHARED)
+		mem_parms.local = false;
+	else
+		mem_parms.local = true;
+
 	rc = tfc_tbl_scope_mem_alloc(tfcp, fid, tsid, &mem_parms);
 	if (rc) {
 		BNXT_DRV_DBG(ERR,
@@ -528,24 +553,39 @@ ulp_tfc_cntxt_app_caps_init(struct bnxt *bp, uint8_t app_id, uint32_t dev_id)
 		if (info[i].flags & BNXT_ULP_APP_CAP_BC_MC_SUPPORT)
 			ulp_ctx->cfg_data->ulp_flags |=
 				BNXT_ULP_APP_BC_MC_SUPPORT;
-		if (info[i].flags & BNXT_ULP_APP_CAP_SOCKET_DIRECT) {
-			/* Enable socket direction only if MR is enabled in fw*/
-			if (BNXT_MULTIROOT_EN(bp)) {
-				ulp_ctx->cfg_data->ulp_flags |=
-					BNXT_ULP_APP_SOCKET_DIRECT;
-				BNXT_DRV_DBG(DEBUG,
-					    "Socket Direct feature is enabled\n");
-			}
-		}
+		if (info[i].flags & BNXT_ULP_APP_CAP_SOCKET_DIRECT)
+			ulp_ctx->cfg_data->ulp_flags |=
+				BNXT_ULP_APP_SOCKET_DIRECT;
+
 		/* Update the capability feature bits*/
 		if (bnxt_ulp_cap_feat_process(info[i].feature_bits,
 					      &ulp_ctx->cfg_data->feature_bits))
 			return -EINVAL;
 
+		if ((ulp_ctx->cfg_data->feature_bits &
+		     BNXT_ULP_FEATURE_BIT_UNICAST_ONLY))
+			ulp_ctx->cfg_data->ulp_flags |=
+			BNXT_ULP_APP_UNICAST_ONLY;
+
 		bnxt_ulp_default_app_priority_set(ulp_ctx,
 						  info[i].default_priority);
 		bnxt_ulp_max_def_priority_set(ulp_ctx,
 					      info[i].max_def_priority);
+
+		/* if hot upgrade is enabled */
+		if (bnxt_ulp_tfc_hot_upgrade_enabled(ulp_ctx)) {
+			uint32_t ha_prio = 0;
+
+			if (info[i].min_flow_priority >
+			    info[i].max_flow_priority)
+				ha_prio = info[i].min_flow_priority -
+					info[i].max_flow_priority;
+			else
+				ha_prio = info[i].max_flow_priority -
+					info[i].min_flow_priority;
+			ha_prio = ha_prio / 2;
+			bnxt_ulp_ha_priority_set(ulp_ctx, ha_prio);
+		}
 		bnxt_ulp_min_flow_priority_set(ulp_ctx,
 					       info[i].min_flow_priority);
 		bnxt_ulp_max_flow_priority_set(ulp_ctx,
@@ -677,6 +717,16 @@ ulp_tfc_ctx_init(struct bnxt *bp,
 		goto error_deinit;
 	}
 	BNXT_DRV_DBG(DEBUG, "Ulp initialized with app id %d\n", bp->app_id);
+
+	rc = bnxt_ulp_app_instance_id_set(bp->ulp_ctx, bp->app_instance_id);
+	if (rc) {
+		BNXT_DRV_DBG(ERR,
+			     "Unable to set app_instance_id for ULP init.\n");
+		goto error_deinit;
+	}
+	if (bp->app_instance_id)
+		BNXT_DRV_DBG(DEBUG, "Hot upgrade instance id %u\n",
+			     bp->app_instance_id);
 
 	rc = ulp_tfc_dparms_init(bp, bp->ulp_ctx, devid);
 	if (rc) {
@@ -875,19 +925,14 @@ static void
 ulp_tfc_deinit(struct bnxt *bp,
 	       struct bnxt_ulp_session_state *session)
 {
-	bool ha_enabled;
 	uint16_t fid_cnt = 0;
 	int32_t rc;
 
 	if (!bp->ulp_ctx || !bp->ulp_ctx->cfg_data)
 		return;
 
-	ha_enabled = bnxt_ulp_cntxt_ha_enabled(bp->ulp_ctx);
-	if (ha_enabled) {
-		rc = ulp_ha_mgr_close(bp->ulp_ctx);
-		if (rc)
-			BNXT_DRV_DBG(ERR, "Failed to close HA (%d)\n", rc);
-	}
+	/* Delete the Hot upgrade manager */
+	ulp_tfc_hot_upgrade_mgr_deinit(bp->ulp_ctx);
 
 	/* Delete the Stats Counter Manager */
 	ulp_sc_mgr_deinit(bp->ulp_ctx);
@@ -1050,6 +1095,12 @@ ulp_tfc_init(struct bnxt *bp,
 		goto jump_to_error;
 	}
 
+	rc = ulp_tfc_hot_upgrade_mgr_init(bp->ulp_ctx);
+	if (rc) {
+		BNXT_DRV_DBG(ERR, "Failed to initialize ulp hot upgrade mgr\n");
+		goto jump_to_error;
+	}
+
 	rc = bnxt_ulp_cntxt_dev_id_get(bp->ulp_ctx, &ulp_dev_id);
 	if (rc) {
 		BNXT_DRV_DBG(ERR, "Unable to get device id from ulp.\n");
@@ -1087,9 +1138,7 @@ static int
 ulp_tfc_mtr_cap_get(struct bnxt *bp __rte_unused,
 		    struct rte_mtr_capabilities *cap)
 {
-#if (RTE_VERSION_NUM(21, 05, 0, 0) <= RTE_VERSION)
 	cap->srtcm_rfc2697_byte_mode_supported = 1;
-#endif
 	cap->n_max = MAX_NUM_METER;
 	cap->n_shared_max = cap->n_max;
 	/* No meter is identical */

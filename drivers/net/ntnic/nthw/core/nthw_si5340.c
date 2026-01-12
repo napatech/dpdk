@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  *
  * This file implements Si5340 clock synthesizer support.
@@ -121,7 +120,7 @@ static int nthw_si5340_cfg(nthw_si5340_t *p, const void *p_data, int data_cnt,
 
 		if (addr == 0x0006) {
 			/* Wait 300ms before continuing. See NT200E3-2-PTP_U23_Si5340_adr0_v2.h */
-			nt_os_wait_usec(300000);
+			nthw_os_wait_usec(300000);
 		}
 
 		nthw_si5340_write(p, addr, value);
@@ -144,7 +143,7 @@ static int nthw_si5340_cfg(nthw_si5340_t *p, const void *p_data, int data_cnt,
 	return 0;
 }
 
-int nthw_si5340_config(nthw_si5340_t *p, const void *p_data, int data_cnt,
+static int nthw_si5340_config(nthw_si5340_t *p, const void *p_data, int data_cnt,
 	clk_profile_data_fmt_t data_format)
 {
 	const char *const p_adapter_id_str =
@@ -167,7 +166,7 @@ int nthw_si5340_config(nthw_si5340_t *p, const void *p_data, int data_cnt,
 			break;
 		}
 
-		nt_os_wait_usec(1000000);	/* 1 sec */
+		nthw_os_wait_usec(1000000);	/* 1 sec */
 	}
 
 	if (!success) {

@@ -639,7 +639,8 @@ cnxk_sso_tx_adapter_free(uint8_t id __rte_unused,
 }
 
 static int
-crypto_adapter_qp_setup(const struct rte_cryptodev *cdev, struct cnxk_cpt_qp *qp,
+crypto_adapter_qp_setup(struct cnxk_sso_evdev *evdev, const struct rte_cryptodev *cdev,
+			struct cnxk_cpt_qp *qp,
 			const struct rte_event_crypto_adapter_queue_conf *conf)
 {
 	char name[RTE_MEMPOOL_NAMESIZE];
@@ -662,12 +663,13 @@ crypto_adapter_qp_setup(const struct rte_cryptodev *cdev, struct cnxk_cpt_qp *qp
 		return -ENOSPC;
 	}
 
+	qp->evdev = evdev;
 	qp->lmtline.fc_thresh -= nb_desc_min;
 
 	snprintf(name, RTE_MEMPOOL_NAMESIZE, "cnxk_ca_req_%u:%u", cdev->data->dev_id, qp->lf.lf_id);
 	req_size = sizeof(struct cpt_inflight_req);
 	cache_size = RTE_MIN(RTE_MEMPOOL_CACHE_MAX_SIZE, qp->lf.nb_desc / 1.5);
-	nb_req = RTE_MAX(qp->lf.nb_desc, cache_size * rte_lcore_count());
+	nb_req = qp->lf.nb_desc + (cache_size * rte_lcore_count());
 	qp->ca.req_mp = rte_mempool_create(name, nb_req, req_size, cache_size, 0, NULL, NULL, NULL,
 					   NULL, rte_socket_id(), 0);
 	if (qp->ca.req_mp == NULL)
@@ -676,6 +678,7 @@ crypto_adapter_qp_setup(const struct rte_cryptodev *cdev, struct cnxk_cpt_qp *qp
 	if (conf != NULL) {
 		qp->ca.vector_sz = conf->vector_sz;
 		qp->ca.vector_mp = conf->vector_mp;
+		qp->ca.vector_timeout_ns = conf->vector_timeout_ns;
 	}
 	qp->ca.enabled = true;
 
@@ -697,7 +700,7 @@ cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev, const struct rt
 
 		for (qp_id = 0; qp_id < cdev->data->nb_queue_pairs; qp_id++) {
 			qp = cdev->data->queue_pairs[qp_id];
-			ret = crypto_adapter_qp_setup(cdev, qp, conf);
+			ret = crypto_adapter_qp_setup(sso_evdev, cdev, qp, conf);
 			if (ret) {
 				cnxk_crypto_adapter_qp_del(cdev, -1);
 				return ret;
@@ -706,7 +709,7 @@ cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev, const struct rt
 		}
 	} else {
 		qp = cdev->data->queue_pairs[queue_pair_id];
-		ret = crypto_adapter_qp_setup(cdev, qp, conf);
+		ret = crypto_adapter_qp_setup(sso_evdev, cdev, qp, conf);
 		if (ret)
 			return ret;
 		adptr_xae_cnt = qp->ca.req_mp->size;

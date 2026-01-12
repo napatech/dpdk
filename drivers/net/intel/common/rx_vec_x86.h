@@ -21,19 +21,19 @@ enum ci_rx_vec_level {
 static inline int
 _ci_rxq_rearm_get_bufs(struct ci_rx_queue *rxq)
 {
-	struct ci_rx_entry *rxp = &rxq->sw_ring[rxq->rxrearm_start];
+	struct rte_mbuf **rxp = &rxq->sw_ring[rxq->rxrearm_start].mbuf;
 	const uint16_t rearm_thresh = CI_VPMD_RX_REARM_THRESH;
 	volatile union ci_rx_desc *rxdp;
 	int i;
 
 	rxdp = &rxq->rx_ring[rxq->rxrearm_start];
 
-	if (rte_mempool_get_bulk(rxq->mp, (void **)rxp, rearm_thresh) < 0) {
+	if (rte_mbuf_raw_alloc_bulk(rxq->mp, rxp, rearm_thresh) < 0) {
 		if (rxq->rxrearm_nb + rearm_thresh >= rxq->nb_rx_desc) {
 			const __m128i zero = _mm_setzero_si128();
 
 			for (i = 0; i < CI_VPMD_DESCS_PER_LOOP; i++) {
-				rxp[i].mbuf = &rxq->fake_mbuf;
+				rxp[i] = &rxq->fake_mbuf;
 				_mm_store_si128(RTE_CAST_PTR(__m128i *, &rxdp[i]), zero);
 			}
 		}
@@ -344,6 +344,29 @@ ci_rxq_rearm(struct ci_rx_queue *rxq, const enum ci_rx_vec_level vec_level)
 
 	/* Update the tail pointer on the NIC */
 	rte_write32_wc(rte_cpu_to_le_32(rx_id), rxq->qrx_tail);
+}
+
+#ifdef CC_AVX512_SUPPORT
+#define X86_MAX_SIMD_BITWIDTH (rte_vect_get_max_simd_bitwidth())
+#else
+#define X86_MAX_SIMD_BITWIDTH RTE_MIN(256, rte_vect_get_max_simd_bitwidth())
+#endif /* CC_AVX512_SUPPORT */
+
+static inline enum rte_vect_max_simd
+ci_get_x86_max_simd_bitwidth(void)
+{
+	int ret = RTE_VECT_SIMD_DISABLED;
+	int simd = X86_MAX_SIMD_BITWIDTH;
+
+	if (simd >= 512 && rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1 &&
+			rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512BW) == 1 &&
+			rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512DQ) == 1)
+		ret = RTE_VECT_SIMD_512;
+	else if (simd >= 256 && (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1))
+		ret = RTE_VECT_SIMD_256;
+	else if (simd >= 128)
+		ret = RTE_VECT_SIMD_128;
+	return ret;
 }
 
 #endif /* _COMMON_INTEL_RX_VEC_X86_H_ */

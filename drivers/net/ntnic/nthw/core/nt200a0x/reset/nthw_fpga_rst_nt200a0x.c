@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -197,7 +196,7 @@ static int nthw_fpga_rst_nt200a0x_wait_sdc_calibrated(nthw_fpga_t *p_fpga,
 		 * reset DDR and perform calibration retry
 		 */
 		nthw_field_set_flush(p->mp_fld_rst_ddr4);	/* Reset DDR PLL */
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 		nthw_field_clr_flush(p->mp_fld_rst_ddr4);
 
 		n_retry_cnt++;
@@ -575,8 +574,8 @@ static struct rst_nt200a0x_ops rst_nt200a0x_ops = { .nthw_fpga_rst_nt200a0x_init
 			nthw_fpga_rst_nt200a0x_reset
 };
 
-void rst_nt200a0x_ops_init(void)
+void nthw_rst_nt200a0x_ops_init(void)
 {
 	NT_LOG(DBG, NTHW, "RST NT200A0X OPS INIT");
-	register_rst_nt200a0x_ops(&rst_nt200a0x_ops);
+	nthw_reg_rst_nt200a0x_ops(&rst_nt200a0x_ops);
 }

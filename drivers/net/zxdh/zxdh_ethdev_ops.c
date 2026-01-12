@@ -315,6 +315,13 @@ zxdh_link_info_get(struct rte_eth_dev *dev, struct rte_eth_link *link)
 		else
 			link->link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
 	}
+
+	if (hw->switchoffload) {
+		link->link_speed = RTE_ETH_SPEED_NUM_25G;
+		link->link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
+		link->link_autoneg = RTE_ETH_LINK_AUTONEG;
+		link->link_status = RTE_ETH_LINK_UP;
+	}
 	hw->speed = link->link_speed;
 
 	return 0;
@@ -413,7 +420,10 @@ zxdh_dev_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 	struct zxdh_hw *hw = (struct zxdh_hw *)dev->data->dev_private;
 	struct rte_ether_addr *old_addr = &dev->data->mac_addrs[0];
 	struct zxdh_msg_info msg_info = {0};
-	uint16_t ret = 0;
+	uint8_t zxdh_msg_reply_info[ZXDH_ST_SZ_BYTES(msg_reply_info)] = {0};
+	void *reply_body_addr = ZXDH_ADDR_OF(msg_reply_info, zxdh_msg_reply_info, reply_body);
+	void *mac_reply_msg_addr = ZXDH_ADDR_OF(msg_reply_body, reply_body_addr, mac_reply_msg);
+	int ret = 0;
 
 	if (!rte_is_valid_assigned_ether_addr(addr)) {
 		PMD_DRV_LOG(ERR, "mac address is invalid!");
@@ -425,7 +435,7 @@ zxdh_dev_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 	if (hw->is_pf) {
 		ret = zxdh_add_mac_table(hw, hw->vport.vport, addr, hw->hash_search_index, 0, 0);
 		if (ret) {
-			if (ret == ZXDH_EEXIST_MAC_FLAG) {
+			if (ret == -EADDRINUSE) {
 				PMD_DRV_LOG(ERR, "pf mac add failed! mac is in used, code:%d", ret);
 				return -EADDRINUSE;
 			}
@@ -446,9 +456,11 @@ zxdh_dev_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 		mac_filter->filter_flag = ZXDH_MAC_UNFILTER;
 		mac_filter->mac = *addr;
 		zxdh_msg_head_build(hw, ZXDH_MAC_ADD, &msg_info);
-		ret = zxdh_vf_send_msg_to_pf(dev, &msg_info, sizeof(msg_info), NULL, 0);
+		ret = zxdh_vf_send_msg_to_pf(dev, &msg_info, sizeof(msg_info),
+				zxdh_msg_reply_info, ZXDH_ST_SZ_BYTES(msg_reply_info));
 		if (ret) {
-			if (ret == ZXDH_EEXIST_MAC_FLAG) {
+			uint8_t flag = ZXDH_GET(mac_reply_msg, mac_reply_msg_addr, mac_flag);
+			if (flag == ZXDH_EEXIST_MAC_FLAG) {
 				PMD_DRV_LOG(ERR, "pf mac add failed! mac is in used, code:%d", ret);
 				return -EADDRINUSE;
 			}
@@ -482,7 +494,11 @@ zxdh_dev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 {
 	struct zxdh_hw *hw = dev->data->dev_private;
 	struct zxdh_msg_info msg_info = {0};
-	uint16_t i, ret;
+	uint8_t zxdh_msg_reply_info[ZXDH_ST_SZ_BYTES(msg_reply_info)] = {0};
+	void *reply_body_addr = ZXDH_ADDR_OF(msg_reply_info, zxdh_msg_reply_info, reply_body);
+	void *mac_reply_msg_addr = ZXDH_ADDR_OF(msg_reply_body, reply_body_addr, mac_reply_msg);
+	uint16_t i;
+	int ret;
 
 	if (index >= ZXDH_MAX_MAC_ADDRS) {
 		PMD_DRV_LOG(ERR, "Add mac index (%u) is out of range", index);
@@ -503,6 +519,10 @@ zxdh_dev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 				ret = zxdh_add_mac_table(hw, hw->vport.vport,
 							mac_addr, hw->hash_search_index, 0, 0);
 				if (ret) {
+					if (ret == -EADDRINUSE) {
+						PMD_DRV_LOG(ERR, "pf mac add failed mac is in used");
+						return -EADDRINUSE;
+					}
 					PMD_DRV_LOG(ERR, "mac_addr_add failed, code:%d", ret);
 					return ret;
 				}
@@ -536,9 +556,16 @@ zxdh_dev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 		zxdh_msg_head_build(hw, ZXDH_MAC_ADD, &msg_info);
 		if (rte_is_unicast_ether_addr(mac_addr)) {
 			if (hw->uc_num < ZXDH_MAX_UC_MAC_ADDRS) {
-				ret = zxdh_vf_send_msg_to_pf(dev, &msg_info,
-							sizeof(msg_info), NULL, 0);
+				ret = zxdh_vf_send_msg_to_pf(dev, &msg_info, sizeof(msg_info),
+						zxdh_msg_reply_info,
+						ZXDH_ST_SZ_BYTES(msg_reply_info));
 				if (ret) {
+					uint8_t flag = ZXDH_GET(mac_reply_msg,
+						mac_reply_msg_addr, mac_flag);
+					if (flag == ZXDH_EEXIST_MAC_FLAG) {
+						PMD_DRV_LOG(ERR, "pf mac add failed mac is in used");
+						return -EADDRINUSE;
+					}
 					PMD_DRV_LOG(ERR, "Failed to send msg: port 0x%x msg type %d",
 							hw->vport.vport, ZXDH_MAC_ADD);
 					return ret;
@@ -875,7 +902,7 @@ zxdh_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 					return -EAGAIN;
 				}
 			} else {
-				msg.data.vlan_filter_set_msg.enable = true;
+				msg.data.vlan_filter_set_msg.enable = false;
 				zxdh_msg_head_build(hw, ZXDH_VLAN_FILTER_SET, &msg);
 				ret = zxdh_vf_send_msg_to_pf(hw->eth_dev, &msg,
 						sizeof(struct zxdh_msg_info), NULL, 0);
@@ -985,6 +1012,43 @@ zxdh_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 }
 
 int
+zxdh_vlan_tpid_set(struct rte_eth_dev *dev, enum rte_vlan_type vlan_type, uint16_t tpid)
+{
+	struct zxdh_hw *hw = dev->data->dev_private;
+	struct zxdh_port_vlan_table port_vlan_table = {0};
+	struct zxdh_msg_info msg = {0};
+	int ret = 0;
+
+	if (vlan_type != RTE_ETH_VLAN_TYPE_OUTER) {
+		PMD_DRV_LOG(ERR, "unsupported rte vlan type!");
+		return -1;
+	}
+
+	if (hw->is_pf) {
+		ret = zxdh_get_port_vlan_attr(hw, hw->vport.vport, &port_vlan_table);
+		if (ret != 0)
+			PMD_DRV_LOG(ERR, "get port vlan attr table failed");
+		port_vlan_table.hit_flag = 1;
+		port_vlan_table.business_vlan_tpid = tpid;
+		ret = zxdh_set_port_vlan_attr(hw, hw->vport.vport, &port_vlan_table);
+		if (ret != 0)
+			PMD_DRV_LOG(ERR, "set port vlan tpid %d attr table failed", tpid);
+	} else {
+		zxdh_msg_head_build(hw, ZXDH_VLAN_SET_TPID, &msg);
+		msg.data.zxdh_vlan_tpid.tpid = tpid;
+		ret = zxdh_vf_send_msg_to_pf(dev, &msg,
+				sizeof(struct zxdh_msg_info), NULL, 0);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "port %d vlan tpid %d set failed",
+				hw->vfid, tpid);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+int
 zxdh_dev_rss_reta_update(struct rte_eth_dev *dev,
 			 struct rte_eth_rss_reta_entry64 *reta_conf,
 			 uint16_t reta_size)
@@ -1056,7 +1120,7 @@ zxdh_dev_rss_reta_update(struct rte_eth_dev *dev,
 	return ret;
 }
 
-static uint16_t
+uint16_t
 zxdh_hw_qid_to_logic_qid(struct rte_eth_dev *dev, uint16_t qid)
 {
 	struct zxdh_hw *priv = (struct zxdh_hw *)dev->data->dev_private;
@@ -1150,7 +1214,7 @@ zxdh_rss_hf_to_hw(uint64_t hf)
 }
 
 static uint64_t
-zxdh_rss_hf_to_eth(uint32_t hw_hf)
+zxdh_rss_hf_to_eth(uint64_t hw_hf)
 {
 	uint64_t hf = 0;
 
@@ -1188,7 +1252,7 @@ zxdh_rss_hash_update(struct rte_eth_dev *dev,
 	hw_hf_new = zxdh_rss_hf_to_hw(rss_conf->rss_hf);
 	hw_hf_old = zxdh_rss_hf_to_hw(old_rss_conf->rss_hf);
 
-	if ((hw_hf_new != hw_hf_old || !!rss_conf->rss_hf))
+	if (hw_hf_new != hw_hf_old || hw->rss_enable != !!rss_conf->rss_hf)
 		need_update_hf = 1;
 
 	if (need_update_hf) {
@@ -1211,6 +1275,9 @@ zxdh_rss_hash_update(struct rte_eth_dev *dev,
 			}
 		}
 		if (hw->is_pf) {
+			hw->rss_enable = !!rss_conf->rss_hf;
+			if (rss_conf->rss_hf == 0)
+				return 0;
 			ret = zxdh_get_port_attr(hw, hw->vport.vport, &port_attr);
 			port_attr.rss_hash_factor = hw_hf_new;
 			ret = zxdh_set_port_attr(hw, hw->vport.vport, &port_attr);
@@ -1237,15 +1304,16 @@ zxdh_rss_hash_update(struct rte_eth_dev *dev,
 int
 zxdh_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf)
 {
-	struct zxdh_hw *hw = (struct zxdh_hw *)dev->data->dev_private;
+	struct zxdh_hw *hw = dev->data->dev_private;
 	struct rte_eth_rss_conf *old_rss_conf = &dev->data->dev_conf.rx_adv_conf.rss_conf;
 	struct zxdh_msg_info msg = {0};
 	uint8_t zxdh_msg_reply_info[ZXDH_ST_SZ_BYTES(msg_reply_info)] = {0};
 	void *reply_body_addr = ZXDH_ADDR_OF(msg_reply_info, zxdh_msg_reply_info, reply_body);
 	void *rss_hf_msg_addr = ZXDH_ADDR_OF(msg_reply_body, reply_body_addr, rss_hf_msg);
 	struct zxdh_port_attr_table port_attr = {0};
-	uint32_t rss_hf;
-	uint32_t hw_hf;
+	uint64_t rss_hf = 0;
+	uint64_t hw_hf = 0;
+	uint8_t need_update_hf = 0;
 	int ret;
 
 	if (rss_conf == NULL) {
@@ -1253,27 +1321,40 @@ zxdh_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_con
 		return -ENOMEM;
 	}
 
-	hw_hf = zxdh_rss_hf_to_hw(old_rss_conf->rss_hf);
-	rss_conf->rss_hf = zxdh_rss_hf_to_eth(hw_hf);
-
-	zxdh_msg_head_build(hw, ZXDH_RSS_HF_GET, &msg);
-	if (hw->is_pf) {
-		ret = zxdh_get_port_attr(hw, hw->vport.vport, &port_attr);
-		if (ret) {
-			PMD_DRV_LOG(ERR, "rss hash factor set failed");
-			return -EINVAL;
-		}
-		ZXDH_SET(rss_hf, rss_hf_msg_addr, rss_hf, port_attr.rss_hash_factor);
-	} else {
-		ret = zxdh_vf_send_msg_to_pf(dev, &msg, sizeof(struct zxdh_msg_info),
-				zxdh_msg_reply_info, ZXDH_ST_SZ_BYTES(msg_reply_info));
-		if (ret) {
-			PMD_DRV_LOG(ERR, "rss hash factor set failed");
-			return -EINVAL;
-		}
+	if (hw->rss_enable == 0) {
+		rss_conf->rss_hf = 0;
+		return 0;
 	}
-	rss_hf = ZXDH_GET(rss_hf, rss_hf_msg_addr, rss_hf);
-	rss_conf->rss_hf = zxdh_rss_hf_to_eth(rss_hf);
+
+	if (old_rss_conf->rss_hf == 0)
+		need_update_hf = 1;
+
+	if (!need_update_hf) {
+		hw_hf = zxdh_rss_hf_to_hw(old_rss_conf->rss_hf);
+		rss_conf->rss_hf = zxdh_rss_hf_to_eth(hw_hf);
+	}
+
+	if (need_update_hf) {
+		zxdh_msg_head_build(hw, ZXDH_RSS_HF_GET, &msg);
+		if (hw->is_pf) {
+			ret = zxdh_get_port_attr(hw, hw->vport.vport, &port_attr);
+			if (ret) {
+				PMD_DRV_LOG(ERR, "rss hash factor set failed");
+				return -EINVAL;
+			}
+			ZXDH_SET(rss_hf, rss_hf_msg_addr, rss_hf, port_attr.rss_hash_factor);
+		} else {
+			ret = zxdh_vf_send_msg_to_pf(dev, &msg, sizeof(struct zxdh_msg_info),
+					zxdh_msg_reply_info, ZXDH_ST_SZ_BYTES(msg_reply_info));
+			if (ret) {
+				PMD_DRV_LOG(ERR, "rss hash factor set failed");
+				return -EINVAL;
+			}
+		}
+		rss_hf = ZXDH_GET(rss_hf, rss_hf_msg_addr, rss_hf);
+		rss_conf->rss_hf = zxdh_rss_hf_to_eth(rss_hf);
+		old_rss_conf->rss_hf = zxdh_rss_hf_to_eth(hw_hf);
+	}
 
 	return 0;
 }
@@ -1332,7 +1413,6 @@ zxdh_rss_configure(struct rte_eth_dev *dev)
 
 	if (curr_rss_enable && hw->rss_init == 0) {
 		/* config hash factor */
-		dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf = ZXDH_HF_F5_ETH;
 		hw_hf = zxdh_rss_hf_to_hw(dev->data->dev_conf.rx_adv_conf.rss_conf.rss_hf);
 		memset(&msg, 0, sizeof(msg));
 		if (hw->is_pf) {
@@ -1476,7 +1556,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_BROAD_STATS_EGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				0, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1487,7 +1567,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_BROAD_STATS_INGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				0, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1498,7 +1578,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_MULTICAST_STATS_EGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				0, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1509,7 +1589,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_MULTICAST_STATS_INGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				0, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1520,7 +1600,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_UNICAST_STATS_EGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				0, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1531,7 +1611,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_UNICAST_STATS_INGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				0, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1542,7 +1622,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_MTU_STATS_EGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				1, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1553,7 +1633,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_MTU_STATS_INGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				1, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1564,7 +1644,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_MTR_STATS_EGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				1, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1575,7 +1655,7 @@ zxdh_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 
 	idx = stats_id + ZXDH_MTR_STATS_INGRESS_BASE;
 	memset(&stats_data, 0, sizeof(stats_data));
-	ret = zxdh_np_dtb_stats_get(hw->slot_id, dtb_data->queueid,
+	ret = zxdh_np_dtb_stats_get(hw->dev_id, dtb_data->queueid,
 				1, idx, (uint32_t *)&stats_data);
 	if (ret)
 		return ret;
@@ -1618,7 +1698,8 @@ zxdh_hw_np_stats_get(struct rte_eth_dev *dev, struct zxdh_hw_np_stats *np_stats)
 }
 
 int
-zxdh_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+zxdh_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		struct eth_queue_stats *qstats)
 {
 	struct zxdh_hw *hw = dev->data->dev_private;
 	struct zxdh_hw_vqm_stats vqm_stats = {0};
@@ -1650,14 +1731,16 @@ zxdh_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 		if (rxvq == NULL)
 			continue;
-		stats->q_ipackets[i] = *(uint64_t *)(((char *)rxvq) +
-				zxdh_rxq_stat_strings[0].offset);
-		stats->q_ibytes[i] = *(uint64_t *)(((char *)rxvq) +
-				zxdh_rxq_stat_strings[1].offset);
-		stats->q_errors[i] = *(uint64_t *)(((char *)rxvq) +
-				zxdh_rxq_stat_strings[2].offset);
-		stats->q_errors[i] += *(uint64_t *)(((char *)rxvq) +
-				zxdh_rxq_stat_strings[5].offset);
+		if (qstats != NULL) {
+			qstats->q_ipackets[i] = *(uint64_t *)(((char *)rxvq) +
+					zxdh_rxq_stat_strings[0].offset);
+			qstats->q_ibytes[i] = *(uint64_t *)(((char *)rxvq) +
+					zxdh_rxq_stat_strings[1].offset);
+			qstats->q_errors[i] = *(uint64_t *)(((char *)rxvq) +
+					zxdh_rxq_stat_strings[2].offset);
+			qstats->q_errors[i] += *(uint64_t *)(((char *)rxvq) +
+					zxdh_rxq_stat_strings[5].offset);
+		}
 	}
 
 	for (i = 0; (i < dev->data->nb_tx_queues) && (i < RTE_ETHDEV_QUEUE_STAT_CNTRS); i++) {
@@ -1665,14 +1748,16 @@ zxdh_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 		if (txvq == NULL)
 			continue;
-		stats->q_opackets[i] = *(uint64_t *)(((char *)txvq) +
-				zxdh_txq_stat_strings[0].offset);
-		stats->q_obytes[i] = *(uint64_t *)(((char *)txvq) +
-				zxdh_txq_stat_strings[1].offset);
-		stats->q_errors[i] += *(uint64_t *)(((char *)txvq) +
-				zxdh_txq_stat_strings[2].offset);
-		stats->q_errors[i] += *(uint64_t *)(((char *)txvq) +
-				zxdh_txq_stat_strings[5].offset);
+		if (qstats != NULL) {
+			qstats->q_opackets[i] = *(uint64_t *)(((char *)txvq) +
+					zxdh_txq_stat_strings[0].offset);
+			qstats->q_obytes[i] = *(uint64_t *)(((char *)txvq) +
+					zxdh_txq_stat_strings[1].offset);
+			qstats->q_errors[i] += *(uint64_t *)(((char *)txvq) +
+					zxdh_txq_stat_strings[2].offset);
+			qstats->q_errors[i] += *(uint64_t *)(((char *)txvq) +
+					zxdh_txq_stat_strings[5].offset);
+		}
 	}
 	return 0;
 }

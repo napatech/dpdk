@@ -259,7 +259,7 @@ fm10k_rxq_rearm(struct fm10k_rx_queue *rxq)
 	rxdp = rxq->hw_ring + rxq->rxrearm_start;
 
 	/* Pull 'n' more MBUFs into the software ring */
-	if (rte_mempool_get_bulk(rxq->mp,
+	if (rte_mbuf_raw_alloc_bulk(rxq->mp,
 				 (void *)mb_alloc,
 				 RTE_FM10K_RXQ_REARM_THRESH) < 0) {
 		dma_addr0 = _mm_setzero_si128();
@@ -775,14 +775,13 @@ fm10k_tx_free_bufs(struct fm10k_tx_queue *txq)
 				if (likely(m->pool == free[0]->pool))
 					free[nb_free++] = m;
 				else {
-					rte_mempool_put_bulk(free[0]->pool,
-							(void *)free, nb_free);
+					rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 					free[0] = m;
 					nb_free = 1;
 				}
 			}
 		}
-		rte_mempool_put_bulk(free[0]->pool, (void **)free, nb_free);
+		rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 	} else {
 		for (i = 1; i < n; i++) {
 			m = rte_pktmbuf_prefree_seg(txep[i]);

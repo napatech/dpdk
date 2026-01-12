@@ -14,7 +14,8 @@ an application through DMA API.
    cnxk
    dpaa
    dpaa2
-   hisilicon
+   hisi_acc
+   hisi_pciep
    idxd
    ioat
    odm

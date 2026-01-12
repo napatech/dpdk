@@ -84,7 +84,6 @@ struct ci_tx_queue {
 		};
 		struct { /* iavf driver specific values */
 			uint16_t ipsec_crypto_pkt_md_offset;
-			uint8_t rel_mbufs_type;
 #define IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1 BIT(0)
 #define IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2 BIT(1)
 			uint8_t vlan_flag;
@@ -203,13 +202,13 @@ normal:
 				if (likely(m->pool == free[0]->pool)) {
 					free[nb_free++] = m;
 				} else {
-					rte_mempool_put_bulk(free[0]->pool, (void *)free, nb_free);
+					rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 					free[0] = m;
 					nb_free = 1;
 				}
 			}
 		}
-		rte_mempool_put_bulk(free[0]->pool, (void **)free, nb_free);
+		rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 	} else {
 		for (uint32_t i = 1; i < n; i++) {
 			m = rte_pktmbuf_prefree_seg(txep[i].mbuf);

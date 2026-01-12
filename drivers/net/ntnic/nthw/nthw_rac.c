@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -326,7 +325,7 @@ int nthw_rac_rab_setup(nthw_rac_t *p)
 
 	const struct fpga_info_s *const p_fpga_info = p->mp_fpga->p_fpga_info;
 	uint32_t n_dma_buf_size = 2L * RAB_DMA_BUF_CNT * sizeof(uint32_t);
-	const size_t align_size = nt_util_align_size(n_dma_buf_size);
+	const size_t align_size = nthw_util_align_size(n_dma_buf_size);
 	int numa_node = p_fpga_info->numa_node;
 	uint64_t dma_addr;
 	uint32_t buf;
@@ -334,10 +333,10 @@ int nthw_rac_rab_setup(nthw_rac_t *p)
 	if (!p->m_dma) {
 		struct nt_dma_s *vfio_dma;
 		/* FPGA needs Page alignment (4K) */
-		vfio_dma = nt_dma_alloc(align_size, 0x1000, numa_node);
+		vfio_dma = nthw_dma_alloc(align_size, 0x1000, numa_node);
 
 		if (vfio_dma == NULL) {
-			NT_LOG(ERR, NTNIC, "nt_dma_alloc failed");
+			NT_LOG(ERR, NTNIC, "nthw_dma_alloc failed");
 			return -1;
 		}
 
@@ -418,7 +417,7 @@ static int nthw_rac_rab_dma_wait(nthw_rac_t *p)
 	uint32_t i;
 
 	for (i = 0; i < RAB_DMA_WAIT; i++) {
-		nt_os_wait_usec_poll(1);
+		nthw_os_wait_usec_poll(1);
 
 		if ((p->m_dma_out_buf[p->m_dma_out_ptr_rd] & completion) == completion)
 			break;
@@ -654,8 +653,8 @@ int nthw_rac_rab_write32(nthw_rac_t *p, bool trc, nthw_rab_bus_id_t bus_id, uint
 			char *tmp_string;
 
 			if (trc) {
-				tmp_string = ntlog_helper_str_alloc("Register::write");
-				ntlog_helper_str_add(tmp_string,
+				tmp_string = nthw_log_helper_str_alloc("Register::write");
+				nthw_log_helper_str_add(tmp_string,
 					"(Dev: NA, Bus: RAB%u, Addr: 0x%08X, Cnt: %d, Data:",
 					bus_id, address, word_cnt);
 			}
@@ -669,13 +668,13 @@ int nthw_rac_rab_write32(nthw_rac_t *p, bool trc, nthw_rab_bus_id_t bus_id, uint
 				}
 
 				if (trc)
-					ntlog_helper_str_add(tmp_string, " 0x%08X", data);
+					nthw_log_helper_str_add(tmp_string, " 0x%08X", data);
 			}
 
 			if (trc) {
-				ntlog_helper_str_add(tmp_string, ")");
+				nthw_log_helper_str_add(tmp_string, ")");
 				NT_LOG(DBG, NTHW, "%s", tmp_string);
-				ntlog_helper_str_free(tmp_string);
+				nthw_log_helper_str_free(tmp_string);
 			}
 		}
 
@@ -840,17 +839,17 @@ int nthw_rac_rab_read32(nthw_rac_t *p, bool trc, nthw_rab_bus_id_t bus_id, uint3
 			}
 
 			if (trc) {
-				char *tmp_string = ntlog_helper_str_alloc("Register::read");
-				ntlog_helper_str_add(tmp_string,
+				char *tmp_string = nthw_log_helper_str_alloc("Register::read");
+				nthw_log_helper_str_add(tmp_string,
 					"(Dev: NA, Bus: RAB%u, Addr: 0x%08X, Cnt: %d, Data:",
 					bus_id, address, word_cnt);
 
 				for (i = 0; i < word_cnt; i++)
-					ntlog_helper_str_add(tmp_string, " 0x%08X", p_data[i]);
+					nthw_log_helper_str_add(tmp_string, " 0x%08X", p_data[i]);
 
-				ntlog_helper_str_add(tmp_string, ")");
+				nthw_log_helper_str_add(tmp_string, ")");
 				NT_LOG(DBG, NTHW, "%s", tmp_string);
-				ntlog_helper_str_free(tmp_string);
+				nthw_log_helper_str_free(tmp_string);
 			}
 		}
 

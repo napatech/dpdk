@@ -110,6 +110,7 @@ struct rnp_tx_queue {
 	uint16_t nb_tx_free; /* avail desc to set pkts */
 	uint16_t nb_tx_used; /* multiseg mbuf used num */
 	uint16_t last_desc_cleaned;
+	uint16_t tunnel_len;
 	uint16_t tx_tail;
 
 	uint16_t tx_next_dd; /* next to scan writeback dd bit */
@@ -117,7 +118,7 @@ struct rnp_tx_queue {
 	uint16_t tx_next_rs; /* index of next time to set rs bit*/
 	uint16_t tx_free_thresh; /* thresh to free tx desc resource */
 
-	uint8_t tx_deferred_start; /*< Do not start queue with dev_start(). */
+	uint8_t tx_deferred_start; /* do not start queue with dev_start() */
 	uint8_t txq_started; /* tx queue is started */
 	uint8_t tx_link; /* device link state */
 	uint8_t pthresh; /* rx desc prefetch threshold */

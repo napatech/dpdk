@@ -41,6 +41,8 @@
 #define ICE_DDP_FILENAME_ARG      "ddp_pkg_file"
 #define ICE_DDP_LOAD_SCHED_ARG    "ddp_load_sched_topo"
 #define ICE_TM_LEVELS_ARG         "tm_sched_levels"
+#define ICE_SOURCE_PRUNE_ARG      "source-prune"
+#define ICE_LINK_STATE_ON_CLOSE   "link_state_on_close"
 
 #define ICE_CYCLECOUNTER_MASK  0xffffffffffffffffULL
 
@@ -57,6 +59,8 @@ static const char * const ice_valid_args[] = {
 	ICE_DDP_FILENAME_ARG,
 	ICE_DDP_LOAD_SCHED_ARG,
 	ICE_TM_LEVELS_ARG,
+	ICE_SOURCE_PRUNE_ARG,
+	ICE_LINK_STATE_ON_CLOSE,
 	NULL
 };
 
@@ -64,14 +68,6 @@ static const char * const ice_valid_args[] = {
 
 /* Maximum number of VSI */
 #define ICE_MAX_NUM_VSIS          (768UL)
-
-/* The 119 bit offset of the LAN Rx queue context is the L2TSEL control bit. */
-#define ICE_L2TSEL_QRX_CONTEXT_REG_IDX	3
-#define ICE_L2TSEL_BIT_OFFSET		   23
-enum ice_l2tsel {
-	ICE_L2TSEL_EXTRACT_FIRST_TAG_L2TAG2_2ND,
-	ICE_L2TSEL_EXTRACT_FIRST_TAG_L2TAG1,
-};
 
 struct proto_xtr_ol_flag {
 	const struct rte_mbuf_dynflag param;
@@ -95,9 +91,22 @@ static struct proto_xtr_ol_flag ice_proto_xtr_ol_flag_params[] = {
 		.param = { .name = "intel_pmd_dynflag_proto_xtr_ip_offset" }}
 };
 
+enum ice_link_state_on_close {
+	ICE_LINK_DOWN,
+	ICE_LINK_UP,
+	ICE_LINK_INITIAL,
+};
+
 #define ICE_OS_DEFAULT_PKG_NAME		"ICE OS Default Package"
 #define ICE_COMMS_PKG_NAME			"ICE COMMS Package"
 #define ICE_MAX_RES_DESC_NUM        1024
+
+#define ICE_MAC_E810_MAX_WATERMARK	143744U
+#define ICE_MAC_E830_MAX_WATERMARK	259103U
+#define ICE_MAC_TC_MAX_WATERMARK	(((hw)->mac_type == ICE_MAC_E830) ?	\
+				ICE_MAC_E830_MAX_WATERMARK : ICE_MAC_E810_MAX_WATERMARK)
+
+#define ICE_RSS_LUT_GLOBAL_QUEUE_NB	64
 
 static int ice_dev_configure(struct rte_eth_dev *dev);
 static int ice_dev_start(struct rte_eth_dev *dev);
@@ -161,7 +170,7 @@ static int ice_get_module_info(struct rte_eth_dev *dev,
 static int ice_get_module_eeprom(struct rte_eth_dev *dev,
 				 struct rte_dev_eeprom_info *info);
 static int ice_stats_get(struct rte_eth_dev *dev,
-			 struct rte_eth_stats *stats);
+			 struct rte_eth_stats *stats, struct eth_queue_stats *qstats);
 static int ice_stats_reset(struct rte_eth_dev *dev);
 static int ice_xstats_get(struct rte_eth_dev *dev,
 			  struct rte_eth_xstat *xstats, unsigned int n);
@@ -194,6 +203,8 @@ static int ice_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa);
 static int ice_fec_set(struct rte_eth_dev *dev, uint32_t fec_capa);
 static const uint32_t *ice_buffer_split_supported_hdr_ptypes_get(struct rte_eth_dev *dev,
 						size_t *no_of_elements);
+static int ice_get_dcb_info(struct rte_eth_dev *dev, struct rte_eth_dcb_info *dcb_info);
+static int ice_priority_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_pfc_conf *pfc_conf);
 
 static const struct rte_pci_id pci_id_ice_map[] = {
 	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E823L_BACKPLANE) },
@@ -237,6 +248,15 @@ static const struct rte_pci_id pci_id_ice_map[] = {
 	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E830_L_QSFP) },
 	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E830C_SFP) },
 	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E830_L_SFP) },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835CC_BACKPLANE), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835CC_QSFP56), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835CC_SFP), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835C_BACKPLANE), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835C_QSFP), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835C_SFP), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835_L_BACKPLANE), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835_L_QSFP), },
+	{ RTE_PCI_DEVICE(ICE_INTEL_VENDOR_ID, ICE_DEV_ID_E835_L_SFP), },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -324,6 +344,8 @@ static const struct eth_dev_ops ice_eth_dev_ops = {
 	.fec_get                      = ice_fec_get,
 	.fec_set                      = ice_fec_set,
 	.buffer_split_supported_hdr_ptypes_get = ice_buffer_split_supported_hdr_ptypes_get,
+	.get_dcb_info                 =	ice_get_dcb_info,
+	.priority_flow_ctrl_set       = ice_priority_flow_ctrl_set,
 };
 
 /* store statistics names and its offset in stats structure */
@@ -371,6 +393,46 @@ static const struct ice_xstats_name_off ice_hw_port_strings[] = {
 	{"rx_xon_packets", offsetof(struct ice_hw_port_stats, link_xon_rx)},
 	{"tx_xoff_packets", offsetof(struct ice_hw_port_stats, link_xoff_tx)},
 	{"rx_xoff_packets", offsetof(struct ice_hw_port_stats, link_xoff_rx)},
+	{"priority_xon_rx_tc0", offsetof(struct ice_hw_port_stats, priority_xon_rx[0])},
+	{"priority_xon_rx_tc1", offsetof(struct ice_hw_port_stats, priority_xon_rx[1])},
+	{"priority_xon_rx_tc2", offsetof(struct ice_hw_port_stats, priority_xon_rx[2])},
+	{"priority_xon_rx_tc3", offsetof(struct ice_hw_port_stats, priority_xon_rx[3])},
+	{"priority_xon_rx_tc4", offsetof(struct ice_hw_port_stats, priority_xon_rx[4])},
+	{"priority_xon_rx_tc5", offsetof(struct ice_hw_port_stats, priority_xon_rx[5])},
+	{"priority_xon_rx_tc6", offsetof(struct ice_hw_port_stats, priority_xon_rx[6])},
+	{"priority_xon_rx_tc7", offsetof(struct ice_hw_port_stats, priority_xon_rx[7])},
+	{"priority_xoff_rx_tc0", offsetof(struct ice_hw_port_stats, priority_xoff_rx[0])},
+	{"priority_xoff_rx_tc1", offsetof(struct ice_hw_port_stats, priority_xoff_rx[1])},
+	{"priority_xoff_rx_tc2", offsetof(struct ice_hw_port_stats, priority_xoff_rx[2])},
+	{"priority_xoff_rx_tc3", offsetof(struct ice_hw_port_stats, priority_xoff_rx[3])},
+	{"priority_xoff_rx_tc4", offsetof(struct ice_hw_port_stats, priority_xoff_rx[4])},
+	{"priority_xoff_rx_tc5", offsetof(struct ice_hw_port_stats, priority_xoff_rx[5])},
+	{"priority_xoff_rx_tc6", offsetof(struct ice_hw_port_stats, priority_xoff_rx[6])},
+	{"priority_xoff_rx_tc7", offsetof(struct ice_hw_port_stats, priority_xoff_rx[7])},
+	{"priority_xon_tx_tc0", offsetof(struct ice_hw_port_stats, priority_xon_tx[0])},
+	{"priority_xon_tx_tc1", offsetof(struct ice_hw_port_stats, priority_xon_tx[1])},
+	{"priority_xon_tx_tc2", offsetof(struct ice_hw_port_stats, priority_xon_tx[2])},
+	{"priority_xon_tx_tc3", offsetof(struct ice_hw_port_stats, priority_xon_tx[3])},
+	{"priority_xon_tx_tc4", offsetof(struct ice_hw_port_stats, priority_xon_tx[4])},
+	{"priority_xon_tx_tc5", offsetof(struct ice_hw_port_stats, priority_xon_tx[5])},
+	{"priority_xon_tx_tc6", offsetof(struct ice_hw_port_stats, priority_xon_tx[6])},
+	{"priority_xon_tx_tc7", offsetof(struct ice_hw_port_stats, priority_xon_tx[7])},
+	{"priority_xoff_tx_tc0", offsetof(struct ice_hw_port_stats, priority_xoff_tx[0])},
+	{"priority_xoff_tx_tc1", offsetof(struct ice_hw_port_stats, priority_xoff_tx[1])},
+	{"priority_xoff_tx_tc2", offsetof(struct ice_hw_port_stats, priority_xoff_tx[2])},
+	{"priority_xoff_tx_tc3", offsetof(struct ice_hw_port_stats, priority_xoff_tx[3])},
+	{"priority_xoff_tx_tc4", offsetof(struct ice_hw_port_stats, priority_xoff_tx[4])},
+	{"priority_xoff_tx_tc5", offsetof(struct ice_hw_port_stats, priority_xoff_tx[5])},
+	{"priority_xoff_tx_tc6", offsetof(struct ice_hw_port_stats, priority_xoff_tx[6])},
+	{"priority_xoff_tx_tc7", offsetof(struct ice_hw_port_stats, priority_xoff_tx[7])},
+	{"priority_xon_2_xoff_tc0", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[0])},
+	{"priority_xon_2_xoff_tc1", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[1])},
+	{"priority_xon_2_xoff_tc2", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[2])},
+	{"priority_xon_2_xoff_tc3", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[3])},
+	{"priority_xon_2_xoff_tc4", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[4])},
+	{"priority_xon_2_xoff_tc5", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[5])},
+	{"priority_xon_2_xoff_tc6", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[6])},
+	{"priority_xon_2_xoff_tc7", offsetof(struct ice_hw_port_stats, priority_xon_2_xoff[7])},
 	{"rx_size_64_packets", offsetof(struct ice_hw_port_stats, rx_size_64)},
 	{"rx_size_65_to_127_packets", offsetof(struct ice_hw_port_stats,
 		rx_size_127)},
@@ -1658,6 +1720,7 @@ ice_setup_vsi(struct ice_pf *pf, enum ice_vsi_type type)
 	uint16_t max_txqs[ICE_MAX_TRAFFIC_CLASS] = { 0 };
 	uint8_t tc_bitmap = 0x1;
 	uint16_t cfg;
+	struct ice_adapter *ad = (struct ice_adapter *)hw->back;
 
 	/* hw->num_lports = 1 in NIC mode */
 	vsi = rte_zmalloc(NULL, sizeof(struct ice_vsi), 0);
@@ -1695,8 +1758,16 @@ ice_setup_vsi(struct ice_pf *pf, enum ice_vsi_type type)
 		 * by ice_init_hw
 		 */
 		vsi_ctx.info.sw_id = hw->port_info->sw_id;
-		vsi_ctx.info.sw_flags = ICE_AQ_VSI_SW_FLAG_LOCAL_LB;
-		vsi_ctx.info.sw_flags |= ICE_AQ_VSI_SW_FLAG_SRC_PRUNE;
+		/* Source Prune */
+		if (ad->devargs.source_prune != 1) {
+			/* Disable source prune to support VRRP
+			 * when source-prune devarg is not set
+			 */
+			vsi_ctx.info.sw_flags =
+				ICE_AQ_VSI_SW_FLAG_LOCAL_LB;
+			vsi_ctx.info.sw_flags |=
+				ICE_AQ_VSI_SW_FLAG_SRC_PRUNE;
+		}
 		cfg = ICE_AQ_VSI_PROP_SW_VALID;
 		vsi_ctx.info.valid_sections |= rte_cpu_to_le_16(cfg);
 		vsi_ctx.info.sw_flags2 = ICE_AQ_VSI_SW_FLAG_LAN_ENA;
@@ -2117,6 +2188,29 @@ parse_tx_sched_levels(const char *key, const char *value, void *args)
 }
 
 static int
+parse_link_state_on_close(const char *key, const char *value, void *args)
+{
+	int *state = args, ret = 0;
+
+	if (value == NULL || state == NULL)
+		return -EINVAL;
+
+	if (strcmp(value, "down") == 0) {
+		*state = ICE_LINK_DOWN;
+	} else if (strcmp(value, "up") == 0) {
+		*state = ICE_LINK_UP;
+	} else if (strcmp(value, "initial") == 0) {
+		*state = ICE_LINK_INITIAL;
+	} else {
+		ret = -EINVAL;
+		PMD_DRV_LOG(WARNING, "%s: Invalid value \"%s\", "
+				"should be \"down\" \"up\" or \"initial\"", key, value);
+	}
+
+	return ret;
+}
+
+static int
 lookup_pps_type(const char *pps_name)
 {
 	static struct {
@@ -2368,6 +2462,14 @@ static int ice_parse_devargs(struct rte_eth_dev *dev)
 	if (ret)
 		goto bail;
 
+	ret = rte_kvargs_process(kvlist, ICE_SOURCE_PRUNE_ARG,
+				 &parse_bool, &ad->devargs.source_prune);
+	if (ret)
+		goto bail;
+
+	ret = rte_kvargs_process(kvlist, ICE_LINK_STATE_ON_CLOSE,
+				 &parse_link_state_on_close, &ad->devargs.link_state_on_close);
+
 bail:
 	rte_kvargs_free(kvlist);
 	return ret;
@@ -2544,8 +2646,6 @@ ice_dev_init(struct rte_eth_dev *dev)
 		ice_set_tx_function(dev);
 		return 0;
 	}
-
-	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	ice_set_default_ptype_table(dev);
 	pci_dev = RTE_DEV_TO_PCI(dev->device);
@@ -2791,6 +2891,8 @@ ice_dev_stop(struct rte_eth_dev *dev)
 {
 	struct rte_eth_dev_data *data = dev->data;
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	struct ice_adapter *ad =
+			ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct ice_vsi *main_vsi = pf->main_vsi;
 	struct rte_pci_device *pci_dev = ICE_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
@@ -2811,7 +2913,14 @@ ice_dev_stop(struct rte_eth_dev *dev)
 	/* disable all queue interrupts */
 	ice_vsi_disable_queues_intr(main_vsi);
 
-	if (pf->init_link_up)
+	if (dev->data->dev_conf.txmode.offloads & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) {
+		ad->txpp_ena = 0;
+		ice_timesync_disable(dev);
+	}
+
+	if (pf->adapter->devargs.link_state_on_close == ICE_LINK_UP ||
+			(pf->adapter->devargs.link_state_on_close == ICE_LINK_INITIAL &&
+				pf->init_link_up))
 		ice_dev_set_link_up(dev);
 	else
 		ice_dev_set_link_down(dev);
@@ -2824,6 +2933,47 @@ ice_dev_stop(struct rte_eth_dev *dev)
 	dev->data->dev_started = 0;
 
 	return 0;
+}
+
+static void
+ice_deinit_dcb(struct rte_eth_dev *dev)
+{
+	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ice_port_info *port_info = hw->port_info;
+	struct ice_qos_cfg *qos_cfg = &port_info->qos_cfg;
+	struct ice_dcbx_cfg *local_dcb_conf = &qos_cfg->local_dcbx_cfg;
+	int i, ret, cgd_idx;
+	uint16_t max_frame_size;
+	u8 max_tcs = local_dcb_conf->etscfg.maxtcs;
+	u8 tc;
+
+	if (!(dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_DCB_FLAG ||
+			dev->data->dev_conf.txmode.mq_mode == RTE_ETH_MQ_TX_DCB))
+		return;
+
+	for (i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+		tc = ice_get_tc_by_priority(hw, i);
+		cgd_idx = ice_get_cgd_idx(hw, tc);
+		wr32(hw, GLRPB_TCHW(cgd_idx), CPU_TO_LE32(ICE_MAC_TC_MAX_WATERMARK));
+		wr32(hw, GLRPB_TCLW(cgd_idx), CPU_TO_LE32(ICE_MAC_TC_MAX_WATERMARK));
+	}
+
+	max_frame_size = pf->dev_data->mtu ?
+		pf->dev_data->mtu + ICE_ETH_OVERHEAD : ICE_FRAME_SIZE_MAX;
+	/* for each TC resets corresponding PFC quanta/threshold to its default values */
+	ret = ice_aq_set_mac_pfc_cfg(hw, max_frame_size, (1 << max_tcs) - 1,
+		UINT16_MAX, INT16_MAX + 1, false, NULL);
+	if (ret)
+		PMD_DRV_LOG(ERR, "Failed to set mac config on DCB deinit");
+
+	memset(local_dcb_conf, 0, sizeof(*local_dcb_conf));
+	local_dcb_conf->etscfg.maxtcs = max_tcs;
+	local_dcb_conf->etscfg.tcbwtable[0] = 100;
+	local_dcb_conf->etsrec.tcbwtable[0] = 100;
+	ret = ice_set_dcb_cfg(port_info);
+	if (ret)
+		PMD_DRV_LOG(ERR, "Failed to disable DCB");
 }
 
 static int
@@ -2860,6 +3010,7 @@ ice_dev_close(struct rte_eth_dev *dev)
 	if (!ad->is_safe_mode)
 		ice_flow_uninit(ad);
 
+	ice_deinit_dcb(dev);
 	/* release all queue resource */
 	ice_free_queues(dev);
 
@@ -3643,11 +3794,47 @@ static int ice_init_rss(struct ice_pf *pf)
 	for (i = 0; i < vsi->rss_lut_size; i++)
 		vsi->rss_lut[i] = i % nb_q;
 
+	if (nb_q <= ICE_RSS_LUT_GLOBAL_QUEUE_NB && (hw)->mac_type == ICE_MAC_E830) {
+		struct ice_vsi_ctx vsi_ctx;
+		uint16_t global_lut;
+
+		if (!vsi->global_lut_allocated) {
+			ret = ice_alloc_rss_global_lut(hw, false, &global_lut);
+			if (ret)
+				goto out;
+			vsi->global_lut_allocated = true;
+			vsi->global_lut_id = global_lut;
+		}
+		global_lut = vsi->global_lut_id;
+
+		vsi_ctx.flags = ICE_AQ_VSI_TYPE_PF;
+		vsi_ctx.info = vsi->info;
+		vsi_ctx.info.q_opt_rss &= ICE_AQ_VSI_Q_OPT_RSS_LUT_M |
+					ICE_AQ_VSI_Q_OPT_RSS_GBL_LUT_M;
+		vsi_ctx.info.q_opt_rss |= ICE_AQ_VSI_Q_OPT_RSS_LUT_GBL |
+			((global_lut << ICE_AQ_VSI_Q_OPT_RSS_GBL_LUT_S) &
+			 ICE_AQ_VSI_Q_OPT_RSS_GBL_LUT_M);
+
+		vsi_ctx.info.valid_sections =
+			rte_cpu_to_le_16(ICE_AQ_VSI_PROP_Q_OPT_VALID);
+
+		ret = ice_update_vsi(hw, vsi->idx, &vsi_ctx, NULL);
+		if (ret != ICE_SUCCESS) {
+			PMD_INIT_LOG(ERR, "update vsi failed, err = %d", ret);
+			goto out;
+		}
+
+		vsi->info = vsi_ctx.info;
+		lut_params.lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_GLOBAL;
+		lut_params.global_lut_id = global_lut;
+	} else {
+		lut_params.lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
+		lut_params.global_lut_id = 0;
+	}
+
 	lut_params.vsi_handle = vsi->idx;
 	lut_params.lut_size = vsi->rss_lut_size;
-	lut_params.lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
 	lut_params.lut = vsi->rss_lut;
-	lut_params.global_lut_id = 0;
 	ret = ice_aq_set_rss_lut(hw, &lut_params);
 	if (ret)
 		goto out;
@@ -3671,6 +3858,34 @@ out:
 }
 
 static int
+check_dcb_conf(int is_8_ports, struct rte_eth_dcb_rx_conf *dcb_conf)
+{
+	uint32_t tc_map = 0;
+	int i;
+
+	enum rte_eth_nb_tcs nb_tcs = dcb_conf->nb_tcs;
+	if (nb_tcs != RTE_ETH_4_TCS && is_8_ports) {
+		PMD_DRV_LOG(ERR, "Invalid num TCs setting - only 4 TCs are supported");
+		return -1;
+	} else if (nb_tcs != RTE_ETH_4_TCS && nb_tcs != RTE_ETH_8_TCS) {
+		PMD_DRV_LOG(ERR, "Invalid num TCs setting - only 8 TCs or 4 TCs are supported");
+		return -1;
+	}
+
+	/* Check if associated TC are in continuous range */
+	for (i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++)
+		tc_map |= 1 << (dcb_conf->dcb_tc[i] & 0x7);
+
+	if (!rte_is_power_of_2(tc_map + 1)) {
+		PMD_DRV_LOG(ERR,
+			"Bad VLAN User Priority to Traffic Class association in DCB config");
+		return -1;
+	}
+
+	return rte_popcount32(tc_map);
+}
+
+static int
 ice_dev_configure(struct rte_eth_dev *dev)
 {
 	struct ice_adapter *ad =
@@ -3684,6 +3899,8 @@ ice_dev_configure(struct rte_eth_dev *dev)
 	ad->rx_bulk_alloc_allowed = true;
 	ad->tx_simple_allowed = true;
 
+	ad->rx_func_type = ICE_RX_DEFAULT;
+
 	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
 		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
@@ -3693,6 +3910,234 @@ ice_dev_configure(struct rte_eth_dev *dev)
 			PMD_DRV_LOG(ERR, "Failed to enable rss for PF");
 			return ret;
 		}
+	}
+
+	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_DCB_FLAG) {
+		struct ice_hw *hw = ICE_PF_TO_HW(pf);
+		struct ice_vsi *vsi = pf->main_vsi;
+		struct ice_port_info *port_info = hw->port_info;
+		struct ice_qos_cfg *qos_cfg = &port_info->qos_cfg;
+		struct ice_dcbx_cfg *local_dcb_conf = &qos_cfg->local_dcbx_cfg;
+		struct ice_vsi_ctx ctxt;
+		struct rte_eth_dcb_rx_conf *dcb_conf = &dev->data->dev_conf.rx_adv_conf.dcb_rx_conf;
+		int i;
+		enum rte_eth_nb_tcs nb_tcs = dcb_conf->nb_tcs;
+		int nb_tc_used, queues_per_tc;
+		uint16_t total_q_nb;
+
+		nb_tc_used = check_dcb_conf(ice_get_port_max_cgd(hw) == ICE_4_CGD_PER_PORT,
+			dcb_conf);
+		if (nb_tc_used < 0)
+			return -EINVAL;
+
+		ctxt.info = vsi->info;
+		if (rte_le_to_cpu_16(ctxt.info.mapping_flags) == ICE_AQ_VSI_Q_MAP_NONCONTIG) {
+			PMD_DRV_LOG(ERR, "VSI configured with non contiguous queues, DCB is not supported");
+			return -EINVAL;
+		}
+
+		total_q_nb = dev->data->nb_rx_queues;
+		queues_per_tc = total_q_nb / nb_tc_used;
+		if (total_q_nb % nb_tc_used != 0) {
+			PMD_DRV_LOG(ERR, "For DCB, number of queues must be evenly divisible by number of used TCs");
+			return -EINVAL;
+		} else if (!rte_is_power_of_2(queues_per_tc)) {
+			PMD_DRV_LOG(ERR, "For DCB, number of queues per TC must be a power of 2");
+			return -EINVAL;
+		}
+
+		for (i = 0; i < nb_tc_used; i++) {
+			ctxt.info.tc_mapping[i] =
+				rte_cpu_to_le_16(((i * queues_per_tc) << ICE_AQ_VSI_TC_Q_OFFSET_S) |
+					(rte_log2_u32(queues_per_tc) << ICE_AQ_VSI_TC_Q_NUM_S));
+		}
+
+		memset(local_dcb_conf, 0, sizeof(*local_dcb_conf));
+
+		local_dcb_conf->etscfg.maxtcs = nb_tcs;
+
+		/* Associate each VLAN UP with particular TC */
+		for (i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+			local_dcb_conf->etscfg.prio_table[i] = dcb_conf->dcb_tc[i];
+			local_dcb_conf->etsrec.prio_table[i] = dcb_conf->dcb_tc[i];
+		}
+
+		/*
+		 * Since current API does not support setting ETS BW Share and Scheduler
+		 * configure all TC as ETS and evenly share load across all existing TC
+		 **/
+		const int bw_share_percent = 100 / nb_tc_used;
+		const int bw_share_left = 100 - bw_share_percent * nb_tc_used;
+		for (i = 0; i < nb_tc_used; i++) {
+			/* Per TC bandwidth table (all valued must add up to 100%), valid on ETS */
+			local_dcb_conf->etscfg.tcbwtable[i] = bw_share_percent;
+			local_dcb_conf->etsrec.tcbwtable[i] = bw_share_percent;
+
+			/**< Transmission Selection Algorithm. 0 - Strict prio, 2 - ETS */
+			local_dcb_conf->etscfg.tsatable[i] = 2;
+			local_dcb_conf->etsrec.tsatable[i] = 2;
+		}
+
+		for (i = 0; i < bw_share_left; i++) {
+			local_dcb_conf->etscfg.tcbwtable[i]++;
+			local_dcb_conf->etsrec.tcbwtable[i]++;
+		}
+
+		local_dcb_conf->pfc.pfccap = nb_tcs;
+		local_dcb_conf->pfc.pfcena = 0;
+
+		ret = ice_set_dcb_cfg(port_info);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to configure DCB for PF");
+			return ret;
+		}
+
+		/* Update VSI queue allocatios per TC */
+		ctxt.info.valid_sections = rte_cpu_to_le_16(ICE_AQ_VSI_PROP_RXQ_MAP_VALID);
+		ctxt.info.mapping_flags = rte_cpu_to_le_16(ICE_AQ_VSI_Q_MAP_CONTIG);
+
+		ret = ice_update_vsi(hw, vsi->idx, &ctxt, NULL);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to configure queue mapping");
+			return ret;
+		}
+
+		ctxt.info.valid_sections = 0;
+		vsi->info = ctxt.info;
+
+		hw->port_info->fc.current_mode = ICE_FC_PFC;
+	}
+
+	return 0;
+}
+
+static int
+ice_get_dcb_info(struct rte_eth_dev *dev, struct rte_eth_dcb_info *dcb_info)
+{
+	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	struct ice_hw *hw = ICE_PF_TO_HW(pf);
+	struct ice_port_info *port_info = hw->port_info;
+	struct ice_qos_cfg *qos_cfg = &port_info->qos_cfg;
+	struct ice_dcbx_cfg *dcb_conf = &qos_cfg->local_dcbx_cfg;
+	struct ice_vsi *vsi = pf->main_vsi;
+
+	if (rte_le_to_cpu_16(vsi->info.mapping_flags) == ICE_AQ_VSI_Q_MAP_NONCONTIG) {
+		PMD_DRV_LOG(ERR, "VSI configured with non contiguous queues, DCB is not supported");
+		return -ENOTSUP;
+	}
+
+	dcb_info->nb_tcs = dcb_conf->etscfg.maxtcs;
+	for (int i = 0; i < dcb_info->nb_tcs; i++) {
+		dcb_info->prio_tc[i] = dcb_conf->etscfg.prio_table[i];
+		dcb_info->tc_bws[i] = dcb_conf->etscfg.tcbwtable[i];
+		/* Using VMDQ pool zero since DCB+VMDQ is not supported */
+		uint16_t tc_rx_q_map = rte_le_to_cpu_16(vsi->info.tc_mapping[i]);
+		dcb_info->tc_queue.tc_rxq[0][i].base = tc_rx_q_map & ICE_AQ_VSI_TC_Q_OFFSET_M;
+		dcb_info->tc_queue.tc_rxq[0][i].nb_queue =
+			1 << ((tc_rx_q_map & ICE_AQ_VSI_TC_Q_NUM_M) >> ICE_AQ_VSI_TC_Q_NUM_S);
+
+		dcb_info->tc_queue.tc_txq[0][i].base = dcb_info->tc_queue.tc_rxq[0][i].base;
+		dcb_info->tc_queue.tc_txq[0][i].nb_queue = dcb_info->tc_queue.tc_rxq[0][i].nb_queue;
+	}
+
+	return 0;
+}
+
+static int
+ice_priority_flow_ctrl_set(struct rte_eth_dev *dev, struct rte_eth_pfc_conf *pfc_conf)
+{
+	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	struct ice_hw *hw = ICE_PF_TO_HW(pf);
+	struct ice_port_info *port_info = hw->port_info;
+	struct ice_qos_cfg *qos_cfg = &port_info->qos_cfg;
+	struct ice_dcbx_cfg *dcb_conf = &qos_cfg->local_dcbx_cfg;
+	int ret;
+
+	dcb_conf->pfc_mode = ICE_QOS_MODE_VLAN;
+	dcb_conf->pfc.willing = 0;
+	/** pfccap should already be set by DCB config, check if zero */
+	if (dcb_conf->pfc.pfccap == 0) {
+		PMD_DRV_LOG(ERR, "DCB is not configured on the port, can not set PFC");
+		return -EINVAL;
+	}
+
+	ret = ice_aq_set_pfc_mode(hw, ICE_AQC_PFC_VLAN_BASED_PFC, NULL);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "Failed to enable PFC in VLAN mode");
+		return ret;
+	}
+
+	u8 tc = ice_get_tc_by_priority(hw, pfc_conf->priority);
+
+	switch (pfc_conf->fc.mode) {
+	case (RTE_ETH_FC_NONE):
+		dcb_conf->pfc.pfcena &= ~(1 << tc);
+		dcb_conf->pfc.pfcena_asym_rx &= ~(1 << tc);
+		dcb_conf->pfc.pfcena_asym_tx &= ~(1 << tc);
+		break;
+	case (RTE_ETH_FC_RX_PAUSE):
+		dcb_conf->pfc.pfcena &= ~(1 << tc);
+		dcb_conf->pfc.pfcena_asym_rx |= (1 << tc);
+		dcb_conf->pfc.pfcena_asym_tx &= ~(1 << tc);
+		break;
+	case (RTE_ETH_FC_TX_PAUSE):
+		dcb_conf->pfc.pfcena &= ~(1 << tc);
+		dcb_conf->pfc.pfcena_asym_rx &= ~(1 << tc);
+		dcb_conf->pfc.pfcena_asym_tx |= (1 << tc);
+		break;
+	case (RTE_ETH_FC_FULL):
+		dcb_conf->pfc.pfcena |= (1 << tc);
+		dcb_conf->pfc.pfcena_asym_rx &= ~(1 << tc);
+		dcb_conf->pfc.pfcena_asym_tx &= ~(1 << tc);
+		break;
+	}
+
+	ret = ice_set_dcb_cfg(port_info);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "Failed to configure DCB for PF");
+		return ret;
+	}
+
+	/* Update high and low watermarks */
+	u32 high_watermark = pfc_conf->fc.high_water;
+	if (high_watermark > ICE_MAC_TC_MAX_WATERMARK)
+		high_watermark = ICE_MAC_TC_MAX_WATERMARK;
+
+	u32 low_watermark = pfc_conf->fc.low_water;
+	if (low_watermark > ICE_MAC_TC_MAX_WATERMARK)
+		low_watermark = ICE_MAC_TC_MAX_WATERMARK;
+
+	int cgd_idx = ice_get_cgd_idx(hw, tc);
+
+	if (high_watermark)
+		wr32(hw, GLRPB_TCHW(cgd_idx), high_watermark);
+	if (low_watermark)
+		wr32(hw, GLRPB_TCLW(cgd_idx), low_watermark);
+
+	/* Update pause quanta */
+	uint16_t max_frame_size = pf->dev_data->mtu ?
+		pf->dev_data->mtu + ICE_ETH_OVERHEAD :
+		ICE_FRAME_SIZE_MAX;
+	ret = ice_aq_set_mac_pfc_cfg(hw, max_frame_size, 1 << tc, pfc_conf->fc.pause_time,
+			((u32)pfc_conf->fc.pause_time + 1) / 2, false, NULL);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "Can not update MAC configuration");
+		return ret;
+	}
+
+	/* Update forwarding of the non FC MAC control frames settings */
+	if ((hw)->mac_type == ICE_MAC_E830) {
+#define E830_MAC_COMMAND_CONFIG(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+		E830_PRTMAC_200G_COMMAND_CONFIG : E830_PRTMAC_COMMAND_CONFIG)
+
+		u32 mac_config = rd32(hw, E830_MAC_COMMAND_CONFIG(port_info));
+
+		if (pfc_conf->fc.mac_ctrl_frame_fwd)
+			mac_config |= E830_PRTMAC_COMMAND_CONFIG_CNTL_FRM_ENA_M;
+		else
+			mac_config &= ~E830_PRTMAC_COMMAND_CONFIG_CNTL_FRM_ENA_M;
+
+		wr32(hw, E830_MAC_COMMAND_CONFIG(port_info), mac_config);
 	}
 
 	return 0;
@@ -4047,6 +4492,11 @@ ice_dev_start(struct rte_eth_dev *dev)
 			PMD_DRV_LOG(ERR, "Fail to configure 1pps out");
 			goto rx_err;
 		}
+	}
+
+	if (dev->data->dev_conf.txmode.offloads & RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP) {
+		ice_timesync_enable(dev);
+		ad->txpp_ena = 1;
 	}
 
 	return 0;
@@ -4965,49 +5415,12 @@ ice_vsi_config_vlan_stripping(struct ice_vsi *vsi, bool ena)
 	return ret;
 }
 
-/**
- * ice_vsi_update_l2tsel - update l2tsel field for all Rx rings on this VSI
- * @vsi: VSI used to update l2tsel on
- * @l2tsel: l2tsel setting requested
- *
- * Use the l2tsel setting to update all of the Rx queue context bits for l2tsel.
- * This will modify which descriptor field the first offloaded VLAN will be
- * stripped into.
- */
-static void ice_vsi_update_l2tsel(struct ice_vsi *vsi, enum ice_l2tsel l2tsel)
-{
-	struct ice_hw *hw = ICE_VSI_TO_HW(vsi);
-	struct ice_pf *pf = ICE_VSI_TO_PF(vsi);
-	struct rte_eth_dev_data *dev_data = pf->dev_data;
-	u32 l2tsel_bit;
-	uint16_t i;
-
-	if (l2tsel == ICE_L2TSEL_EXTRACT_FIRST_TAG_L2TAG2_2ND)
-		l2tsel_bit = 0;
-	else
-		l2tsel_bit = BIT(ICE_L2TSEL_BIT_OFFSET);
-
-	for (i = 0; i < dev_data->nb_rx_queues; i++) {
-		const struct ci_rx_queue *rxq = dev_data->rx_queues[i];
-		u32 qrx_context_offset;
-		u32 regval;
-
-		qrx_context_offset = QRX_CONTEXT(ICE_L2TSEL_QRX_CONTEXT_REG_IDX, rxq->reg_idx);
-
-		regval = rd32(hw, qrx_context_offset);
-		regval &= ~BIT(ICE_L2TSEL_BIT_OFFSET);
-		regval |= l2tsel_bit;
-		wr32(hw, qrx_context_offset, regval);
-	}
-}
-
 /* Configure outer vlan stripping on or off in QinQ mode */
 static int
 ice_vsi_config_outer_vlan_stripping(struct ice_vsi *vsi, bool on)
 {
 	uint16_t outer_ethertype = vsi->adapter->pf.outer_ethertype;
 	struct ice_hw *hw = ICE_VSI_TO_HW(vsi);
-	int err = 0;
 
 	if (vsi->vsi_id >= ICE_MAX_NUM_VSIS) {
 		PMD_DRV_LOG(ERR, "VSI ID exceeds the maximum");
@@ -5019,41 +5432,9 @@ ice_vsi_config_outer_vlan_stripping(struct ice_vsi *vsi, bool on)
 		return -EOPNOTSUPP;
 	}
 
-	if (on) {
-		err = ice_vsi_ena_outer_stripping(vsi, outer_ethertype);
-		if (!err) {
-			enum ice_l2tsel l2tsel =
-				ICE_L2TSEL_EXTRACT_FIRST_TAG_L2TAG2_2ND;
-
-			/* PF tells the VF that the outer VLAN tag is always
-			 * extracted to VIRTCHNL_VLAN_TAG_LOCATION_L2TAG2_2 and
-			 * inner is always extracted to
-			 * VIRTCHNL_VLAN_TAG_LOCATION_L2TAG1. This is needed to
-			 * support outer stripping so the first tag always ends
-			 * up in L2TAG2_2ND and the second/inner tag, if
-			 * enabled, is extracted in L2TAG1.
-			 */
-			ice_vsi_update_l2tsel(vsi, l2tsel);
-		}
-	} else {
-		err = ice_vsi_dis_outer_stripping(vsi);
-		if (!err) {
-			enum ice_l2tsel l2tsel =
-				ICE_L2TSEL_EXTRACT_FIRST_TAG_L2TAG1;
-
-			/* PF tells the VF that the outer VLAN tag is always
-			 * extracted to VIRTCHNL_VLAN_TAG_LOCATION_L2TAG2_2 and
-			 * inner is always extracted to
-			 * VIRTCHNL_VLAN_TAG_LOCATION_L2TAG1. This is needed to
-			 * support inner stripping while outer stripping is
-			 * disabled so that the first and only tag is extracted
-			 * in L2TAG1.
-			 */
-			ice_vsi_update_l2tsel(vsi, l2tsel);
-		}
-	}
-
-	return err;
+	return on ?
+		ice_vsi_ena_outer_stripping(vsi, outer_ethertype) :
+		ice_vsi_dis_outer_stripping(vsi);
 }
 
 static int
@@ -6036,10 +6417,16 @@ ice_stat_update_40(struct ice_hw *hw,
 		   uint64_t *stat)
 {
 	uint64_t new_data;
+	uint32_t lo_old, hi, lo;
 
-	new_data = (uint64_t)ICE_READ_REG(hw, loreg);
-	new_data |= (uint64_t)(ICE_READ_REG(hw, hireg) & ICE_8_BIT_MASK) <<
-		    ICE_32_BIT_WIDTH;
+	do {
+		lo_old = ICE_READ_REG(hw, loreg);
+		hi = ICE_READ_REG(hw, hireg);
+		lo = ICE_READ_REG(hw, loreg);
+	} while (lo_old > lo);
+
+	new_data = (uint64_t)lo;
+	new_data |= (uint64_t)(hi & ICE_8_BIT_MASK) << ICE_32_BIT_WIDTH;
 
 	if (!offset_loaded)
 		*offset = new_data;
@@ -6364,6 +6751,29 @@ ice_read_stats_registers(struct ice_pf *pf, struct ice_hw *hw)
 	/* GLPRT_MSPDC not supported */
 	/* GLPRT_XEC not supported */
 
+	for (int i = 0; i < ICE_MAX_TRAFFIC_CLASS; i++) {
+		ice_stat_update_40(hw, GLPRT_PXONRXC_H(hw->port_info->lport, i),
+			   GLPRT_PXONRXC(hw->port_info->lport, i),
+			   pf->offset_loaded, &os->priority_xon_rx[i],
+			   &ns->priority_xon_rx[i]);
+		ice_stat_update_40(hw, GLPRT_PXONTXC_H(hw->port_info->lport, i),
+			   GLPRT_PXONTXC(hw->port_info->lport, i),
+			   pf->offset_loaded, &os->priority_xon_tx[i],
+			   &ns->priority_xon_tx[i]);
+		ice_stat_update_40(hw, GLPRT_PXOFFRXC_H(hw->port_info->lport, i),
+			   GLPRT_PXOFFRXC(hw->port_info->lport, i),
+			   pf->offset_loaded, &os->priority_xoff_rx[i],
+			   &ns->priority_xoff_rx[i]);
+		ice_stat_update_40(hw, GLPRT_PXOFFTXC_H(hw->port_info->lport, i),
+			   GLPRT_PXOFFTXC(hw->port_info->lport, i),
+			   pf->offset_loaded, &os->priority_xoff_tx[i],
+			   &ns->priority_xoff_tx[i]);
+		ice_stat_update_40(hw, GLPRT_RXON2OFFCNT_H(hw->port_info->lport, i),
+			   GLPRT_RXON2OFFCNT(hw->port_info->lport, i),
+			   pf->offset_loaded, &os->priority_xon_2_xoff[i],
+			   &ns->priority_xon_2_xoff[i]);
+	}
+
 	pf->offset_loaded = true;
 
 	if (pf->main_vsi)
@@ -6372,7 +6782,8 @@ ice_read_stats_registers(struct ice_pf *pf, struct ice_hw *hw)
 
 /* Get all statistics of a port */
 static int
-ice_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+ice_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		struct eth_queue_stats *qstats __rte_unused)
 {
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -6684,6 +7095,9 @@ ice_timesync_enable(struct rte_eth_dev *dev)
 			ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	int ret;
 
+	if (ad->txpp_ena)
+		return 0;
+
 	if (dev->data->dev_started && !(dev->data->dev_conf.rxmode.offloads &
 	    RTE_ETH_RX_OFFLOAD_TIMESTAMP)) {
 		PMD_DRV_LOG(ERR, "Rx timestamp offload not configured");
@@ -6921,6 +7335,9 @@ ice_timesync_disable(struct rte_eth_dev *dev)
 	uint8_t tmr_idx = hw->func_caps.ts_func_info.tmr_index_assoc;
 	uint64_t val;
 	uint8_t lport;
+
+	if (ad->txpp_ena)
+		return 0;
 
 	lport = hw->port_info->lport;
 
@@ -7320,7 +7737,9 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ice,
 			      ICE_DDP_FILENAME_ARG "=</path/to/file>"
 			      ICE_DDP_LOAD_SCHED_ARG "=<0|1>"
 			      ICE_TM_LEVELS_ARG "=<N>"
-			      ICE_RX_LOW_LATENCY_ARG "=<0|1>");
+			      ICE_SOURCE_PRUNE_ARG "=<0|1>"
+			      ICE_RX_LOW_LATENCY_ARG "=<0|1>"
+			      ICE_LINK_STATE_ON_CLOSE "=<down|up|initial>");
 
 RTE_LOG_REGISTER_SUFFIX(ice_logtype_init, init, NOTICE);
 RTE_LOG_REGISTER_SUFFIX(ice_logtype_driver, driver, NOTICE);

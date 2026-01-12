@@ -16,6 +16,7 @@
 #define ROC_NIX_SQB_THRESH	      30U
 #define ROC_NIX_SQB_SLACK	      12U
 #define ROC_NIX_AURA_THRESH	      95U
+#define ROC_NIX_LINK_SPEED_ALL	      0xFFFFF
 
 /* Reserved interface types for BPID allocation */
 #define ROC_NIX_INTF_TYPE_CGX  0
@@ -27,6 +28,11 @@
 /* Application based types for BPID allocation, start from end (255 unused rsvd) */
 #define ROC_NIX_INTF_TYPE_CPT_NIX 254
 #define ROC_NIX_INTF_TYPE_SSO     253
+
+/* Software defined LSO base format IDX */
+#define ROC_NIX_LSO_FORMAT_IDX_TSOV4 0
+#define ROC_NIX_LSO_FORMAT_IDX_TSOV6 1
+#define ROC_NIX_LSO_FORMAT_IDX_IPV4  2
 
 enum roc_nix_rss_reta_sz {
 	ROC_NIX_RSS_RETA_SZ_64 = 64,
@@ -107,6 +113,89 @@ enum roc_nix_bpf_stats {
 	ROC_NIX_BPF_RED_OCTS_F_PASS = BIT_ULL(9),
 	ROC_NIX_BPF_RED_PKT_F_DROP = BIT_ULL(10),
 	ROC_NIX_BPF_RED_OCTS_F_DROP = BIT_ULL(11),
+};
+
+enum roc_nix_link_duplex {
+	ROC_NIX_LINK_DUPLEX_FULL = 0,
+	ROC_NIX_LINK_DUPLEX_HALF = 1
+};
+
+enum roc_nix_link_speed_bits {
+	ROC_NIX_LINK_SPEED_NONE_BIT = BIT_ULL(0),
+	ROC_NIX_LINK_SPEED_10M_HD_BIT = BIT_ULL(1),
+	ROC_NIX_LINK_SPEED_10M_BIT = BIT_ULL(2),
+	ROC_NIX_LINK_SPEED_100M_HD_BIT = BIT_ULL(3),
+	ROC_NIX_LINK_SPEED_100M_BIT = BIT_ULL(4),
+	ROC_NIX_LINK_SPEED_1G_BIT = BIT_ULL(5),
+	ROC_NIX_LINK_SPEED_2_5G_BIT = BIT_ULL(6),
+	ROC_NIX_LINK_SPEED_5G_BIT = BIT_ULL(7),
+	ROC_NIX_LINK_SPEED_10G_BIT = BIT_ULL(8),
+	ROC_NIX_LINK_SPEED_20G_BIT = BIT_ULL(9),
+	ROC_NIX_LINK_SPEED_25G_BIT = BIT_ULL(10),
+	ROC_NIX_LINK_SPEED_40G_BIT = BIT_ULL(11),
+	ROC_NIX_LINK_SPEED_50G_BIT = BIT_ULL(12),
+	ROC_NIX_LINK_SPEED_56G_BIT = BIT_ULL(13),
+	ROC_NIX_LINK_SPEED_100G_BIT = BIT_ULL(14),
+	ROC_NIX_LINK_SPEED_200G_BIT = BIT_ULL(15),
+	ROC_NIX_LINK_SPEED_400G_BIT = BIT_ULL(16),
+	ROC_NIX_LINK_SPEED_MAX = 17
+};
+
+enum roc_nix_link_mode {
+	ROC_NIX_LINK_MODE_10BASET_HD = BIT_ULL(0),
+	ROC_NIX_LINK_MODE_10BASET_FD = BIT_ULL(1),
+	ROC_NIX_LINK_MODE_100BASET_HD = BIT_ULL(2),
+	ROC_NIX_LINK_MODE_100BASET_FD = BIT_ULL(3),
+	ROC_NIX_LINK_MODE_1000BASET_HD = BIT_ULL(4),
+	ROC_NIX_LINK_MODE_1000BASET_FD = BIT_ULL(5),
+	ROC_NIX_LINK_MODE_AUTONEG = BIT_ULL(6),
+	ROC_NIX_LINK_MODE_10000BASET_FD = BIT_ULL(12),
+	ROC_NIX_LINK_MODE_2500BASEX_FD = BIT_ULL(15),
+	ROC_NIX_LINK_MODE_1000BASEKX_FD = BIT_ULL(17),
+	ROC_NIX_LINK_MODE_10000BASEKX4_FD = BIT_ULL(18),
+	ROC_NIX_LINK_MODE_10000BASEKR_FD = BIT_ULL(19),
+	ROC_NIX_LINK_MODE_10000BASER_FEC = BIT_ULL(20),
+	ROC_NIX_LINK_MODE_20000BASEMLD2_FD = BIT_ULL(21),
+	ROC_NIX_LINK_MODE_20000BASEKR2_FD = BIT_ULL(22),
+	ROC_NIX_LINK_MODE_40000BASEKR4_FD = BIT_ULL(23),
+	ROC_NIX_LINK_MODE_40000BASECR4_FD = BIT_ULL(24),
+	ROC_NIX_LINK_MODE_40000BASESR4_FD = BIT_ULL(25),
+	ROC_NIX_LINK_MODE_40000BASELR4_FD = BIT_ULL(26),
+	ROC_NIX_LINK_MODE_56000BASEKR4_FD = BIT_ULL(27),
+	ROC_NIX_LINK_MODE_56000BASECR4_FD = BIT_ULL(28),
+	ROC_NIX_LINK_MODE_56000BASESR4_FD = BIT_ULL(29),
+	ROC_NIX_LINK_MODE_56000BASELR4_FD = BIT_ULL(30),
+	ROC_NIX_LINK_MODE_25000BASECR_FD = BIT_ULL(31),
+	ROC_NIX_LINK_MODE_25000BASEKR_FD = BIT_ULL(32),
+	ROC_NIX_LINK_MODE_25000BASESR_FD = BIT_ULL(33),
+	ROC_NIX_LINK_MODE_50000BASECR2_FD = BIT_ULL(34),
+	ROC_NIX_LINK_MODE_50000BASEKR2_FD = BIT_ULL(35),
+	ROC_NIX_LINK_MODE_100000BASEKR4_FD = BIT_ULL(36),
+	ROC_NIX_LINK_MODE_100000BASESR4_FD = BIT_ULL(37),
+	ROC_NIX_LINK_MODE_100000BASECR4_FD = BIT_ULL(38),
+	ROC_NIX_LINK_MODE_100000BASELR4_ER4_FD = BIT_ULL(39),
+	ROC_NIX_LINK_MODE_50000BASESR2_FD = BIT_ULL(40),
+	ROC_NIX_LINK_MODE_1000BASEX_FD = BIT_ULL(41),
+	ROC_NIX_LINK_MODE_10000BASECR_FD = BIT_ULL(42),
+	ROC_NIX_LINK_MODE_10000BASESR_FD = BIT_ULL(43),
+	ROC_NIX_LINK_MODE_10000BASELR_FD = BIT_ULL(44),
+	ROC_NIX_LINK_MODE_10000BASELRM_FD = BIT_ULL(45),
+	ROC_NIX_LINK_MODE_10000BASEER_FD = BIT_ULL(46),
+	ROC_NIX_LINK_MODE_2500BASET_FD = BIT_ULL(47),
+	ROC_NIX_LINK_MODE_5000BASET_FD = BIT_ULL(48),
+	ROC_NIX_LINK_MODE_FEC_NONE = BIT_ULL(49),
+	ROC_NIX_LINK_MODE_FEC_RS = BIT_ULL(50),
+	ROC_NIX_LINK_MODE_FEC_BASER = BIT_ULL(51),
+	ROC_NIX_LINK_MODE_50000BASEKR_FD = BIT_ULL(52),
+	ROC_NIX_LINK_MODE_50000BASESR_FD = BIT_ULL(53),
+	ROC_NIX_LINK_MODE_50000BASECR_FD = BIT_ULL(54),
+	ROC_NIX_LINK_MODE_50000BASELR_ER_FR_FD = BIT_ULL(55),
+	ROC_NIX_LINK_MODE_50000BASEDR_FD = BIT_ULL(56),
+	ROC_NIX_LINK_MODE_100000BASEKR2_FD = BIT_ULL(57),
+	ROC_NIX_LINK_MODE_100000BASESR2_FD = BIT_ULL(58),
+	ROC_NIX_LINK_MODE_100000BASECR2_FD = BIT_ULL(59),
+	ROC_NIX_LINK_MODE_100000BASELR2_ER2_FR2_FD = BIT_ULL(60),
+	ROC_NIX_LINK_MODE_100000BASEDR2_FD = BIT_ULL(61),
 };
 
 struct roc_nix_bpf_cfg {
@@ -394,6 +483,7 @@ struct roc_nix_sq {
 	bool cq_ena;
 	uint8_t fc_hyst_bits;
 	/* End of Input parameters */
+	uint16_t sqes_per_sqb;
 	uint16_t sqes_per_sqb_log2;
 	struct roc_nix *roc_nix;
 	uint64_t aura_handle;
@@ -404,6 +494,8 @@ struct roc_nix_sq {
 	void *lmt_addr;
 	void *sqe_mem;
 	void *fc;
+	void *sq_cnt_ptr;
+	uint8_t update_sq_cnt;
 	uint8_t tc;
 	bool enable;
 };
@@ -413,9 +505,18 @@ struct roc_nix_link_info {
 	uint64_t full_duplex : 1;
 	uint64_t lmac_type_id : 4;
 	uint64_t speed : 20;
+	uint64_t speed_bitmask : 16;
 	uint64_t autoneg : 1;
 	uint64_t fec : 2;
 	uint64_t port : 8;
+	uint64_t advertising;
+};
+
+struct roc_nix_mac_fwdata {
+	uint64_t advertised_link_modes;
+	uint64_t supported_link_modes;
+	uint64_t port_type;
+	uint64_t supported_an;
 };
 
 /** Maximum name length for extended statistics counters */
@@ -488,6 +589,7 @@ struct roc_nix {
 	uint16_t inb_cfg_param2;
 	bool force_tail_drop;
 	bool dis_xqe_drop;
+	bool sq_resize_ena;
 	/* End of input parameters */
 	/* LMT line base for "Per Core Tx LMT line" mode*/
 	uintptr_t lmt_base;
@@ -500,9 +602,10 @@ struct roc_nix {
 	uint16_t rep_cnt;
 	uint16_t rep_pfvf_map[MAX_PFVF_REP];
 	bool reass_ena;
+	bool use_multi_bpids;
 	TAILQ_ENTRY(roc_nix) next;
 
-#define ROC_NIX_MEM_SZ (6 * 1112)
+#define ROC_NIX_MEM_SZ (6 * 1131)
 	uint8_t reserved[ROC_NIX_MEM_SZ] __plt_cache_aligned;
 } __plt_cache_aligned;
 
@@ -596,6 +699,7 @@ enum roc_nix_tm_tree {
 	ROC_NIX_TM_DEFAULT = 0,
 	ROC_NIX_TM_RLIMIT,
 	ROC_NIX_TM_PFC,
+	ROC_NIX_TM_SDP,
 	ROC_NIX_TM_USER,
 	ROC_NIX_TM_TREE_MAX,
 };
@@ -768,6 +872,7 @@ int __roc_api roc_nix_tm_lvl_cnt_get(struct roc_nix *roc_nix);
 int __roc_api roc_nix_tm_lvl_have_link_access(struct roc_nix *roc_nix, int lvl);
 int __roc_api roc_nix_tm_prepare_rate_limited_tree(struct roc_nix *roc_nix);
 int __roc_api roc_nix_tm_pfc_prepare_tree(struct roc_nix *roc_nix);
+int __roc_api roc_nix_tm_sdp_prepare_tree(struct roc_nix *roc_nix);
 bool __roc_api roc_nix_tm_is_user_hierarchy_enabled(struct roc_nix *nix);
 int __roc_api roc_nix_tm_tree_type_get(struct roc_nix *nix);
 int __roc_api roc_nix_tm_mark_config(struct roc_nix *roc_nix,
@@ -865,6 +970,7 @@ void __roc_api roc_nix_mac_link_info_get_cb_unregister(struct roc_nix *roc_nix);
 int __roc_api roc_nix_q_err_cb_register(struct roc_nix *roc_nix, q_err_get_t sq_err_handle);
 void __roc_api roc_nix_q_err_cb_unregister(struct roc_nix *roc_nix);
 int __roc_api roc_nix_mac_stats_reset(struct roc_nix *roc_nix);
+int __roc_api roc_nix_mac_fwdata_get(struct roc_nix *roc_nix, struct roc_nix_mac_fwdata *fwdata);
 
 /* Ops */
 int __roc_api roc_nix_switch_hdr_set(struct roc_nix *roc_nix,
@@ -876,9 +982,12 @@ int __roc_api roc_nix_lso_fmt_setup(struct roc_nix *roc_nix);
 int __roc_api roc_nix_lso_fmt_get(struct roc_nix *roc_nix,
 				  uint8_t udp_tun[ROC_NIX_LSO_TUN_MAX],
 				  uint8_t tun[ROC_NIX_LSO_TUN_MAX]);
+int __roc_api roc_nix_lso_fmt_ipv4_frag_get(struct roc_nix *roc_nix);
 int __roc_api roc_nix_lso_custom_fmt_setup(struct roc_nix *roc_nix,
 					   struct nix_lso_format *fields,
 					   uint16_t nb_fields);
+int __roc_api roc_nix_lso_alt_flags_profile_setup(struct roc_nix *roc_nix,
+						  nix_lso_alt_flg_format_t *fmt);
 
 int __roc_api roc_nix_eeprom_info_get(struct roc_nix *roc_nix,
 				      struct roc_nix_eeprom_info *info);
@@ -979,6 +1088,8 @@ int __roc_api roc_nix_sq_fini(struct roc_nix_sq *sq);
 int __roc_api roc_nix_sq_ena_dis(struct roc_nix_sq *sq, bool enable);
 void __roc_api roc_nix_sq_head_tail_get(struct roc_nix *roc_nix, uint16_t qid,
 					uint32_t *head, uint32_t *tail);
+int __roc_api roc_nix_sq_cnt_update(struct roc_nix_sq *sq, bool enable);
+int __roc_api roc_nix_sq_resize(struct roc_nix_sq *sq, uint32_t nb_desc);
 
 /* PTP */
 int __roc_api roc_nix_ptp_rx_ena_dis(struct roc_nix *roc_nix, int enable);

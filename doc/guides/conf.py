@@ -65,13 +65,6 @@ if environ.get('DTS_DOC_BUILD'):
         graphviz_output_format = "svg"
         tags.add("graphviz")
 
-    # Pydantic models require autodoc_pydantic for the right formatting. Add if installed.
-    try:
-        import sphinxcontrib.autodoc_pydantic
-        extensions.append("sphinxcontrib.autodoc_pydantic")
-    except ImportError:
-        pass
-
     # Napoleon enables the Google format of Python doscstrings.
     napoleon_numpy_docstring = False
     napoleon_attr_annotations = True
@@ -112,6 +105,9 @@ if environ.get('DTS_DOC_BUILD'):
     # The qualified names of imported objects are fully expanded with dependencies, such as:
     # fabric.Connection (without) vs. fabric.connection.Connection (with)
     autodoc_mock_imports = importlib.import_module('check-dts-requirements').get_missing_imports()
+
+    # Always mock Pydantic to avoid autodoc introspecting its internals.
+    autodoc_mock_imports = list(set(autodoc_mock_imports + ['pydantic', 'pydantic_core']))
 
 
 # ####### :numref: fallback ########

@@ -5,7 +5,11 @@
 #ifndef RTE_PMD_PRIVATE_MLX5_H_
 #define RTE_PMD_PRIVATE_MLX5_H_
 
+#include <stdint.h>
+
+#include <rte_byteorder.h>
 #include <rte_compat.h>
+#include <rte_per_lcore.h>
 
 /**
  * @file
@@ -414,6 +418,213 @@ rte_pmd_mlx5_rxq_dump_contexts(uint16_t port_id, uint16_t queue_id, const char *
 __rte_experimental
 int
 rte_pmd_mlx5_txq_dump_contexts(uint16_t port_id, uint16_t queue_id, const char *filename);
+
+/** Type of mlx5 driver event for which custom callback is called. */
+enum rte_pmd_mlx5_driver_event_cb_type {
+	/** Called after HW Rx queue is created. */
+	RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_RXQ_CREATE,
+	/** Called before HW Rx queue will be destroyed. */
+	RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_RXQ_DESTROY,
+	/** Called after HW Tx queue is created. */
+	RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_TXQ_CREATE,
+	/** Called before HW Tx queue will be destroyed. */
+	RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_TXQ_DESTROY,
+};
+
+/** Information about the queue for which driver event is being called. */
+struct rte_pmd_mlx5_driver_event_cb_queue_info {
+	/** DPDK queue index. */
+	uint16_t dpdk_queue_id;
+	/** HW queue identifier (DevX object ID). */
+	uint32_t hw_queue_id;
+	/**
+	 * Low-level HW configuration of the port related to the queue.
+	 * This configuration is presented as a string
+	 * with "key=value" pairs, separated by commas.
+	 * This string is owned by mlx5 PMD and should not be freed by the user,
+	 * and should be copied to the memory owned by the user.
+	 *
+	 * For RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_RXQ_CREATE this will contain:
+	 *
+	 * - lro_timeout - Configured timeout of LRO session in microseconds.
+	 *   Set to 0 if LRO is not configured.
+	 * - max_lro_msg_size - Maximum size of a single LRO message.
+	 *   Provided in granularity of 256 bytes.
+	 *   Set to 0 if LRO is not configured.
+	 * - td - Identifier of transport domain allocated from HW (DevX object ID).
+	 * - lbpk - Set to 1 if loopback is enabled on the given queue
+	 *
+	 * For all other events, this field will be set to NULL.
+	 */
+	const char *queue_info;
+};
+
+/** Information related to a driver event. */
+struct rte_pmd_mlx5_driver_event_cb_info {
+	/** Type of the driver event for which the callback is called. */
+	enum rte_pmd_mlx5_driver_event_cb_type event;
+	union {
+		/**
+		 * Information about the queue for which driver event is being called.
+		 *
+		 * This union variant is valid for the following events:
+		 *
+		 * - RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_RXQ_CREATE
+		 * - RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_RXQ_DESTROY
+		 * - RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_TXQ_CREATE
+		 * - RTE_PMD_MLX5_DRIVER_EVENT_CB_TYPE_TXQ_DESTROY
+		 */
+		struct rte_pmd_mlx5_driver_event_cb_queue_info queue;
+	};
+};
+
+/** Prototype of the callback called on mlx5 driver events. */
+typedef void (*rte_pmd_mlx5_driver_event_callback_t)(uint16_t port_id,
+		const struct rte_pmd_mlx5_driver_event_cb_info *info,
+		const void *opaque);
+
+
+/**
+ * Disable traffic for external SQ. Should be invoked by application
+ * before destroying the external SQ.
+ *
+ * @param[in] port_id
+ *   The port identifier of the Ethernet device.
+ * @param[in] sq_num
+ *   SQ HW number.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ *   Possible values for rte_errno:
+ *   - EINVAL - invalid sq_number or port type.
+ *   - ENODEV - there is no Ethernet device for this port id.
+ */
+__rte_experimental
+int rte_pmd_mlx5_external_sq_disable(uint16_t port_id, uint32_t sq_num);
+
+/**
+ * Register mlx5 driver event callback.
+ *
+ * mlx5 PMD configures HW through interfaces exposed by rdma-core and mlx5 kernel driver.
+ * Any HW object created this way may be used by other libraries or applications.
+ * This function allows application to register a custom callback which will be called
+ * whenever mlx5 PMD performs some operation (driver event) on a managed HW objects.
+ * #rte_pmd_mlx5_driver_event_cb_type defines exposed driver events.
+ *
+ * This function can be called multiple times with different callbacks.
+ * mlx5 PMD will register all of them and all of them will be called for triggered driver events.
+ *
+ * This function can be called:
+ *
+ * - before or after #rte_eal_init (potentially in a constructor function as well),
+ * - before or after any mlx5 port is probed.
+ *
+ * If this function is called when mlx5 ports (at least one) exist,
+ * then provided callback will be immediately called for all applicable driver events,
+ * for all existing mlx5 ports.
+ *
+ * This function is lock-free and it is assumed that it won't be called concurrently
+ * with other functions from ethdev API used to configure any of the mlx5 ports.
+ * It is the responsibility of the application to enforce this.
+ *
+ * Registered callbacks might be called during control path configuration triggered
+ * by DPDK API. It is the user's responsibility to prevent
+ * calling more configurations by the DPDK API from the callback itself.
+ *
+ * mlx5 PMD registers a destructor (through #RTE_FINI)
+ * which will unregister all known callbacks.
+ *
+ * @param[in] cb
+ *   Pointer to callback.
+ * @param[in] opaque
+ *   Opaque pointer which will be passed as an argument to @p cb on each event.
+ *
+ * @return
+ *   - 0 if callback was successfully registered.
+ *   - (-EINVAL) if @p cb is NULL.
+ *   - (-EEXIST) if @p cb was already registered.
+ *   - (-ENOMEM) if failed to allocate memory for callback entry.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_driver_event_cb_register(rte_pmd_mlx5_driver_event_callback_t cb, void *opaque);
+
+/**
+ * Unregister driver event callback.
+ *
+ * Unregisters a mlx5 driver event callback which was previously registered
+ * through #rte_pmd_mlx5_driver_event_cb_unregister.
+ *
+ * This function is lock-free and it is assumed that it won't be called concurrently
+ * with other functions from ethdev API used to configure any of the mlx5 ports.
+ * It is the responsibility of the application to enforce this.
+ *
+ * @param[in] cb
+ *   Pointer to callback.
+ *
+ * @return
+ *   - 0 if callback was successfully unregistered or if no such callback was registered.
+ *   - (-EINVAL) if @p cb is NULL.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_driver_event_cb_unregister(rte_pmd_mlx5_driver_event_callback_t cb);
+
+/**
+ * Disable flow steering for all mlx5 ports.
+ *
+ * In mlx5 PMD, HW flow rules are generally used in 2 ways:
+ *
+ * - "internal" - to connect HW objects created by mlx5 PMD (e.g. Rx queues)
+ *   to datapath, so traffic can be received in user space by DPDK application,
+ *   bypassing the kernel driver. Such rules are created implicitly by mlx5 PMD.
+ * - "external" - flow rules created by application explicitly through flow API.
+ *
+ * In mlx5 PMD language, configuring flow rules is known as configuring flow steering.
+ *
+ * If an application wants to use any other library compatible with NVIDIA hardware
+ * to configure flow steering or delegate flow steering to another process,
+ * the application can call this function to disable flow steering globally for all mlx5 ports.
+ *
+ * Information required to configure flow steering in such a way that externally created
+ * flow rules would forward/match traffic to DPDK-managed Rx/Tx queues can be extracted
+ * through #rte_pmd_mlx5_driver_event_cb_register API.
+ *
+ * This function can be called:
+ *
+ * - before or after #rte_eal_init.
+ * - before or after any mlx5 port is probed.
+ *
+ * If this function is called when mlx5 ports (at least one) exist,
+ * then steering will be disabled for all existing mlx5 port.
+ * This will invalidate *ALL* handles to objects return from flow API for these ports
+ * (for example handles to flow rules, indirect actions, template tables).
+ *
+ * This function is lock-free and it is assumed that it won't be called concurrently
+ * with other functions from ethdev API used to configure any of the mlx5 ports.
+ * It is the responsibility of the application to enforce this.
+ */
+__rte_experimental
+void
+rte_pmd_mlx5_disable_steering(void);
+
+/**
+ * Enable flow steering for mlx5 ports.
+ *
+ * This function reverses the effects of #rte_pmd_mlx5_disable_steering.
+ *
+ * It can be called if and only if there are no mlx5 ports known by DPDK,
+ * so in case if #rte_pmd_mlx5_disable_steering was previously called
+ * the application has to remove mlx5 devices, call this function and
+ * re-probe the mlx5 devices.
+ *
+ * @return
+ *   - 0 - Flow steering was successfully enabled or it flow steering was never disabled.
+ *   - (-EBUSY) - There are mlx5 ports probed and re-enabling steering cannot be done safely.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_enable_steering(void);
 
 #ifdef __cplusplus
 }

@@ -1,10 +1,8 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
-#include <rte_thread.h>
-
+#include "nt_service.h"
 #include "ntlog.h"
 #include "nthw_fpga.h"
 #include "ntnic_mod_reg.h"
@@ -12,28 +10,6 @@
 /*
  * Global variables shared by NT adapter types
  */
-rte_thread_t monitor_tasks[NUM_ADAPTER_MAX];
-volatile int monitor_task_is_running[NUM_ADAPTER_MAX];
-
-/*
- * Signal-handler to stop all monitor threads
- */
-static void stop_monitor_tasks(int signum)
-{
-	const size_t N = ARRAY_SIZE(monitor_task_is_running);
-	size_t i;
-
-	/* Stop all monitor tasks */
-	for (i = 0; i < N; i++) {
-		const int is_running = monitor_task_is_running[i];
-		monitor_task_is_running[i] = 0;
-
-		if (signum == -1 && is_running != 0) {
-			rte_thread_join(monitor_tasks[i], NULL);
-			memset(&monitor_tasks[i], 0, sizeof(monitor_tasks[0]));
-		}
-	}
-}
 
 static int nt4ga_adapter_show_info(struct adapter_info_s *p_adapter_info, FILE *pfh)
 {
@@ -75,7 +51,7 @@ static int nt4ga_adapter_show_info(struct adapter_info_s *p_adapter_info, FILE *
 
 static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 {
-	const struct flow_filter_ops *flow_filter_ops = get_flow_filter_ops();
+	const struct flow_filter_ops *flow_filter_ops = nthw_get_flow_filter_ops();
 
 	if (flow_filter_ops == NULL)
 		NT_LOG(ERR, NTNIC, "%s: flow_filter module uninitialized", __func__);
@@ -94,7 +70,7 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 	int res = -1;
 	nthw_fpga_t *p_fpga = NULL;
 
-	p_hw_info->n_nthw_adapter_id = nthw_platform_get_nthw_adapter_id(p_hw_info->pci_device_id);
+	p_hw_info->n_nthw_adapter_id = nthw_platform_get_adapter_id(p_hw_info->pci_device_id);
 
 	fpga_info->n_nthw_adapter_id = p_hw_info->n_nthw_adapter_id;
 	/* ref: DN-0060 section 9 */
@@ -185,7 +161,7 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 		switch (fpga_info->n_fpga_prod_id) {
 		/* NT200A01: 2x100G (Xilinx) */
 		case 9563:	/* NT200A02 (Cap) */
-			link_ops = get_100g_link_ops();
+			link_ops = nthw_get_100g_link_ops();
 
 			if (link_ops == NULL) {
 				NT_LOG(ERR, NTNIC, "NT200A02 100G link module uninitialized");
@@ -195,10 +171,11 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 
 			res = link_ops->link_init(p_adapter_info, p_fpga);
 			break;
+		case 9569: /* NT400D11 (Intel Agilex FPGA) */
 		case 9574: /* NT400D13 (Intel Agilex FPGA) */
-			link_ops = get_agx_100g_link_ops();
+			link_ops = nthw_get_agx_100g_link_ops();
 			if (link_ops == NULL) {
-				NT_LOG(ERR, NTNIC, "NT400D11 100G link module uninitialized");
+				NT_LOG(ERR, NTNIC, "NT400Dxx 100G link module uninitialized");
 				res = -1;
 				break;
 			}
@@ -220,7 +197,7 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 		}
 	}
 
-	const struct nt4ga_stat_ops *nt4ga_stat_ops = get_nt4ga_stat_ops();
+	const struct nt4ga_stat_ops *nt4ga_stat_ops = nthw_get_nt4ga_stat_ops();
 
 	if (nt4ga_stat_ops != NULL) {
 		/* Nt4ga Stat init/setup */
@@ -246,7 +223,7 @@ static int nt4ga_adapter_init(struct adapter_info_s *p_adapter_info)
 
 static int nt4ga_adapter_deinit(struct adapter_info_s *p_adapter_info)
 {
-	const struct flow_filter_ops *flow_filter_ops = get_flow_filter_ops();
+	const struct flow_filter_ops *flow_filter_ops = nthw_get_flow_filter_ops();
 
 	if (flow_filter_ops == NULL)
 		NT_LOG(ERR, NTNIC, "%s: flow_filter module uninitialized", __func__);
@@ -255,7 +232,7 @@ static int nt4ga_adapter_deinit(struct adapter_info_s *p_adapter_info)
 	int i;
 	int res = -1;
 
-	stop_monitor_tasks(-1);
+	nthw_service_del(RTE_NTNIC_SERVICE_ADAPTER_MON);
 
 	/* Nt4ga Deinit Filter */
 	nt4ga_filter_t *p_filter = &p_adapter_info->nt4ga_filter;
@@ -306,5 +283,5 @@ static const struct adapter_ops ops = {
 
 void nthw_adapter_init(void)
 {
-	register_adapter_ops(&ops);
+	nthw_reg_adapter_ops(&ops);
 }

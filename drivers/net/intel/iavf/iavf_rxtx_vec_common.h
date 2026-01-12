@@ -67,15 +67,14 @@ iavf_rx_vec_queue_default(struct ci_rx_queue *rxq)
 	if (rxq->proto_xtr != IAVF_PROTO_XTR_NONE)
 		return -1;
 
-	if (rxq->offloads & IAVF_RX_VECTOR_OFFLOAD)
-		return IAVF_VECTOR_OFFLOAD_PATH;
-
-	return IAVF_VECTOR_PATH;
+	return 0;
 }
 
 static inline int
 iavf_tx_vec_queue_default(struct ci_tx_queue *txq)
 {
+	bool vlan_offload = false, vlan_needs_ctx = false;
+
 	if (!txq)
 		return -1;
 
@@ -91,19 +90,21 @@ iavf_tx_vec_queue_default(struct ci_tx_queue *txq)
 		return IAVF_VECTOR_CTX_PATH;
 	}
 
+	/* Vlan tci needs to be inserted via ctx desc, if the vlan_flag is L2TAG2. */
+	if (txq->offloads & RTE_ETH_TX_OFFLOAD_VLAN_INSERT) {
+		vlan_offload = true;
+		if (txq->vlan_flag == IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2)
+			vlan_needs_ctx = true;
+	}
+
 	/**
-	 * Vlan tci needs to be inserted via ctx desc, if the vlan_flag is L2TAG2.
 	 * Tunneling parameters and other fields need be configured in ctx desc
 	 * if the outer checksum offload is enabled.
 	 */
-	if (txq->offloads & (IAVF_TX_VECTOR_OFFLOAD | IAVF_TX_VECTOR_OFFLOAD_CTX)) {
-		if (txq->offloads & IAVF_TX_VECTOR_OFFLOAD_CTX) {
-			if (txq->vlan_flag == IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG2) {
-				txq->use_ctx = 1;
-				return IAVF_VECTOR_CTX_OFFLOAD_PATH;
-			} else {
-				return -1;
-			}
+	if (txq->offloads & (IAVF_TX_VECTOR_OFFLOAD | IAVF_TX_VECTOR_OFFLOAD_CTX) || vlan_offload) {
+		if (txq->offloads & IAVF_TX_VECTOR_OFFLOAD_CTX || vlan_needs_ctx) {
+			txq->use_ctx = 1;
+			return IAVF_VECTOR_CTX_OFFLOAD_PATH;
 		} else {
 			return IAVF_VECTOR_OFFLOAD_PATH;
 		}
@@ -117,20 +118,17 @@ iavf_rx_vec_dev_check_default(struct rte_eth_dev *dev)
 {
 	int i;
 	struct ci_rx_queue *rxq;
-	int ret;
-	int result = 0;
+	int ret = 0;
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		rxq = dev->data->rx_queues[i];
 		ret = iavf_rx_vec_queue_default(rxq);
 
 		if (ret < 0)
-			return -1;
-		if (ret > result)
-			result = ret;
+			break;
 	}
 
-	return result;
+	return ret;
 }
 
 static inline int
@@ -166,7 +164,7 @@ iavf_tx_vec_dev_check_default(struct rte_eth_dev *dev)
 
 static __rte_always_inline void
 iavf_txd_enable_offload(__rte_unused struct rte_mbuf *tx_pkt,
-			uint64_t *txd_hi)
+			uint64_t *txd_hi, uint8_t vlan_flag)
 {
 #if defined(IAVF_TX_CSUM_OFFLOAD) || defined(IAVF_TX_VLAN_QINQ_OFFLOAD)
 	uint64_t ol_flags = tx_pkt->ol_flags;
@@ -175,6 +173,8 @@ iavf_txd_enable_offload(__rte_unused struct rte_mbuf *tx_pkt,
 #ifdef IAVF_TX_CSUM_OFFLOAD
 	uint32_t td_offset = 0;
 #endif
+
+	RTE_SET_USED(vlan_flag);
 
 #ifdef IAVF_TX_CSUM_OFFLOAD
 	/* Set MACLEN */
@@ -227,10 +227,18 @@ iavf_txd_enable_offload(__rte_unused struct rte_mbuf *tx_pkt,
 #endif
 
 #ifdef IAVF_TX_VLAN_QINQ_OFFLOAD
-	if (ol_flags & (RTE_MBUF_F_TX_VLAN | RTE_MBUF_F_TX_QINQ)) {
+	if (ol_flags & RTE_MBUF_F_TX_QINQ) {
 		td_cmd |= IAVF_TX_DESC_CMD_IL2TAG1;
-		*txd_hi |= ((uint64_t)tx_pkt->vlan_tci <<
-			    IAVF_TXD_QW1_L2TAG1_SHIFT);
+		/* vlan_flag specifies outer tag location for QinQ. */
+		if (vlan_flag & IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1)
+			*txd_hi |= ((uint64_t)tx_pkt->vlan_tci_outer <<
+					IAVF_TXD_QW1_L2TAG1_SHIFT);
+		else
+			*txd_hi |= ((uint64_t)tx_pkt->vlan_tci <<
+					IAVF_TXD_QW1_L2TAG1_SHIFT);
+	} else if (ol_flags & RTE_MBUF_F_TX_VLAN && vlan_flag & IAVF_TX_FLAGS_VLAN_TAG_LOC_L2TAG1) {
+		td_cmd |= IAVF_TX_DESC_CMD_IL2TAG1;
+		*txd_hi |= ((uint64_t)tx_pkt->vlan_tci << IAVF_TXD_QW1_L2TAG1_SHIFT);
 	}
 #endif
 

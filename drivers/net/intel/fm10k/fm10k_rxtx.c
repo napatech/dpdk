@@ -164,8 +164,8 @@ fm10k_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	q->next_dd = next_dd;
 
 	if ((q->next_dd > q->next_trigger) || (alloc == 1)) {
-		ret = rte_mempool_get_bulk(q->mp,
-					(void **)&q->sw_ring[q->next_alloc],
+		ret = rte_mbuf_raw_alloc_bulk(q->mp,
+					(void *)&q->sw_ring[q->next_alloc],
 					q->alloc_thresh);
 
 		if (unlikely(ret != 0)) {
@@ -322,8 +322,8 @@ fm10k_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	q->next_dd = next_dd;
 
 	if ((q->next_dd > q->next_trigger) || (alloc == 1)) {
-		ret = rte_mempool_get_bulk(q->mp,
-					(void **)&q->sw_ring[q->next_alloc],
+		ret = rte_mbuf_raw_alloc_bulk(q->mp,
+					(void *)&q->sw_ring[q->next_alloc],
 					q->alloc_thresh);
 
 		if (unlikely(ret != 0)) {
@@ -364,7 +364,7 @@ fm10k_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	return nb_rcv;
 }
 
-uint32_t
+int
 fm10k_dev_rx_queue_count(void *rx_queue)
 {
 #define FM10K_RXQ_SCAN_INTERVAL 4
@@ -495,15 +495,14 @@ static inline void tx_free_bulk_mbuf(struct rte_mbuf **txep, int num)
 				if (likely(m->pool == free[0]->pool))
 					free[nb_free++] = m;
 				else {
-					rte_mempool_put_bulk(free[0]->pool,
-							(void *)free, nb_free);
+					rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 					free[0] = m;
 					nb_free = 1;
 				}
 			}
 			txep[i] = NULL;
 		}
-		rte_mempool_put_bulk(free[0]->pool, (void **)free, nb_free);
+		rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 	} else {
 		for (i = 1; i < num; i++) {
 			m = rte_pktmbuf_prefree_seg(txep[i]);

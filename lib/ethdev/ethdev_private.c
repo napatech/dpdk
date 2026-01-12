@@ -152,11 +152,20 @@ rte_eth_devargs_parse_representor_ports(char *str, void *data)
 		if (str == NULL)
 			goto done;
 	}
-	if (str[0] == 'p' && str[1] == 'f') {
+	/* pfX... or (pfX)... */
+	if ((str[0] == 'p' && str[1] == 'f') ||
+	    (str[0] == '(' && str[1] == 'p' && str[2] == 'f')) {
 		eth_da->type = RTE_ETH_REPRESENTOR_PF;
-		str += 2;
+		if (str[0] == '(')
+			str++; /* advance past leading "(" */
+		str += 2; /* advance past "pf" */
 		str = rte_eth_devargs_process_list(str, eth_da->ports,
 				&eth_da->nb_ports, RTE_DIM(eth_da->ports));
+		if (str != NULL && str[0] == ')') {
+			str++; /* advance past ")" */
+			eth_da->flags =
+				RTE_ETH_DEVARG_REPRESENTOR_IGNORE_PF;
+		}
 		if (str == NULL || str[0] == '\0')
 			goto done;
 	} else if (eth_da->nb_mh_controllers > 0) {
@@ -476,4 +485,31 @@ eth_dev_tx_queue_config(struct rte_eth_dev *dev, uint16_t nb_queues)
 	}
 	dev->data->nb_tx_queues = nb_queues;
 	return 0;
+}
+
+int
+eth_stats_qstats_get(uint16_t port_id, struct rte_eth_stats *stats, struct eth_queue_stats *qstats)
+{
+	struct rte_eth_dev *dev;
+	int ret;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+
+	if (stats == NULL) {
+		RTE_ETHDEV_LOG_LINE(ERR, "Cannot get ethdev port %u stats to NULL",
+				port_id);
+		return -EINVAL;
+	}
+
+	memset(stats, 0, sizeof(*stats));
+	if (qstats != NULL)
+		memset(qstats, 0, sizeof(*qstats));
+
+	if (dev->dev_ops->stats_get == NULL)
+		return -ENOTSUP;
+	stats->rx_nombuf = dev->data->rx_mbuf_alloc_failed;
+	ret = eth_err(port_id, dev->dev_ops->stats_get(dev, stats, qstats));
+
+	return ret;
 }

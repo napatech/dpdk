@@ -71,15 +71,6 @@ bnxt_ulp_mapper_ops_get(struct bnxt *bp)
 	return func_ops;
 }
 
-static const struct ulp_mapper_core_ops *
-ulp_mapper_data_oper_get(struct bnxt_ulp_context *ulp_ctx)
-{
-	struct bnxt_ulp_mapper_data *m_data;
-
-	m_data = (struct bnxt_ulp_mapper_data *)ulp_ctx->cfg_data->mapper_data;
-	return m_data->mapper_oper;
-}
-
 static const char *
 ulp_mapper_tmpl_name_str(enum bnxt_ulp_template_type tmpl_type)
 {
@@ -662,12 +653,6 @@ ulp_mapper_priority_opc_process(struct bnxt_ulp_mapper_parms *parms,
 		rc = -EINVAL;
 		break;
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	if (!rc)
-		BNXT_DRV_DBG(DEBUG, "Tcam priority = 0x%x\n", *priority);
-#endif
-#endif
 	return rc;
 }
 
@@ -738,12 +723,16 @@ ulp_mapper_tbl_ident_scan_ext(struct bnxt_ulp_mapper_parms *parms,
 static int32_t
 ulp_mapper_ident_process(struct bnxt_ulp_mapper_parms *parms,
 			 struct bnxt_ulp_mapper_tbl_info *tbl,
+			 struct ulp_blob *key,
 			 struct bnxt_ulp_mapper_ident_info *ident,
 			 uint16_t *val)
 {
 	const struct ulp_mapper_core_ops *op = parms->mapper_data->mapper_oper;
 	struct ulp_flow_db_res_params fid_parms = { 0 };
+	bool global = false;
 	uint64_t id = 0;
+	uint8_t *context;
+	uint16_t tmplen = 0;
 	int32_t idx;
 	int rc;
 
@@ -751,14 +740,30 @@ ulp_mapper_ident_process(struct bnxt_ulp_mapper_parms *parms,
 	fid_parms.resource_func = ident->resource_func;
 	fid_parms.resource_type = ident->ident_type;
 	fid_parms.critical_resource = tbl->critical_resource;
-	ulp_flow_db_shared_session_set(&fid_parms, tbl->session_type);
 
-	rc = op->ulp_mapper_core_ident_alloc_process(parms->ulp_ctx,
-						     tbl->session_type,
-						     ident->ident_type,
-						     tbl->direction,
-						     tbl->track_type,
-						     &id);
+	if (tbl->resource_func == BNXT_ULP_RESOURCE_FUNC_GLOBAL_IDENTIFIER)
+		global = true;
+
+	if (!global) {
+		ulp_flow_db_shared_session_set(&fid_parms, tbl->session_type);
+		rc = op->ulp_mapper_core_ident_alloc_process(parms->ulp_ctx,
+							     tbl->session_type,
+							     ident->ident_type,
+							     tbl->direction,
+							     tbl->track_type,
+							     &id);
+	} else {
+		context = ulp_blob_data_get(key, &tmplen);
+		tmplen = ULP_BITS_2_BYTE(tmplen);
+		rc = op->ulp_mapper_core_global_ident_alloc(parms->ulp_ctx,
+							    ident->ident_type,
+							    tbl->direction,
+							    context,
+							    tmplen,
+							    &id);
+		fid_parms.resource_func = tbl->resource_func;
+	}
+
 	if (unlikely(rc)) {
 		BNXT_DRV_DBG(ERR, "identifier process failed\n");
 		return rc;
@@ -790,7 +795,11 @@ ulp_mapper_ident_process(struct bnxt_ulp_mapper_parms *parms,
 
 error:
 	/* Need to free the identifier */
-	op->ulp_mapper_core_ident_free(parms->ulp_ctx, &fid_parms);
+	if (!global)
+		op->ulp_mapper_core_ident_free(parms->ulp_ctx, &fid_parms);
+	else
+		op->ulp_mapper_core_global_ident_free(parms->ulp_ctx,
+						      &fid_parms);
 	return rc;
 }
 
@@ -1489,13 +1498,6 @@ ulp_mapper_key_recipe_alloc(struct bnxt_ulp_context *ulp_ctx,
 			BNXT_DRV_DBG(ERR, "Unable to alloc key recipe\n");
 			return NULL;
 		}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_INF("Alloc key recipe [%s]:[%s] = 0x%X\n",
-		     (dir == BNXT_ULP_DIRECTION_INGRESS) ? "rx" : "tx",
-		     ulp_mapper_key_recipe_type_to_str(stype), recipe_id);
-#endif
-#endif
 	} else if (alloc_only) {
 		BNXT_DRV_DBG(ERR, "Recipe ID (%d) already allocated\n",
 			     recipe_id);
@@ -1539,13 +1541,6 @@ ulp_mapper_key_recipe_free(struct bnxt_ulp_context *ulp_ctx,
 	}
 	rte_free(recipes[index]);
 	recipes[index] = NULL;
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_INF("Free key recipe [%s]:[%s] = 0x%X\n",
-		     (dir == BNXT_ULP_DIRECTION_INGRESS) ? "rx" : "tx",
-		     ulp_mapper_key_recipe_type_to_str(stype), index);
-#endif
-#endif
 	return 0;
 }
 
@@ -1753,13 +1748,6 @@ ulp_mapper_key_recipe_field_opc_process(struct bnxt_ulp_mapper_parms *parms,
 			}
 		}
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	if (*written && is_key)
-		BNXT_DRV_DBG(DEBUG, "%-20s bits = %-3d\n", fld->description,
-			     fld->field_bit_size);
-#endif
-#endif
 	return rc;
 }
 
@@ -2422,7 +2410,7 @@ ulp_mapper_tcam_tbl_ident_alloc(struct bnxt_ulp_mapper_parms *parms,
 
 	idents = ulp_mapper_ident_fields_get(parms, tbl, &num_idents);
 	for (i = 0; i < num_idents; i++) {
-		if (unlikely(ulp_mapper_ident_process(parms, tbl,
+		if (unlikely(ulp_mapper_ident_process(parms, tbl, NULL,
 						      &idents[i], NULL)))
 			return -EINVAL;
 	}
@@ -2604,6 +2592,7 @@ ulp_mapper_gen_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 	uint32_t i, num_kflds = 0, key_index = 0, num_par_kflds = 0, pad = 0;
 	uint32_t gen_tbl_miss = 1, fdb_write = 0;
 	uint8_t *byte_data;
+	uint64_t regval = 0;
 	int32_t rc = 0;
 
 	/* Get the key fields list and build the key. */
@@ -2710,7 +2699,9 @@ ulp_mapper_gen_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 							  &gen_tbl_ent)))
 			return -EINVAL;
 	} else if (gen_tbl_list->tbl_type ==
-		   BNXT_ULP_GEN_TBL_TYPE_SIMPLE_LIST) {
+		   BNXT_ULP_GEN_TBL_TYPE_SIMPLE_LIST &&
+		   tbl->tbl_opcode !=
+		   BNXT_ULP_GENERIC_TBL_OPC_ITERATE) {
 		list_srch = ulp_gen_tbl_simple_list_search(gen_tbl_list,
 							   cache_key,
 							   &key_index);
@@ -2810,6 +2801,53 @@ ulp_mapper_gen_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 
 		fdb_write = 1;
 		parms->shared_hndl = (uint64_t)tbl_idx << 32 | key_index;
+		break;
+	case BNXT_ULP_GENERIC_TBL_OPC_ITERATE:
+		if (gen_tbl_list->tbl_type !=
+		    BNXT_ULP_GEN_TBL_TYPE_SIMPLE_LIST) {
+			BNXT_DRV_DBG(ERR, "%s: Invalid table opcode\n",
+				     gen_tbl_list->gen_tbl_name);
+			return -EINVAL;
+		}
+		/* read the gen table index */
+		if (unlikely(ulp_regfile_read(parms->regfile,
+					      tbl->tbl_operand,
+					      &regval))) {
+			BNXT_DRV_DBG(ERR,
+				     "Fail to get tbl idx from regfile[%d].\n",
+				     BNXT_ULP_RF_IDX_GENERIC_TBL_INDEX);
+			return -EINVAL;
+		}
+		key_index = (uint32_t)rte_be_to_cpu_64(regval);
+		/* get the next index from the simple list table */
+		rc = ulp_gen_tbl_simple_list_get_next(gen_tbl_list, &key_index);
+		if (rc == ULP_GEN_LIST_SEARCH_FOUND) {
+			gen_tbl_miss = 0; /* entry exits */
+			regval = key_index;
+			(void)ulp_regfile_write(parms->regfile,
+						tbl->tbl_operand,
+						tfp_cpu_to_be_64(regval));
+			g = &gen_tbl_ent;
+			rc = ulp_mapper_gen_tbl_entry_get(gen_tbl_list,
+							  key_index,
+							  &gen_tbl_ent);
+			if (rc)
+				return rc;
+
+			/* scan the result list and update the regfile values */
+			rc = ulp_mapper_tbl_ident_scan_ext(parms, tbl,
+							   g->byte_data,
+							   g->byte_data_size,
+							   g->byte_order);
+			if (unlikely(rc)) {
+				BNXT_DRV_DBG(ERR, "Fail to scan ident list\n");
+				return rc;
+			}
+
+		} else {
+			gen_tbl_miss = 1; /* no more entries */
+		}
+		fdb_write = 0;
 		break;
 	default:
 		BNXT_DRV_DBG(ERR, "Invalid table opcode %x\n", tbl->tbl_opcode);
@@ -2999,11 +3037,6 @@ ulp_mapper_stats_cache_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 			     rc);
 		return rc;
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_DBG(DEBUG, "flow id =0x%x\n", parms->flow_id);
-#endif
-#endif
 	return rc;
 }
 
@@ -3013,6 +3046,159 @@ ulp_mapper_stats_cache_tbl_res_free(struct bnxt_ulp_context *ulp,
 {
 	ulp_sc_mgr_entry_free(ulp, fid);
 	return 0;
+}
+
+static int32_t
+ulp_mapper_global_identifier_process(struct bnxt_ulp_mapper_parms *parms,
+				     struct bnxt_ulp_mapper_tbl_info *tbl)
+{
+	int32_t rc = 0;
+	struct bnxt_ulp_mapper_ident_info *idents;
+	struct bnxt_ulp_mapper_key_info	*kflds;
+	struct ulp_blob key;
+	uint32_t num_idents;
+	uint32_t num_kflds;
+	uint32_t i;
+
+	/* check the table opcode  */
+	if (tbl->tbl_opcode != BNXT_ULP_GLOBAL_IDENTIFIER_TBL_OPC_ALLOC) {
+		BNXT_DRV_DBG(ERR, "Invalid global ident table opcode %d\n",
+			     tbl->tbl_opcode);
+		return -EINVAL;
+	}
+
+	/* Create the key blob */
+	if (unlikely(ulp_blob_init(&key, tbl->blob_key_bit_size,
+				   BNXT_ULP_BYTE_ORDER_BE))) {
+		BNXT_DRV_DBG(ERR, "blob init failed.\n");
+		return -EINVAL;
+	}
+
+	kflds = ulp_mapper_key_fields_get(parms, tbl, &num_kflds);
+	for (i = 0; i < num_kflds; i++) {
+		rc = ulp_mapper_field_opc_process(parms, tbl->direction,
+						  &kflds[i].field_info_spec,
+						  &key, 1, "Global Id Context");
+		if (unlikely(rc)) {
+			BNXT_DRV_DBG(ERR, "Key field set failed %s\n",
+				     kflds[i].field_info_spec.description);
+			return rc;
+		}
+	}
+
+	/* Get the identifiers to process it */
+	idents = ulp_mapper_ident_fields_get(parms, tbl, &num_idents);
+	for (i = 0; i < num_idents; i++) {
+		if (unlikely(ulp_mapper_ident_process(parms, tbl, &key,
+						      &idents[i], NULL)))
+			return -EINVAL;
+	}
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_global_idx_tbl_process(struct bnxt_ulp_mapper_parms *parms,
+				  struct bnxt_ulp_mapper_tbl_info *tbl)
+{
+	const struct ulp_mapper_core_ops *op = parms->mapper_data->mapper_oper;
+	struct bnxt_ulp_glb_resource_info glb_res = { 0 };
+	struct ulp_flow_db_res_params fid_parms = { 0 };
+	struct bnxt_ulp_mapper_key_info	*kflds;
+	struct ulp_blob key;
+	uint32_t num_kflds = 0;
+	uint16_t tmplen = 0;
+	uint64_t idx = 0;
+	uint8_t *context;
+	int32_t rc = 0;
+	uint32_t i;
+
+	/* check the table opcode  */
+	if (tbl->tbl_opcode != BNXT_ULP_GLOBAL_IDX_TBL_OPC_ALLOC) {
+		BNXT_DRV_DBG(ERR, "Invalid global idx table opcode %d",
+			     tbl->tbl_opcode);
+		return -EINVAL;
+	}
+
+	/* Create the key blob */
+	if (unlikely(ulp_blob_init(&key, tbl->blob_key_bit_size,
+				   BNXT_ULP_BYTE_ORDER_BE))) {
+		BNXT_DRV_DBG(ERR, "blob init failed.");
+		return -EINVAL;
+	}
+
+	kflds = ulp_mapper_key_fields_get(parms, tbl, &num_kflds);
+	for (i = 0; i < num_kflds; i++) {
+		rc = ulp_mapper_field_opc_process(parms, tbl->direction,
+						  &kflds[i].field_info_spec,
+						  &key, 1,
+						  "Global Idx Context");
+		if (unlikely(rc)) {
+			BNXT_DRV_DBG(ERR, "Key field set failed %s",
+				     kflds[i].field_info_spec.description);
+			return rc;
+		}
+	}
+
+	context = ulp_blob_data_get(&key, &tmplen);
+	tmplen = ULP_BITS_2_BYTE(tmplen);
+
+	if (unlikely(!op->ulp_mapper_core_glb_idx_tbl_alloc)) {
+		BNXT_DRV_DBG(ERR, "global idx tbl process not supported");
+		return -EINVAL;
+	}
+
+	rc = op->ulp_mapper_core_glb_idx_tbl_alloc(parms->ulp_ctx,
+						   tbl->resource_type,
+						   tbl->direction, context,
+						   tmplen, &idx);
+	if (unlikely(rc)) {
+		BNXT_DRV_DBG(ERR, "global idx tbl process failed");
+		return rc;
+	}
+
+	/* Add the table index to the flow db */
+	memset(&fid_parms, 0, sizeof(fid_parms));
+	fid_parms.direction = tbl->direction;
+	fid_parms.resource_func = tbl->resource_func;
+	fid_parms.resource_type	= tbl->resource_type;
+	fid_parms.critical_resource = tbl->critical_resource;
+	fid_parms.resource_hndl = idx;
+
+	rc = ulp_mapper_fdb_opc_process(parms, tbl, &fid_parms);
+	if (unlikely(rc)) {
+		BNXT_DRV_DBG(ERR, "Fail to link res to flow rc = %d", rc);
+		goto error;
+	}
+
+	rc = bnxt_ulp_cntxt_dev_id_get(parms->ulp_ctx, &glb_res.device_id);
+	if (unlikely(rc)) {
+		BNXT_DRV_DBG(ERR, "Failed to get device id (%d)", rc);
+		goto error;
+	}
+
+	rc = bnxt_ulp_cntxt_app_id_get(parms->ulp_ctx, &glb_res.app_id);
+	if (unlikely(rc)) {
+		BNXT_DRV_DBG(ERR, "Failed to get app id (%d)", rc);
+		goto error;
+	}
+
+	glb_res.direction = tbl->direction;
+	glb_res.resource_func = tbl->resource_func;
+	glb_res.resource_type = tbl->resource_type;
+	glb_res.glb_regfile_index = tbl->tbl_operand;
+	/* Write the table index into the regfile*/
+	if (ulp_mapper_glb_resource_write(parms->mapper_data, &glb_res,
+					  tfp_cpu_to_be_64(idx), false)) {
+		BNXT_DRV_DBG(ERR, "Glb Regfile[%d] write failed.",
+			     tbl->tbl_operand);
+		rc = -EINVAL;
+		goto error;
+	}
+	return rc;
+error:
+	(void)op->ulp_mapper_core_glb_idx_tbl_free(parms->ulp_ctx, &fid_parms);
+	return rc;
 }
 
 /* Free the vnic resource */
@@ -3662,12 +3848,16 @@ ulp_mapper_func_info_process(struct bnxt_ulp_mapper_parms *parms,
 	case BNXT_ULP_FUNC_OPC_HANDLE_TO_OFFSET:
 	case BNXT_ULP_FUNC_OPC_VFR_MARK_SET:
 	case BNXT_ULP_FUNC_OPC_BD_ACT_SET:
+	case BNXT_ULP_FUNC_OPC_MTR_ID_TO_STATS_HANDLE:
+	case BNXT_ULP_FUNC_OPC_TCAM_SET_PRIORITY:
 		process_src1 = 1;
 		process_src2 = 1;
 		break;
 	case BNXT_ULP_FUNC_OPC_NOT_NOT:
 		process_src1 = 1;
 	case BNXT_ULP_FUNC_OPC_COND_LIST:
+	case BNXT_ULP_FUNC_OPC_APP_PRIORITY:
+	case BNXT_ULP_FUNC_OPC_GET_HA_PRIORITY:
 		break;
 	case BNXT_ULP_FUNC_OPC_PORT_TABLE:
 		process_src1 = 1;
@@ -3790,6 +3980,22 @@ ulp_mapper_func_info_process(struct bnxt_ulp_mapper_parms *parms,
 						    (uint8_t *)&res2,
 						    func_info->func_oper_size);
 		return rc;
+	case BNXT_ULP_FUNC_OPC_MTR_ID_TO_STATS_HANDLE:
+		/* res1 is mtr_id, res2 is stats_id */
+		return op->ulp_mapper_mtr_stats_hndl_set(parms, res1, res2);
+	case BNXT_ULP_FUNC_OPC_APP_PRIORITY:
+		res = parms->app_priority;
+		break;
+	case BNXT_ULP_FUNC_OPC_TCAM_SET_PRIORITY:
+		return op->ulp_mapper_core_tcam_prio_update(parms,
+							    tbl->direction,
+							    tbl->track_type,
+							    CFA_RSUBTYPE_TCAM_WC,
+							    (uint32_t)res1,
+							    (uint16_t)res2);
+	case BNXT_ULP_FUNC_OPC_GET_HA_PRIORITY:
+		res = bnxt_ulp_ha_priority_id_get(parms->ulp_ctx);
+		break;
 	default:
 		BNXT_DRV_DBG(ERR, "invalid func code %u\n",
 			     func_info->func_opc);
@@ -3801,12 +4007,6 @@ ulp_mapper_func_info_process(struct bnxt_ulp_mapper_parms *parms,
 			     func_info->func_dst_opr);
 		return -EINVAL;
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_DBG(DEBUG, "write the %" PRIX64 " into func_opc %u\n", res,
-		     func_info->func_dst_opr);
-#endif
-#endif
 
 	return rc;
 }
@@ -4220,6 +4420,12 @@ ulp_mapper_tbls_process(struct bnxt_ulp_mapper_parms *parms, void *error)
 		case BNXT_ULP_RESOURCE_FUNC_STATS_CACHE:
 			rc = ulp_mapper_stats_cache_tbl_process(parms, tbl);
 			break;
+		case BNXT_ULP_RESOURCE_FUNC_GLOBAL_IDENTIFIER:
+			rc = ulp_mapper_global_identifier_process(parms, tbl);
+			break;
+		case BNXT_ULP_RESOURCE_FUNC_GLOBAL_IDX_TBL:
+			rc = ulp_mapper_global_idx_tbl_process(parms, tbl);
+			break;
 		default:
 			BNXT_DRV_DBG(ERR, "Unexpected mapper resource %d\n",
 				     tbl->resource_func);
@@ -4361,6 +4567,12 @@ ulp_mapper_resource_free(struct bnxt_ulp_context *ulp,
 	case BNXT_ULP_RESOURCE_FUNC_STATS_CACHE:
 		rc = ulp_mapper_stats_cache_tbl_res_free(ulp,
 							 fid);
+		break;
+	case BNXT_ULP_RESOURCE_FUNC_GLOBAL_IDENTIFIER:
+		rc = mapper_op->ulp_mapper_core_global_ident_free(ulp, res);
+		break;
+	case BNXT_ULP_RESOURCE_FUNC_GLOBAL_IDX_TBL:
+		rc = mapper_op->ulp_mapper_core_glb_idx_tbl_free(ulp, res);
 		break;
 	default:
 		break;

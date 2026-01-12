@@ -129,6 +129,12 @@
 	(PLT_ALIGN_CEIL(ROC_AR_WIN_SIZE_MAX, BITS_PER_LONG_LONG) /             \
 	 BITS_PER_LONG_LONG)
 
+/* ROC CPTR Cache */
+#define ROC_CPTR_CACHE_LINE_SZ 256
+#define ROC_CPTR_ALIGN	       ROC_CPTR_CACHE_LINE_SZ
+
+#define ROC_CPT_CQ_ENTRY_SIZE_UNIT 32
+
 enum {
 	ROC_CPT_REVISION_ID_83XX = 0,
 	ROC_CPT_REVISION_ID_96XX_B0 = 1,
@@ -148,10 +154,16 @@ struct roc_cpt_lf {
 	/* Input parameters */
 	uint16_t lf_id;
 	uint32_t nb_desc;
+	bool dq_ack_ena;
+	bool cq_all;
+	bool cpt_cq_ena;
+	uint8_t cq_entry_size;
+	uint32_t cq_size;
 	/* End of Input parameters */
 	struct plt_pci_device *pci_dev;
 	struct dev *dev;
 	struct roc_cpt *roc_cpt;
+	uint16_t *cq_vaddr;
 	uintptr_t rbase;
 	uintptr_t lmt_base;
 	uint16_t msixoff;
@@ -169,6 +181,7 @@ struct roc_cpt {
 	uint16_t nb_lf;
 	uint16_t nb_lf_avail;
 	uintptr_t lmt_base;
+	uint8_t ctx_ilen;
 	/**< CPT device capabilities */
 	union cpt_eng_caps hw_caps[CPT_MAX_ENG_TYPES];
 	uint8_t eng_grp[CPT_MAX_ENG_TYPES];
@@ -226,6 +239,8 @@ int __roc_api roc_cpt_afs_print(struct roc_cpt *roc_cpt);
 int __roc_api roc_cpt_lfs_print(struct roc_cpt *roc_cpt);
 void __roc_api roc_cpt_iq_disable(struct roc_cpt_lf *lf);
 void __roc_api roc_cpt_iq_enable(struct roc_cpt_lf *lf);
+void __roc_api roc_cpt_cq_disable(struct roc_cpt_lf *lf);
+void __roc_api roc_cpt_cq_enable(struct roc_cpt_lf *lf);
 int __roc_api roc_cpt_lmtline_init(struct roc_cpt *roc_cpt, struct roc_cpt_lmtline *lmtline,
 				   int lf_id, bool is_dual);
 

@@ -136,22 +136,6 @@ rte_tel_data_add_array_int(struct rte_tel_data *d, int64_t x);
 int
 rte_tel_data_add_array_uint(struct rte_tel_data *d, uint64_t x);
 
- /**
- * Add a uint64_t to an array.
- * The array must have been started by rte_tel_data_start_array() with
- * RTE_TEL_UINT_VAL as the type parameter.
- *
- * @param d
- *   The data structure passed to the callback
- * @param x
- *   The number to be returned in the array
- * @return
- *   0 on success, negative errno on error
- */
-int
-rte_tel_data_add_array_u64(struct rte_tel_data *d, uint64_t x)
-	__rte_deprecated_msg("use 'rte_tel_data_add_array_uint' instead");
-
 /**
  * Add a container to an array. A container is an existing telemetry data
  * array. The array the container is to be added to must have been started by
@@ -249,25 +233,6 @@ int
 rte_tel_data_add_dict_uint(struct rte_tel_data *d,
 		const char *name, uint64_t val);
 
- /**
- * Add a uint64_t value to a dictionary.
- * The dict must have been started by rte_tel_data_start_dict().
- *
- * @param d
- *   The data structure passed to the callback
- * @param name
- *   The name the value is to be stored under in the dict
- *   Must contain only alphanumeric characters or the symbols: '_' or '/'
- * @param val
- *   The number to be stored in the dict
- * @return
- *   0 on success, negative errno on error, E2BIG on string truncation of name.
- */
-int
-rte_tel_data_add_dict_u64(struct rte_tel_data *d,
-		const char *name, uint64_t val)
-	__rte_deprecated_msg("use 'rte_tel_data_add_dict_uint' instead");
-
 /**
  * Add a container to a dictionary. A container is an existing telemetry data
  * array. The dict the container is to be added to must have been started by
@@ -359,17 +324,6 @@ typedef int (*telemetry_cb)(const char *cmd, const char *params,
  */
 typedef int (*telemetry_arg_cb)(const char *cmd, const char *params, void *arg,
 		struct rte_tel_data *info);
-
-/**
- * Used for handling data received over a telemetry socket.
- *
- * @param sock_id
- * ID for the socket to be used by the handler.
- *
- * @return
- * Void.
- */
-typedef void * (*handler)(void *sock_id);
 
 /**
  * Used when registering a command and callback function with telemetry.

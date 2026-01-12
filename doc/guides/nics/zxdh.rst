@@ -41,6 +41,7 @@ Features of the ZXDH PMD are:
 - Hardware TSO for generic IP or UDP tunnel, including VXLAN
 - Extended statistics query
 - Ingress meter support
+- Flow API
 
 
 Driver compilation and testing
@@ -53,4 +54,4 @@ for details.
 Limitations or Known issues
 ---------------------------
 
-X86-32, Power8, ARMv7, RISC-V, Windows and BSD are not supported yet.
+X86-32, Power8, ARMv7, RISC-V-32, Windows and BSD are not supported yet.

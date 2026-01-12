@@ -19,13 +19,18 @@ from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether
 from scapy.packet import Raw
 
+from api.capabilities import (
+    NicCapability,
+    requires_nic_capability,
+)
+from api.packet import send_packet_and_capture
+from api.test import fail, verify
+from api.testpmd import TestPmd
 from framework.exception import InteractiveCommandExecutionError
-from framework.remote_session.testpmd_shell import NicCapability, TestPmdShell
 from framework.test_suite import TestSuite, func_test
-from framework.testbed_model.capability import requires
 
 
-@requires(NicCapability.PHYSICAL_FUNCTION)
+@requires_nic_capability(NicCapability.PHYSICAL_FUNCTION)
 class TestMacFilter(TestSuite):
     """Mac address allowlist filtering test suite.
 
@@ -42,7 +47,7 @@ class TestMacFilter(TestSuite):
     test case passes.
     """
 
-    def send_packet_and_verify(
+    def _send_packet_and_verify(
         self,
         mac_address: str,
         should_receive: bool = True,
@@ -70,22 +75,22 @@ class TestMacFilter(TestSuite):
         packet.dst = mac_address
         received_packets = [
             packets
-            for packets in self.send_packet_and_capture(packet)
+            for packets in send_packet_and_capture(packet)
             if hasattr(packets, "load") and "X" * 22 in str(packets.load)
         ]
         if should_receive:
-            self.verify(
+            verify(
                 len(received_packets) == 1,
                 "Packet sent by test case should be forwarded and received.",
             )
         else:
-            self.verify(
+            verify(
                 len(received_packets) == 0,
                 "Packet sent by test case should not be forwarded and received.",
             )
 
     @func_test
-    def test_add_remove_mac_addresses(self) -> None:
+    def add_remove_mac_addresses(self) -> None:
         """Assess basic mac addressing filtering functionalities.
 
         This test case validates for proper behavior of mac address filtering with both
@@ -93,42 +98,48 @@ class TestMacFilter(TestSuite):
         added to the PMD. Packets should either be received or not received depending on
         the properties applied to the PMD at any given time.
 
-        Test:
-            * Start TestPMD without promiscuous mode.
+        Steps:
+            * Start testpmd without promiscuous mode.
             * Send a packet with the port's default mac address. (Should receive)
             * Send a packet with fake mac address. (Should not receive)
             * Add fake mac address to the PMD's address pool.
             * Send a packet with the fake mac address to the PMD. (Should receive)
             * Remove the fake mac address from the PMD's address pool.
             * Send a packet with the fake mac address to the PMD. (Should not receive)
+
+        Verify:
+            * Packet with the port's default mac address is received.
+            * Packet with a fake mac address is not received.
+            * Packet with a fake mac address is received when being sent to the PMD.
+            * Packet with a fake mac address is not received when being sent to the PMD.
         """
-        with TestPmdShell() as testpmd:
+        with TestPmd() as testpmd:
             testpmd.set_promisc(0, enable=False)
             testpmd.start()
             mac_address = self.topology.sut_port_ingress.mac_address
 
             # Send a packet with NIC default mac address
-            self.send_packet_and_verify(mac_address=mac_address, should_receive=True)
+            self._send_packet_and_verify(mac_address=mac_address, should_receive=True)
             # Send a packet with different mac address
             fake_address = "00:00:00:00:00:01"
-            self.send_packet_and_verify(mac_address=fake_address, should_receive=False)
+            self._send_packet_and_verify(mac_address=fake_address, should_receive=False)
 
             # Add mac address to pool and rerun tests
             testpmd.set_mac_addr(0, mac_address=fake_address, add=True)
-            self.send_packet_and_verify(mac_address=fake_address, should_receive=True)
+            self._send_packet_and_verify(mac_address=fake_address, should_receive=True)
             testpmd.set_mac_addr(0, mac_address=fake_address, add=False)
-            self.send_packet_and_verify(mac_address=fake_address, should_receive=False)
+            self._send_packet_and_verify(mac_address=fake_address, should_receive=False)
 
     @func_test
-    def test_invalid_address(self) -> None:
+    def invalid_address(self) -> None:
         """Assess the behavior of a NIC mac address pool while bound to the PMD.
 
         An assessment of a NIC's behavior when mounted to a PMD as it relates to mac addresses
         and address pooling. Devices should not be able to use invalid mac addresses, remove their
         built-in hardware address, or exceed their address pools.
 
-        Test:
-            * Start TestPMD.
+        Steps:
+            * Start testpmd.
             * Attempt to add an invalid mac address. (Should fail)
             * Attempt to remove the device's hardware address with no additional addresses in the
               address pool. (Should fail)
@@ -137,18 +148,26 @@ class TestMacFilter(TestSuite):
               pool. (Should fail)
             * Determine the device's mac address pool size, and fill the pool with fake addresses.
             * Attempt to add another fake mac address, overloading the address pool. (Should fail)
+
+        Verify:
+            * It is not possible to add a invalid mac address.
+            * It is not possible to remove the default mac address when there are no other
+              addresses in the pool.
+            * It is not possible to remove the default mac address when there are other
+              addresses in the pool.
+            * It is not possible to add another mac address.
         """
-        with TestPmdShell() as testpmd:
+        with TestPmd() as testpmd:
             testpmd.start()
             mac_address = self.topology.sut_port_ingress.mac_address
             try:
                 testpmd.set_mac_addr(0, "00:00:00:00:00:00", add=True)
-                self.verify(False, "Invalid mac address added.")
+                fail("Invalid mac address added.")
             except InteractiveCommandExecutionError:
                 pass
             try:
                 testpmd.set_mac_addr(0, mac_address, add=False)
-                self.verify(False, "Default mac address removed.")
+                fail("Default mac address removed.")
             except InteractiveCommandExecutionError:
                 pass
             # Should be no errors adding this twice
@@ -157,7 +176,7 @@ class TestMacFilter(TestSuite):
             # Double check to see if default mac address can be removed
             try:
                 testpmd.set_mac_addr(0, mac_address, add=False)
-                self.verify(False, "Default mac address removed.")
+                fail("Default mac address removed.")
             except InteractiveCommandExecutionError:
                 pass
 
@@ -173,33 +192,37 @@ class TestMacFilter(TestSuite):
                 testpmd.set_mac_addr(0, "E" + mac_address[1:], add=True)
                 # We add an extra address to compensate for mac address pool inconsistencies.
                 testpmd.set_mac_addr(0, "F" + mac_address[1:], add=True)
-                self.verify(False, "Mac address limit exceeded.")
+                fail("Mac address limit exceeded.")
             except InteractiveCommandExecutionError:
                 pass
 
-    @requires(NicCapability.MCAST_FILTERING)
+    @requires_nic_capability(NicCapability.MCAST_FILTERING)
     @func_test
-    def test_multicast_filter(self) -> None:
+    def multicast_filter(self) -> None:
         """Assess basic multicast address filtering functionalities.
 
         Ensure that multicast filtering performs as intended when a given device is bound
         to the PMD.
 
-        Test:
-            * Start TestPMD without promiscuous mode.
+        Steps:
+            * Start testpmd without promiscuous mode.
             * Add a fake multicast address to the PMD's multicast address pool.
-            * Send a packet with the fake multicast address to the PMD. (Should receive)
+            * Send a packet with the fake multicast address to the PMD.
             * Remove the fake multicast address from the PMDs multicast address filter.
-            * Send a packet with the fake multicast address to the PMD. (Should not receive)
+            * Send a packet with the fake multicast address to the PMD.
+
+        Verify:
+            * Packet sent with a fake multicast address is received.
+            * Packet sent with a fake multicast address is not received.
         """
-        with TestPmdShell() as testpmd:
+        with TestPmd() as testpmd:
             testpmd.start()
             testpmd.set_promisc(0, enable=False)
             multicast_address = "01:00:5E:00:00:00"
 
             testpmd.set_multicast_mac_addr(0, multi_addr=multicast_address, add=True)
-            self.send_packet_and_verify(multicast_address, should_receive=True)
+            self._send_packet_and_verify(multicast_address, should_receive=True)
 
             # Remove multicast filter and verify the packet was not received.
             testpmd.set_multicast_mac_addr(0, multicast_address, add=False)
-            self.send_packet_and_verify(multicast_address, should_receive=False)
+            self._send_packet_and_verify(multicast_address, should_receive=False)

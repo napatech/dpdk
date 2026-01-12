@@ -115,6 +115,38 @@ static struct rte_cryptodev_capabilities qat_sym_crypto_caps_gen4[] = {
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
+static struct rte_cryptodev_capabilities qat_asym_crypto_caps_gen4[] = {
+	QAT_ASYM_CAP(MODEX,
+		0, 1, 512, 1),
+	QAT_ASYM_CAP(MODINV,
+		0, 1, 512, 1),
+	QAT_ASYM_CAP(RSA,
+			((1 << RTE_CRYPTO_ASYM_OP_SIGN) |
+			(1 << RTE_CRYPTO_ASYM_OP_VERIFY) |
+			(1 << RTE_CRYPTO_ASYM_OP_ENCRYPT) |
+			(1 << RTE_CRYPTO_ASYM_OP_DECRYPT)),
+			64, 512, 64),
+	{	/* SM2 */
+		.op = RTE_CRYPTO_OP_TYPE_ASYMMETRIC,
+		{.asym = {
+			.xform_capa = {
+				.xform_type = RTE_CRYPTO_ASYM_XFORM_SM2,
+				.op_types =
+				((1 << RTE_CRYPTO_ASYM_OP_SIGN) |
+				 (1 << RTE_CRYPTO_ASYM_OP_VERIFY) |
+				 (1 << RTE_CRYPTO_ASYM_OP_ENCRYPT) |
+				 (1 << RTE_CRYPTO_ASYM_OP_DECRYPT)),
+				.op_capa = {
+					[RTE_CRYPTO_ASYM_OP_ENCRYPT] = (1 << RTE_CRYPTO_SM2_PARTIAL),
+					[RTE_CRYPTO_ASYM_OP_DECRYPT] = (1 << RTE_CRYPTO_SM2_PARTIAL),
+				},
+			},
+		}
+		}
+	},
+	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
+};
+
 static int
 qat_sym_crypto_cap_get_gen4(struct qat_cryptodev_private *internals,
 			const char *capa_memz_name,
@@ -152,6 +184,44 @@ qat_sym_crypto_cap_get_gen4(struct qat_cryptodev_private *internals,
 	}
 	capabilities = qat_sym_crypto_caps_gen4;
 	memcpy(addr, capabilities, sizeof(qat_sym_crypto_caps_gen4));
+	internals->qat_dev_capabilities = internals->capa_mz->addr;
+
+	return 0;
+}
+
+static int
+qat_asym_crypto_cap_get_gen4(struct qat_cryptodev_private *internals,
+			const char *capa_memz_name,
+			const uint16_t __rte_unused slice_map)
+{
+	const uint32_t size = sizeof(qat_asym_crypto_caps_gen4);
+	uint32_t i;
+
+	internals->capa_mz = rte_memzone_lookup(capa_memz_name);
+	if (internals->capa_mz == NULL) {
+		internals->capa_mz = rte_memzone_reserve(capa_memz_name,
+				size, rte_socket_id(), 0);
+		if (internals->capa_mz == NULL) {
+			QAT_LOG(DEBUG,
+				"Error allocating memzone for capabilities");
+			return -1;
+		}
+	}
+
+	struct rte_cryptodev_capabilities *addr =
+			(struct rte_cryptodev_capabilities *)
+				internals->capa_mz->addr;
+	const struct rte_cryptodev_capabilities *capabilities =
+		qat_asym_crypto_caps_gen4;
+	const uint32_t capa_num =
+		size / sizeof(struct rte_cryptodev_capabilities);
+	uint32_t curr_capa = 0;
+
+	for (i = 0; i < capa_num; i++) {
+		memcpy(addr + curr_capa, capabilities + i,
+			sizeof(struct rte_cryptodev_capabilities));
+		curr_capa++;
+	}
 	internals->qat_dev_capabilities = internals->capa_mz->addr;
 
 	return 0;
@@ -219,7 +289,7 @@ qat_sym_build_op_aead_gen4(void *in_op, struct qat_sym_session *ctx,
 	}
 
 	total_len = qat_sym_build_req_set_data(qat_req, in_op, cookie,
-			in_sgl.vec, in_sgl.num, out_sgl.vec, out_sgl.num);
+			in_sgl.vec, in_sgl.num, out_sgl.vec, out_sgl.num, &ofs, op);
 	if (unlikely(total_len < 0)) {
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
 		return -EINVAL;
@@ -376,7 +446,7 @@ qat_sym_dp_enqueue_single_aead_gen4(void *qp_data, uint8_t *drv_ctx,
 	rte_mov128((uint8_t *)req, (const uint8_t *)&(ctx->fw_req));
 	rte_prefetch0((uint8_t *)tx_queue->base_addr + tail);
 	data_len = qat_sym_build_req_set_data(req, user_data, cookie,
-			data, n_data_vecs, NULL, 0);
+			data, n_data_vecs, NULL, 0, NULL, NULL);
 	if (unlikely(data_len < 0))
 		return -1;
 
@@ -435,7 +505,7 @@ qat_sym_dp_enqueue_aead_jobs_gen4(void *qp_data, uint8_t *drv_ctx,
 			data_len = qat_sym_build_req_set_data(req,
 				user_data[i], cookie,
 				vec->src_sgl[i].vec,
-				vec->src_sgl[i].num, NULL, 0);
+				vec->src_sgl[i].num, NULL, 0, NULL, NULL);
 		}
 
 		if (unlikely(data_len < 0) || error)
@@ -546,7 +616,7 @@ RTE_INIT(qat_asym_crypto_gen4_init)
 			&qat_asym_crypto_ops_gen1;
 	qat_asym_gen_dev_ops[QAT_VQAT].get_capabilities =
 		qat_asym_gen_dev_ops[QAT_GEN4].get_capabilities =
-			qat_asym_crypto_cap_get_gen1;
+			qat_asym_crypto_cap_get_gen4;
 	qat_asym_gen_dev_ops[QAT_VQAT].get_feature_flags =
 		qat_asym_gen_dev_ops[QAT_GEN4].get_feature_flags =
 			qat_asym_crypto_feature_flags_get_gen1;

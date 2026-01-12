@@ -31,6 +31,7 @@
  * http://www.kohala.com/start/tcpipiv2.html
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include <rte_common.h>
@@ -40,6 +41,7 @@
 #include <rte_branch_prediction.h>
 #include <rte_mbuf_ptype.h>
 #include <rte_mbuf_core.h>
+#include <rte_mbuf_history.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -337,17 +339,19 @@ rte_pktmbuf_priv_flags(struct rte_mempool *mp)
 #define RTE_MBUF_HAS_PINNED_EXTBUF(mb) \
 	(rte_pktmbuf_priv_flags(mb->pool) & RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF)
 
-#ifdef RTE_LIBRTE_MBUF_DEBUG
+#if defined RTE_LIBRTE_MBUF_DEBUG || defined __DOXYGEN__
 
-/**  check mbuf type in debug mode */
+/** Check reinitialized mbuf type in debug mode. */
+#define __rte_mbuf_raw_sanity_check_mp(m, mp) rte_mbuf_raw_sanity_check(m, mp)
+/** Check mbuf type in debug mode. */
 #define __rte_mbuf_sanity_check(m, is_h) rte_mbuf_sanity_check(m, is_h)
 
-#else /*  RTE_LIBRTE_MBUF_DEBUG */
+#else /* !RTE_LIBRTE_MBUF_DEBUG */
 
-/**  check mbuf type in debug mode */
+#define __rte_mbuf_raw_sanity_check_mp(m, mp) do { } while (0)
 #define __rte_mbuf_sanity_check(m, is_h) do { } while (0)
 
-#endif /*  RTE_LIBRTE_MBUF_DEBUG */
+#endif /* RTE_LIBRTE_MBUF_DEBUG */
 
 #ifdef RTE_MBUF_REFCNT_ATOMIC
 
@@ -514,6 +518,46 @@ rte_mbuf_ext_refcnt_update(struct rte_mbuf_ext_shared_info *shinfo,
 
 
 /**
+ * Sanity checks on a reinitialized mbuf.
+ *
+ * Check the consistency of the given reinitialized mbuf.
+ * The function will cause a panic if corruption is detected.
+ *
+ * Check that the mbuf is properly reinitialized (refcnt=1, next=NULL,
+ * nb_segs=1), as done by rte_pktmbuf_prefree_seg().
+ *
+ * @param m
+ *   The mbuf to be checked.
+ * @param mp
+ *   The mempool to which the mbuf belongs.
+ *   NULL if unknown, not to be checked.
+ */
+void
+rte_mbuf_raw_sanity_check(const struct rte_mbuf *m, const struct rte_mempool *mp);
+
+/**
+ * Sanity checks on a reinitialized mbuf.
+ *
+ * Almost like rte_mbuf_raw_sanity_check(), but this function gives the reason
+ * if corruption is detected rather than panic.
+ *
+ * @param m
+ *   The mbuf to be checked.
+ * @param mp
+ *   The mempool to which the mbuf belongs.
+ *   NULL if unknown, not to be checked.
+ * @param reason
+ *   A reference to a string pointer where to store the reason
+ *   why a mbuf is considered invalid.
+ * @return
+ *   - 0 if no issue has been found, reason is left untouched.
+ *   - -1 if a problem is detected, reason then points to a string
+ *     describing the reason why the mbuf is deemed invalid.
+ */
+int rte_mbuf_raw_check(const struct rte_mbuf *m, const struct rte_mempool *mp,
+		   const char **reason);
+
+/**
  * Sanity checks on an mbuf.
  *
  * Check the consistency of the given mbuf. The function will cause a
@@ -550,33 +594,11 @@ rte_mbuf_sanity_check(const struct rte_mbuf *m, int is_header);
 int rte_mbuf_check(const struct rte_mbuf *m, int is_header,
 		   const char **reason);
 
-/**
- * Sanity checks on a reinitialized mbuf in debug mode.
- *
- * Check the consistency of the given reinitialized mbuf.
- * The function will cause a panic if corruption is detected.
- *
- * Check that the mbuf is properly reinitialized (refcnt=1, next=NULL,
- * nb_segs=1), as done by rte_pktmbuf_prefree_seg().
- *
- * @param m
- *   The mbuf to be checked.
- */
-static __rte_always_inline void
-__rte_mbuf_raw_sanity_check(__rte_unused const struct rte_mbuf *m)
-{
-	RTE_ASSERT(rte_mbuf_refcnt_read(m) == 1);
-	RTE_ASSERT(m->next == NULL);
-	RTE_ASSERT(m->nb_segs == 1);
-	RTE_ASSERT(!RTE_MBUF_CLONED(m));
-	RTE_ASSERT(!RTE_MBUF_HAS_EXTBUF(m) ||
-			(RTE_MBUF_HAS_PINNED_EXTBUF(m) &&
-			rte_mbuf_ext_refcnt_read(m->shinfo) == 1));
-	__rte_mbuf_sanity_check(m, 0);
-}
+/** For backwards compatibility. */
+#define __rte_mbuf_raw_sanity_check(m) __rte_mbuf_raw_sanity_check_mp(m, NULL)
 
 /** For backwards compatibility. */
-#define MBUF_RAW_ALLOC_CHECK(m) __rte_mbuf_raw_sanity_check(m)
+#define MBUF_RAW_ALLOC_CHECK(m) __rte_mbuf_raw_sanity_check_mp(m, NULL)
 
 /**
  * Allocate an uninitialized mbuf from mempool *mp*.
@@ -606,14 +628,14 @@ static inline struct rte_mbuf *rte_mbuf_raw_alloc(struct rte_mempool *mp)
 
 	if (rte_mempool_get(mp, &ret.ptr) < 0)
 		return NULL;
-	__rte_mbuf_raw_sanity_check(ret.m);
+	__rte_mbuf_raw_sanity_check_mp(ret.m, mp);
+
+	rte_mbuf_history_mark(ret.m, RTE_MBUF_HISTORY_OP_LIB_ALLOC);
+
 	return ret.m;
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
- *
  * Allocate a bulk of uninitialized mbufs from mempool *mp*.
  *
  * This function can be used by PMDs (especially in Rx functions)
@@ -637,14 +659,17 @@ static inline struct rte_mbuf *rte_mbuf_raw_alloc(struct rte_mempool *mp)
  *   - 0: Success.
  *   - -ENOENT: Not enough entries in the mempool; no mbufs are retrieved.
  */
-__rte_experimental
 static __rte_always_inline int
 rte_mbuf_raw_alloc_bulk(struct rte_mempool *mp, struct rte_mbuf **mbufs, unsigned int count)
 {
 	int rc = rte_mempool_get_bulk(mp, (void **)mbufs, count);
-	if (likely(rc == 0))
+	if (likely(rc == 0)) {
 		for (unsigned int idx = 0; idx < count; idx++)
-			__rte_mbuf_raw_sanity_check(mbufs[idx]);
+			__rte_mbuf_raw_sanity_check_mp(mbufs[idx], mp);
+	}
+
+	rte_mbuf_history_mark_bulk(mbufs, count, RTE_MBUF_HISTORY_OP_LIB_ALLOC);
+
 	return rc;
 }
 
@@ -665,14 +690,12 @@ rte_mbuf_raw_alloc_bulk(struct rte_mempool *mp, struct rte_mbuf **mbufs, unsigne
 static __rte_always_inline void
 rte_mbuf_raw_free(struct rte_mbuf *m)
 {
-	__rte_mbuf_raw_sanity_check(m);
+	__rte_mbuf_raw_sanity_check_mp(m, NULL);
+	rte_mbuf_history_mark(m, RTE_MBUF_HISTORY_OP_LIB_FREE);
 	rte_mempool_put(m->pool, m);
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
- *
  * Put a bulk of mbufs allocated from the same mempool back into the mempool.
  *
  * The caller must ensure that the mbufs come from the specified mempool,
@@ -692,17 +715,12 @@ rte_mbuf_raw_free(struct rte_mbuf *m)
  * @param count
  *   Array size.
  */
-__rte_experimental
 static __rte_always_inline void
 rte_mbuf_raw_free_bulk(struct rte_mempool *mp, struct rte_mbuf **mbufs, unsigned int count)
 {
-	for (unsigned int idx = 0; idx < count; idx++) {
-		const struct rte_mbuf *m = mbufs[idx];
-		RTE_ASSERT(m != NULL);
-		RTE_ASSERT(m->pool == mp);
-		__rte_mbuf_raw_sanity_check(m);
-	}
-
+	for (unsigned int idx = 0; idx < count; idx++)
+		__rte_mbuf_raw_sanity_check_mp(mbufs[idx], mp);
+	rte_mbuf_history_mark_bulk(mbufs, count, RTE_MBUF_HISTORY_OP_LIB_FREE);
 	rte_mempool_put_bulk(mp, (void **)mbufs, count);
 }
 
@@ -943,6 +961,50 @@ static inline void rte_pktmbuf_reset_headroom(struct rte_mbuf *m)
 }
 
 /**
+ * Reset the fields of a bulk of packet mbufs to their default values.
+ *
+ * The caller must ensure that the mbufs come from the specified mempool,
+ * are direct and properly reinitialized (refcnt=1, next=NULL, nb_segs=1),
+ * as done by rte_pktmbuf_prefree_seg().
+ *
+ * This function should be used with care, when optimization is required.
+ * For standard needs, prefer rte_pktmbuf_reset().
+ *
+ * @param mp
+ *   The mempool to which the mbuf belongs.
+ * @param mbufs
+ *   Array of pointers to packet mbufs.
+ *   The array must not contain NULL pointers.
+ * @param count
+ *   Array size.
+ */
+static inline void
+rte_mbuf_raw_reset_bulk(struct rte_mempool *mp, struct rte_mbuf **mbufs, unsigned int count)
+{
+	uint64_t ol_flags = (rte_pktmbuf_priv_flags(mp) & RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF) ?
+			RTE_MBUF_F_EXTERNAL : 0;
+	uint16_t data_off = RTE_MIN_T(RTE_PKTMBUF_HEADROOM, rte_pktmbuf_data_room_size(mp),
+			uint16_t);
+
+	for (unsigned int idx = 0; idx < count; idx++) {
+		struct rte_mbuf *m = mbufs[idx];
+
+		m->pkt_len = 0;
+		m->tx_offload = 0;
+		m->vlan_tci = 0;
+		m->vlan_tci_outer = 0;
+		m->port = RTE_MBUF_PORT_INVALID;
+
+		m->ol_flags = ol_flags;
+		m->packet_type = 0;
+		m->data_off = data_off;
+
+		m->data_len = 0;
+		__rte_mbuf_sanity_check(m, 1);
+	}
+}
+
+/**
  * Reset the fields of a packet mbuf to their default values.
  *
  * The given mbuf must have only one segment.
@@ -985,7 +1047,7 @@ static inline struct rte_mbuf *rte_pktmbuf_alloc(struct rte_mempool *mp)
 {
 	struct rte_mbuf *m;
 	if ((m = rte_mbuf_raw_alloc(mp)) != NULL)
-		rte_pktmbuf_reset(m);
+		rte_mbuf_raw_reset_bulk(mp, &m, 1);
 	return m;
 }
 
@@ -1006,42 +1068,16 @@ static inline struct rte_mbuf *rte_pktmbuf_alloc(struct rte_mempool *mp)
 static inline int rte_pktmbuf_alloc_bulk(struct rte_mempool *pool,
 	 struct rte_mbuf **mbufs, unsigned count)
 {
-	unsigned idx = 0;
 	int rc;
 
-	rc = rte_mempool_get_bulk(pool, (void **)mbufs, count);
+	rc = rte_mbuf_raw_alloc_bulk(pool, mbufs, count);
 	if (unlikely(rc))
 		return rc;
 
-	/* To understand duff's device on loop unwinding optimization, see
-	 * https://en.wikipedia.org/wiki/Duff's_device.
-	 * Here while() loop is used rather than do() while{} to avoid extra
-	 * check if count is zero.
-	 */
-	switch (count % 4) {
-	case 0:
-		while (idx != count) {
-			__rte_mbuf_raw_sanity_check(mbufs[idx]);
-			rte_pktmbuf_reset(mbufs[idx]);
-			idx++;
-			/* fall-through */
-	case 3:
-			__rte_mbuf_raw_sanity_check(mbufs[idx]);
-			rte_pktmbuf_reset(mbufs[idx]);
-			idx++;
-			/* fall-through */
-	case 2:
-			__rte_mbuf_raw_sanity_check(mbufs[idx]);
-			rte_pktmbuf_reset(mbufs[idx]);
-			idx++;
-			/* fall-through */
-	case 1:
-			__rte_mbuf_raw_sanity_check(mbufs[idx]);
-			rte_pktmbuf_reset(mbufs[idx]);
-			idx++;
-			/* fall-through */
-		}
-	}
+	rte_mbuf_history_mark_bulk(mbufs, count, RTE_MBUF_HISTORY_OP_LIB_ALLOC);
+
+	rte_mbuf_raw_reset_bulk(pool, mbufs, count);
+
 	return 0;
 }
 
@@ -1423,44 +1459,30 @@ static inline int __rte_pktmbuf_pinned_extbuf_decref(struct rte_mbuf *m)
 static __rte_always_inline struct rte_mbuf *
 rte_pktmbuf_prefree_seg(struct rte_mbuf *m)
 {
+	bool refcnt_not_one;
+
 	__rte_mbuf_sanity_check(m, 0);
 
-	if (likely(rte_mbuf_refcnt_read(m) == 1)) {
+	refcnt_not_one = unlikely(rte_mbuf_refcnt_read(m) != 1);
+	if (refcnt_not_one && __rte_mbuf_refcnt_update(m, -1) != 0)
+		return NULL;
 
-		if (!RTE_MBUF_DIRECT(m)) {
-			rte_pktmbuf_detach(m);
-			if (RTE_MBUF_HAS_EXTBUF(m) &&
-			    RTE_MBUF_HAS_PINNED_EXTBUF(m) &&
-			    __rte_pktmbuf_pinned_extbuf_decref(m))
-				return NULL;
-		}
-
-		if (m->next != NULL)
-			m->next = NULL;
-		if (m->nb_segs != 1)
-			m->nb_segs = 1;
-
-		return m;
-
-	} else if (__rte_mbuf_refcnt_update(m, -1) == 0) {
-
-		if (!RTE_MBUF_DIRECT(m)) {
-			rte_pktmbuf_detach(m);
-			if (RTE_MBUF_HAS_EXTBUF(m) &&
-			    RTE_MBUF_HAS_PINNED_EXTBUF(m) &&
-			    __rte_pktmbuf_pinned_extbuf_decref(m))
-				return NULL;
-		}
-
-		if (m->next != NULL)
-			m->next = NULL;
-		if (m->nb_segs != 1)
-			m->nb_segs = 1;
-		rte_mbuf_refcnt_set(m, 1);
-
-		return m;
+	if (unlikely(!RTE_MBUF_DIRECT(m))) {
+		rte_pktmbuf_detach(m);
+		if (RTE_MBUF_HAS_EXTBUF(m) &&
+				RTE_MBUF_HAS_PINNED_EXTBUF(m) &&
+				__rte_pktmbuf_pinned_extbuf_decref(m))
+			return NULL;
 	}
-	return NULL;
+
+	if (refcnt_not_one)
+		rte_mbuf_refcnt_set(m, 1);
+	if (m->nb_segs != 1)
+		m->nb_segs = 1;
+	if (m->next != NULL)
+		m->next = NULL;
+
+	return m;
 }
 
 /**

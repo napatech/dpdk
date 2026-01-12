@@ -780,7 +780,7 @@ mlx5_shared_rxq_match(struct mlx5_rxq_ctrl *rxq_ctrl, struct rte_eth_dev *dev,
 			dev->data->port_id, idx);
 		return false;
 	}
-	if (priv->mtu != spriv->mtu) {
+	if (priv->mtu != rxq_ctrl->mtu) {
 		DRV_LOG(ERR, "port %u queue index %u failed to join shared group: mtu mismatch",
 			dev->data->port_id, idx);
 		return false;
@@ -1813,6 +1813,10 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	LIST_INIT(&tmpl->owners);
 	MLX5_ASSERT(n_seg && n_seg <= MLX5_MAX_RXQ_NSEG);
 	/*
+	 * Save the original MTU to check against for shared rx queues.
+	 */
+	tmpl->mtu = dev->data->mtu;
+	/*
 	 * Save the original segment configuration in the shared queue
 	 * descriptor for the later check on the sibling queue creation.
 	 */
@@ -2033,8 +2037,9 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		tmpl->share_group = conf->share_group;
 		tmpl->share_qid = conf->share_qid;
 		LIST_INSERT_HEAD(&priv->sh->shared_rxqs, tmpl, share_entry);
+	} else {
+		LIST_INSERT_HEAD(&priv->rxqsctrl, tmpl, next);
 	}
-	LIST_INSERT_HEAD(&priv->rxqsctrl, tmpl, next);
 	rte_atomic_store_explicit(&tmpl->ctrl_ref, 1, rte_memory_order_relaxed);
 	return tmpl;
 error:
@@ -2211,7 +2216,8 @@ mlx5_ext_rxq_ref(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct mlx5_external_q *rxq = mlx5_ext_rxq_get(dev, idx);
 
-	rte_atomic_fetch_add_explicit(&rxq->refcnt, 1, rte_memory_order_relaxed);
+	if (rxq != NULL)
+		rte_atomic_fetch_add_explicit(&rxq->refcnt, 1, rte_memory_order_relaxed);
 	return rxq;
 }
 
@@ -2231,7 +2237,9 @@ mlx5_ext_rxq_deref(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct mlx5_external_q *rxq = mlx5_ext_rxq_get(dev, idx);
 
-	return rte_atomic_fetch_sub_explicit(&rxq->refcnt, 1, rte_memory_order_relaxed) - 1;
+	return rxq != NULL ?
+		rte_atomic_fetch_sub_explicit(&rxq->refcnt, 1, rte_memory_order_relaxed) - 1 :
+		UINT32_MAX;
 }
 
 /**
@@ -2250,8 +2258,8 @@ mlx5_ext_rxq_get(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
-	MLX5_ASSERT(mlx5_is_external_rxq(dev, idx));
-	return &priv->ext_rxqs[idx - RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN];
+	return mlx5_is_external_rxq(dev, idx) ?
+		&priv->ext_rxqs[idx -  RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN] : NULL;
 }
 
 /**
@@ -2365,7 +2373,8 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 					(&rxq_ctrl->rxq.mr_ctrl.cache_bh);
 			if (rxq_ctrl->rxq.shared)
 				LIST_REMOVE(rxq_ctrl, share_entry);
-			LIST_REMOVE(rxq_ctrl, next);
+			else
+				LIST_REMOVE(rxq_ctrl, next);
 			mlx5_free(rxq_ctrl->rxq.rq_win_data);
 			mlx5_free(rxq_ctrl);
 		}
@@ -2413,7 +2422,6 @@ int
 mlx5_ext_rxq_verify(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_external_q *rxq;
 	uint32_t i;
 	int ret = 0;
 
@@ -2421,8 +2429,9 @@ mlx5_ext_rxq_verify(struct rte_eth_dev *dev)
 		return 0;
 
 	for (i = RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN; i <= UINT16_MAX ; ++i) {
-		rxq = mlx5_ext_rxq_get(dev, i);
-		if (rxq->refcnt < 2)
+		struct mlx5_external_q *rxq = mlx5_ext_rxq_get(dev, i);
+
+		if (rxq == NULL || rxq->refcnt < 2)
 			continue;
 		DRV_LOG(DEBUG, "Port %u external RxQ %u still referenced.",
 			dev->data->port_id, i);

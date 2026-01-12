@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -119,8 +118,8 @@ struct sg_ops_s {
 	int (*nthw_virt_queue_init)(struct fpga_info_s *p_fpga_info);
 };
 
-void register_sg_ops(struct sg_ops_s *ops);
-const struct sg_ops_s *get_sg_ops(void);
+void nthw_reg_sg_ops(struct sg_ops_s *ops);
+const struct sg_ops_s *nthw_get_sg_ops(void);
 void nthw_sg_init(void);
 
 /* Meter ops section */
@@ -128,8 +127,8 @@ struct meter_ops_s {
 	int (*eth_mtr_ops_get)(struct rte_eth_dev *eth_dev, void *ops);
 };
 
-void register_meter_ops(struct meter_ops_s *ops);
-const struct meter_ops_s *get_meter_ops(void);
+void nthw_reg_meter_ops(struct meter_ops_s *ops);
+const struct meter_ops_s *nthw_get_meter_ops(void);
 void nthw_meter_init(void);
 
 /*
@@ -139,21 +138,21 @@ struct ntnic_filter_ops {
 	int (*poll_statistics)(struct pmd_internals *internals);
 };
 
-void register_ntnic_filter_ops(const struct ntnic_filter_ops *ops);
-const struct ntnic_filter_ops *get_ntnic_filter_ops(void);
-void ntnic_filter_init(void);
+void nthw_reg_filter_ops(const struct ntnic_filter_ops *ops);
+const struct ntnic_filter_ops *nthw_get_filter_ops(void);
+void nthw_filter_ops_init(void);
 
 struct link_ops_s {
 	int (*link_init)(struct adapter_info_s *p_adapter_info, nthw_fpga_t *p_fpga);
 };
 
-void register_100g_link_ops(struct link_ops_s *ops);
-const struct link_ops_s *get_100g_link_ops(void);
+void nthw_reg_100g_link_ops(struct link_ops_s *ops);
+const struct link_ops_s *nthw_get_100g_link_ops(void);
 void nthw_link_100g_init(void);
 
-void register_agx_100g_link_ops(struct link_ops_s *ops);
-const struct link_ops_s *get_agx_100g_link_ops(void);
-void link_agx_100g_init(void);
+void nthw_reg_agx_100g_link_ops(struct link_ops_s *ops);
+const struct link_ops_s *nthw_get_agx_100g_link_ops(void);
+void nthw_link_agx_100g_ops_init(void);
 
 struct port_ops {
 	bool (*get_nim_present)(struct adapter_info_s *p, int port);
@@ -207,8 +206,8 @@ struct port_ops {
 	int (*tx_power)(struct adapter_info_s *p, int port, bool disable);
 };
 
-void register_port_ops(const struct port_ops *ops);
-const struct port_ops *get_port_ops(void);
+void nthw_reg_port_ops(const struct port_ops *ops);
+const struct port_ops *nthw_get_port_ops(void);
 void nthw_port_init(void);
 
 struct nt4ga_stat_ops {
@@ -218,9 +217,9 @@ struct nt4ga_stat_ops {
 		nt4ga_stat_t *p_nt4ga_stat);
 };
 
-void register_nt4ga_stat_ops(const struct nt4ga_stat_ops *ops);
-const struct nt4ga_stat_ops *get_nt4ga_stat_ops(void);
-void nt4ga_stat_ops_init(void);
+void nthw_reg_nt4ga_stat_ops(const struct nt4ga_stat_ops *ops);
+const struct nt4ga_stat_ops *nthw_get_nt4ga_stat_ops(void);
+void nthw_stat_ops_init(void);
 
 struct adapter_ops {
 	int (*init)(struct adapter_info_s *p_adapter_info);
@@ -229,8 +228,8 @@ struct adapter_ops {
 	int (*show_info)(struct adapter_info_s *p_adapter_info, FILE *pfh);
 };
 
-void register_adapter_ops(const struct adapter_ops *ops);
-const struct adapter_ops *get_adapter_ops(void);
+void nthw_reg_adapter_ops(const struct adapter_ops *ops);
+const struct adapter_ops *nthw_get_adapter_ops(void);
 void nthw_adapter_init(void);
 
 struct clk9563_ops {
@@ -238,9 +237,9 @@ struct clk9563_ops {
 	const clk_profile_data_fmt2_t *(*get_p_data_9563_si5340_nt200a02_u23_v5)(void);
 };
 
-void register_clk9563_ops(struct clk9563_ops *ops);
-struct clk9563_ops *get_clk9563_ops(void);
-void clk9563_ops_init(void);
+void nthw_reg_clk9563_ops(struct clk9563_ops *ops);
+struct clk9563_ops *nthw_get_clk9563_ops(void);
+void nthw_clk9563_ops_init(void);
 
 struct rst_nt200a0x_ops {
 	int (*nthw_fpga_rst_nt200a0x_init)(struct fpga_info_s *p_fpga_info,
@@ -249,18 +248,18 @@ struct rst_nt200a0x_ops {
 		const struct nthw_fpga_rst_nt200a0x *p);
 };
 
-void register_rst_nt200a0x_ops(struct rst_nt200a0x_ops *ops);
-struct rst_nt200a0x_ops *get_rst_nt200a0x_ops(void);
-void rst_nt200a0x_ops_init(void);
+void nthw_reg_rst_nt200a0x_ops(struct rst_nt200a0x_ops *ops);
+struct rst_nt200a0x_ops *nthw_get_rst_nt200a0x_ops(void);
+void nthw_rst_nt200a0x_ops_init(void);
 
 struct rst9563_ops {
 	int (*nthw_fpga_rst9563_init)(struct fpga_info_s *p_fpga_info,
 		struct nthw_fpga_rst_nt200a0x *const p);
 };
 
-void register_rst9563_ops(struct rst9563_ops *ops);
-struct rst9563_ops *get_rst9563_ops(void);
-void rst9563_ops_init(void);
+void nthw_reg_rst9563_ops(struct rst9563_ops *ops);
+struct rst9563_ops *nthw_get_rst9563_ops(void);
+void nthw_rst9563_ops_init(void);
 
 struct rst9574_ops {
 	int (*nthw_fpga_rst9574_init)(struct fpga_info_s *p_fpga_info,
@@ -269,18 +268,29 @@ struct rst9574_ops {
 		struct nthw_fpga_rst_nt400dxx *const p);
 };
 
-void register_rst9574_ops(struct rst9574_ops *ops);
-struct rst9574_ops *get_rst9574_ops(void);
-void rst9574_ops_init(void);
+struct rst9569_ops {
+	int (*nthw_fpga_rst9569_init)(struct fpga_info_s *p_fpga_info,
+		struct nthw_fpga_rst_nt400dxx *const p);
+	int (*nthw_fpga_rst9569_setup)(nthw_fpga_t *p_fpga,
+		struct nthw_fpga_rst_nt400dxx *const p);
+};
+
+void nthw_reg_rst9569_ops(struct rst9569_ops *ops);
+struct rst9569_ops *nthw_get_rst9569_ops(void);
+void nthw_rst9569_ops_init(void);
+
+void nthw_reg_rst9574_ops(struct rst9574_ops *ops);
+struct rst9574_ops *nthw_get_rst9574_ops(void);
+void nthw_rst9574_ops_init(void);
 
 struct rst_nt400dxx_ops {
 	int (*nthw_fpga_rst_nt400dxx_init)(struct fpga_info_s *p_fpga_info);
 	int (*nthw_fpga_rst_nt400dxx_reset)(struct fpga_info_s *p_fpga_info);
 };
 
-void register_rst_nt400dxx_ops(struct rst_nt400dxx_ops *ops);
-struct rst_nt400dxx_ops *get_rst_nt400dxx_ops(void);
-void rst_nt400dxx_ops_init(void);
+void nthw_reg_rst_nt400dxx_ops(struct rst_nt400dxx_ops *ops);
+struct rst_nt400dxx_ops *nthw_get_rst_nt400dxx_ops(void);
+void nthw_rst_nt400dxx_ops_init(void);
 
 struct flow_backend_ops {
 	const struct flow_api_backend_ops *(*nthw_bin_flow_backend_init)(nthw_fpga_t *p_fpga,
@@ -288,8 +298,8 @@ struct flow_backend_ops {
 	void (*bin_flow_backend_done)(void *be_dev);
 };
 
-void register_flow_backend_ops(const struct flow_backend_ops *ops);
-const struct flow_backend_ops *get_flow_backend_ops(void);
+void nthw_reg_flow_backend_ops(const struct flow_backend_ops *ops);
+const struct flow_backend_ops *nthw_get_flow_backend_ops(void);
 void nthw_flow_backend_init(void);
 
 struct profile_inline_ops {
@@ -297,18 +307,18 @@ struct profile_inline_ops {
 	 * Management
 	 */
 
-	int (*done_flow_management_of_ndev_profile_inline)(struct flow_nic_dev *ndev);
+	int (*nthw_done_flow_mgmnt_of_ndev_profile_inline)(struct flow_nic_dev *ndev);
 
-	int (*initialize_flow_management_of_ndev_profile_inline)(struct flow_nic_dev *ndev);
+	int (*nthw_init_flow_mgmnt_of_ndev_profile_inline)(struct flow_nic_dev *ndev);
 
 	/*
 	 * Flow functionality
 	 */
-	int (*flow_destroy_locked_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_destroy_locked_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_handle *fh,
 		struct rte_flow_error *error);
 
-	struct flow_handle *(*flow_create_profile_inline)(struct flow_eth_dev *dev,
+	struct flow_handle *(*nthw_flow_create_profile_inline)(struct flow_eth_dev *dev,
 		const struct rte_flow_attr *attr,
 		uint16_t forced_vlan_vid,
 		uint16_t caller_id,
@@ -316,26 +326,26 @@ struct profile_inline_ops {
 		const struct rte_flow_action action[],
 		struct rte_flow_error *error);
 
-	int (*flow_destroy_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_destroy_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_handle *flow,
 		struct rte_flow_error *error);
 
-	int (*flow_flush_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_flush_profile_inline)(struct flow_eth_dev *dev,
 		uint16_t caller_id,
 		struct rte_flow_error *error);
 
-	int (*flow_actions_update_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_actions_update_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_handle *flow,
 		const struct rte_flow_action action[],
 		struct rte_flow_error *error);
 
-	int (*flow_dev_dump_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_dev_dump_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_handle *flow,
 		uint16_t caller_id,
 		FILE *file,
 		struct rte_flow_error *error);
 
-	int (*flow_get_aged_flows_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_get_aged_flows_profile_inline)(struct flow_eth_dev *dev,
 		uint16_t caller_id,
 		void **context,
 		uint32_t nb_contexts,
@@ -345,55 +355,58 @@ struct profile_inline_ops {
 	 * RTE flow asynchronous operations functions
 	 */
 
-	struct flow_pattern_template *(*flow_pattern_template_create_profile_inline)
+	struct flow_pattern_template *(*nthw_flow_pattern_template_create_profile_inline)
 		(struct flow_eth_dev *dev,
 		const struct rte_flow_pattern_template_attr *template_attr, uint16_t caller_id,
 		const struct rte_flow_item pattern[], struct rte_flow_error *error);
 
-	int (*flow_pattern_template_destroy_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_pattern_template_destroy_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_pattern_template *pattern_template,
 		struct rte_flow_error *error);
 
-	struct flow_actions_template *(*flow_actions_template_create_profile_inline)
+	struct flow_actions_template *(*nthw_flow_actions_template_create_profile_inline)
 		(struct flow_eth_dev *dev,
 		const struct rte_flow_actions_template_attr *template_attr,
 		uint16_t caller_id, const struct rte_flow_action actions[],
 		const struct rte_flow_action masks[], struct rte_flow_error *error);
 
-	int (*flow_actions_template_destroy_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_actions_template_destroy_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_actions_template *actions_template,
 		struct rte_flow_error *error);
 
-	struct flow_template_table *(*flow_template_table_create_profile_inline)
+	struct flow_template_table *(*nthw_flow_template_table_create_profile_inline)
 		(struct flow_eth_dev *dev, const struct rte_flow_template_table_attr *table_attr,
 		uint16_t forced_vlan_vid, uint16_t caller_id,
 		struct flow_pattern_template *pattern_templates[], uint8_t nb_pattern_templates,
 		struct flow_actions_template *actions_templates[], uint8_t nb_actions_templates,
 		struct rte_flow_error *error);
 
-	int (*flow_template_table_destroy_profile_inline)(struct flow_eth_dev *dev,
+	int (*nthw_flow_template_table_destroy_profile_inline)(struct flow_eth_dev *dev,
 		struct flow_template_table *template_table,
 		struct rte_flow_error *error);
 
-	struct flow_handle *(*flow_async_create_profile_inline)(struct flow_eth_dev *dev,
+	struct flow_handle *(*nthw_flow_async_create_profile_inline)(struct flow_eth_dev *dev,
 		uint32_t queue_id, const struct rte_flow_op_attr *op_attr,
 		struct flow_template_table *template_table, const struct rte_flow_item pattern[],
 		uint8_t rte_pattern_template_index, const struct rte_flow_action actions[],
 		uint8_t rte_actions_template_index, void *user_data, struct rte_flow_error *error);
 
-	int (*flow_async_destroy_profile_inline)(struct flow_eth_dev *dev, uint32_t queue_id,
+	int (*nthw_flow_async_destroy_profile_inline)(struct flow_eth_dev *dev, uint32_t queue_id,
 		const struct rte_flow_op_attr *op_attr,
 		struct flow_handle *flow, void *user_data,
 		struct rte_flow_error *error);
 
+	int (*nthw_flow_pull_profile_inline)(struct flow_eth_dev *dev, uint16_t caller_id,
+		uint32_t queue_id, struct rte_flow_op_result res[],
+		uint16_t n_res, struct rte_flow_error *error);
 	/*
 	 * Stats
 	 */
-	int (*flow_get_flm_stats_profile_inline)(struct flow_nic_dev *ndev,
+	int (*nthw_flow_get_flm_stats_profile_inline)(struct flow_nic_dev *ndev,
 		uint64_t *data,
 		uint64_t size);
 
-	int (*flow_get_ifr_stats_profile_inline)(struct flow_nic_dev *ndev,
+	int (*nthw_flow_get_ifr_stats_profile_inline)(struct flow_nic_dev *ndev,
 		uint64_t *data,
 		uint8_t port_count);
 
@@ -431,11 +444,11 @@ struct profile_inline_ops {
 
 	uint32_t (*flm_update)(struct flow_eth_dev *dev);
 
-	int (*flow_info_get_profile_inline)(struct flow_eth_dev *dev, uint8_t caller_id,
+	int (*nthw_flow_info_get_profile_inline)(struct flow_eth_dev *dev, uint8_t caller_id,
 		struct rte_flow_port_info *port_info, struct rte_flow_queue_info *queue_info,
 		struct rte_flow_error *error);
 
-	int (*flow_configure_profile_inline)(struct flow_eth_dev *dev, uint8_t caller_id,
+	int (*nthw_flow_configure_profile_inline)(struct flow_eth_dev *dev, uint8_t caller_id,
 	const struct rte_flow_port_attr *port_attr, uint16_t nb_queue,
 	const struct rte_flow_queue_attr *queue_attr[],
 	struct rte_flow_error *error);
@@ -443,12 +456,12 @@ struct profile_inline_ops {
 	/*
 	 * Config API
 	 */
-	int (*flow_set_mtu_inline)(struct flow_eth_dev *dev, uint32_t port, uint16_t mtu);
+	int (*nthw_flow_set_mtu_inline)(struct flow_eth_dev *dev, uint32_t port, uint16_t mtu);
 };
 
-void register_profile_inline_ops(const struct profile_inline_ops *ops);
-const struct profile_inline_ops *get_profile_inline_ops(void);
-void profile_inline_init(void);
+void nthw_reg_profile_inline_ops(const struct profile_inline_ops *ops);
+const struct profile_inline_ops *nthw_get_profile_inline_ops(void);
+void nthw_profile_inline_init(void);
 
 struct flow_filter_ops {
 	int (*nthw_flow_filter_init)(nthw_fpga_t *p_fpga, struct flow_nic_dev **p_flow_device,
@@ -500,7 +513,7 @@ struct flow_filter_ops {
 	/*
 	 * Other
 	 */
-	int (*hw_mod_hsh_rcp_flush)(struct flow_api_backend_s *be, int start_idx, int count);
+	int (*nthw_mod_hsh_rcp_flush)(struct flow_api_backend_s *be, int start_idx, int count);
 
 	int (*flow_get_aged_flows)(struct flow_eth_dev *dev,
 		uint16_t caller_id,
@@ -549,6 +562,9 @@ struct flow_filter_ops {
 		const struct rte_flow_op_attr *op_attr, struct flow_handle *flow,
 		void *user_data, struct rte_flow_error *error);
 
+	int (*flow_pull)(struct flow_eth_dev *dev, uint16_t caller_id, uint32_t queue_id,
+		struct rte_flow_op_result res[], uint16_t n_res, struct rte_flow_error *error);
+
 	int (*flow_info_get)(struct flow_eth_dev *dev, uint8_t caller_id,
 		struct rte_flow_port_info *port_info, struct rte_flow_queue_info *queue_info,
 		struct rte_flow_error *error);
@@ -559,16 +575,16 @@ struct flow_filter_ops {
 		struct rte_flow_error *error);
 };
 
-void register_dev_fp_flow_ops(const struct rte_flow_fp_ops *ops);
-const struct rte_flow_fp_ops *get_dev_fp_flow_ops(void);
+void nthw_reg_dev_fp_flow_ops(const struct rte_flow_fp_ops *ops);
+const struct rte_flow_fp_ops *nthw_get_dev_fp_flow_ops(void);
 void nthw_dev_fp_flow_init(void);
 
-void register_dev_flow_ops(const struct rte_flow_ops *ops);
-const struct rte_flow_ops *get_dev_flow_ops(void);
+void nthw_reg_dev_flow_ops(const struct rte_flow_ops *ops);
+const struct rte_flow_ops *nthw_get_dev_flow_ops(void);
 void nthw_dev_flow_init(void);
 
-void register_flow_filter_ops(const struct flow_filter_ops *ops);
-const struct flow_filter_ops *get_flow_filter_ops(void);
+void nthw_reg_flow_filter_ops(const struct flow_filter_ops *ops);
+const struct flow_filter_ops *nthw_get_flow_filter_ops(void);
 void nthw_init_flow_filter(void);
 
 struct ntnic_xstats_ops {
@@ -591,8 +607,8 @@ struct ntnic_xstats_ops {
 		uint8_t port);
 };
 
-void register_ntnic_xstats_ops(struct ntnic_xstats_ops *ops);
-struct ntnic_xstats_ops *get_ntnic_xstats_ops(void);
-void ntnic_xstats_ops_init(void);
+void nthw_reg_xstats_ops(struct ntnic_xstats_ops *ops);
+struct ntnic_xstats_ops *nthw_get_xstats_ops(void);
+void nthw_xstats_ops_init(void);
 
 #endif	/* __NTNIC_MOD_REG_H__ */

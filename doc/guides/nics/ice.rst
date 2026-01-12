@@ -63,14 +63,6 @@ For E810,
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    DPDK   | Kernel Driver | OS Default DDP  | COMMS DDP | Wireless DDP | Firmware  |
    +===========+===============+=================+===========+==============+===========+
-   |    20.11  |     1.3.2     |      1.3.20     |  1.3.24   |      N/A     |    2.3    |
-   +-----------+---------------+-----------------+-----------+--------------+-----------+
-   |    21.02  |     1.4.11    |      1.3.24     |  1.3.28   |    1.3.4     |    2.4    |
-   +-----------+---------------+-----------------+-----------+--------------+-----------+
-   |    21.05  |     1.6.5     |      1.3.26     |  1.3.30   |    1.3.6     |    3.0    |
-   +-----------+---------------+-----------------+-----------+--------------+-----------+
-   |    21.08  |     1.7.16    |      1.3.27     |  1.3.31   |    1.3.7     |    3.1    |
-   +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    21.11  |     1.7.16    |      1.3.27     |  1.3.31   |    1.3.7     |    3.1    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    22.03  |     1.8.3     |      1.3.28     |  1.3.35   |    1.3.8     |    3.2    |
@@ -95,6 +87,8 @@ For E810,
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    25.07  |     2.2.8     |      1.3.43     |  1.3.55   |    1.3.23    |    4.8    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    25.11  |     2.3.14    |      1.3.43     |  1.3.55   |    1.3.25    |    4.9    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
 
 For E830,
 
@@ -103,7 +97,8 @@ For E830,
    +===========+===============+=================+===========+==============+===========+
    |    25.07  |     2.2.8     |      1.3.43     |  1.3.55   |    1.3.23    |    1.0    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
-
+   |    25.11  |     2.3.14    |      1.3.43     |  1.3.55   |    1.3.25    |    1.2    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
 
 Dynamic Device Personalization (DDP) package loading
 ----------------------------------------------------
@@ -182,6 +177,17 @@ Runtime Configuration
   The provided value must be between 3 and 8.
   If the value provided is greater than the number of levels provided by the HW,
   SW will use the hardware maximum value.
+
+- ``Source Prune Enable`` (default ``0``)
+
+  Enable Source Prune to automatically drop incoming packets
+  when their source MAC address matches one of the MAC addresses
+  assigned to that same NIC port.
+
+  Source Prune can be enabled by setting the devargs parameter ``source-prune``,
+  for example::
+
+    -a 80:00.0,source-prune=1
 
 - ``Protocol extraction for per queue``
 
@@ -322,6 +328,19 @@ Runtime Configuration
 
     -a af:00.0,pps_out='[pin:0]'
 
+- ``Link state on close`` (default ``down``)
+
+  The user can request that the link be set to up or down
+  or restored to its original state when the device is closed::
+
+    -a af:00.0,link_state_on_close=<state>
+
+  Supported values for the ``<state>`` parameter:
+
+  * ``down``: Leave the link in the down state.
+  * ``up``: Leave the link in the up state.
+  * ``initial``: Restore the link to the state it was in when the device started.
+
 - ``Low Rx latency`` (default ``0``)
 
   vRAN workloads require low latency DPDK interface for the front haul
@@ -413,6 +432,109 @@ The DCF PMD needs to advertise and acquire DCF capability which allows DCF to
 send AdminQ commands that it would like to execute over to the PF and receive
 responses for the same from PF.
 
+
+Data Center Bridging (DCB) and Priority Flow Control (PFC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ice PMD supports Data Center Bridging (DCB) and Priority Flow Control (PFC).
+These features enable Quality of Service (QoS) in data center environments by allowing
+traffic classification and prioritization across multiple traffic classes.
+
+DCB Configuration
++++++++++++++++++
+
+DCB can be enabled by configuring the device with ``RTE_ETH_MQ_RX_DCB_FLAG``
+in the Rx mode during device configuration.
+
+The ice PMD supports:
+
+* 4 or 8 traffic classes (TCs)
+* VLAN Priority to Traffic Class mapping
+
+Limitations:
+
+* All TCs are configured with Enhanced Transmission Selection (ETS) with even bandwidth allocation
+* Queues are evenly distributed across configured TCs
+* The number of queues must be evenly divisible by the number of traffic classes
+* The number of queues per TC must be a power of 2
+* Traffic classes must be configured contiguously starting from TC 0
+
+Example DCB configuration in testpmd:
+
+.. code-block:: console
+
+   dpdk-testpmd -a 0000:18:00.0 -- -i --nb-cores=8 --rxq=8 --txq=8
+   port stop 0
+   port config 0 dcb vt off 4 pfc off
+   port start 0
+
+This configures 4 traffic classes with 2 queues per TC.
+
+Example DCB configuration in application code:
+
+.. code-block:: c
+
+   struct rte_eth_conf port_conf = {
+       .rxmode = {
+           .mq_mode = RTE_ETH_MQ_RX_DCB,
+       },
+       .rx_adv_conf = {
+           .dcb_rx_conf = {
+               .nb_tcs = RTE_ETH_4_TCS,
+               .dcb_tc = {0, 1, 2, 3, 0, 1, 2, 3},  /* Map priorities to TCs */
+           },
+       },
+   };
+
+   ret = rte_eth_dev_configure(port_id, nb_rx_queues, nb_tx_queues, &port_conf);
+
+PFC Configuration
++++++++++++++++++
+
+Priority Flow Control (PFC) provides a mechanism to pause and resume traffic
+on individual traffic classes, enabling lossless Ethernet for specific priorities.
+
+PFC can be configured per priority using the ``rte_eth_dev_priority_flow_ctrl_set()`` API.
+Each traffic class can be independently configured with:
+
+* RX pause only
+* TX pause only
+* Full duplex pause
+* No pause (disabled)
+
+PFC operates in VLAN-based mode and requires DCB to be configured first.
+
+Features:
+
+* Per-TC pause control (XON/XOFF)
+* Configurable high/low watermarks for buffer management
+* Configurable pause quanta
+* PFC statistics exposed via xstats
+
+Example PFC configuration in testpmd:
+
+.. code-block:: console
+
+   set pfc_ctrl rx on tx on 100000 50000 65535 0 0
+
+This enables PFC on port 0 priority 0 with high watermark of 100000 bytes,
+low watermark of 50000 bytes, and pause time of 65535.
+
+Example PFC configuration using DPDK API:
+
+.. code-block:: c
+
+   struct rte_eth_pfc_conf pfc_conf;
+
+   pfc_conf.fc.mode = RTE_ETH_FC_FULL;           /* Enable full duplex pause */
+   pfc_conf.fc.high_water = 100000;              /* High watermark in bytes */
+   pfc_conf.fc.low_water = 50000;                /* Low watermark in bytes */
+   pfc_conf.fc.pause_time = 0xFFFF;              /* Pause quanta (in 512 bit-time units) */
+   pfc_conf.priority = 0;                        /* Configure PFC for priority 0 */
+
+   ret = rte_eth_dev_priority_flow_ctrl_set(port_id, &pfc_conf);
+
+
 Forward Error Correction (FEC)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -444,6 +566,10 @@ This feature is currently supported only in E830 adapters.
 The flag ``RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP`` is used to enable the feature.
 In order to deliver timestamps internally ``set txtimes`` is used,
 where inter burst and intra burst time interval in nsecs is provided.
+
+Note that DPDK library should be compiled using PTP support enabled
+and testpmd application should run on PF.
+
 For example:
 
 .. code-block:: console
@@ -493,19 +619,261 @@ For each engine, a list of supported patterns is maintained in a global array
 named ``ice_<engine>_supported_pattern``. The Ice PMD will reject any rule with
 a pattern that is not included in the supported list.
 
-One notable feature is the ice PMD's ability to leverage the Raw pattern,
-enabling protocol-agnostic flow offloading. Here is an example of creating
-a rule that matches an IPv4 destination address of 1.2.3.4 and redirects it to
-queue 3 using a raw pattern::
+Protocol Agnostic Filtering
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-  flow create 0 ingress group 2 pattern raw \
-  pattern spec \
-  00000000000000000000000008004500001400004000401000000000000001020304 \
-  pattern mask \
-  000000000000000000000000000000000000000000000000000000000000ffffffff \
-  end actions queue index 3 / mark id 3 / end
+One notable feature is the ice PMD's ability to leverage the raw pattern,
+enabling protocol-agnostic flow offloading.
+This feature allows users to create flow rules for any protocol recognized by the hardware parser,
+by manually specifying the raw packet structure.
+Therefore, flow offloading can be used
+even in cases where desired protocol isn't explicitly supported by the flow API.
+
+Raw Pattern Components
+++++++++++++++++++++++
+
+Raw patterns consist of two key components:
+
+**Pattern Spec**
+  An ASCII hexadecimal string representing the complete packet structure
+  that defines the packet type and protocol layout.
+  The hardware parser analyzes this structure to determine the packet type (PTYPE)
+  and identify protocol headers and their offsets.
+  This specification must represent a valid packet structure
+  that the hardware can parse and classify.
+  If the hardware parser does not support a particular protocol stack,
+  it may not correctly identify the packet type.
+
+**Pattern Mask**
+  An ASCII hexadecimal string of the same length as the spec
+  that determines which specific fields within the packet will be extracted and used for matching.
+  The mask control field extraction without affecting the packet type identification.
+
+.. note::
+
+   Raw pattern must be the only flow item in the flow item list.
+
+Generating Raw Pattern Values
++++++++++++++++++++++++++++++
+
+To create raw patterns, follow these steps:
+
+#. **Verify parser support**:
+   Confirm that the hardware parser supports the protocol combination
+   needed for the intended flow rule.
+   This can be checked against the documentation for the DDP package currently in use.
+
+#. **Build the packet template**:
+   Create a complete, valid packet header
+   with all necessary sections (Ethernet, IP, UDP/TCP, etc.)
+   using the exact field values that need to be matched.
+
+#. **Convert to hexadecimal**:
+   Transform the entire header into a continuous ASCII hexadecimal string,
+   with each byte represented as two hex characters.
+
+#. **Create the extraction mask**:
+   Generate a mask of the same length as the spec,
+   where set bits would indicate the fields used for extraction/matching.
+
+VPP project's `flow_parse.py` script can be used
+to generate packet templates and masks for raw patterns.
+This tool takes a human-readable flow description
+and outputs the corresponding ASCII hexadecimal spec and mask.
+This script can be found under ``extras/packetforge``
+in `VPP project <https://github.com/FDio/vpp/blob/master/extras/packetforge/flow_parse.py>`_.
+
+Example usage:
+
+.. code-block:: console
+
+   python3 flow_parse.py --show -p "mac()/ipv4(src=1.1.1.1,dst=2.2.2.2)/udp()"
+
+Output:
+
+.. code-block:: console
+
+   {'flow': {'generic': {'pattern': {'spec': b'00000000000100000000000208004500001c000000000011000001010101020202020000000000080000',
+   'mask': b'0000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000'}}}}
+
+.. note::
+
+   Ensure the spec represents complete protocol headers,
+   as the hardware parser processes fields at 16-bit boundaries.
+   Incomplete or truncated headers may result in unpredictable field extraction behavior.
+
+Action Support and Usage
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+After constructing the raw pattern spec and mask,
+they can be used in the flow API with pattern type "raw".
+
+The following is an example of a minimal Ethernet + IPv4 header template.
+Source and destination IPv4 addresses are part of the match key; all other fields are ignored.
+
+Spec (packet template):
+
+.. code-block::
+
+  000000000001              Destination MAC (6 bytes)
+  000000000002              Source MAC (6 bytes)
+  0800                      EtherType = IPv4
+  4500001c0000000000110000  IPv4 header, protocol = UDP
+  01010101                  Source IP = 1.1.1.1
+  02020202                  Destination IP = 2.2.2.2
+  0000000000080000          UDP header
+
+Mask:
+
+.. code-block::
+
+  000000000000              Destination MAC (ignored)
+  000000000000              Source MAC (ignored)
+  0000                      EtherType (ignored)
+  000000000000000000000000  IPv4/UDP header (ignored)
+  ffffffff                  Source IP (match all 32 bits)
+  ffffffff                  Destination IP (match all 32 bits)
+  0000000000000000          UDP header (ignored)
+
+This spec will match any non-fragmented IPv4/UDP packet
+whose source IP is 1.1.1.1 and destination IP is 2.2.2.2.
+
+Currently, the following actions are supported:
+
+- **mark**:
+  Attaches a user-defined integer value to matching packets.
+  Can be specified together with another action.
+
+- **queue**:
+  Directs matching packets to a specific receive queue.
+
+- **drop**:
+  Discards matching packets at the hardware level.
+
+- **rss**:
+  Enables Receive Side Scaling (RSS) for matching packets.
+
+Constraints:
+  * For RSS, only the global configuration is used;
+    per-rule queue lists or RSS keys are not supported.
+
+To direct matching packets to a specific queue, and set mbuf FDIR metadata in:
+
+.. code-block:: console
+
+   flow create 0 ingress pattern raw \
+     pattern spec 00000000000100000000000208004500001c000000000011000001010101020202020000000000080000 \
+     pattern mask 0000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000 / end \
+     actions queue index 3 mark id 3 / end
+
+Equivalent C code using the flow API:
+
+.. code-block:: c
+
+   /* Hex string for the packet spec (Ethernet + IPv4 + UDP header) */
+   static const uint8_t raw_pattern_spec[] = {
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x01,  /* Destination MAC */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x02,  /* Source MAC */
+       0x08, 0x00,                          /* EtherType: IPv4 */
+       0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00,
+       0x00, 0x11, 0x00, 0x00,              /* IPv4 header, protocol UDP */
+       0x01, 0x01, 0x01, 0x01,              /* Source IP: 1.1.1.1 */
+       0x02, 0x02, 0x02, 0x02,              /* Destination IP: 2.2.2.2 */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00  /* UDP header */
+   };
+
+   /* Mask indicating which fields to match (source and destination IPs) */
+   static const uint8_t raw_pattern_mask[] = {
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  /* MAC addresses - ignored */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+       0x00, 0x00,                          /* EtherType - ignored */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+       0x00, 0x00, 0x00, 0x00,              /* IPv4/UDP headers - ignored */
+       0xff, 0xff, 0xff, 0xff,              /* Source IP - match all bits */
+       0xff, 0xff, 0xff, 0xff,              /* Destination IP - match all bits */
+       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  /* UDP - ignored */
+   };
+
+   struct rte_flow_item_raw raw_spec = {
+       .length = sizeof(raw_pattern_spec),
+       .pattern = raw_pattern_spec,
+   };
+
+   struct rte_flow_item_raw raw_mask = {
+       .length = sizeof(raw_pattern_mask),
+       .pattern = raw_pattern_mask,
+   };
+
+   struct rte_flow_attr attr = {
+       .ingress = 1,
+   };
+
+   struct rte_flow_item pattern[] = {
+       {
+           .type = RTE_FLOW_ITEM_TYPE_RAW,
+           .spec = &raw_spec,
+           .mask = &raw_mask,
+       },
+       {
+           .type = RTE_FLOW_ITEM_TYPE_END,
+       },
+   };
+
+   struct rte_flow_action actions[] = {
+       /* direct flow to queue index 3 */
+       {
+           .type = RTE_FLOW_ACTION_TYPE_QUEUE,
+           .conf = &(struct rte_flow_action_queue){ .index = 3 },
+       },
+       /* write id into mbuf FDIR metadata */
+       {
+           .type = RTE_FLOW_ACTION_TYPE_MARK,
+           .conf = &(struct rte_flow_action_mark){ .id = 3 },
+       },
+       {
+           .type = RTE_FLOW_ACTION_TYPE_END,
+       },
+   };
+
+   struct rte_flow_error error;
+   struct rte_flow *flow = flow = rte_flow_create(port_id, &attr, pattern, actions, &error);
+
+To use masked bits (IPv4 source/destination addresses) to distribute such packets via RSS:
+
+.. code-block:: console
+
+   flow create 0 ingress pattern raw \
+     pattern spec 00000000000100000000000208004500001c000000000011000001010101020202020000000000080000 \
+     pattern mask 0000000000000000000000000000000000000000000000000000ffffffffffffffff0000000000000000 / end \
+     actions rss / end
+
+Equivalent C code using the flow API:
+
+.. code-block:: c
+
+   /* Use the same structures and code as above, only actions change */
+
+   struct rte_flow_action actions[] = {
+       {
+           .type = RTE_FLOW_ACTION_TYPE_RSS,
+           /* Use NULL conf for default RSS configuration */
+       },
+       {
+           .type = RTE_FLOW_ACTION_TYPE_END,
+       },
+   };
+
+**Limitations**
 
 Currently, raw pattern support is limited to the FDIR and Hash engines.
+
+.. note::
+
+   **DDP Package Dependency**:
+   Raw pattern functionality relies on the loaded DDP package
+   to define available packet types and protocol parsing rules.
+   Different DDP packages (OS Default, COMMS, Wireless)
+   may support different protocol combinations and PTYPE mappings.
 
 Traffic Management Support
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

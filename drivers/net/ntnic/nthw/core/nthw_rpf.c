@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -18,11 +17,6 @@ nthw_rpf_t *nthw_rpf_new(void)
 		memset(p, 0, sizeof(nthw_rpf_t));
 
 	return p;
-}
-
-void nthw_rpf_delete(nthw_rpf_t *p)
-{
-	free(p);
 }
 
 int nthw_rpf_init(nthw_rpf_t *p, nthw_fpga_t *p_fpga, int n_instance)
@@ -65,15 +59,6 @@ int nthw_rpf_init(nthw_rpf_t *p, nthw_fpga_t *p_fpga, int n_instance)
 	/* Initialize mutex */
 	rte_spinlock_init(&p->rpf_mutex);
 	return 0;
-}
-
-void nthw_rpf_administrative_block(nthw_rpf_t *p)
-{
-	/* block all MAC ports */
-	nthw_register_update(p->mp_reg_control);
-	nthw_field_set_val_flush32(p->mp_fld_control_pen, 0);
-
-	p->m_administrative_block = true;
 }
 
 void nthw_rpf_block(nthw_rpf_t *p)

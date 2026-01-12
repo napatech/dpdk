@@ -1281,8 +1281,8 @@ mlx5_ext_txq_get(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
-	MLX5_ASSERT(mlx5_is_external_txq(dev, idx));
-	return &priv->ext_txqs[idx - MLX5_EXTERNAL_TX_QUEUE_ID_MIN];
+	return mlx5_is_external_txq(dev, idx) ?
+		&priv->ext_txqs[idx - MLX5_EXTERNAL_TX_QUEUE_ID_MIN] : NULL;
 }
 
 /**
@@ -1298,7 +1298,6 @@ int
 mlx5_ext_txq_verify(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_external_q *txq;
 	uint32_t i;
 	int ret = 0;
 
@@ -1306,8 +1305,9 @@ mlx5_ext_txq_verify(struct rte_eth_dev *dev)
 		return 0;
 
 	for (i = MLX5_EXTERNAL_TX_QUEUE_ID_MIN; i <= UINT16_MAX ; ++i) {
-		txq = mlx5_ext_txq_get(dev, i);
-		if (txq->refcnt < 2)
+		struct mlx5_external_q *txq = mlx5_ext_txq_get(dev, i);
+
+		if (txq == NULL || txq->refcnt < 2)
 			continue;
 		DRV_LOG(DEBUG, "Port %u external TxQ %u still referenced.",
 			dev->data->port_id, i);
@@ -1433,7 +1433,7 @@ rte_pmd_mlx5_external_sq_enable(uint16_t port_id, uint32_t sq_num)
 	priv = dev->data->dev_private;
 	if ((!priv->representor && !priv->master) ||
 	    !priv->sh->config.dv_esw_en) {
-		DRV_LOG(ERR, "Port %u must be represetnor or master port in E-Switch mode.",
+		DRV_LOG(ERR, "Port %u must be representor or master port in E-Switch mode.",
 			port_id);
 		rte_errno = EINVAL;
 		return -rte_errno;
@@ -1453,12 +1453,12 @@ rte_pmd_mlx5_external_sq_enable(uint16_t port_id, uint32_t sq_num)
 			sq_miss_created = true;
 		}
 
-		if (priv->sh->config.repr_matching &&
-		    mlx5_flow_hw_tx_repr_matching_flow(dev, sq_num, true)) {
+		if (mlx5_flow_hw_create_tx_repr_matching_flow(dev, sq_num, true)) {
 			if (sq_miss_created)
-				mlx5_flow_hw_esw_destroy_sq_miss_flow(dev, sq_num);
+				mlx5_flow_hw_esw_destroy_sq_miss_flow(dev, sq_num, true);
 			return -rte_errno;
 		}
+
 		return 0;
 	}
 #endif
@@ -1467,6 +1467,48 @@ rte_pmd_mlx5_external_sq_enable(uint16_t port_id, uint32_t sq_num)
 		return 0;
 	DRV_LOG(ERR, "Port %u failed to create default miss flow for SQ %u.",
 		port_id, sq_num);
+	return -rte_errno;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_external_sq_disable, 25.11)
+int
+rte_pmd_mlx5_external_sq_disable(uint16_t port_id, uint32_t sq_num)
+{
+	struct rte_eth_dev *dev;
+	struct mlx5_priv *priv;
+
+	if (rte_eth_dev_is_valid_port(port_id) < 0) {
+		DRV_LOG(ERR, "There is no Ethernet device for port %u.",
+			port_id);
+		rte_errno = ENODEV;
+		return -rte_errno;
+	}
+	dev = &rte_eth_devices[port_id];
+	priv = dev->data->dev_private;
+	if ((!priv->representor && !priv->master) ||
+	    !priv->sh->config.dv_esw_en) {
+		DRV_LOG(ERR, "Port %u must be representor or master port in E-Switch mode.",
+			port_id);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	if (sq_num == 0) {
+		DRV_LOG(ERR, "Invalid SQ number.");
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+#ifdef HAVE_MLX5_HWS_SUPPORT
+	if (priv->sh->config.dv_flow_en == 2) {
+		if (priv->sh->config.fdb_def_rule &&
+		    mlx5_flow_hw_esw_destroy_sq_miss_flow(dev, sq_num, true))
+			return -rte_errno;
+		if (mlx5_flow_hw_destroy_tx_repr_matching_flow(dev, sq_num, true))
+			return -rte_errno;
+		return 0;
+	}
+#endif
+	/* Not supported for software steering. */
+	rte_errno = ENOTSUP;
 	return -rte_errno;
 }
 

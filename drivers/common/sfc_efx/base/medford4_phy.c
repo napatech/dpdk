@@ -34,7 +34,6 @@ medford4_phy_get_link(
 	efx_np_handle_t nph = enp->en_port.ep_np_handle;
 	efx_np_link_state_t ls;
 	efx_np_mac_state_t ms;
-	uint32_t fcntl;
 	efx_rc_t rc;
 
 	rc = efx_np_link_state(enp, nph, &ls);
@@ -117,6 +116,7 @@ medford4_phy_reconfigure(
 
 	rc = efx_np_link_ctrl(enp, epp->ep_np_handle, epp->ep_np_cap_data_raw,
 		    loopback_link_mode, loopback, epp->ep_np_lane_count_req,
+		    epp->ep_np_keep_prev_fec_ctrl, &epp->ep_np_prev_fec_ctrl,
 		    epp->ep_adv_cap_mask, epp->ep_fcntl_autoneg);
 	if (rc != 0)
 		goto fail2;

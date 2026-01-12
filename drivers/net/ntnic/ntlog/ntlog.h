@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -10,14 +9,14 @@
 #include <stdint.h>
 #include <rte_log.h>
 
-extern int nt_log_general;
-#define RTE_LOGTYPE_GENERAL nt_log_general
-extern int nt_log_nthw;
-#define RTE_LOGTYPE_NTHW nt_log_nthw
-extern int nt_log_filter;
-#define RTE_LOGTYPE_FILTER nt_log_filter
-extern int nt_log_ntnic;
-#define RTE_LOGTYPE_NTNIC nt_log_ntnic
+extern int nthw_logtype_general;
+#define RTE_LOGTYPE_GENERAL nthw_logtype_general
+extern int nthw_logtype_nthw;
+#define RTE_LOGTYPE_NTHW nthw_logtype_nthw
+extern int nthw_logtype_filter;
+#define RTE_LOGTYPE_FILTER nthw_logtype_filter
+extern int nthw_logtype_ntnic;
+#define RTE_LOGTYPE_NTNIC nthw_logtype_ntnic
 
 #define NT_DRIVER_NAME "ntnic"
 
@@ -65,8 +64,8 @@ extern int nt_log_ntnic;
  * to use when one single function call to NT_LOG is not optimal - that is
  * you do not know the number of parameters at programming time or it is variable
  */
-char *ntlog_helper_str_alloc(const char *sinit);
-void ntlog_helper_str_add(char *s, const char *format, ...);
-void ntlog_helper_str_free(char *s);
+char *nthw_log_helper_str_alloc(const char *sinit);
+void nthw_log_helper_str_add(char *s, const char *format, ...);
+void nthw_log_helper_str_free(char *s);
 
 #endif	/* NTOSS_SYSTEM_NTLOG_H */

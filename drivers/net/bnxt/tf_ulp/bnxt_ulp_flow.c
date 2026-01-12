@@ -13,6 +13,7 @@
 #include "ulp_fc_mgr.h"
 #include "ulp_port_db.h"
 #include "ulp_ha_mgr.h"
+#include "ulp_tfc_ha_mgr.h"
 #include "ulp_tun.h"
 #include <rte_malloc.h>
 #include "ulp_template_db_tbl.h"
@@ -75,10 +76,8 @@ bnxt_ulp_set_dir_attributes(struct ulp_rte_parser_params *params,
 		params->dir_attr |= BNXT_ULP_FLOW_ATTR_EGRESS;
 	if (attr->ingress)
 		params->dir_attr |= BNXT_ULP_FLOW_ATTR_INGRESS;
-#if RTE_VERSION_NUM(17, 11, 10, 16) < RTE_VERSION
 	if (attr->transfer)
 		params->dir_attr |= BNXT_ULP_FLOW_ATTR_TRANSFER;
-#endif
 	if (attr->group) {
 		ULP_COMP_FLD_IDX_WR(params, BNXT_ULP_CF_IDX_GROUP_ID,
 				    rte_cpu_to_le_32(attr->group));
@@ -92,8 +91,10 @@ bnxt_ulp_set_prio_attribute(struct ulp_rte_parser_params *params,
 {
 	uint32_t max_p = bnxt_ulp_max_flow_priority_get(params->ulp_ctx);
 	uint32_t min_p = bnxt_ulp_min_flow_priority_get(params->ulp_ctx);
+	uint32_t hot_prio = bnxt_ulp_ha_priority_id_get(params->ulp_ctx);
 
 	if (max_p < min_p) {
+		min_p -= hot_prio;
 		if (unlikely(attr->priority > min_p || attr->priority < max_p)) {
 			BNXT_DRV_DBG(ERR, "invalid prio, not in range %u:%u\n",
 				     max_p, min_p);
@@ -101,6 +102,7 @@ bnxt_ulp_set_prio_attribute(struct ulp_rte_parser_params *params,
 		}
 		params->priority = attr->priority;
 	} else {
+		max_p -= hot_prio;
 		if (unlikely(attr->priority > max_p || attr->priority < min_p)) {
 			BNXT_DRV_DBG(ERR, "invalid prio, not in range %u:%u\n",
 				     min_p, max_p);
@@ -244,6 +246,12 @@ bnxt_ulp_init_mapper_params(struct bnxt_ulp_mapper_parms *mparms,
 				    BNXT_ULP_CF_IDX_HA_SUPPORT_DISABLED,
 				    1);
 	}
+
+	/* update the Hot upgrade flag */
+	if (bnxt_ulp_tfc_hot_upgrade_enabled(params->ulp_ctx) &&
+	    bnxt_ulp_tfc_hot_upgrade_is_secondary(params->ulp_ctx))
+		ULP_BITMAP_SET(mparms->cf_bitmap,
+			       BNXT_ULP_CF_BIT_HOT_UP_SECONDARY);
 
 	/* Update the socket direct flag */
 	if (ULP_BITMAP_ISSET(params->hdr_bitmap.bits,

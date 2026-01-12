@@ -299,10 +299,10 @@ int bnxt_rep_link_update_op(struct rte_eth_dev *eth_dev, int wait_to_compl)
 	struct rte_eth_link *link;
 	int rc;
 
-	parent_bp = rep->parent_dev->data->dev_private;
-	if (!parent_bp)
+	if (!bnxt_rep_check_parent(rep))
 		return 0;
 
+	parent_bp = rep->parent_dev->data->dev_private;
 	rc = bnxt_link_update_op(parent_bp->eth_dev, wait_to_compl);
 
 	/* Link state. Inherited from PF or trusted VF */
@@ -502,12 +502,33 @@ int bnxt_rep_dev_start_op(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
+static int bnxt_tf_vfr_flush_flows(struct bnxt_representor *vfr_bp)
+{
+	struct bnxt *parent_bp = vfr_bp->parent_dev->data->dev_private;
+	uint16_t func_id;
+
+	/* it is assumed that port is either TVF or PF */
+	if (unlikely(ulp_port_db_port_func_id_get(parent_bp->ulp_ctx,
+						  vfr_bp->dpdk_port_id,
+						  &func_id))) {
+		BNXT_DRV_DBG(ERR, "Invalid argument\n");
+		return -EINVAL;
+	}
+	return ulp_flow_db_function_flow_flush(parent_bp->ulp_ctx, func_id);
+}
+
 static int bnxt_tf_vfr_free(struct bnxt_representor *vfr)
 {
 	struct bnxt *parent_bp;
 	int32_t rc;
 
 	PMD_DRV_LOG_LINE(DEBUG, "BNXT Port:%d VFR ulp free", vfr->dpdk_port_id);
+	rc = bnxt_tf_vfr_flush_flows(vfr);
+	if (rc)
+		PMD_DRV_LOG_LINE(ERR,
+			    "Failed to delete rules from Port:%d VFR",
+			    vfr->dpdk_port_id);
+
 	rc = bnxt_ulp_delete_vfr_default_rules(vfr);
 	if (rc)
 		PMD_DRV_LOG_LINE(ERR,
@@ -542,7 +563,7 @@ static int bnxt_vfr_free(struct bnxt_representor *vfr)
 
 	if (!bnxt_rep_check_parent(vfr)) {
 		PMD_DRV_LOG_LINE(DEBUG, "BNXT Port:%d VFR already freed",
-			    vfr->dpdk_port_id);
+				 vfr->dpdk_port_id);
 		return 0;
 	}
 	parent_bp = vfr->parent_dev->data->dev_private;
@@ -603,15 +624,17 @@ int bnxt_rep_dev_info_get_op(struct rte_eth_dev *eth_dev,
 	struct bnxt *parent_bp;
 	unsigned int max_rx_rings;
 
+	/* Need be an error scenario, if parent is removed first */
+	if (eth_dev->device->driver == NULL)
+		return -ENODEV;
+
 	/* MAC Specifics */
 	if (!bnxt_rep_check_parent(rep_bp)) {
-		PMD_DRV_LOG_LINE(INFO, "Rep parent port does not exist");
-		/* Need be an error scenario, if parent is removed first */
-		if (eth_dev->device->driver == NULL)
-			return -ENODEV;
+		PMD_DRV_LOG_LINE(INFO, "Rep parent port does not exist.");
 		/* Need not be an error scenario, if parent is closed first */
 		return 0;
 	}
+
 	parent_bp = rep_bp->parent_dev->data->dev_private;
 	PMD_DRV_LOG_LINE(DEBUG, "Representor dev_info_get_op");
 	dev_info->max_mac_addrs = parent_bp->max_l2_ctx;
@@ -766,13 +789,8 @@ int bnxt_rep_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	return 0;
 
 out:
-	if (rxq) {
- #if (RTE_VERSION_NUM(21, 8, 0, 0) < RTE_VERSION)
+	if (rxq)
 		bnxt_rep_rx_queue_release_op(eth_dev, queue_idx);
- #else
-		bnxt_rx_queue_release_op(rxq);
- #endif
-	}
 
 	return rc;
 }
@@ -877,7 +895,7 @@ void bnxt_rep_tx_queue_release_op(struct rte_eth_dev *dev, uint16_t queue_idx)
 }
 
 int bnxt_rep_stats_get_op(struct rte_eth_dev *eth_dev,
-			     struct rte_eth_stats *stats)
+			     struct rte_eth_stats *stats, struct eth_queue_stats *qstats)
 {
 	struct bnxt_representor *rep_bp = eth_dev->data->dev_private;
 	unsigned int i;
@@ -890,11 +908,13 @@ int bnxt_rep_stats_get_op(struct rte_eth_dev *eth_dev,
 		stats->ipackets += rep_bp->rx_pkts[i];
 		stats->imissed += rep_bp->rx_drop_pkts[i];
 
-		stats->q_ipackets[i] = rep_bp->rx_pkts[i];
-		stats->q_ibytes[i] = rep_bp->rx_bytes[i];
-		stats->q_opackets[i] = rep_bp->tx_pkts[i];
-		stats->q_obytes[i] = rep_bp->tx_bytes[i];
-		stats->q_errors[i] = rep_bp->rx_drop_pkts[i];
+		if (qstats) {
+			qstats->q_ipackets[i] = rep_bp->rx_pkts[i];
+			qstats->q_ibytes[i] = rep_bp->rx_bytes[i];
+			qstats->q_opackets[i] = rep_bp->tx_pkts[i];
+			qstats->q_obytes[i] = rep_bp->tx_bytes[i];
+			qstats->q_errors[i] = rep_bp->rx_drop_pkts[i];
+		}
 	}
 
 	return 0;

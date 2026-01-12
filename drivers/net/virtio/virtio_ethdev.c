@@ -68,7 +68,8 @@ static void virtio_set_hwaddr(struct virtio_hw *hw);
 static void virtio_get_hwaddr(struct virtio_hw *hw);
 
 static int virtio_dev_stats_get(struct rte_eth_dev *dev,
-				 struct rte_eth_stats *stats);
+				 struct rte_eth_stats *stats,
+				 struct eth_queue_stats *qstats);
 static int virtio_dev_xstats_get(struct rte_eth_dev *dev,
 				 struct rte_eth_xstat *xstats, unsigned n);
 static int virtio_dev_xstats_get_names(struct rte_eth_dev *dev,
@@ -616,6 +617,28 @@ virtio_dev_priv_dump(struct rte_eth_dev *dev, FILE *f)
 	return 0;
 }
 
+static void
+virtio_rxq_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
+		    struct rte_eth_rxq_info *qinfo)
+{
+	uint16_t vq_idx = 2 * rx_queue_id + VTNET_SQ_RQ_QUEUE_IDX;
+	struct virtio_hw *hw = dev->data->dev_private;
+	struct virtqueue *vq = hw->vqs[vq_idx];
+
+	qinfo->nb_desc = vq->vq_nentries;
+}
+
+static void
+virtio_txq_info_get(struct rte_eth_dev *dev, uint16_t tx_queue_id,
+		    struct rte_eth_txq_info *qinfo)
+{
+	uint16_t vq_idx = 2 * tx_queue_id + VTNET_SQ_TQ_QUEUE_IDX;
+	struct virtio_hw *hw = dev->data->dev_private;
+	struct virtqueue *vq = hw->vqs[vq_idx];
+
+	qinfo->nb_desc = vq->vq_nentries;
+}
+
 /*
  * dev_ops for virtio, bare necessities for basic operation
  */
@@ -630,6 +653,8 @@ static const struct eth_dev_ops virtio_eth_dev_ops = {
 	.allmulticast_disable    = virtio_dev_allmulticast_disable,
 	.mtu_set                 = virtio_mtu_set,
 	.dev_infos_get           = virtio_dev_info_get,
+	.rxq_info_get            = virtio_rxq_info_get,
+	.txq_info_get            = virtio_txq_info_get,
 	.stats_get               = virtio_dev_stats_get,
 	.xstats_get              = virtio_dev_xstats_get,
 	.xstats_get_names        = virtio_dev_xstats_get_names,
@@ -673,7 +698,8 @@ const struct eth_dev_ops virtio_user_secondary_eth_dev_ops = {
 };
 
 static void
-virtio_update_stats(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+virtio_update_stats(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		    struct eth_queue_stats *qstats)
 {
 	unsigned i;
 
@@ -685,9 +711,9 @@ virtio_update_stats(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->opackets += txvq->stats.packets;
 		stats->obytes += txvq->stats.bytes;
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_opackets[i] = txvq->stats.packets;
-			stats->q_obytes[i] = txvq->stats.bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_opackets[i] = txvq->stats.packets;
+			qstats->q_obytes[i] = txvq->stats.bytes;
 		}
 	}
 
@@ -700,9 +726,9 @@ virtio_update_stats(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->ibytes += rxvq->stats.bytes;
 		stats->ierrors += rxvq->stats.errors;
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_ipackets[i] = rxvq->stats.packets;
-			stats->q_ibytes[i] = rxvq->stats.bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_ipackets[i] = rxvq->stats.packets;
+			qstats->q_ibytes[i] = rxvq->stats.bytes;
 		}
 	}
 
@@ -802,9 +828,10 @@ virtio_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 }
 
 static int
-virtio_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+virtio_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		     struct eth_queue_stats *qstats)
 {
-	virtio_update_stats(dev, stats);
+	virtio_update_stats(dev, stats, qstats);
 
 	return 0;
 }
@@ -2104,6 +2131,8 @@ virtio_dev_speed_capa_get(uint32_t speed)
 		return RTE_ETH_LINK_SPEED_200G;
 	case RTE_ETH_SPEED_NUM_400G:
 		return RTE_ETH_LINK_SPEED_400G;
+	case RTE_ETH_SPEED_NUM_800G:
+		return RTE_ETH_LINK_SPEED_800G;
 	default:
 		return 0;
 	}

@@ -63,8 +63,8 @@ __mlx5_hws_cnt_svc(struct mlx5_dev_ctx_shared *sh,
 	uint32_t ret __rte_unused;
 
 	reset_cnt_num = rte_ring_count(reset_list);
-	cpool->query_gen++;
 	mlx5_aso_cnt_query(sh, cpool);
+	rte_atomic_fetch_add_explicit(&cpool->query_gen, 1, rte_memory_order_release);
 	zcdr.n1 = 0;
 	zcdu.n1 = 0;
 	ret = rte_ring_enqueue_zc_burst_elem_start(reuse_list,
@@ -134,14 +134,14 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 	uint32_t nb_alloc_cnts = mlx5_hws_cnt_pool_get_size(cpool);
 	uint16_t expected1 = HWS_AGE_CANDIDATE;
 	uint16_t expected2 = HWS_AGE_CANDIDATE_INSIDE_RING;
-	uint32_t i;
+	uint32_t i, age_idx, in_use;
 
 	cpool->time_of_last_age_check = curr_time;
 	for (i = 0; i < nb_alloc_cnts; ++i) {
-		uint32_t age_idx = cpool->pool[i].age_idx;
 		uint64_t hits;
 
-		if (!cpool->pool[i].in_used || age_idx == 0)
+		mlx5_hws_cnt_get_all(&cpool->pool[i], &in_use, NULL, &age_idx);
+		if (!in_use || age_idx == 0)
 			continue;
 		param = mlx5_ipool_get(age_info->ages_ipool, age_idx);
 		if (unlikely(param == NULL)) {
@@ -170,10 +170,13 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 			break;
 		case HWS_AGE_FREE:
 			/*
-			 * AGE parameter with state "FREE" couldn't be pointed
-			 * by any counter since counter is destroyed first.
-			 * Fall-through.
+			 * Since this check is async, we may reach a race condition
+			 * where the age and counter are used in the same rule,
+			 * using the same counter index,
+			 * age was freed first, and counter was not freed yet.
+			 * Aging check can be safely ignored in that case.
 			 */
+			continue;
 		default:
 			MLX5_ASSERT(0);
 			continue;
@@ -436,6 +439,9 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 	}
 
 	cntp->cfg = *pcfg;
+	DRV_LOG(DEBUG, "ibdev %s counter and age action %s supported on group 0",
+		sh->ibdev_name,
+		mlx5dr_action_counter_root_is_supported() ? "is" : "is not");
 	if (cntp->cfg.host_cpool)
 		return cntp;
 	if (pcfg->request_num > sh->hws_max_nb_counters) {
@@ -656,9 +662,13 @@ mlx5_hws_cnt_pool_action_destroy(struct mlx5_hws_cnt_pool *cpool)
 	for (idx = 0; idx < cpool->dcs_mng.batch_total; idx++) {
 		struct mlx5_hws_cnt_dcs *dcs = &cpool->dcs_mng.dcs[idx];
 
-		if (dcs->dr_action != NULL) {
-			mlx5dr_action_destroy(dcs->dr_action);
-			dcs->dr_action = NULL;
+		if (dcs->root_action != NULL) {
+			mlx5dr_action_destroy(dcs->root_action);
+			dcs->root_action = NULL;
+		}
+		if (dcs->hws_action != NULL) {
+			mlx5dr_action_destroy(dcs->hws_action);
+			dcs->hws_action = NULL;
 		}
 	}
 }
@@ -670,11 +680,14 @@ mlx5_hws_cnt_pool_action_create(struct mlx5_priv *priv,
 	struct mlx5_hws_cnt_pool *hpool = mlx5_hws_cnt_host_pool(cpool);
 	uint32_t idx;
 	int ret = 0;
-	uint32_t flags;
+	uint32_t root_flags;
+	uint32_t hws_flags;
 
-	flags = MLX5DR_ACTION_FLAG_HWS_RX | MLX5DR_ACTION_FLAG_HWS_TX;
+	root_flags = MLX5DR_ACTION_FLAG_ROOT_RX | MLX5DR_ACTION_FLAG_ROOT_TX;
+	hws_flags = MLX5DR_ACTION_FLAG_HWS_RX | MLX5DR_ACTION_FLAG_HWS_TX;
 	if (priv->sh->config.dv_esw_en && priv->master) {
-		flags |= (is_unified_fdb(priv) ?
+		root_flags |= MLX5DR_ACTION_FLAG_ROOT_FDB;
+		hws_flags |= (is_unified_fdb(priv) ?
 				(MLX5DR_ACTION_FLAG_HWS_FDB_RX |
 				 MLX5DR_ACTION_FLAG_HWS_FDB_TX |
 				 MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED) :
@@ -684,10 +697,24 @@ mlx5_hws_cnt_pool_action_create(struct mlx5_priv *priv,
 		struct mlx5_hws_cnt_dcs *hdcs = &hpool->dcs_mng.dcs[idx];
 		struct mlx5_hws_cnt_dcs *dcs = &cpool->dcs_mng.dcs[idx];
 
-		dcs->dr_action = mlx5dr_action_create_counter(priv->dr_ctx,
+		dcs->hws_action = mlx5dr_action_create_counter(priv->dr_ctx,
 					(struct mlx5dr_devx_obj *)hdcs->obj,
-					flags);
-		if (dcs->dr_action == NULL) {
+					hws_flags);
+		if (dcs->hws_action == NULL) {
+			mlx5_hws_cnt_pool_action_destroy(cpool);
+			ret = -ENOSYS;
+			break;
+		}
+
+		if (!mlx5dr_action_counter_root_is_supported()) {
+			dcs->root_action = NULL;
+			continue;
+		}
+
+		dcs->root_action = mlx5dr_action_create_counter(priv->dr_ctx,
+					(struct mlx5dr_devx_obj *)hdcs->obj,
+					root_flags);
+		if (dcs->root_action == NULL) {
 			mlx5_hws_cnt_pool_action_destroy(cpool);
 			ret = -ENOSYS;
 			break;
@@ -764,7 +791,7 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 	 * because they already have init value no need
 	 * to wait for query.
 	 */
-	cpool->query_gen = 1;
+	rte_atomic_store_explicit(&cpool->query_gen, 1, rte_memory_order_relaxed);
 	ret = mlx5_hws_cnt_pool_action_create(priv, cpool);
 	if (ret != 0) {
 		rte_flow_error_set(error, -ret,

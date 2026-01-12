@@ -182,9 +182,6 @@
 /* HW steering counter's query interval. */
 #define MLX5_HWS_CNT_CYCLE_TIME "svc_cycle_time"
 
-/* Device parameter to control representor matching in ingress/egress flows with HWS. */
-#define MLX5_REPR_MATCHING_EN "repr_matching_en"
-
 /*
  * Alignment of the Tx queue starting address,
  * If not set, using separate umem and MR for each TxQ.
@@ -393,9 +390,6 @@ static const struct mlx5_indexed_pool_config mlx5_ipool_cfg[] = {
 		.type = "mlx5_meter_policy_ipool",
 	},
 };
-
-#define MLX5_FLOW_MIN_ID_POOL_SIZE 512
-#define MLX5_ID_GENERATION_ARRAY_FACTOR 16
 
 #define MLX5_FLOW_TABLE_HLIST_ARRAY_SIZE 1024
 
@@ -1045,24 +1039,6 @@ error:
 }
 
 /*
- * Destroy the flex parser node, including the parser itself, input / output
- * arcs and DW samples. Resources could be reused then.
- *
- * @param dev
- *   Pointer to Ethernet device structure.
- */
-static void
-mlx5_flex_parser_ecpri_release(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_ecpri_parser_profile *prf = &priv->sh->ecpri_parser;
-
-	if (prf->obj)
-		mlx5_devx_cmd_destroy(prf->obj);
-	prf->obj = NULL;
-}
-
-/*
  * Allocation of a flex parser for srh. Once refcnt is zero, the resources held
  * by this parser will be freed.
  * @param dev
@@ -1104,9 +1080,15 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 	/* The unit is uint64_t. */
 	node.header_length_field_shift = 0x3;
 	/* Header length is the 2nd byte. */
-	node.header_length_field_offset = 0x8;
-	if (attr->header_length_mask_width < 8)
-		node.header_length_field_offset += 8 - attr->header_length_mask_width;
+	if (attr->header_length_field_mode_wa) {
+		/* Legacy firmware before ConnectX-8, we should provide offset WA. */
+		node.header_length_field_offset = 8;
+		if (attr->header_length_mask_width < 8)
+			node.header_length_field_offset += 8 - attr->header_length_mask_width;
+	} else {
+		/* The new firmware, we can specify the correct offset directly. */
+		node.header_length_field_offset = 12;
+	}
 	node.header_length_field_mask = 0xF;
 	/* One byte next header protocol. */
 	node.next_header_field_size = 0x8;
@@ -1453,8 +1435,6 @@ mlx5_dev_args_check_handler(const char *key, const char *val, void *opaque)
 		config->cnt_svc.service_core = tmp;
 	} else if (strcmp(MLX5_HWS_CNT_CYCLE_TIME, key) == 0) {
 		config->cnt_svc.cycle_time = tmp;
-	} else if (strcmp(MLX5_REPR_MATCHING_EN, key) == 0) {
-		config->repr_matching = !!tmp;
 	} else if (strcmp(MLX5_TXQ_MEM_ALGN, key) == 0) {
 		config->txq_mem_algn = (uint32_t)tmp;
 	}
@@ -1495,7 +1475,6 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 		MLX5_FDB_DEFAULT_RULE_EN,
 		MLX5_HWS_CNT_SERVICE_CORE,
 		MLX5_HWS_CNT_CYCLE_TIME,
-		MLX5_REPR_MATCHING_EN,
 		MLX5_TXQ_MEM_ALGN,
 		NULL,
 	};
@@ -1518,7 +1497,6 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	config->fdb_def_rule = 1;
 	config->cnt_svc.cycle_time = MLX5_CNT_SVC_CYCLE_TIME_DEFAULT;
 	config->cnt_svc.service_core = rte_get_main_lcore();
-	config->repr_matching = 1;
 	config->txq_mem_algn = log2above(alignment);
 	if (mkvlist != NULL) {
 		/* Process parameters. */
@@ -1552,11 +1530,6 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 			"Metadata mode %u is not supported (no E-Switch).",
 			config->dv_xmeta_en);
 		config->dv_xmeta_en = MLX5_XMETA_MODE_LEGACY;
-	}
-	if (config->dv_flow_en != 2 && !config->repr_matching) {
-		DRV_LOG(DEBUG, "Disabling representor matching is valid only "
-			       "when HW Steering is enabled.");
-		config->repr_matching = 1;
 	}
 	if (config->tx_pp && !sh->dev_cap.txpp_en) {
 		DRV_LOG(ERR, "Packet pacing is not supported.");
@@ -1612,7 +1585,6 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	DRV_LOG(DEBUG, "\"allow_duplicate_pattern\" is %u.",
 		config->allow_duplicate_pattern);
 	DRV_LOG(DEBUG, "\"fdb_def_rule_en\" is %u.", config->fdb_def_rule);
-	DRV_LOG(DEBUG, "\"repr_matching_en\" is %u.", config->repr_matching);
 	DRV_LOG(DEBUG, "\"txq_mem_algn\" is %u.", config->txq_mem_algn);
 	return 0;
 }
@@ -1669,7 +1641,9 @@ mlx5_init_hws_flow_tags_registers(struct mlx5_dev_ctx_shared *sh)
 	unset |= 1 << mlx5_regc_index(REG_C_6);
 	if (sh->config.dv_esw_en)
 		unset |= 1 << mlx5_regc_index(REG_C_0);
-	if (meta_mode == MLX5_XMETA_MODE_META32_HWS)
+	if (meta_mode == MLX5_XMETA_MODE_META32_HWS ||
+	    mlx5_vport_rx_metadata_passing_enabled(sh) ||
+	    mlx5_vport_tx_metadata_passing_enabled(sh))
 		unset |= 1 << mlx5_regc_index(REG_C_1);
 	masks &= ~unset;
 	for (i = 0, j = 0; i < MLX5_FLOW_HW_TAGS_MAX; i++) {
@@ -2336,6 +2310,18 @@ mlx5_proc_priv_uninit(struct rte_eth_dev *dev)
 	dev->process_private = NULL;
 }
 
+static void
+mlx5_flow_pools_destroy(struct mlx5_priv *priv)
+{
+	int i;
+
+	for (i = 0; i < MLX5_FLOW_TYPE_MAXI; i++) {
+		if (!priv->flows[i])
+			continue;
+		mlx5_ipool_destroy(priv->flows[i]);
+	}
+}
+
 /**
  * DPDK callback to close the device.
  *
@@ -2396,6 +2382,11 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	/* Free the eCPRI flex parser resource. */
 	mlx5_flex_parser_ecpri_release(dev);
 	mlx5_flex_item_port_cleanup(dev);
+	if (priv->representor) {
+		/* Each representor has a dedicated interrupts handler */
+		rte_intr_instance_free(dev->intr_handle);
+		dev->intr_handle = NULL;
+	}
 	mlx5_indirect_list_handles_release(dev);
 #ifdef HAVE_MLX5_HWS_SUPPORT
 	mlx5_nta_sample_context_free(dev);
@@ -2525,6 +2516,7 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 		if (!c)
 			claim_zero(rte_eth_switch_domain_free(priv->domain_id));
 	}
+	mlx5_flow_pools_destroy(priv);
 	memset(priv, 0, sizeof(*priv));
 	priv->domain_id = RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID;
 	/*
@@ -3821,7 +3813,14 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 				PCI_DEVICE_ID_MELLANOX_CONNECTX8)
 	},
-
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX9)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_BLUEFIELD4)
+	},
 	{
 		.vendor_id = 0
 	}

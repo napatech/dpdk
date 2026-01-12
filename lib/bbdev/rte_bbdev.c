@@ -1247,7 +1247,7 @@ rte_bbdev_queue_ops_dump(uint16_t dev_id, uint16_t queue_id, FILE *f)
 {
 	struct rte_bbdev_queue_data *q_data;
 	struct rte_bbdev_stats *stats;
-	uint16_t i;
+	enum rte_bbdev_enqueue_status i;
 	struct rte_bbdev *dev = get_dev(dev_id);
 
 	VALID_DEV_OR_RET_ERR(dev, dev_id);
@@ -1264,11 +1264,15 @@ rte_bbdev_queue_ops_dump(uint16_t dev_id, uint16_t queue_id, FILE *f)
 			dev->data->name, queue_id);
 	fprintf(f, "  Last Enqueue Status %s\n",
 			rte_bbdev_enqueue_status_str(q_data->enqueue_status));
-	for (i = 0; i < RTE_BBDEV_ENQ_STATUS_SIZE_MAX; i++)
+	for (i = 0; i < RTE_BBDEV_ENQ_STATUS_SIZE_MAX; i++) {
+		const char *status_str = rte_bbdev_enqueue_status_str(i);
+		if (status_str == NULL)
+			continue;
 		if (q_data->queue_stats.enqueue_status_count[i] > 0)
 			fprintf(f, "  Enqueue Status Counters %s %" PRIu64 "\n",
-					rte_bbdev_enqueue_status_str(i),
+					status_str,
 					q_data->queue_stats.enqueue_status_count[i]);
+	}
 	stats = &dev->data->queues[queue_id].queue_stats;
 
 	fprintf(f, "  Enqueue Count %" PRIu64 " Warning %" PRIu64 " Error %" PRIu64 "\n",
@@ -1279,6 +1283,29 @@ rte_bbdev_queue_ops_dump(uint16_t dev_id, uint16_t queue_id, FILE *f)
 			stats->dequeue_err_count);
 
 	return dev->dev_ops->queue_ops_dump(dev, queue_id, f);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_bbdev_ops_trace, 25.03)
+void
+rte_bbdev_ops_trace(void *op, enum rte_bbdev_op_type op_type)
+{
+	struct rte_bbdev_dec_op *op_dec = op;
+	struct rte_bbdev_enc_op *op_enc = op;
+	struct rte_bbdev_fft_op *op_fft = op;
+	struct rte_bbdev_mldts_op *op_mldts = op;
+
+	if (op_type == RTE_BBDEV_OP_LDPC_DEC)
+		rte_bbdev_trace_op_ldpc_dec(op_dec->ldpc_dec);
+	else if (op_type == RTE_BBDEV_OP_LDPC_ENC)
+		rte_bbdev_trace_op_ldpc_enc(op_enc->ldpc_enc);
+	else if (op_type == RTE_BBDEV_OP_FFT)
+		rte_bbdev_trace_op_fft(op_fft->fft);
+	else if (op_type == RTE_BBDEV_OP_MLDTS)
+		rte_bbdev_trace_op_mldts(op_mldts->mldts);
+	else if (op_type == RTE_BBDEV_OP_TURBO_DEC)
+		rte_bbdev_trace_op_turbo_dec(op_dec->turbo_dec);
+	else if (op_type == RTE_BBDEV_OP_TURBO_ENC)
+		rte_bbdev_trace_op_turbo_enc(op_enc->turbo_enc);
 }
 
 RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_bbdev_ops_param_string, 24.11)

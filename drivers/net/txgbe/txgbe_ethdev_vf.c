@@ -74,6 +74,9 @@ static void txgbevf_dev_interrupt_handler(void *param);
 static const struct rte_pci_id pci_id_txgbevf_map[] = {
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_SP1000_VF) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_WX1820_VF) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_AML_VF) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_AML5024_VF) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_WANGXUN, TXGBE_DEV_ID_AML5124_VF) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -129,6 +132,7 @@ txgbevf_negotiate_api(struct txgbe_hw *hw)
 
 	/* start with highest supported, proceed down */
 	static const int sup_ver[] = {
+		txgbe_mbox_api_23,
 		txgbe_mbox_api_21,
 		txgbe_mbox_api_13,
 		txgbe_mbox_api_12,
@@ -162,13 +166,14 @@ int
 txgbevf_inject_5tuple_filter(struct rte_eth_dev *dev,
 			     struct txgbe_5tuple_filter *filter)
 {
+	struct txgbe_filter_info *filter_info = TXGBE_DEV_FILTER(dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	uint32_t mask = TXGBE_5TFCTL0_MASK;
 	uint16_t index = filter->index;
 	uint32_t msg[TXGBEVF_5T_MAX];
 	int err;
 
-	memset(msg, 0, sizeof(*msg));
+	memset(msg, 0, sizeof(msg));
 
 	/* 0 means compare */
 	mask &= ~TXGBE_5TFCTL0_MPOOL;
@@ -194,9 +199,16 @@ txgbevf_inject_5tuple_filter(struct rte_eth_dev *dev,
 	msg[TXGBEVF_5T_SA] = be_to_le32(filter->filter_info.src_ip);
 
 	err = txgbevf_add_5tuple_filter(hw, msg, index);
-	if (err)
-		PMD_DRV_LOG(ERR, "VF request PF to add 5tuple filters failed.");
+	if (!err)
+		return 0;
 
+	if (msg[TXGBEVF_5T_REQ] & TXGBE_VT_MSGTYPE_SPEC) {
+		PMD_DRV_LOG(INFO, "5tuple filters are full, switch to FDIR");
+		filter_info->ntuple_is_full = true;
+		return -ENOSYS;
+	}
+
+	PMD_DRV_LOG(ERR, "VF request PF to add 5tuple filters failed.");
 	return err;
 }
 
@@ -367,6 +379,9 @@ eth_txgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	memset(filter_info, 0,
 	       sizeof(struct txgbe_filter_info));
 
+	/* initialize flow director filter list & hash */
+	txgbe_fdir_filter_init(eth_dev);
+
 	/* initialize 5tuple filter list */
 	TAILQ_INIT(&filter_info->fivetuple_list);
 
@@ -375,7 +390,7 @@ eth_txgbevf_dev_init(struct rte_eth_dev *eth_dev)
 
 	PMD_INIT_LOG(DEBUG, "port %d vendorID=0x%x deviceID=0x%x mac.type=%s",
 		     eth_dev->data->port_id, pci_dev->id.vendor_id,
-		     pci_dev->id.device_id, "txgbe_mac_raptor_vf");
+		     pci_dev->id.device_id, "txgbe_mac_sp_vf");
 
 	return 0;
 }
@@ -494,7 +509,8 @@ txgbevf_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 }
 
 static int
-txgbevf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+txgbevf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		      struct eth_queue_stats *qstats __rte_unused)
 {
 	struct txgbevf_hw_stats *hw_stats = (struct txgbevf_hw_stats *)
 			  TXGBE_DEV_STATS(dev);
@@ -528,7 +544,7 @@ txgbevf_dev_stats_reset(struct rte_eth_dev *dev)
 	uint32_t i;
 
 	/* Sync HW register to the last stats */
-	txgbevf_dev_stats_get(dev, NULL);
+	txgbevf_dev_stats_get(dev, NULL, NULL);
 
 	/* reset HW current stats*/
 	for (i = 0; i < 8; i++) {
@@ -858,6 +874,9 @@ txgbevf_dev_close(struct rte_eth_dev *dev)
 	rte_intr_disable(intr_handle);
 	rte_intr_callback_unregister(intr_handle,
 				     txgbevf_dev_interrupt_handler, dev);
+
+	/* remove all the fdir filters & hash */
+	txgbe_fdir_filter_uninit(dev);
 
 	/* Remove all ntuple filters of the device */
 	txgbe_ntuple_filter_uninit(dev);
@@ -1362,6 +1381,75 @@ txgbevf_dev_allmulticast_disable(struct rte_eth_dev *dev)
 	return ret;
 }
 
+/**
+ *  txgbevf_get_pf_link_status - Get pf link/speed status
+ *  @hw: pointer to hardware structure
+ *
+ *  - PF notifies status via mailbox on change
+ *  - VF sets its link state synchronously upon mailbox interrupt,
+ *    skipping hardware link detection.
+ **/
+static s32 txgbevf_get_pf_link_status(struct rte_eth_dev *dev)
+{
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	struct txgbe_mbx_info *mbx = &hw->mbx;
+	struct rte_eth_link link;
+	u32 link_speed = TXGBE_LINK_SPEED_UNKNOWN;
+	bool link_up = false;
+	u32 msgbuf[2];
+	s32 retval;
+
+	retval = mbx->read(hw, msgbuf, 2, 0);
+
+	/*
+	 *if the read failed it could just be a mailbox collision, best wait
+	 * until we are called again and don't report an error
+	 */
+	if (retval)
+		return 0;
+
+	rte_eth_linkstatus_get(dev, &link);
+
+	link_up = msgbuf[1] & TXGBE_VFSTATUS_UP;
+	link_speed = (msgbuf[1] & 0xFFF0) >> 1;
+
+	if (link_up == link.link_status && link_speed == link.link_speed)
+		return 0;
+
+	link.link_speed = link_speed;
+	link.link_status = link_up;
+
+	if (link_up)
+		link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
+	else
+		link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
+	/*
+	 * Invoke the LSC interrupt callback to notify the upper app of a link
+	 * status change, even though the change is detected via a mailbox interrupt
+	 * instead of an LSC interrupt. This is because VF link status changes do
+	 * not trigger LSC interrupts — they rely on PF notifications.
+	 */
+	rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+				     NULL);
+	return rte_eth_linkstatus_set(dev, &link);
+}
+
+static void txgbevf_check_link_for_intr(struct rte_eth_dev *dev)
+{
+	struct rte_eth_link orig_link, new_link;
+
+	rte_eth_linkstatus_get(dev, &orig_link);
+	txgbevf_dev_link_update(dev, 0);
+	rte_eth_linkstatus_get(dev, &new_link);
+
+	PMD_DRV_LOG(INFO, "orig_link: %d, new_link: %d",
+		    orig_link.link_status, new_link.link_status);
+
+	if (new_link.link_status != orig_link.link_status)
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_LSC,
+					     NULL);
+}
+
 static void txgbevf_mbx_process(struct rte_eth_dev *dev)
 {
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
@@ -1371,12 +1459,15 @@ static void txgbevf_mbx_process(struct rte_eth_dev *dev)
 	in_msg = rd32(hw, TXGBE_VFMBX);
 
 	/* PF reset VF event */
-	if (in_msg == TXGBE_PF_CONTROL_MSG) {
-		/* dummy mbx read to ack pf */
-		if (txgbe_read_mbx(hw, &in_msg, 1, 0))
-			return;
-		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
-					      NULL);
+	if (in_msg & TXGBE_PF_CONTROL_MSG) {
+		if (in_msg & TXGBE_NOFITY_VF_LINK_STATUS) {
+			txgbevf_get_pf_link_status(dev);
+		} else {
+			/* dummy mbx read to ack pf */
+			txgbe_read_mbx(hw, &in_msg, 1, 0);
+			/* check link status if pf ping vf */
+			txgbevf_check_link_for_intr(dev);
+		}
 	}
 }
 

@@ -11,6 +11,7 @@
 
 #include <ethdev_driver.h>
 #include <rte_tm_driver.h>
+#include <rte_vect.h>
 
 #include "base/ice_common.h"
 #include "base/ice_adminq_cmd.h"
@@ -191,6 +192,22 @@ enum pps_type {
 	PPS_MAX,
 };
 
+enum ice_rx_func_type {
+	ICE_RX_DEFAULT,
+	ICE_RX_SCATTERED,
+	ICE_RX_BULK_ALLOC,
+	ICE_RX_SSE,
+	ICE_RX_SSE_SCATTERED,
+	ICE_RX_AVX2,
+	ICE_RX_AVX2_SCATTERED,
+	ICE_RX_AVX2_OFFLOAD,
+	ICE_RX_AVX2_SCATTERED_OFFLOAD,
+	ICE_RX_AVX512,
+	ICE_RX_AVX512_SCATTERED,
+	ICE_RX_AVX512_OFFLOAD,
+	ICE_RX_AVX512_SCATTERED_OFFLOAD,
+};
+
 struct ice_adapter;
 
 /**
@@ -316,6 +333,8 @@ struct ice_vsi {
 	uint8_t vlan_anti_spoof_on; /* The VLAN anti-spoofing enabled */
 	uint8_t vlan_filter_on; /* The VLAN filter enabled */
 	/* information about rss configuration */
+	uint8_t global_lut_allocated : 1;
+	uint8_t global_lut_id : 7;
 	u32 rss_key_size;
 	u32 rss_lut_size;
 	uint8_t *rss_lut;
@@ -362,7 +381,7 @@ struct ice_fdir_filter_conf {
 	uint64_t input_set_i; /* only for tunnel inner fields */
 	uint32_t mark_flag;
 
-	struct ice_parser_profile *prof;
+	struct ice_parser_profile prof;
 	bool parser_ena;
 	u8 *pkt_buf;
 	u8 pkt_len;
@@ -597,6 +616,8 @@ struct ice_devargs {
 	uint8_t pps_out_ena;
 	uint8_t ddp_load_sched;
 	uint8_t tm_exposed_levels;
+	uint8_t source_prune;
+	int link_state_on_close;
 	int xtr_field_offs;
 	uint8_t xtr_flag_offs[PROTO_XTR_MAX];
 	/* Name of the field. */
@@ -634,9 +655,9 @@ struct ice_adapter {
 	struct ice_hw hw;
 	struct ice_pf pf;
 	bool rx_bulk_alloc_allowed;
-	bool rx_vec_allowed;
 	bool tx_vec_allowed;
 	bool tx_simple_allowed;
+	enum ice_rx_func_type rx_func_type;
 	/* ptype mapping table */
 	alignas(RTE_CACHE_LINE_MIN_SIZE) uint32_t ptype_tbl[ICE_MAX_PKT_TYPE];
 	bool is_safe_mode;
@@ -649,6 +670,7 @@ struct ice_adapter {
 	uint8_t ptp_tx_block;
 	uint8_t ptp_tx_index;
 	bool ptp_ena;
+	bool txpp_ena;	/* For TxPP */
 	uint64_t time_hw;
 	struct ice_fdir_prof_info fdir_prof_info[ICE_MAX_PTGS];
 	struct ice_rss_prof_info rss_prof_info[ICE_MAX_PTGS];
@@ -657,11 +679,7 @@ struct ice_adapter {
 	/* Set bit if the engine is disabled */
 	unsigned long disabled_engine_mask;
 	struct ice_parser *psr;
-	/* used only on X86, zero on other Archs */
-	bool rx_use_avx2;
-	bool rx_use_avx512;
-	bool tx_use_avx2;
-	bool tx_use_avx512;
+	enum rte_vect_max_simd tx_simd_width;
 	bool rx_vec_offload_support;
 };
 

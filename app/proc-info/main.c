@@ -657,7 +657,6 @@ static void
 nic_stats_display(uint16_t port_id)
 {
 	struct rte_eth_stats stats;
-	uint8_t i;
 
 	static const char *nic_stats_border = "########################";
 
@@ -673,21 +672,6 @@ nic_stats_display(uint16_t port_id)
 	       "  TX-bytes:  %-10"PRIu64"\n", stats.opackets, stats.oerrors,
 	       stats.obytes);
 
-	printf("\n");
-	for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-		printf("  Stats reg %2d RX-packets: %-10"PRIu64
-		       "  RX-errors: %-10"PRIu64
-		       "  RX-bytes: %-10"PRIu64"\n",
-		       i, stats.q_ipackets[i], stats.q_errors[i], stats.q_ibytes[i]);
-	}
-
-	printf("\n");
-	for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS; i++) {
-		printf("  Stats reg %2d TX-packets: %-10"PRIu64
-		       "  TX-bytes: %-10"PRIu64"\n",
-		       i, stats.q_opackets[i], stats.q_obytes[i]);
-	}
-
 	printf("  %s############################%s\n",
 		   nic_stats_border, nic_stats_border);
 }
@@ -702,7 +686,7 @@ nic_stats_clear(uint16_t port_id)
 
 static void collectd_resolve_cnt_type(char *cnt_type, size_t cnt_type_len,
 				      const char *cnt_name) {
-	char *type_end = strrchr(cnt_name, '_');
+	const char *type_end = strrchr(cnt_name, '_');
 
 	if ((type_end != NULL) &&
 	    (strncmp(cnt_name, "rx_", strlen("rx_")) == 0)) {
@@ -2137,7 +2121,7 @@ main(int argc, char **argv)
 {
 	int ret;
 	int i;
-	char c_flag[] = "-c1";
+	char c_flag[] = "-l0";
 	char n_flag[] = "-n4";
 	char mp_flag[] = "--proc-type=secondary";
 	char log_flag[] = "--log-level=6";

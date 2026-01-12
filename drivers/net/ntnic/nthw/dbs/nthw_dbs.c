@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -76,7 +75,7 @@ nthw_dbs_t *nthw_dbs_new(void)
 	return p;
 }
 
-int dbs_init(nthw_dbs_t *p, nthw_fpga_t *p_fpga, int n_instance)
+int nthw_dbs_init(nthw_dbs_t *p, nthw_fpga_t *p_fpga, int n_instance)
 {
 	nthw_module_t *mod = nthw_fpga_query_module(p_fpga, MOD_DBS, n_instance);
 
@@ -369,7 +368,7 @@ static int dbs_reset_tx_control(nthw_dbs_t *p)
 	return 0;
 }
 
-void dbs_reset(nthw_dbs_t *p)
+void nthw_dbs_reset(nthw_dbs_t *p)
 {
 	int i;
 	dbs_reset_rx_control(p);
@@ -462,7 +461,7 @@ int nthw_get_rx_init(nthw_dbs_t *p, uint32_t *init, uint32_t *queue, uint32_t *b
 	return 0;
 }
 
-int set_tx_init(nthw_dbs_t *p, uint32_t start_idx, uint32_t start_ptr, uint32_t init,
+int nthw_set_tx_init(nthw_dbs_t *p, uint32_t start_idx, uint32_t start_ptr, uint32_t init,
 	uint32_t queue)
 {
 	if (p->mp_reg_tx_init_val) {
@@ -601,7 +600,7 @@ static void flush_rx_am_data(nthw_dbs_t *p, uint32_t index)
 	nthw_register_flush(p->mp_reg_rx_avail_monitor_data, 1);
 }
 
-int set_rx_am_data(nthw_dbs_t *p,
+int nthw_set_rx_am_data(nthw_dbs_t *p,
 	uint32_t index,
 	uint64_t guest_physical_address,
 	uint32_t enable,
@@ -618,7 +617,7 @@ int set_rx_am_data(nthw_dbs_t *p,
 	return 0;
 }
 
-int set_rx_am_data_enable(nthw_dbs_t *p, uint32_t index, uint32_t enable)
+int nthw_set_rx_am_data_enable(nthw_dbs_t *p, uint32_t index, uint32_t enable)
 {
 	if (!p->mp_reg_rx_avail_monitor_data)
 		return -ENOTSUP;
@@ -673,7 +672,7 @@ static void flush_tx_am_data(nthw_dbs_t *p, uint32_t index)
 	nthw_register_flush(p->mp_reg_tx_avail_monitor_data, 1);
 }
 
-int set_tx_am_data(nthw_dbs_t *p,
+int nthw_set_tx_am_data(nthw_dbs_t *p,
 	uint32_t index,
 	uint64_t guest_physical_address,
 	uint32_t enable,
@@ -690,7 +689,7 @@ int set_tx_am_data(nthw_dbs_t *p,
 	return 0;
 }
 
-int set_tx_am_data_enable(nthw_dbs_t *p, uint32_t index, uint32_t enable)
+int nthw_set_tx_am_data_enable(nthw_dbs_t *p, uint32_t index, uint32_t enable)
 {
 	if (!p->mp_reg_tx_avail_monitor_data)
 		return -ENOTSUP;
@@ -796,7 +795,7 @@ static void flush_rx_uw_data(nthw_dbs_t *p, uint32_t index)
 	nthw_register_flush(p->mp_reg_rx_used_writer_data, 1);
 }
 
-int set_rx_uw_data(nthw_dbs_t *p,
+int nthw_set_rx_uw_data(nthw_dbs_t *p,
 	uint32_t index,
 	uint64_t guest_physical_address,
 	uint32_t host_id,
@@ -923,7 +922,7 @@ static void flush_tx_uw_data(nthw_dbs_t *p, uint32_t index)
 	nthw_register_flush(p->mp_reg_tx_used_writer_data, 1);
 }
 
-int set_tx_uw_data(nthw_dbs_t *p,
+int nthw_set_tx_uw_data(nthw_dbs_t *p,
 	uint32_t index,
 	uint64_t guest_physical_address,
 	uint32_t host_id,
@@ -1019,7 +1018,7 @@ static void flush_rx_dr_data(nthw_dbs_t *p, uint32_t index)
 	nthw_register_flush(p->mp_reg_rx_descriptor_reader_data, 1);
 }
 
-int set_rx_dr_data(nthw_dbs_t *p,
+int nthw_set_rx_dr_data(nthw_dbs_t *p,
 	uint32_t index,
 	uint64_t guest_physical_address,
 	uint32_t host_id,
@@ -1121,7 +1120,7 @@ static void flush_tx_dr_data(nthw_dbs_t *p, uint32_t index)
 	nthw_register_flush(p->mp_reg_tx_descriptor_reader_data, 1);
 }
 
-int set_tx_dr_data(nthw_dbs_t *p,
+int nthw_set_tx_dr_data(nthw_dbs_t *p,
 	uint32_t index,
 	uint64_t guest_physical_address,
 	uint32_t host_id,

@@ -176,6 +176,7 @@ struct __rte_cache_aligned mlx5_rxq_data {
 /* RX queue control descriptor. */
 struct mlx5_rxq_ctrl {
 	struct mlx5_rxq_data rxq; /* Data path structure. */
+	uint16_t mtu; /* Original MTU that the queue was allocated with. */
 	LIST_ENTRY(mlx5_rxq_ctrl) next; /* Pointer to the next element. */
 	LIST_HEAD(priv, mlx5_rxq_priv) owners; /* Owner rxq list. */
 	struct mlx5_rxq_obj *obj; /* Verbs/DevX elements. */
@@ -320,7 +321,7 @@ void mlx5_mprq_buf_free(struct mlx5_mprq_buf *buf);
 uint16_t mlx5_rx_burst_mprq(void *dpdk_rxq, struct rte_mbuf **pkts,
 			    uint16_t pkts_n);
 int mlx5_rx_descriptor_status(void *rx_queue, uint16_t offset);
-uint32_t mlx5_rx_queue_count(void *rx_queue);
+int mlx5_rx_queue_count(void *rx_queue);
 void mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		       struct rte_eth_rxq_info *qinfo);
 int mlx5_rx_burst_mode_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,

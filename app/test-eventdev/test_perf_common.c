@@ -566,11 +566,11 @@ crypto_adapter_enq_op_fwd(struct prod_data *p)
 static inline void
 dma_adapter_enq_op_fwd(struct prod_data *p)
 {
-	struct rte_event_dma_adapter_op *ops[BURST_SIZE] = {NULL};
+	struct rte_dma_op *ops[BURST_SIZE] = {NULL};
 	struct test_perf *t = p->t;
 	const uint32_t nb_flows = t->nb_flows;
 	const uint64_t nb_pkts = t->nb_pkts;
-	struct rte_event_dma_adapter_op op;
+	struct rte_dma_op op;
 	struct rte_event evts[BURST_SIZE];
 	const uint8_t dev_id = p->dev_id;
 	struct evt_options *opt = t->opt;
@@ -1316,7 +1316,6 @@ static int
 perf_event_dma_adapter_setup(struct test_perf *t, struct prod_data *p)
 {
 	struct evt_options *opt = t->opt;
-	struct rte_event event;
 	uint32_t cap;
 	int ret;
 
@@ -1335,13 +1334,15 @@ perf_event_dma_adapter_setup(struct test_perf *t, struct prod_data *p)
 		return -ENOTSUP;
 	}
 
-	if (cap & RTE_EVENT_DMA_ADAPTER_CAP_INTERNAL_PORT_VCHAN_EV_BIND)
+	if (cap & RTE_EVENT_DMA_ADAPTER_CAP_INTERNAL_PORT_VCHAN_EV_BIND) {
+		struct rte_event event = { .queue_id = p->queue_id, };
+
 		ret = rte_event_dma_adapter_vchan_add(TEST_PERF_DA_ID, p->da.dma_dev_id,
 						      p->da.vchan_id, &event);
-	else
+	} else {
 		ret = rte_event_dma_adapter_vchan_add(TEST_PERF_DA_ID, p->da.dma_dev_id,
 						      p->da.vchan_id, NULL);
-
+	}
 	return ret;
 }
 
@@ -2250,7 +2251,7 @@ perf_mempool_setup(struct evt_test *test, struct evt_options *opt)
 	} else if (opt->prod_type == EVT_PROD_TYPE_EVENT_DMA_ADPTR) {
 		t->pool = rte_mempool_create(test->name,   /* mempool name */
 					     opt->pool_sz, /* number of elements*/
-					     sizeof(struct rte_event_dma_adapter_op) +
+					     sizeof(struct rte_dma_op) +
 						     (sizeof(struct rte_dma_sge) * 2),
 					     cache_sz,		       /* cache size*/
 					     0, NULL, NULL, NULL,      /* obj constructor */

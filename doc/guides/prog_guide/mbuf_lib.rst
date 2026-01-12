@@ -266,8 +266,22 @@ can be found in several of the sample applications, for example, the IPv4 Multic
 Debug
 -----
 
-In debug mode, the functions of the mbuf library perform sanity checks before any operation (such as, buffer corruption,
-bad type, and so on).
+When ``RTE_LIBRTE_MBUF_DEBUG`` is enabled at compilation,
+some major mbuf operations (clone, copy, freeing)
+perform sanity checks (such as buffer corruption, bad type, and so on).
+
+When ``RTE_ENABLE_ASSERT`` is enabled,
+more basic checks are done in many functions.
+
+When ``RTE_MBUF_HISTORY_DEBUG`` is enabled,
+the mbuf lifecycle is tracked.
+More marks can be added by the application
+by calling functions like ``rte_mbuf_history_mark_bulk()``.
+Then the history can be stored in a file
+by calling functions like ``rte_mbuf_history_dump_all()``.
+The dump file will be easier to read after being processed
+by the script ``dpdk-mbuf-history-parser.py``.
+
 
 Use Cases
 ---------

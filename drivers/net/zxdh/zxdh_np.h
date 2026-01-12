@@ -15,9 +15,13 @@
 #define ZXDH_DISABLE                          (0)
 #define ZXDH_ENABLE                           (1)
 #define ZXDH_PORT_NAME_MAX                    (32)
-#define ZXDH_DEV_CHANNEL_MAX                  (2)
+#define ZXDH_DEV_CHANNEL_MAX                  (16)
 #define ZXDH_DEV_SDT_ID_MAX                   (256U)
-
+#define ZXDH_DEV_PF_NUM_MAX                   (8)
+#define ZXDH_DEV_SLOT_ID(DEVICE_ID)           ((DEVICE_ID) & (ZXDH_DEV_CHANNEL_MAX - 1))
+#define ZXDH_DEV_PCIE_ID(DEVICE_ID)           (((DEVICE_ID) >> 16) & 0xFFFF)
+#define ZXDH_DEV_VF_INDEX(DEVICE_ID)          (ZXDH_DEV_PCIE_ID(DEVICE_ID) & 0xFF)
+#define ZXDH_DEV_PF_INDEX(DEVICE_ID)          ((ZXDH_DEV_PCIE_ID(DEVICE_ID) >> 8) & 0x7)
 
 /*DTB*/
 #define ZXDH_DTB_QUEUE_ITEM_NUM_MAX           (32)
@@ -1058,7 +1062,7 @@ typedef struct zxdh_acl_etcamid_cfg_t {
 typedef struct zxdh_acl_key_info_t {
 	uint32_t handle;
 	uint32_t pri;
-	uint8_t   key[0];
+	uint8_t key[];
 } ZXDH_ACL_KEY_INFO_T;
 
 typedef uint32_t (*ZXDH_ACL_TBL_AS_DDR_WR_FUN)(uint32_t dev_id, uint32_t tbl_type,
@@ -1130,18 +1134,19 @@ typedef struct zxdh_sys_init_ctrl_t {
 } ZXDH_SYS_INIT_CTRL_T;
 
 typedef struct dpp_dev_cfg_t {
-	uint32_t device_id;
+	uint32_t slot_id;
+	uint16_t pcie_id[ZXDH_DEV_PF_NUM_MAX];
 	ZXDH_DEV_TYPE_E dev_type;
 	uint32_t chip_ver;
 	uint32_t access_type;
 	uint32_t agent_flag;
-	uint32_t vport;
+	uint32_t vport[ZXDH_DEV_PF_NUM_MAX];
 	uint32_t fw_bar_msg_num;
-	uint64_t pcie_addr;
+	uint64_t pcie_addr[ZXDH_DEV_PF_NUM_MAX];
 	uint64_t riscv_addr;
 	uint64_t dma_vir_addr;
 	uint64_t dma_phy_addr;
-	uint64_t agent_addr;
+	uint64_t agent_addr[ZXDH_DEV_PF_NUM_MAX];
 	uint32_t init_flags[ZXDH_MODULE_INIT_MAX];
 	ZXDH_DEV_WRITE_FUNC p_pcie_write_fun;
 	ZXDH_DEV_READ_FUNC  p_pcie_read_fun;
@@ -1751,6 +1756,15 @@ typedef enum zxdh_profile_type {
 	CAR_MAX
 } ZXDH_PROFILE_TYPE;
 
+typedef enum zxdh_msg_acl_index_oper_e {
+	ZXDH_ACL_INDEX_REQUEST    = 0,
+	ZXDH_ACL_INDEX_RELEASE    = 1,
+	ZXDH_ACL_INDEX_VPORT_REL  = 2,
+	ZXDH_ACL_INDEX_ALL_REL    = 3,
+	ZXDH_ACL_INDEX_STAT_CLR   = 4,
+	ZXDH_ACL_INDEX_MAX
+} ZXDH_MSG_ACL_INDEX_OPER_E;
+
 typedef struct __rte_aligned(2) zxdh_version_compatible_reg_t {
 	uint8_t version_compatible_item;
 	uint8_t major;
@@ -1915,6 +1929,18 @@ typedef struct zxdh_dtb_dump_index_t {
 	uint32_t index_type;
 } ZXDH_DTB_DUMP_INDEX_T;
 
+typedef struct __rte_aligned(2) zxdh_agent_channel_acl_msg_t {
+	uint8_t dev_id;
+	uint8_t type;
+	uint8_t oper;
+	uint8_t rsv;
+	uint32_t sdt_no;
+	uint32_t vport;
+	uint32_t index;
+	uint32_t counter_id;
+	uint32_t rd_mode;
+} ZXDH_AGENT_CHANNEL_ACL_MSG_T;
+
 int zxdh_np_host_init(uint32_t dev_id, ZXDH_DEV_INIT_CTRL_T *p_dev_init_ctrl);
 int zxdh_np_online_uninit(uint32_t dev_id, char *port_name, uint32_t queue_id);
 int zxdh_np_dtb_table_entry_write(uint32_t dev_id, uint32_t queue_id,
@@ -1928,6 +1954,7 @@ int zxdh_np_dtb_stats_get(uint32_t dev_id,
 			ZXDH_STAT_CNT_MODE_E rd_mode,
 			uint32_t index,
 			uint32_t *p_data);
+uint32_t zxdh_np_soft_res_uninstall(uint32_t dev_id);
 uint32_t zxdh_np_stat_ppu_cnt_get_ex(uint32_t dev_id,
 			ZXDH_STAT_CNT_MODE_E rd_mode,
 			uint32_t index,
@@ -1958,5 +1985,13 @@ uint32_t zxdh_np_dtb_hash_offline_delete(uint32_t dev_id,
 						uint32_t queue_id,
 						uint32_t sdt_no,
 						__rte_unused uint32_t flush_mode);
+uint32_t zxdh_np_dtb_acl_index_request(uint32_t dev_id,
+	uint32_t sdt_no, uint32_t vport, uint32_t *p_index);
 
+uint32_t zxdh_np_dtb_acl_index_release(uint32_t dev_id,
+	uint32_t sdt_no, uint32_t vport, uint32_t index);
+uint32_t zxdh_np_dtb_acl_table_dump_by_vport(uint32_t dev_id, uint32_t queue_id,
+	uint32_t sdt_no, uint32_t vport, uint32_t *entry_num, uint8_t *p_dump_data);
+uint32_t zxdh_np_dtb_acl_offline_delete(uint32_t dev_id, uint32_t queue_id,
+	uint32_t sdt_no, uint32_t vport, uint32_t counter_id, uint32_t rd_mode);
 #endif /* ZXDH_NP_H */

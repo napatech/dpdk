@@ -4,8 +4,12 @@
 TXGBE Poll Mode Driver
 ======================
 
-The TXGBE PMD (librte_pmd_txgbe) provides poll mode driver support
-for Wangxun 10 Gigabit Ethernet NICs.
+Supported NICs
+--------------
+
+- Wangxun 10 Gigabit Ethernet NICs
+- Wangxun 25 Gigabit Ethernet NICs
+- Wangxun 40 Gigabit Ethernet NICs
 
 Features
 --------
@@ -30,12 +34,16 @@ Features
 - FW version
 - LRO
 - Generic flow API
+- Forward Error Correction (FEC) (only for 25G NICs)
 
 Prerequisites
 -------------
 
 - Learning about Wangxun 10 Gigabit Ethernet NICs using
   `<https://www.net-swift.com/a/383.html>`_.
+
+- Learning about Wangxun 25 Gigabit Ethernet NICs using
+  `<https://www.net-swift.com/a/25GbE-tong-yong-lei-FF5025.html>`_.
 
 - Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
 
@@ -138,6 +146,36 @@ Please note that following ``devargs`` are only set for backplane NICs.
 
   PHY parameter used for user debugging. Setting other values to
   take effect requires setting the ``ffe_set``.
+
+- ``pkt-filter-size`` (default **0**)
+
+  Memory allocation for the flow director filter.
+  Default 0 for 64K mode, set 1 for 128K mode, set 2 for 256K mode.
+
+- ``pkt-filter-drop-queue`` (default **127**)
+
+  The drop queue number for packets that match the drop rule in flow director.
+  Valid values are from 0 to 127.
+
+Please note that following ``devargs`` are only set for Amber-Lite NICs.
+
+- ``tx_headwb`` (default **1**)
+
+  Use to enable the TX Head Write-Back mode.
+  In this mode, the hardware merges and writes back a group of TX descriptors
+  together to reduce memory access times, which helps improve performance.
+
+- ``tx_headwb_size`` (default **16**)
+
+  Tx head write-back length.
+  It is recommended to use the default values.
+  Setting other values to take effect requires setting the ``tx_headwb``.
+
+- ``rx_desc_merge`` (default **1**)
+
+  Use to enable the RX descriptor merge mode.
+  In this mode, the hardware merges and writes back a group of RX descriptors
+  together to reduce memory access times, which helps improve performance.
 
 Driver compilation and testing
 ------------------------------

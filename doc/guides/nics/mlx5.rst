@@ -38,8 +38,9 @@ NIC / DPU          total bandwidth max ports PCIe        embedded CPU
 **ConnectX-6 Dx**  200 Gb/s        2         Gen4        --
 **BlueField-2**    200 Gb/s        2         Gen4        A72 x8
 **ConnectX-7**     400 Gb/s        4         Gen5        --
-**ConnectX-8**     400 Gb/s        4         Gen6        --
 **BlueField-3**    400 Gb/s        2         Gen5        A78 x16
+**ConnectX-8**     400 Gb/s        4         Gen6        --
+**ConnectX-9**     800 Gb/s        4         Gen6        --
 ================== =============== ========= =========== ============
 
 The details of models and specifications can be found on the website
@@ -232,9 +233,9 @@ for an additional list of options shared with other mlx5 drivers.
   Supported on:
 
   - x86_64 with ConnectX-4, ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, ConnectX-7, ConnectX-8, BlueField-2, and BlueField-3.
+    ConnectX-6 Lx, ConnectX-7, ConnectX-8, ConnectX-9, BlueField-2, and BlueField-3.
   - POWER9 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, ConnectX-7, ConnectX-8, BlueField-2, and BlueField-3.
+    ConnectX-6 Lx, ConnectX-7, ConnectX-8, ConnectX-9, BlueField-2, and BlueField-3.
 
 - ``rxq_pkt_pad_en`` parameter [int]
 
@@ -247,9 +248,9 @@ for an additional list of options shared with other mlx5 drivers.
   Supported on:
 
   - x86_64 with ConnectX-4, ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, ConnectX-7, ConnectX-8, BlueField-2, and BlueField-3.
+    ConnectX-6 Lx, ConnectX-7, ConnectX-8, ConnectX-9, BlueField-2, and BlueField-3.
   - POWER8 and ARMv8 with ConnectX-4 Lx, ConnectX-5, ConnectX-6, ConnectX-6 Dx,
-    ConnectX-6 Lx, ConnectX-7, ConnectX-8, BlueField-2, and BlueField-3.
+    ConnectX-6 Lx, ConnectX-7, ConnectX-8, ConnectX-9, BlueField-2, and BlueField-3.
 
 .. _mlx5_delay_drop_param:
 
@@ -646,6 +647,8 @@ for an additional list of options shared with other mlx5 drivers.
 
   - 3, this engages tunnel offload mode. In E-Switch configuration, that
     mode implicitly activates ``dv_xmeta_en=1``.
+    Tunnel offload is not supported in synchronous flow API
+    when using :ref:`HW steering <mlx5_hws>`.
 
   - 4, this mode is only supported in :ref:`HW steering <mlx5_hws>`.
     The Rx/Tx metadata with 32b width copy between FDB and NIC is supported.
@@ -686,9 +689,11 @@ for an additional list of options shared with other mlx5 drivers.
 - ``dv_flow_en`` parameter [int]
 
   Value 0 means legacy Verbs flow offloading.
+  It is available for devices older than ConnectX-9.
 
-  Value 1 enables the DV flow steering assuming it is supported by the
-  driver (requires rdma-core 24 or higher).
+  Value 1 enables the Direct Verbs flow steering.
+  It is available for devices older than ConnectX-9,
+  and requires rdma-core 24 or later.
 
   Value 2 enables the WQE based hardware steering.
   In this mode, only queue-based flow management is supported.
@@ -744,23 +749,15 @@ for an additional list of options shared with other mlx5 drivers.
 
     <Primary_PCI_BDF>,representor=pf[0,1]vf[0-2]
 
-- ``repr_matching_en`` parameter [int]
+  On ConnectX-7 multi-host setup, the PF index is not continuous,
+  and must be queried in sysfs::
 
-  - 0. If representor matching is disabled, then there will be no implicit
-    item added. As a result, ingress flow rules will match traffic
-    coming to any port, not only the port on which flow rule is created.
-    Because of that, default flow rules for ingress traffic cannot be created
-    and port starts in isolated mode by default. Port cannot be switched back
-    to non-isolated mode.
+    cat /sys/class/net/*/phys_port_name
 
-  - 1. If representor matching is enabled (default setting),
-    then each ingress pattern template has an implicit REPRESENTED_PORT
-    item added. Flow rules based on this pattern template will match
-    the vport associated with port on which rule is created.
+  With an example output 0 and 2 for PF1 and PF2, use [0,2] for PF index
+  to probe VF port representors 0 through 2 on both PFs of bonding device::
 
-  .. note::
-
-     This parameter is deprecated and will be removed in future releases.
+    <Primary_PCI_BDF>,representor=pf[0,2]vf[0-2]
 
 - ``max_dump_files_num`` parameter [int]
 
@@ -1232,6 +1229,10 @@ On Windows, the features are limited:
   - IPv4/TCP with CVLAN filtering
   - L4 steering rules for port RSS of IP, UDP, TCP
 
+- Tunnel protocol support:
+
+  - NVGRE (requires DevX dynamic insertion mode)
+
 
 .. _mlx5_multiproc:
 
@@ -1339,7 +1340,8 @@ Hardware Steering
 ~~~~~~~~~~~~~~~~~
 
 Faster than software steering (SWS),
-hardware steering (HWS) is the only mode supporting the flow template async API.
+hardware steering (HWS) is the only mode supporting the flow template async API,
+and the only mode supported on device ConnectX-9 and later.
 
 Flow rules are managed by the hardware,
 with a WQE-based high scaling and safer flow insertion/destruction.
@@ -1364,6 +1366,13 @@ Reconfiguring HW steering engine is not supported.
 Any subsequent call to ``rte_flow_configure()`` with different configuration
 than initially provided will be rejected.
 
+.. note::
+
+   The application must call ``rte_flow_configure()``
+   before creating any flow rules
+   when using :ref:`asynchronous flow API <flow_async_api>`.
+   It is also recommended for synchronous API.
+
 Limitations
 ^^^^^^^^^^^
 
@@ -1380,8 +1389,6 @@ Limitations
 
    - ``-EAGAIN`` for ``rte_eth_dev_start()``.
    - ``-EBUSY`` for ``rte_eth_dev_stop()``.
-
-#. Partial match with item template is not supported.
 
 #. The supported actions order is as below::
 
@@ -1402,6 +1409,41 @@ Limitations
    c. Any encapsulation action, including the combination of RAW_ENCAP and RAW_DECAP actions
       which results in L3 encap.
    d. Only in transfer (switchdev) mode.
+
+#. When using synchronous flow API,
+   the following limitations and considerations apply:
+
+   - There are limitations on size of match fields.
+     Exceeding these limitations will result in an error,
+     unlike other flow engines (``dv_flow_en`` < 2)
+     that handle this by creating a tree of rules.
+
+   - When updating a rule by inserting a new one and deleting the old one,
+     for non-zero group, after adding the new rule,
+     and before the deletion of the old rule, the new rule will be matched,
+     contrary to the behavior in other flow engines (``dv_flow_en`` < 2)
+     in which the old rule will be matched.
+
+   - By default, the port is configured with zeroed ``rte_flow_port_attr``:
+     there are zero flow queues (one is created by default),
+     no actions, and no flags set.
+     The default flow queue size for ``rte_flow_queue_attr`` is 32
+     (used for the internal flow queue).
+     If the application uses any configurable actions
+     (such as meter, age, conntrack or counter),
+     the system will allocate the maximum number of available actions per port.
+     To optimize memory usage,
+     the application should call ``rte_flow_configure``
+     and specify only the required number of actions.
+     If the application needs to modify flow queue settings,
+     it should also use ``rte_flow_configure``.
+
+   - When creating a rule with a partial `mask` provided in the flow item,
+     the `spec` value must be calculated after the "AND" operation with the `mask`.
+     If more significant bits are present in the `spec` than in the `mask`,
+     the rule will be created without any error
+     but the packets will not hit as expected.
+     Such limitation will be removed in future.
 
 
 .. _mlx5_bifurcated:
@@ -2344,7 +2386,6 @@ Runtime configuration
 
 The behaviour of port representors is configured
 with some :ref:`parameters <mlx5_representor_params>`.
-The option ``repr_matching_en`` has an impact on flow steering.
 
 Limitations
 ^^^^^^^^^^^
@@ -2354,9 +2395,14 @@ Limitations
 #. A driver limitation for ``RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR`` action
    restricts the ``port_id`` configuration to only accept the value ``0xffff``,
    indicating the E-Switch manager.
-   If the ``repr_matching_en`` parameter is enabled, the traffic will be directed
-   to the representor of the source virtual port (SF/VF), while if it is disabled,
-   the traffic will be routed based on the steering rules in the ingress domain.
+
+#. When using synchronous flow API with :ref:`HW steering <mlx5_hws>`:
+
+   - ``RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR`` is not supported.
+     ``RTE_FLOW_ITEM_TYPE_TX_QUEUE`` can be used with a rule for each queue.
+   - Transfer rules are not supported on representor ports.
+   - Rules created on proxy ports without explicit represented port matching
+     will match packets from all ports.
 
 Examples
 ^^^^^^^^
@@ -2484,6 +2530,18 @@ and it should be allowed to specify zero values as parameters
 for the META and MARK flow items and actions.
 In the same time, zero mask has no meaning and should be rejected on validation stage.
 
+Starting from firmware version 47.0274,
+if :ref:`switchdev mode <mlx5_switchdev>` was enabled,
+flow metadata can be shared between flows in FDB and VF domains:
+
+* If metadata was attached to FDB flow
+  and that flow transferred incoming packet to a VF,
+  representor, ingress flow bound to the VF can match the metadata.
+
+* If metadata was attached to VF egress flow, FDB flow can match the metadata.
+
+The metadata sharing functionality is controlled with firmware configuration.
+
 Requirements
 ^^^^^^^^^^^^
 
@@ -2534,6 +2592,10 @@ DPDK       19.05         18.11
 
 Limitations
 ^^^^^^^^^^^
+
+#. When using synchronous flow API with :ref:`HW steering <mlx5_hws>`,
+   ``RTE_FLOW_ITEM_TYPE_MARK`` (16-bit match) is unsupported.
+   ``RTE_FLOW_ITEM_TYPE_META`` (32-bit match) can be used as an alternative.
 
 #. ``RTE_FLOW_ACTION_TYPE_MARK`` can be used in transfer flow rules,
    since firmware version xx.43.1014,
@@ -2690,19 +2752,27 @@ DPDK       19.05         19.02          21.05                    21.05
 Limitations
 ^^^^^^^^^^^
 
-Because freeing a counter (by destroying a flow rule or destroying indirect action)
-does not immediately make it available for the application,
-the PMD might return:
+With :ref:`HW steering <mlx5_hws>`:
 
-- ``ENOENT`` if no counter is available in ``free``, ``reuse``
-  or ``wait_reset`` rings.
-  No counter will be available until the application releases some of them.
-- ``EAGAIN`` if no counter is available in ``free`` and ``reuse`` rings,
-  but there are counters in ``wait_reset`` ring.
-  This means that after the next service thread cycle new counters will be available.
+#. Because freeing a counter (by destroying a flow rule or destroying indirect action)
+   does not immediately make it available for the application,
+   the PMD might return:
 
-The application has to be aware that flow rule create or indirect action create
-might need be retried.
+   - ``ENOENT`` if no counter is available in ``free``, ``reuse``
+     or ``wait_reset`` rings.
+     No counter will be available until the application releases some of them.
+   - ``EAGAIN`` if no counter is available in ``free`` and ``reuse`` rings,
+     but there are counters in ``wait_reset`` ring.
+     This means that after the next service thread cycle,
+     new counters will be available.
+
+   The application has to be aware that flow rule or indirect action creation
+   might need to be retried.
+
+#. Using count action on root tables requires:
+
+   - Linux kernel >= 6.4 and rdma-core >= 60.0 for upstream drivers/libraries or,
+   - DOCA >= 3.2.0 for drivers/libraries provided by NVIDIA.
 
 
 .. _mlx5_age:
@@ -2741,6 +2811,18 @@ With :ref:`HW steering <mlx5_hws>`,
    - ``nb_counters`` is the number of flow rules using counter (with/without age)
      in addition to flow rules using only age (without count action).
    - ``nb_aging_objects`` is the number of flow rules containing age action.
+
+#. When using synchronous flow API with :ref:`HW steering <mlx5_hws>`,
+   aged flows are reported only once.
+
+#. With strict queueing enabled
+   (``RTE_FLOW_PORT_FLAG_STRICT_QUEUE`` passed to ``rte_flow_configure()``),
+   indirect age actions can be created only through asynchronous flow API.
+
+#. Using age action on root tables requires:
+
+   - Linux kernel >= 6.4
+   - rdma-core >= 60.0
 
 
 .. _mlx5_quota:
@@ -2865,9 +2947,11 @@ Limitations
    it cannot be used by flow matching all ports.
 
 #. When using :ref:`HW steering <mlx5_hws>`,
-   only meter mark action is supported.
+   only ``RTE_FLOW_ACTION_TYPE_METER_MARK`` is supported,
+   not ``RTE_FLOW_ACTION_TYPE_METER``.
 
 #. The maximal number of HW quota and HW meter objects is ``16e6``.
+
 
 Examples
 ^^^^^^^^
@@ -3071,7 +3155,28 @@ DPDK       21.02
 Limitations
 ^^^^^^^^^^^
 
-#. Supports the 'set' and 'add' operations for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
+#. Supports the 'set' operation for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` in all flow engines.
+
+#. Supports the 'add' operation with 'src' field
+   of type ``RTE_FLOW_FIELD_VALUE`` or ``RTE_FLOW_FIELD_POINTER``
+   with both :ref:`HW steering <mlx5_hws>` and DV flow engine (``dv_flow_en=1``).
+
+   HW steering flow engine, starting with ConnectX-7 and BlueField-3,
+   supports packet header fields in 'src' field.
+
+   'dst' field can be any of the following:
+
+   - ``RTE_FLOW_FIELD_IPV4_TTL``
+   - ``RTE_FLOW_FIELD_IPV6_HOPLIMIT``
+   - ``RTE_FLOW_FIELD_TCP_SEQ_NUM``
+   - ``RTE_FLOW_FIELD_TCP_ACK_NUM``
+   - ``RTE_FLOW_FIELD_TAG``
+   - ``RTE_FLOW_FIELD_META``
+   - ``RTE_FLOW_FIELD_FLEX_ITEM``
+   - ``RTE_FLOW_FIELD_TCP_DATA_OFFSET``
+   - ``RTE_FLOW_FIELD_IPV4_IHL``
+   - ``RTE_FLOW_FIELD_IPV4_TOTAL_LEN``
+   - ``RTE_FLOW_FIELD_IPV6_PAYLOAD_LEN``
 
 #. In template tables of group 0, the modify action must be fully masked.
 
@@ -3181,7 +3286,7 @@ Limitations
 
 #. Only single item is supported per pattern template.
 
-#. In switch mode, when ``repr_matching_en`` is enabled (default setting),
+#. In switch mode,
    matching ``RTE_FLOW_ITEM_TYPE_COMPARE`` is not supported for ``ingress`` rules.
    This is because an implicit ``RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT``
    needs to be added to the matcher,
@@ -3324,7 +3429,13 @@ See :ref:`mlx5_firmware_config` for more details about the flex parser profile.
 Limitations
 ^^^^^^^^^^^
 
-#. IPv6 5-tuple matching is not supported with :ref:`HW steering <mlx5_hws>`.
+#. IPv6 5-tuple matching is supported with :ref:`HW steering <mlx5_hws>`
+   from ConnectX-8/BlueField-3.
+   Previous devices support matching on either IPv6 `src` or `dst` in a rule.
+   In general, the matching limitation is related to the number of dwords:
+   older hardware supports up to 5 dwords for matching,
+   while newer hardware (ConnectX-8/BlueField-3 and up)
+   supports up to 11 dwords for matching.
 
 #. IPv6 multicast messages are not supported on VM,
    while promiscuous mode and allmulticast mode are both set to off.
@@ -3362,6 +3473,14 @@ Limitations
    - Not supported on guest port.
 
 #. IP-in-IP is not supported with :ref:`HW steering <mlx5_hws>`.
+
+#. Matching on packet headers appearing after an IP header is not supported
+   if that packet is an IP fragment.
+   Example:
+
+   - If a flow rule with pattern matching on L4 header contents is created,
+     and the first IP fragment is received,
+     then this IP fragment will miss on that flow rule.
 
 
 .. _mlx5_nat64:
@@ -3696,6 +3815,12 @@ Requirements
 ^^^^^^^^^^^^
 
 Matching on checksum and sequence needs MLNX_OFED 5.6+.
+
+Limitations
+^^^^^^^^^^^
+
+#. When using synchronous flow API with :ref:`HW steering <mlx5_hws>`,
+   matching the field ``c_rsvd0_ver`` is not supported on group 0 (root table).
 
 
 .. _mlx5_nvgre:

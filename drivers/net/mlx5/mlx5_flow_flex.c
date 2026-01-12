@@ -554,7 +554,7 @@ mlx5_flex_translate_length(struct mlx5_hca_flex_attr *attr,
 				 "mask and shift combination not supported (OFFSET)");
 		msb++;
 		offset += field->field_size - msb;
-		if (msb < attr->header_length_mask_width) {
+		if (attr->header_length_field_mode_wa && msb < attr->header_length_mask_width) {
 			if (attr->header_length_mask_width - msb > offset)
 				return rte_flow_error_set
 					(error, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM, NULL,
@@ -572,6 +572,7 @@ mlx5_flex_translate_length(struct mlx5_hca_flex_attr *attr,
 		node->header_length_field_mask = mask;
 		node->header_length_field_shift = shift;
 		node->header_length_field_offset = offset;
+		node->header_length_field_offset_mode = !attr->header_length_field_mode_wa;
 		break;
 	}
 	case FIELD_MODE_BITMASK:
@@ -1556,4 +1557,22 @@ mlx5_flex_parser_clone_free_cb(void *list_ctx, struct mlx5_list_entry *entry)
 		container_of(entry, struct mlx5_flex_parser_devx, entry);
 	RTE_SET_USED(list_ctx);
 	mlx5_free(fp);
+}
+
+/*
+ * Destroy the flex parser node, including the parser itself, input / output
+ * arcs and DW samples. Resources could be reused then.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
+void
+mlx5_flex_parser_ecpri_release(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_ecpri_parser_profile *prf = &priv->sh->ecpri_parser;
+
+	if (prf->obj)
+		mlx5_devx_cmd_destroy(prf->obj);
+	prf->obj = NULL;
 }

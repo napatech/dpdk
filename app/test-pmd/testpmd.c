@@ -47,6 +47,7 @@
 #include <rte_ethdev.h>
 #include <rte_dev.h>
 #include <rte_string_fns.h>
+#include <rte_pci.h>
 #ifdef RTE_NET_IXGBE
 #include <rte_pmd_ixgbe.h>
 #endif
@@ -101,12 +102,15 @@
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
 
+/* Maximum delay for exiting after primary process. */
+#define MONITOR_INTERVAL (500 * 1000)
+
 /* use main core for command line ? */
 uint8_t interactive = 0;
 uint8_t auto_start = 0;
 uint8_t tx_first;
-char cmdline_filename[PATH_MAX] = {0};
-bool echo_cmdline_file;
+struct cmdline_file_info cmdline_files[MAX_CMDLINE_FILENAMES] = {0};
+unsigned int cmdline_file_count;
 
 /*
  * NUMA support configuration.
@@ -206,6 +210,21 @@ struct fwd_engine * fwd_engines[] = {
 	&shared_rxq_engine,
 	NULL,
 };
+
+/*
+ * Bitmask for control DCB forwarding for TCs.
+ * If bit-n in tc-mask is 1, then TC-n's forwarding is enabled, and vice versa.
+ */
+uint8_t dcb_fwd_tc_mask = DEFAULT_DCB_FWD_TC_MASK;
+/*
+ * Poll cores per TC when DCB forwarding.
+ * E.g. 1 indicates that one core process all queues of a TC.
+ *      2 indicates that two cores process all queues of a TC. If there
+ *        is a TC with 8 queues, then [0, 3] belong to first core, and
+ *        [4, 7] belong to second core.
+ *      ...
+ */
+uint8_t dcb_fwd_tc_cores = 1;
 
 struct rte_mempool *mempools[RTE_MAX_NUMA_NODES * MAX_SEGS_BUFFER_SPLIT];
 uint16_t mempool_flags;
@@ -382,6 +401,7 @@ uint64_t noisy_lkup_num_reads_writes;
  * Receive Side Scaling (RSS) configuration.
  */
 uint64_t rss_hf = RTE_ETH_RSS_IP; /* RSS IP by default. */
+bool force_rss;                   /* false == for single queue don't force rss */
 
 /*
  * Port topology configuration
@@ -3407,11 +3427,38 @@ reset_port(portid_t pid)
 	printf("Done\n");
 }
 
+static char *
+convert_pci_address_format(const char *identifier, char *pci_buffer, size_t buf_size)
+{
+	struct rte_devargs da;
+	struct rte_pci_addr pci_addr;
+	size_t pci_len;
+
+	if (rte_devargs_parse(&da, identifier) != 0)
+		return NULL;
+
+	if (da.bus == NULL)
+		return NULL;
+
+	if (strcmp(rte_bus_name(da.bus), "pci") != 0)
+		return NULL;
+
+	if (rte_pci_addr_parse(da.name, &pci_addr) != 0)
+		return NULL;
+
+	rte_pci_device_name(&pci_addr, pci_buffer, buf_size);
+	pci_len = strlen(pci_buffer);
+	snprintf(pci_buffer + pci_len, buf_size - pci_len, ",%s", da.args);
+	return pci_buffer;
+}
+
 void
 attach_port(char *identifier)
 {
 	portid_t pi;
 	struct rte_dev_iterator iterator;
+	char *long_format, *long_identifier;
+	size_t long_format_size;
 
 	printf("Attaching a new port...\n");
 
@@ -3419,6 +3466,17 @@ attach_port(char *identifier)
 		fprintf(stderr, "Invalid parameters are specified\n");
 		return;
 	}
+	long_format_size = strlen(identifier) + PCI_PRI_STR_SIZE;
+	long_format = alloca(long_format_size);
+	if (long_format == NULL) {
+		TESTPMD_LOG(ERR, "Failed to attach port %s - allocation failure\n", identifier);
+		return;
+	}
+
+	/* For PCI device convert to canonical format */
+	long_identifier = convert_pci_address_format(identifier, long_format, long_format_size);
+	if (long_identifier != NULL)
+		identifier = long_identifier;
 
 	if (rte_dev_probe(identifier) < 0) {
 		TESTPMD_LOG(ERR, "Failed to attach port %s\n", identifier);
@@ -3576,6 +3634,83 @@ detach_devargs(char *identifier)
 	rte_devargs_reset(&da);
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+
+enum testpmd_req_type {
+	TESTPMD_REQ_TYPE_EXIT,
+};
+
+struct testpmd_mp_req {
+	enum testpmd_req_type t;
+};
+
+struct testpmd_mp_resp {
+	int result;
+};
+
+#define TESTPMD_MP	"mp_testpmd"
+
+/* Send reply to this peer when testpmd exits */
+static RTE_ATOMIC(const char *) primary_name;
+
+static void
+reply_to_primary(const char *peer, int result)
+{
+	struct rte_mp_msg reply = { };
+	struct testpmd_mp_resp *resp = (struct testpmd_mp_resp *) &reply.param;
+
+	strlcpy(reply.name, TESTPMD_MP, RTE_MP_MAX_NAME_LEN);
+	reply.len_param = sizeof(*resp);
+	resp->result = result;
+
+	printf("Replying %d to primary\n", result);
+	fflush(stdout);
+
+	if (rte_mp_reply(&reply, peer) < 0)
+		printf("Failed to send response to primary:%s", strerror(rte_errno));
+}
+
+/* Primary process is exiting, stop secondary process */
+static void
+pmd_notify_secondary(void)
+{
+	struct testpmd_mp_req request = {
+		.t = TESTPMD_REQ_TYPE_EXIT,
+	};
+	struct rte_mp_msg mp_req = {
+		.name = TESTPMD_MP,
+		.len_param = sizeof(request),
+	};
+	struct rte_mp_reply reply;
+	struct timespec ts = {.tv_sec = 5, .tv_nsec = 0};
+
+	printf("\nPrimary: Sending 'stop_req' request to secondary...\n");
+	fflush(stdout);
+
+	memcpy(mp_req.param, &request, sizeof(request));
+	rte_mp_request_sync(&mp_req, &reply, &ts);
+}
+
+static int
+handle_testpmd_request(const struct rte_mp_msg *request, const void *peer)
+{
+	const struct testpmd_mp_req *req = (const struct testpmd_mp_req *)request->param;
+
+	if (req->t == TESTPMD_REQ_TYPE_EXIT) {
+		printf("\nReceived notification of primary exiting\n");
+		fflush(stdout);
+
+		/* Response is sent after forwarding loop exits */
+		rte_atomic_store_explicit(&primary_name, peer, rte_memory_order_relaxed);
+
+		kill(getpid(), SIGINT);
+	} else {
+		reply_to_primary(peer, -EINVAL);
+	}
+	return 0;
+}
+#endif
+
 void
 pmd_test_exit(void)
 {
@@ -3587,6 +3722,10 @@ pmd_test_exit(void)
 		stop_packet_forwarding();
 
 #ifndef RTE_EXEC_ENV_WINDOWS
+	/* Tell secondary to exit */
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		pmd_notify_secondary();
+
 	for (i = 0 ; i < RTE_DIM(mempools) ; i++) {
 		if (mempools[i]) {
 			if (mp_alloc_type == MP_ALLOC_ANON)
@@ -4007,7 +4146,7 @@ init_port_config(void)
 		if (ret != 0)
 			return;
 
-		if (nb_rxq > 1) {
+		if (nb_rxq > 1 || force_rss) {
 			port->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf =
 				rss_hf & port->dev_info.flow_type_rss_offloads;
@@ -4332,6 +4471,38 @@ signal_handler(int signum __rte_unused)
 	prompt_exit();
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+/* Alarm signal handler, used to check that primary process */
+static void
+monitor_primary(void *arg __rte_unused)
+{
+	if (rte_eal_primary_proc_alive(NULL)) {
+		rte_eal_alarm_set(MONITOR_INTERVAL, monitor_primary, NULL);
+	} else {
+		/*
+		 * If primary process exits, then all the device information
+		 * is no longer valid. Calling any cleanup code is going to
+		 * run into use after free.
+		 */
+		fprintf(stderr, "\nPrimary process is no longer active, exiting...\n");
+		exit(EXIT_FAILURE);
+	}
+}
+
+/* Setup handler to check when primary exits. */
+static int
+enable_primary_monitor(void)
+{
+	return rte_eal_alarm_set(MONITOR_INTERVAL, monitor_primary, NULL);
+}
+
+static void
+disable_primary_monitor(void)
+{
+	rte_eal_alarm_cancel(monitor_primary, NULL);
+}
+#endif
+
 int
 main(int argc, char** argv)
 {
@@ -4362,6 +4533,15 @@ main(int argc, char** argv)
 	if (diag < 0)
 		rte_exit(EXIT_FAILURE, "Cannot init EAL: %s\n",
 			 rte_strerror(rte_errno));
+
+#ifndef RTE_EXEC_ENV_WINDOWS
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		if (enable_primary_monitor() < 0)
+			rte_exit(EXIT_FAILURE, "Cannot setup primary monitor");
+		if (rte_mp_action_register(TESTPMD_MP, handle_testpmd_request) < 0)
+			rte_exit(EXIT_FAILURE, "Failed to register message action\n");
+	}
+#endif
 
 	/* allocate port structures, and init them */
 	init_port();
@@ -4508,8 +4688,13 @@ main(int argc, char** argv)
 		rte_exit(EXIT_FAILURE,
 			"Could not initialise cmdline context.\n");
 
-	if (strlen(cmdline_filename) != 0)
-		cmdline_read_from_file(cmdline_filename);
+	for (unsigned int i = 0; i < cmdline_file_count; i++) {
+		if (cmdline_read_from_file(cmdline_files[i].filename, cmdline_files[i].echo) != 0) {
+			fprintf(stderr, "Failed to process cmdline file: %s\n",
+					cmdline_files[i].filename);
+			break;
+		}
+	}
 
 	if (interactive == 1) {
 		if (auto_start) {
@@ -4556,7 +4741,23 @@ main(int argc, char** argv)
 		}
 	}
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		disable_primary_monitor();
+		rte_mp_action_unregister(TESTPMD_MP);
+	}
+#endif
+
 	pmd_test_exit();
+
+#ifndef RTE_EXEC_ENV_WINDOWS
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		const char *peer = rte_atomic_exchange_explicit(&primary_name, NULL,
+				rte_memory_order_relaxed);
+		if (peer)
+			reply_to_primary(peer, 0);
+	}
+#endif
 
 #ifdef RTE_LIB_PDUMP
 	/* uninitialize packet capture framework */

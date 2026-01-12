@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2024 Napatech A/S
  */
 
@@ -13,14 +12,14 @@ union flm_handles {
 	void *p;
 };
 
-void *ntnic_id_table_create(void);
-void ntnic_id_table_destroy(void *id_table);
+void *nthw_id_table_create(void);
+void nthw_id_table_destroy(void *id_table);
 
-uint32_t ntnic_id_table_get_id(void *id_table, union flm_handles flm_h, uint8_t caller_id,
+uint32_t nthw_id_table_get_id(void *id_table, union flm_handles flm_h, uint8_t caller_id,
 	uint8_t type);
-void ntnic_id_table_free_id(void *id_table, uint32_t id);
+void nthw_id_table_free_id(void *id_table, uint32_t id);
 
-void ntnic_id_table_find(void *id_table, uint32_t id, union flm_handles *flm_h, uint8_t *caller_id,
+void nthw_id_table_find(void *id_table, uint32_t id, union flm_handles *flm_h, uint8_t *caller_id,
 	uint8_t *type);
 
 #endif	/* FLOW_ID_TABLE_H_ */

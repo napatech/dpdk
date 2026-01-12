@@ -19,18 +19,21 @@ from scapy.layers.sctp import SCTP, SCTPChunkData
 from scapy.layers.vxlan import VXLAN
 from scapy.packet import Packet, Raw
 
-from framework.remote_session.testpmd_shell import (
+from api.capabilities import (
+    LinkTopology,
     NicCapability,
-    RtePTypes,
-    SimpleForwardingModes,
-    TestPmdShell,
-    TestPmdVerbosePacket,
+    requires_link_topology,
+    requires_nic_capability,
 )
+from api.packet import send_packet_and_capture
+from api.test import verify
+from api.testpmd import TestPmd
+from api.testpmd.config import SimpleForwardingModes
+from api.testpmd.types import RtePTypes, TestPmdVerbosePacket
 from framework.test_suite import TestSuite, func_test
-from framework.testbed_model.capability import TopologyType, requires
 
 
-@requires(topology_type=TopologyType.two_links)
+@requires_link_topology(LinkTopology.TWO_LINKS)
 class TestUniPkt(TestSuite):
     """DPDK Unified packet test suite.
 
@@ -40,7 +43,7 @@ class TestUniPkt(TestSuite):
 
     """
 
-    def check_for_matching_packet(
+    def _check_for_matching_packet(
         self, output: list[TestPmdVerbosePacket], flags: RtePTypes
     ) -> bool:
         """Returns :data:`True` if the packet in verbose output contains all specified flags."""
@@ -50,57 +53,57 @@ class TestUniPkt(TestSuite):
                     return False
         return True
 
-    def send_packet_and_verify_flags(
-        self, expected_flag: RtePTypes, packet: Packet, testpmd: TestPmdShell
+    def _send_packet_and_verify_flags(
+        self, expected_flag: RtePTypes, packet: Packet, testpmd: TestPmd
     ) -> None:
         """Sends a packet to the DUT and verifies the verbose ptype flags."""
-        self.send_packet_and_capture(packet=packet)
+        send_packet_and_capture(packet=packet)
         verbose_output = testpmd.extract_verbose_output(testpmd.stop())
-        valid = self.check_for_matching_packet(output=verbose_output, flags=expected_flag)
-        self.verify(valid, f"Packet type flag did not match the expected flag: {expected_flag}.")
+        valid = self._check_for_matching_packet(output=verbose_output, flags=expected_flag)
+        verify(valid, f"Packet type flag did not match the expected flag: {expected_flag}.")
 
-    def setup_session(
-        self, testpmd: TestPmdShell, expected_flags: list[RtePTypes], packet_list=list[Packet]
+    def _setup_session(
+        self, testpmd: TestPmd, expected_flags: list[RtePTypes], packet_list=list[Packet]
     ) -> None:
         """Sets the forwarding and verbose mode of each test case interactive shell session."""
         testpmd.set_forward_mode(SimpleForwardingModes.rxonly)
         testpmd.set_verbose(level=1)
         for i in range(0, len(packet_list)):
-            self.send_packet_and_verify_flags(
+            self._send_packet_and_verify_flags(
                 expected_flag=expected_flags[i], packet=packet_list[i], testpmd=testpmd
             )
 
     @func_test
-    def test_l2_packet_detect(self) -> None:
+    def l2_packet_detect(self) -> None:
         """Ensure the correct flags are shown in verbose output when sending L2 packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [Ether(type=0x88F7) / UDP(dport=dport_id) / Raw(), Ether() / ARP() / Raw()]
         flag_list = [RtePTypes.L2_ETHER_TIMESYNC, RtePTypes.L2_ETHER_ARP]
-        with TestPmdShell() as testpmd:
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+        with TestPmd() as testpmd:
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
 
     @func_test
-    def test_l3_l4_packet_detect(self) -> None:
+    def l3_l4_packet_detect(self) -> None:
         """Ensure correct flags are shown in the verbose output when sending IP/L4 packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [
@@ -119,21 +122,21 @@ class TestUniPkt(TestSuite):
             RtePTypes.L4_ICMP,
             RtePTypes.L4_FRAG | RtePTypes.L3_IPV4_EXT_UNKNOWN | RtePTypes.L2_ETHER,
         ]
-        with TestPmdShell() as testpmd:
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+        with TestPmd() as testpmd:
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
 
     @func_test
-    def test_ipv6_l4_packet_detect(self) -> None:
+    def ipv6_l4_packet_detect(self) -> None:
         """Ensure correct flags are shown in the verbose output when sending IPv6/L4 packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [
@@ -148,21 +151,21 @@ class TestUniPkt(TestSuite):
             RtePTypes.L4_TCP,
             RtePTypes.L3_IPV6_EXT_UNKNOWN,
         ]
-        with TestPmdShell() as testpmd:
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+        with TestPmd() as testpmd:
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
 
     @func_test
-    def test_l3_tunnel_packet_detect(self) -> None:
+    def l3_tunnel_packet_detect(self) -> None:
         """Ensure correct flags are shown in the verbose output when sending IPv6/L4 packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [
@@ -183,21 +186,21 @@ class TestUniPkt(TestSuite):
             RtePTypes.TUNNEL_IP | RtePTypes.INNER_L4_ICMP,
             RtePTypes.TUNNEL_IP | RtePTypes.INNER_L3_IPV6_EXT_UNKNOWN | RtePTypes.INNER_L4_FRAG,
         ]
-        with TestPmdShell() as testpmd:
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+        with TestPmd() as testpmd:
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
 
     @func_test
-    def test_gre_tunnel_packet_detect(self) -> None:
+    def gre_tunnel_packet_detect(self) -> None:
         """Ensure the correct flags are shown in the verbose output when sending GRE packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [
@@ -216,21 +219,21 @@ class TestUniPkt(TestSuite):
             RtePTypes.TUNNEL_GRENAT | RtePTypes.INNER_L4_SCTP,
             RtePTypes.TUNNEL_GRENAT | RtePTypes.INNER_L4_ICMP,
         ]
-        with TestPmdShell() as testpmd:
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+        with TestPmd() as testpmd:
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
 
     @func_test
-    def test_nsh_packet_detect(self) -> None:
+    def nsh_packet_detect(self) -> None:
         """Verify the correct flags are shown in the verbose output when sending NSH packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [
@@ -256,23 +259,23 @@ class TestUniPkt(TestSuite):
             RtePTypes.L2_ETHER_NSH | RtePTypes.L3_IPV4_EXT_UNKNOWN | RtePTypes.L4_SCTP,
             RtePTypes.L2_ETHER_NSH | RtePTypes.L3_IPV6_EXT_UNKNOWN | RtePTypes.L4_NONFRAG,
         ]
-        with TestPmdShell() as testpmd:
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+        with TestPmd() as testpmd:
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
 
-    @requires(NicCapability.PHYSICAL_FUNCTION)
+    @requires_nic_capability(NicCapability.PHYSICAL_FUNCTION)
     @func_test
-    def test_vxlan_tunnel_packet_detect(self) -> None:
+    def vxlan_tunnel_packet_detect(self) -> None:
         """Ensure the correct flags are shown in the verbose output when sending VXLAN packets.
 
         Steps:
-            Create a list of packets to test, with a corresponding flag list to check against.
-            Add a UDP port for VXLAN packet filter within testpmd.
-            Launch testpmd with the necessary configuration.
-            Send each packet in the list, capture testpmd verbose output.
+            * Create a list of packets to test, with a corresponding flag list to check against.
+            * Add a UDP port for VXLAN packet filter within testpmd.
+            * Launch testpmd with the necessary configuration.
+            * Send each packet in the list, capture testpmd verbose output.
 
         Verify:
-            Check that each packet has a destination MAC address matching the set ID.
-            Check the packet type fields in verbose output, verify the flags match.
+            * Each packet has a destination MAC address matching the set ID.
+            * Packet type flags match in verbose output, verify the flags match.
         """
         dport_id = 50000
         packet_list = [
@@ -293,6 +296,6 @@ class TestUniPkt(TestSuite):
             RtePTypes.TUNNEL_GRENAT | RtePTypes.INNER_L4_ICMP,
             RtePTypes.TUNNEL_GRENAT | RtePTypes.INNER_L3_IPV6_EXT_UNKNOWN | RtePTypes.INNER_L4_FRAG,
         ]
-        with TestPmdShell() as testpmd:
+        with TestPmd() as testpmd:
             testpmd.rx_vxlan(4789, 0, True)
-            self.setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)
+            self._setup_session(testpmd=testpmd, expected_flags=flag_list, packet_list=packet_list)

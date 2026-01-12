@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -12,12 +11,12 @@
 #define _MOD_ "PDB"
 #define _VER_ be->pdb.ver
 
-bool hw_mod_pdb_present(struct flow_api_backend_s *be)
+bool nthw_mod_pdb_present(struct flow_api_backend_s *be)
 {
 	return be->iface->get_pdb_present(be->be_dev);
 }
 
-int hw_mod_pdb_alloc(struct flow_api_backend_s *be)
+int nthw_mod_pdb_alloc(struct flow_api_backend_s *be)
 {
 	int nb;
 	_VER_ = be->iface->get_pdb_version(be->be_dev);
@@ -50,7 +49,7 @@ int hw_mod_pdb_alloc(struct flow_api_backend_s *be)
 	return 0;
 }
 
-void hw_mod_pdb_free(struct flow_api_backend_s *be)
+void nthw_mod_pdb_free(struct flow_api_backend_s *be)
 {
 	if (be->pdb.base) {
 		free(be->pdb.base);
@@ -58,21 +57,7 @@ void hw_mod_pdb_free(struct flow_api_backend_s *be)
 	}
 }
 
-int hw_mod_pdb_reset(struct flow_api_backend_s *be)
-{
-	int err = 0;
-	/* Zero entire cache area */
-	nthw_zero_module_cache((struct common_func_s *)(&be->hsh));
-
-	NT_LOG(DBG, FILTER, "INIT PDB RCP");
-	err |= hw_mod_pdb_rcp_flush(be, 0, ALL_ENTRIES);
-
-	NT_LOG(DBG, FILTER, "INIT PDB CONFIG");
-	err |= hw_mod_pdb_config_flush(be);
-	return err;
-}
-
-int hw_mod_pdb_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_pdb_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->pdb.nb_pdb_rcp_categories;
@@ -237,13 +222,27 @@ static int hw_mod_pdb_rcp_mod(struct flow_api_backend_s *be, enum hw_pdb_e field
 	return 0;
 }
 
-int hw_mod_pdb_rcp_set(struct flow_api_backend_s *be, enum hw_pdb_e field, uint32_t index,
+int nthw_mod_pdb_rcp_set(struct flow_api_backend_s *be, enum hw_pdb_e field, uint32_t index,
 	uint32_t value)
 {
 	return hw_mod_pdb_rcp_mod(be, field, index, &value, 0);
 }
 
-int hw_mod_pdb_config_flush(struct flow_api_backend_s *be)
+static int hw_mod_pdb_config_flush(struct flow_api_backend_s *be)
 {
 	return be->iface->pdb_config_flush(be->be_dev, &be->pdb);
+}
+
+int nthw_mod_pdb_reset(struct flow_api_backend_s *be)
+{
+	int err = 0;
+	/* Zero entire cache area */
+	nthw_zero_module_cache((struct common_func_s *)(&be->hsh));
+
+	NT_LOG(DBG, FILTER, "INIT PDB RCP");
+	err |= nthw_mod_pdb_rcp_flush(be, 0, ALL_ENTRIES);
+
+	NT_LOG(DBG, FILTER, "INIT PDB CONFIG");
+	err |= hw_mod_pdb_config_flush(be);
+	return err;
 }

@@ -27,6 +27,11 @@ along with the application to demonstrate all the parameters.
 
 .. code-block:: ini
 
+   [GLOBAL]
+   eal_args=--in-memory --file-prefix=test -l 9-12
+   cache_flush=0
+   test_seconds=2
+
    [case1]
    type=DMA_MEM_COPY
    mem_size=10
@@ -35,11 +40,8 @@ along with the application to demonstrate all the parameters.
    kick_batch=32
    src_numa_node=0
    dst_numa_node=0
-   cache_flush=0
-   test_seconds=2
    lcore_dma0=lcore=10,dev=0000:00:04.2,dir=mem2mem
    lcore_dma0=lcore=11,dev=0000:00:04.3,dir=mem2mem
-   eal_args=--in-memory --file-prefix=test
 
    [case2]
    type=CPU_MEM_COPY
@@ -47,10 +49,7 @@ along with the application to demonstrate all the parameters.
    buf_size=64,8192,2,MUL
    src_numa_node=0
    dst_numa_node=1
-   cache_flush=0
-   test_seconds=2
-   lcore = 3, 4
-   eal_args=--in-memory --no-pci
+   lcore = 10, 11
 
    [case3]
    skip=1
@@ -63,14 +62,15 @@ along with the application to demonstrate all the parameters.
    kick_batch=32
    src_numa_node=0
    dst_numa_node=0
-   cache_flush=0
-   test_seconds=2
    lcore_dma0=lcore=10,dev=0000:00:04.1,dir=mem2mem
    lcore_dma1=lcore=11,dev=0000:00:04.2,dir=dev2mem,raddr=0x200000000,coreid=1,pfid=2,vfid=3
    lcore_dma2=lcore=12,dev=0000:00:04.3,dir=mem2dev,raddr=0x200000000,coreid=1,pfid=2,vfid=3
-   eal_args=--in-memory --file-prefix=test
+   use_enq_deq_ops=0
 
-The configuration file is divided into multiple sections, each section represents a test case.
+The configuration file is divided into two type sections,
+the first is global configuration section;
+the second is test case configuration sections
+which contain multiple sections, each section represents a test case.
 The four mandatory variables ``mem_size``, ``buf_size``, ``dma_ring_size``, and ``kick_batch``
 can vary in each test case.
 The format for this is ``variable=first,last,increment,ADD|MUL``.
@@ -84,12 +84,28 @@ and can vary for each device.
 
 For scatter-gather copy test ``dma_src_sge``, ``dma_dst_sge`` must be configured.
 
+Enqueue and dequeue operations can be enabled by setting ``use_enq_deq_ops=1``.
+
 Each case can only have one variable change,
 and each change will generate a scenario, so each case can have multiple scenarios.
 
 
-Configuration Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~
+Global Configuration Parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``eal_args``
+  Specifies the EAL arguments for all test cases.
+
+``cache_flush``
+  Determines whether the cache should be flushed.
+  ``1`` indicates to flush and ``0`` to not flush.
+
+``test_seconds``
+  Controls the test time for each scenario.
+
+
+Testcase Configuration Parameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``skip``
   To skip a test-case, must be configured as ``1``
@@ -121,13 +137,6 @@ Configuration Parameters
 
 ``dst_numa_node``
   Controls the NUMA node where the destination memory is allocated.
-
-``cache_flush``
-  Determines whether the cache should be flushed.
-  ``1`` indicates to flush and ``0`` to not flush.
-
-``test_seconds``
-  Controls the test time for each scenario.
 
 ``lcore_dma``
   Specifies the lcore/DMA mapping and per device specific config.
@@ -167,8 +176,9 @@ Configuration Parameters
 ``lcore``
   Specifies the lcore for CPU testing.
 
-``eal_args``
-  Specifies the EAL arguments.
+``use_enq_deq_ops``
+  Specifies whether to use enqueue/dequeue operations.
+  ``0`` indicates to not use and ``1`` to use.
 
 
 Running the Application
@@ -185,6 +195,13 @@ and ``res_dma.csv`` will be the generated result file.
 
 If no result file is specified, the test results are found in a file
 with the same name as the configuration file with the addition of ``_result.csv`` at the end.
+
+Because the names of dmadevs are different, the following command support
+list DMA devices, it could quickly know how to set the lcore_dma parameters.
+
+.. code-block:: console
+
+   dpdk-test-dma-perf --config ./config.ini --list-dma
 
 
 Limitations

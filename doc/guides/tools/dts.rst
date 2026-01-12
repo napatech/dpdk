@@ -1,6 +1,7 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2022-2023 PANTHEON.tech s.r.o.
     Copyright(c) 2024 Arm Limited
+    Copyright(c) 2025 University of New Hampshire
 
 DPDK Test Suite
 ===============
@@ -23,28 +24,18 @@ DTS runtime environment node
   This is the node where we run DTS and from which DTS connects to other nodes.
 
 System under test
-  An SUT is the combination of DPDK and the hardware we're testing
-  in conjunction with DPDK (NICs, crypto and other devices).
+  The system which runs a DPDK application on relevant hardware
+  (NIC, accelerator cards, etc)
+  and from which the DPDK behavior is observed for tests.
 
 System under test node
   A node where at least one SUT is present.
 
 Traffic generator
-  A TG is either software or hardware capable of sending packets.
+  Node that sends traffic to the SUT, which can be hardware or software-based.
 
 Traffic generator node
   A node where at least one TG is present.
-  In case of hardware traffic generators, the TG and the node are literally the same.
-
-
-In most cases, interchangeably referring to a runtime environment, SUT, TG or the node
-they're running on (e.g. using SUT and SUT node interchangeably) doesn't cause confusion.
-There could theoretically be more than of these running on the same node and in that case
-it's useful to have stricter definitions.
-An example would be two different traffic generators (such as Trex and Scapy)
-running on the same node.
-A different example would be a node containing both a DTS runtime environment
-and a traffic generator, in which case it's both a DTS runtime environment node and a TG node.
 
 
 DTS Environment
@@ -86,15 +77,15 @@ Setting up DTS environment
    To install Poetry, visit their `doc pages <https://python-poetry.org/docs/>`_.
    The recommended Poetry version is at least 1.8.2.
 
-#. **Getting a Poetry shell**
+#. **Running DTS with Poetry**
 
    Once you have Poetry along with the proper Python version all set up, it's just a matter
-   of installing dependencies via Poetry and using the virtual environment Poetry provides:
+   of installing dependencies via Poetry and running main.py:
 
    .. code-block:: console
 
       poetry install
-      poetry shell
+      poetry run ./main.py
 
 #. **SSH Connection**
 
@@ -218,13 +209,49 @@ These need to be set up on a Traffic Generator Node:
 #. **Traffic generator dependencies**
 
    The traffic generator running on the traffic generator node must be installed beforehand.
-   For Scapy traffic generator, only a few Python libraries need to be installed:
+
+   For Scapy traffic generator (functional tests),
+   only a few Python libraries need to be installed:
 
    .. code-block:: console
 
       sudo apt install python3-pip
       sudo pip install --upgrade pip
       sudo pip install scapy==2.5.0
+
+   For TRex traffic generator (performance tests),
+   TRex must be downloaded and a TRex config produced for each TG NIC.
+   For example:
+
+   .. code-block:: console
+
+      wget https://trex-tgn.cisco.com/trex/release/v3.03.tar.gz
+      tar -xf v3.03.tar.gz
+      cd v3.03
+      sudo ./dpdk_setup_ports.py -i
+
+   Within the ``dpdk_setup_ports.py`` utility, follow these instructions:
+
+     - Select MAC based config.
+     - Select interfaces 0 and 1 on your TG NIC.
+     - Do not change assumed dest to DUT MAC (just leave the default loopback).
+     - Print preview of the config.
+     - Check for device address correctness.
+     - Check for socket and CPU correctness (CPU/socket NUMA node should match NIC NUMA node).
+     - Write the file to a path on your system.
+
+   Then, presuming you are using the ``test_run.example.yaml``
+   as a template for your `test_run` config:
+
+     - Uncomment the `performance_traffic_generator` section,
+       making DTS use a performance TG.
+     - Update the `remote_path` and config fields
+       to the remote path of your TRex directory
+       and the path to your new TRex config file.
+     - Update the `perf` field to enable performance testing.
+
+   After these steps, you should be ready to run performance tests with TRex.
+
 
 #. **Hardware dependencies**
 
@@ -258,9 +285,9 @@ DTS configuration is split into nodes and a test run,
 and must respect the model definitions
 as documented in the DTS API docs under the ``config`` page.
 The root of the configuration is represented by the ``Configuration`` model.
-By default, DTS will try to use the ``dts/test_run.example.yaml``
+By default, DTS will try to use the ``dts/configurations/test_run.example.yaml``
 :ref:`config file <test_run_configuration_example>`,
-and ``dts/nodes.example.yaml``
+and ``dts/configurations/nodes.example.yaml``
 :ref:`config file <nodes_configuration_example>`
 which are templates that illustrate what can be configured in DTS.
 
@@ -271,7 +298,7 @@ which don't require password authentication.
 DTS Execution
 ~~~~~~~~~~~~~
 
-DTS is run with ``main.py`` located in the ``dts`` directory after entering Poetry shell:
+DTS is run with ``main.py`` located in the ``dts`` directory using the ``poetry run`` command:
 
 .. code-block:: console
 
@@ -287,9 +314,9 @@ DTS is run with ``main.py`` located in the ``dts`` directory after entering Poet
    options:
      -h, --help            show this help message and exit
      --test-run-config-file FILE_PATH
-                           [DTS_TEST_RUN_CFG_FILE] The configuration file that describes the test cases and DPDK build options. (default: test-run.conf.yaml)
+                           [DTS_TEST_RUN_CFG_FILE] The configuration file that describes the test cases and DPDK build options. (default: configurations/test_run.yaml)
      --nodes-config-file FILE_PATH
-                           [DTS_NODES_CFG_FILE] The configuration file that describes the SUT and TG nodes. (default: nodes.conf.yaml)
+                           [DTS_NODES_CFG_FILE] The configuration file that describes the SUT and TG nodes. (default: configurations/nodes.yaml)
      --tests-config-file FILE_PATH
                            [DTS_TESTS_CFG_FILE] Configuration file used to override variable values inside specific test suites. (default: None)
      --output-dir DIR_PATH, --output DIR_PATH
@@ -356,122 +383,162 @@ Adding test cases may require adding code to the framework as well.
 Framework Coding Guidelines
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When adding code to the DTS framework, pay attention to the rest of the code
-and try not to divert much from it.
-The :ref:`DTS developer tools <dts_dev_tools>` will issue warnings
-when some of the basics are not met.
-You should also build the :ref:`API documentation <building_api_docs>`
-to address any issues found during the build.
+When contributing code to the DTS framework,
+follow existing conventions to ensure consistency.
+The :ref:`DTS developer tools <dts_dev_tools>` will flag basic issues.
+Also, be sure to :ref:`build the API documentation <building_api_docs>`
+to catch any problems during the build.
 
-The API documentation, which is a helpful reference when developing, may be accessed
-in the code directly or generated with the :ref:`API docs build steps <building_api_docs>`.
-When adding new files or modifying the directory structure,
-the corresponding changes must be made to DTS API doc sources in ``doc/api/dts``.
+The API documentation is a helpful reference during development.
+It can be viewed in the code directly
+or generated using the :ref:`API docs build steps <building_api_docs>`.
+If you add new files or change the directory structure,
+update the corresponding sources in ``doc/api/dts``.
 
-Speaking of which, the code must be properly documented with docstrings.
-The style must conform to the `Google style
+Code must be documented with docstrings that follow the `Google style
 <https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings>`_.
-See an example of the style `here
-<https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html>`_.
-For cases which are not covered by the Google style, refer to `PEP 257
-<https://peps.python.org/pep-0257/>`_.
-There are some cases which are not covered by the two style guides,
-where we deviate or where some additional clarification is helpful:
+Additional references:
 
-   * The ``__init__()`` methods of classes are documented separately
-     from the docstring of the class itself.
-   * The docstrings of implemented abstract methods should refer to the superclass's definition
-     if there's no deviation.
-   * Instance variables/attributes should be documented in the docstring of the class
-     in the ``Attributes:`` section.
-   * The ``dataclass.dataclass`` decorator changes how the attributes are processed.
-     The dataclass attributes which result in instance variables/attributes
-     should also be recorded in the ``Attributes:`` section.
-   * Class variables/attributes and Pydantic model fields, on the other hand,
-     should be documented with ``#:`` above the type annotated line.
-     The description may be omitted if the meaning is obvious.
-   * The ``Enum`` and ``TypedDict`` also process the attributes in particular ways
-     and should be documented with ``#:`` as well.
-     This is mainly so that the autogenerated documentation contains the assigned value.
-   * When referencing a parameter of a function or a method in their docstring,
-     don't use any articles and put the parameter into single backticks.
-     This mimics the style of `Python's documentation <https://docs.python.org/3/index.html>`_.
-   * When specifying a value, use double backticks::
+* `Sphinx Google style example
+  <https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html>`_
+* `PEP 257
+  <https://peps.python.org/pep-0257/>`_
 
-        def foo(greet: bool) -> None:
-            """Demonstration of single and double backticks.
+Docstring and Attribute Guidelines:
 
-            `greet` controls whether ``Hello World`` is printed.
+* Document ``__init__()`` separately from the class docstring.
+* If an abstract method simply implements a superclass definition without changes,
+  refer to that superclass in the docstring.
+* Document instance variables in the class docstring under an ``Attributes:`` section.
+* For ``@dataclass`` classes, document instance-level attributes in ``Attributes:``,
+  as they are generated from the class fields.
+* Document class variables and Pydantic fields using ``#:``,
+  placed above the type-annotated line.
+  Descriptions may be omitted if the meaning is clear.
+* Apply ``#:`` to ``Enum`` and ``TypedDict`` fields as well,
+  so that autogenerated documentation includes their values.
+* When referring to a parameter in a docstring,
+  omit articles and enclose the parameter in single backticks,
+  consistent with the `Python documentation style <https://docs.python.org/3/index.html>`_.
+* Use double backticks for literal values.
 
-            Args:
-               greet: Whether to print the ``Hello World`` message.
-            """
-            if greet:
-               print(f"Hello World")
+Example::
 
-   * The docstring maximum line length is the same as the code maximum line length.
+   def foo(greet: bool) -> None:
+       """Demonstrates single and double backticks.
+
+       `greet` controls whether ``Hello World`` is printed.
+
+       Args:
+           greet: Whether to print the ``Hello World`` message.
+       """
+       if greet:
+           print("Hello World")
+
+The maximum line length for docstrings must match that of the code.
 
 
 How To Write a Test Suite
 -------------------------
 
-All test suites inherit from ``TestSuite`` defined in ``dts/framework/test_suite.py``.
-There are four types of methods that comprise a test suite:
+All test suites are classes that inherit from ``TestSuite``,
+defined in ``dts/framework/test_suite.py``.
+A typical suite contains:
 
-#. **Test cases**
+Test Cases
+~~~~~~~~~~
 
-   | Test cases are methods that start with a particular prefix.
-   | Functional test cases start with ``test_``, e.g. ``test_hello_world_single_core``.
-   | Performance test cases start with ``test_perf_``, e.g. ``test_perf_nic_single_core``.
-   | A test suite may have any number of functional and/or performance test cases.
-     However, these test cases must test the same feature,
-     following the rule of one feature = one test suite.
-     Test cases for one feature don't need to be grouped in just one test suite, though.
-     If the feature requires many testing scenarios to cover,
-     the test cases would be better off spread over multiple test suites
-     so that each test suite doesn't take too long to execute.
+Test cases are defined as methods and must be decorated appropriately.
+Use the ``@func_test`` and/or ``@perf_test`` decorators from ``TestSuite``
+above each test case method.
+For example::
 
-#. **Setup and Teardown methods**
+   @func_test
+   def test_basic_link(self):
+      """your testcase docstring here"""
+      # your testcase code here
 
-   | There are setup and teardown methods for the whole test suite and each individual test case.
-   | Methods ``set_up_suite`` and ``tear_down_suite`` will be executed
-     before any and after all test cases have been executed, respectively.
-   | Methods ``set_up_test_case`` and ``tear_down_test_case`` will be executed
-     before and after each test case, respectively.
-   | These methods don't need to be implemented if there's no need for them in a test suite.
-     In that case, nothing will happen when they are executed.
+Functional test cases should use the ``@func_test`` decorator,
+and performance test cases should use ``@perf_test``.
+A test suite may include any number of functional and/or performance test cases.
+Each suite should focus on testing a single feature (one feature = one test suite).
 
-#. **Configuration, traffic and other logic**
+Test case docstrings must include a Steps and Verify section.
+For example::
 
-   The ``TestSuite`` class contains a variety of methods for anything that
-   a test suite setup, a teardown, or a test case may need to do.
+   @func_test
+   def test_basic_link(self):
+   """Tests basic link status.
 
-   The test suites also frequently use a DPDK app, such as testpmd, in interactive mode
-   and use the interactive shell instances directly.
+      Steps:
+         * Launch testpmd.
+         * Check port info.
 
-   These are the two main ways to call the framework logic in test suites.
-   If there's any functionality or logic missing from the framework,
-   it should be implemented so that the test suites can use one of these two ways.
+      Verify:
+         * Port info shows link status is up.
+   """
 
-   Test suites may also be configured individually using a file provided at the command line.
-   The file is a simple mapping of test suite names to their corresponding configurations.
+Setup and Teardown Hooks
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-   Any test suite can be designed to require custom configuration attributes or optional ones.
-   Any optional attributes should supply a default value for the test suite to use.
+Setup and teardown methods can be defined at both the suite and test case levels.
 
-#. **Test case verification**
+Suite-level:
 
-   Test case verification should be done with the ``verify`` method, which records the result.
-   The method should be called at the end of each test case.
+``set_up_suite()``
+   Runs once before any test cases in the suite.
 
-#. **Other methods**
+``tear_down_suite()``
+   Runs once after all test cases have completed.
 
-   Of course, all test suite code should adhere to coding standards.
-   Only the above methods will be treated specially and any other methods may be defined
-   (which should be mostly private methods needed by each particular test suite).
-   Any specific features (such as NIC configuration) required by a test suite
-   should be implemented in the ``SutNode`` class (and the underlying classes that ``SutNode`` uses)
-   and used by the test suite via the ``sut_node`` field.
+Case-level:
+
+``set_up_test_case()``
+   Runs before each individual test case.
+
+``tear_down_test_case()``
+   Runs after each individual test case.
+
+These methods are optional.
+If not implemented, the framework will simply skip them.
+
+The ``TestSuite`` class provides a variety of methods for setup, teardown, and test logic.
+Test suites often use DPDK applications (e.g., testpmd) in interactive mode
+and interact with them via shell instances.
+
+Leveraging the DTS framework in writing testsuites
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+One should avoid directly importing DTS framework code to their testsuites where possible.
+Instead, for performing common processes required in testsuites,
+one should use (or add to) the list of methods provided in the ``api`` module.
+
+For instance, for sending a list of packets,
+one should work through the packet transmitting function
+already made available in the ``api`` module,
+instead of directly importing the DTS traffic generator class
+and using that class in one's testsuite implementation.
+It is also acceptable to import and instantiate classes for various DPDK applications.
+For instance, writing a testsuite for a simple packet forwarding operation
+would involve importing the DTS ``TestPmd`` class from the ``api`` module,
+instantiating ``TestPmd``, calling ``TestPmd``'s ``start()`` method,
+and then sending traffic via one of the traffic transmitting functions
+exposed in the ``api`` module.
+
+Test Case Verification
+~~~~~~~~~~~~~~~~~~~~~~
+
+Use the verify method to assert conditions and record test results.
+This should typically be called at the end of each test case.
+Example: ``verify(link_up, "Link should be up after configuration.")``
+
+Other Methods
+~~~~~~~~~~~~~
+
+All test suite code should follow the project's coding standards.
+Only test cases, setup/teardown hooks, and verification methods
+are treated specially by the framework.
+Additional private methods may be added as needed in your testsuite implementation.
 
 
 .. _dts_dev_tools:
@@ -481,17 +548,12 @@ DTS Developer Tools
 
 There are two tools used in DTS to help with code checking, style and formatting:
 
-* `ruff <https://astral.sh/ruff/>`_
+ruff
+   Linter and formatter (replaces flake8, pylint, isort, etc.).
+   Compatible with Black.
 
-  An extremely fast all-in-one linting and formatting solution,
-  which covers most if not all the major rules such as:
-  pylama, flake8, pylint etc.
-  Its built-in formatter is also Black-compatible
-  and is able to sort imports automatically like isort would.
-
-* `mypy <https://github.com/python/mypy>`_
-
-  Enables static typing for Python, exploiting the type hints in the source code.
+mypy
+   Performs static type checking.
 
 These two tools are all used in ``devtools/dts-check-format.sh``,
 the DTS code check and format script.
@@ -505,14 +567,6 @@ Building DTS API docs
 
 The documentation is built using the standard DPDK build system.
 See :doc:`../linux_gsg/build_dpdk` for more details on compiling DPDK with meson.
-
-The :ref:`doc build dependencies <doc_dependencies>` may be installed with Poetry:
-
-.. code-block:: console
-
-   poetry install --only docs
-   poetry install --with docs  # an alternative that will also install DTS dependencies
-   poetry shell
 
 After executing the meson command, build the documentation with:
 
@@ -545,20 +599,20 @@ And they both have two network ports which are physically connected to each othe
 
 .. _test_run_configuration_example:
 
-``dts/test_run.example.yaml``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``dts/configurations/test_run.example.yaml``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. literalinclude:: ../../../dts/test_run.example.yaml
+.. literalinclude:: ../../../dts/configurations/test_run.example.yaml
    :language: yaml
    :start-at: # Define
 
 .. _nodes_configuration_example:
 
 
-``dts/nodes.example.yaml``
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+``dts/configurations/nodes.example.yaml``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. literalinclude:: ../../../dts/nodes.example.yaml
+.. literalinclude:: ../../../dts/configurations/nodes.example.yaml
    :language: yaml
    :start-at: # Define
 
@@ -571,9 +625,9 @@ to demonstrate custom test suite configuration:
 
 .. _tests_config_example:
 
-``dts/tests_config.example.yaml``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``dts/configurations/tests_config.example.yaml``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. literalinclude:: ../../../dts/tests_config.example.yaml
+.. literalinclude:: ../../../dts/configurations/tests_config.example.yaml
    :language: yaml
    :start-at: # Define

@@ -82,99 +82,6 @@ rte_mp_disable(void)
 	return true;
 }
 
-/* display usage */
-static void
-eal_usage(const char *prgname)
-{
-	rte_usage_hook_t hook = eal_get_application_usage_hook();
-
-	printf("\nUsage: %s ", prgname);
-	eal_common_usage();
-	/* Allow the application to print its usage message too
-	 * if hook is set
-	 */
-	if (hook) {
-		printf("===== Application Usage =====\n\n");
-		(hook)(prgname);
-	}
-}
-
-/* Parse the argument given in the command line of the application */
-static int
-eal_parse_args(int argc, char **argv)
-{
-	int opt, ret;
-	char **argvopt;
-	int option_index;
-	char *prgname = argv[0];
-	struct internal_config *internal_conf =
-		eal_get_internal_configuration();
-
-	argvopt = argv;
-
-	while ((opt = getopt_long(argc, argvopt, eal_short_options,
-		eal_long_options, &option_index)) != EOF) {
-
-		int ret;
-
-		/* getopt is not happy, stop right now */
-		if (opt == '?') {
-			eal_usage(prgname);
-			return -1;
-		}
-
-		/* eal_parse_log_options() already handled this option */
-		if (eal_option_is_log(opt))
-			continue;
-
-		ret = eal_parse_common_option(opt, optarg, internal_conf);
-		/* common parser is not happy */
-		if (ret < 0) {
-			eal_usage(prgname);
-			return -1;
-		}
-		/* common parser handled this option */
-		if (ret == 0)
-			continue;
-
-		switch (opt) {
-		case OPT_HELP_NUM:
-			eal_usage(prgname);
-			exit(EXIT_SUCCESS);
-		default:
-			if (opt < OPT_LONG_MIN_NUM && isprint(opt)) {
-				EAL_LOG(ERR, "Option %c is not supported "
-					"on Windows", opt);
-			} else if (opt >= OPT_LONG_MIN_NUM &&
-				opt < OPT_LONG_MAX_NUM) {
-				EAL_LOG(ERR, "Option %s is not supported "
-					"on Windows",
-					eal_long_options[option_index].name);
-			} else {
-				EAL_LOG(ERR, "Option %d is not supported "
-					"on Windows", opt);
-			}
-			eal_usage(prgname);
-			return -1;
-		}
-	}
-
-	if (eal_adjust_config(internal_conf) != 0)
-		return -1;
-
-	/* sanity checks */
-	if (eal_check_common_options(internal_conf) != 0) {
-		eal_usage(prgname);
-		return -1;
-	}
-
-	if (optind >= 0)
-		argv[optind - 1] = prgname;
-	ret = optind - 1;
-	optind = 0; /* reset getopt lib */
-	return ret;
-}
-
 static int
 sync_func(void *arg __rte_unused)
 {
@@ -260,11 +167,21 @@ rte_eal_init(int argc, char **argv)
 	char cpuset[RTE_CPU_AFFINITY_STR_LEN];
 	char thread_name[RTE_THREAD_NAME_SIZE];
 
+	/* clone argv to report out later in telemetry */
+	eal_save_args(argc, argv);
+
+	fctret = eal_collate_args(argc, argv);
+	if (fctret < 0) {
+		rte_eal_init_alert("Invalid command line arguments.");
+		rte_errno = EINVAL;
+		goto err_out;
+	}
+
 	/* setup log as early as possible */
-	if (eal_parse_log_options(argc, argv) < 0) {
+	if (eal_parse_log_options() < 0) {
 		rte_eal_init_alert("invalid log arguments.");
 		rte_errno = EINVAL;
-		return -1;
+		goto err_out;
 	}
 
 	eal_log_init(NULL);
@@ -272,29 +189,31 @@ rte_eal_init(int argc, char **argv)
 	if (eal_create_cpu_map() < 0) {
 		rte_eal_init_alert("Cannot discover CPU and NUMA.");
 		/* rte_errno is set */
-		return -1;
+		goto err_out;
 	}
 
 	/* verify if DPDK supported on architecture MMU */
 	if (!eal_mmu_supported()) {
 		rte_eal_init_alert("Unsupported MMU type.");
 		rte_errno = ENOTSUP;
-		return -1;
+		goto err_out;
 	}
 
 	if (rte_eal_cpu_init() < 0) {
 		rte_eal_init_alert("Cannot detect lcores.");
 		rte_errno = ENOTSUP;
-		return -1;
+		goto err_out;
 	}
 
-	fctret = eal_parse_args(argc, argv);
-	if (fctret < 0)
-		exit(1);
+	if (eal_parse_args() < 0) {
+		rte_eal_init_alert("Invalid command line arguments.");
+		rte_errno = EINVAL;
+		goto err_out;
+	}
 
 	if (eal_option_device_parse()) {
 		rte_errno = ENODEV;
-		return -1;
+		goto err_out;
 	}
 
 	/* Prevent creation of shared memory files. */
@@ -308,7 +227,7 @@ rte_eal_init(int argc, char **argv)
 	if (!internal_conf->no_hugetlbfs && (eal_hugepage_info_init() < 0)) {
 		rte_eal_init_alert("Cannot get hugepage information");
 		rte_errno = EACCES;
-		return -1;
+		goto err_out;
 	}
 
 	if (internal_conf->memory == 0 && !internal_conf->force_numa) {
@@ -318,26 +237,26 @@ rte_eal_init(int argc, char **argv)
 
 	if (rte_eal_intr_init() < 0) {
 		rte_eal_init_alert("Cannot init interrupt-handling thread");
-		return -1;
+		goto err_out;
 	}
 
 	if (rte_eal_timer_init() < 0) {
 		rte_eal_init_alert("Cannot init TSC timer");
 		rte_errno = EFAULT;
-		return -1;
+		goto err_out;
 	}
 
 	bscan = rte_bus_scan();
 	if (bscan < 0) {
 		rte_eal_init_alert("Cannot scan the buses");
 		rte_errno = ENODEV;
-		return -1;
+		goto err_out;
 	}
 
 	if (eal_mem_win32api_init() < 0) {
 		rte_eal_init_alert("Cannot access Win32 memory management");
 		rte_errno = ENOTSUP;
-		return -1;
+		goto err_out;
 	}
 
 	has_phys_addr = true;
@@ -348,12 +267,15 @@ rte_eal_init(int argc, char **argv)
 		has_phys_addr = false;
 	}
 
+	/* Always call rte_bus_get_iommu_class() to trigger DMA mask detection and validation */
+	enum rte_iova_mode bus_iova_mode = rte_bus_get_iommu_class();
+
 	iova_mode = internal_conf->iova_mode;
 	if (iova_mode == RTE_IOVA_DC) {
 		EAL_LOG(DEBUG, "Specific IOVA mode is not requested, autodetecting");
 		if (has_phys_addr) {
 			EAL_LOG(DEBUG, "Selecting IOVA mode according to bus requests");
-			iova_mode = rte_bus_get_iommu_class();
+			iova_mode = bus_iova_mode;
 			if (iova_mode == RTE_IOVA_DC) {
 				if (!RTE_IOVA_IN_MBUF) {
 					iova_mode = RTE_IOVA_VA;
@@ -370,13 +292,13 @@ rte_eal_init(int argc, char **argv)
 	if (iova_mode == RTE_IOVA_PA && !has_phys_addr) {
 		rte_eal_init_alert("Cannot use IOVA as 'PA' since physical addresses are not available");
 		rte_errno = EINVAL;
-		return -1;
+		goto err_out;
 	}
 
 	if (iova_mode == RTE_IOVA_PA && !RTE_IOVA_IN_MBUF) {
 		rte_eal_init_alert("Cannot use IOVA as 'PA' as it is disabled during build");
 		rte_errno = EINVAL;
-		return -1;
+		goto err_out;
 	}
 
 	EAL_LOG(DEBUG, "Selected IOVA mode '%s'",
@@ -386,7 +308,7 @@ rte_eal_init(int argc, char **argv)
 	if (rte_eal_memzone_init() < 0) {
 		rte_eal_init_alert("Cannot init memzone");
 		rte_errno = ENODEV;
-		return -1;
+		goto err_out;
 	}
 
 	rte_mcfg_mem_read_lock();
@@ -395,14 +317,14 @@ rte_eal_init(int argc, char **argv)
 		rte_mcfg_mem_read_unlock();
 		rte_eal_init_alert("Cannot init memory");
 		rte_errno = ENOMEM;
-		return -1;
+		goto err_out;
 	}
 
 	if (rte_eal_malloc_heap_init() < 0) {
 		rte_mcfg_mem_read_unlock();
 		rte_eal_init_alert("Cannot init malloc heap");
 		rte_errno = ENODEV;
-		return -1;
+		goto err_out;
 	}
 
 	rte_mcfg_mem_read_unlock();
@@ -410,13 +332,13 @@ rte_eal_init(int argc, char **argv)
 	if (rte_eal_malloc_heap_populate() < 0) {
 		rte_eal_init_alert("Cannot init malloc heap");
 		rte_errno = ENODEV;
-		return -1;
+		goto err_out;
 	}
 
 	if (rte_eal_tailqs_init() < 0) {
 		rte_eal_init_alert("Cannot init tail queues for objects");
 		rte_errno = EFAULT;
-		return -1;
+		goto err_out;
 	}
 
 	eal_rand_init();
@@ -425,7 +347,7 @@ rte_eal_init(int argc, char **argv)
 			&lcore_config[config->main_lcore].cpuset) != 0) {
 		rte_eal_init_alert("Cannot set affinity");
 		rte_errno = EINVAL;
-		return -1;
+		goto err_out;
 	}
 	__rte_thread_init(config->main_lcore,
 		&lcore_config[config->main_lcore].cpuset);
@@ -471,13 +393,13 @@ rte_eal_init(int argc, char **argv)
 	if (ret) {
 		rte_eal_init_alert("rte_service_init() failed");
 		rte_errno = -ret;
-		return -1;
+		goto err_out;
 	}
 
 	if (rte_bus_probe()) {
 		rte_eal_init_alert("Cannot probe devices");
 		rte_errno = ENOTSUP;
-		return -1;
+		goto err_out;
 	}
 
 	/*
@@ -490,6 +412,9 @@ rte_eal_init(int argc, char **argv)
 	eal_mcfg_complete();
 
 	return fctret;
+err_out:
+	eal_clean_saved_args();
+	return -1;
 }
 
 /* Don't use MinGW asprintf() to have identical code with all toolchains. */

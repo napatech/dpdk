@@ -29,6 +29,19 @@ static inline bool ice_is_pow2(u64 val)
 }
 
 /**
+ * ice_ctz - count trailing zeroes
+ * @val: unsigned integer to be validated
+ */
+static inline int ice_ctz(u32 val)
+{
+	int i = 0;
+	while (!(val & (1 << i)))
+		i++;
+
+	return i;
+}
+
+/**
  * ice_ilog2 - Calculates integer log base 2 of a number
  * @n: number on which to perform operation
  */
@@ -982,7 +995,7 @@ struct ice_flash_info {
 	struct ice_orom_info orom;	/* Option ROM version info */
 	struct ice_nvm_info nvm;	/* NVM version information */
 	struct ice_bank_info banks;	/* Flash Bank information */
-	u16 sr_words;			/* Shadow RAM size in words */
+	u32 sr_words;			/* Shadow RAM size in words */
 	u32 flash_size;			/* Size of available flash in bytes */
 	u8 blank_nvm_mode;		/* is NVM empty (no FW present) */
 };
@@ -1183,6 +1196,8 @@ struct ice_dcb_pfc_cfg {
 	u8 mbc;
 	u8 pfccap;
 	u8 pfcena;
+	u8 pfcena_asym_rx;
+	u8 pfcena_asym_tx;
 };
 
 /* CEE or IEEE 802.1Qaz Application Priority data */

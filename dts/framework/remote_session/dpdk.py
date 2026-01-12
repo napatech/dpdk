@@ -24,12 +24,12 @@ from framework.config.test_run import (
     RemoteDPDKTarballLocation,
     RemoteDPDKTreeLocation,
 )
-from framework.exception import ConfigurationError, InternalError, RemoteFileNotFoundError
+from framework.context import get_ctx
+from framework.exception import ConfigurationError, RemoteFileNotFoundError
 from framework.logger import DTSLogger, get_dts_logger
 from framework.params.eal import EalParams
 from framework.remote_session.remote_session import CommandResult
 from framework.testbed_model.cpu import LogicalCore, LogicalCoreCount, LogicalCoreList, lcore_filter
-from framework.testbed_model.linux_session import LinuxSession
 from framework.testbed_model.node import Node
 from framework.testbed_model.os_session import OSSession
 from framework.testbed_model.virtual_device import VirtualDevice
@@ -62,7 +62,7 @@ class DPDKBuildEnvironment:
 
     compiler_version: str | None
 
-    def __init__(self, config: DPDKBuildConfiguration, node: Node):
+    def __init__(self, config: DPDKBuildConfiguration, node: Node) -> None:
         """DPDK build environment class constructor."""
         self.config = config
         self._node = node
@@ -74,7 +74,7 @@ class DPDKBuildEnvironment:
 
         self.compiler_version = None
 
-    def setup(self):
+    def setup(self) -> None:
         """Set up the DPDK build on the target node.
 
         DPDK setup includes setting all internals needed for the build, the copying of DPDK
@@ -118,7 +118,7 @@ class DPDKBuildEnvironment:
                 )
                 self._node.main_session.remove_remote_file(tarball_path)
 
-    def _set_remote_dpdk_tree_path(self, dpdk_tree: PurePath):
+    def _set_remote_dpdk_tree_path(self, dpdk_tree: PurePath) -> None:
         """Set the path to the remote DPDK source tree based on the provided DPDK location.
 
         Verify DPDK source tree existence on the SUT node, if exists sets the
@@ -205,7 +205,7 @@ class DPDKBuildEnvironment:
             strip_root_dir=True,
         )
 
-    def _set_remote_dpdk_build_dir(self, build_dir: str):
+    def _set_remote_dpdk_build_dir(self, build_dir: str) -> None:
         """Set the `remote_dpdk_build_dir` on the SUT.
 
         Check existence on the SUT node and sets the
@@ -260,9 +260,21 @@ class DPDKBuildEnvironment:
         Uses the already configured DPDK build configuration. Assumes that the
         `remote_dpdk_tree_path` has already been set on the SUT node.
         """
+        ctx = get_ctx()
+        # If the SUT is an ice driver device, make sure to build with 16B descriptors.
+        if (
+            ctx.topology.sut_port_ingress
+            and ctx.topology.sut_port_ingress.config.os_driver == "ice"
+        ):
+            meson_args = MesonArgs(
+                default_library="static", libdir="lib", c_args="-DRTE_NET_INTEL_USE_16BYTE_DESC"
+            )
+        else:
+            meson_args = MesonArgs(default_library="static", libdir="lib")
+
         self._session.build_dpdk(
             self._env_vars,
-            MesonArgs(default_library="static", enable_kmods=True, libdir="lib"),
+            meson_args,
             self.remote_dpdk_tree_path,
             self.remote_dpdk_build_dir,
         )
@@ -277,7 +289,7 @@ class DPDKBuildEnvironment:
         return self._node.tmp_dir.joinpath(self._remote_tmp_dpdk_tree_dir)
 
     @property
-    def remote_dpdk_build_dir(self) -> str | PurePath:
+    def remote_dpdk_build_dir(self) -> PurePath:
         """The remote DPDK build dir path."""
         if self._remote_dpdk_build_dir:
             return self._remote_dpdk_build_dir
@@ -286,7 +298,7 @@ class DPDKBuildEnvironment:
             "Failed to get remote dpdk build dir because we don't know the "
             "location on the SUT node."
         )
-        return ""
+        return PurePath("")
 
     @cached_property
     def dpdk_version(self) -> str | None:
@@ -323,7 +335,7 @@ class DPDKRuntimeEnvironment:
         config: DPDKRuntimeConfiguration,
         node: Node,
         build_env: DPDKBuildEnvironment | None = None,
-    ):
+    ) -> None:
         """DPDK environment constructor.
 
         Args:
@@ -354,11 +366,10 @@ class DPDKRuntimeEnvironment:
         self._ports_bound_to_dpdk = False
         self._kill_session = None
 
-    def setup(self):
+    def setup(self) -> None:
         """Set up the DPDK runtime on the target node."""
         if self.build:
             self.build.setup()
-        self._prepare_devbind_script()
 
     def teardown(self) -> None:
         """Reset DPDK variables and bind port driver to the OS driver."""
@@ -384,38 +395,6 @@ class DPDKRuntimeEnvironment:
         return self._node.main_session.send_command(
             f"{app_path} {eal_params}", timeout, privileged=True, verify=True
         )
-
-    def _prepare_devbind_script(self) -> None:
-        """Prepare the devbind script.
-
-        If the environment has a build associated with it, then use the script within that build's
-        tree. Otherwise, copy the script from the local repository.
-
-        This script is only available for Linux, if the detected session is not Linux then do
-        nothing.
-
-        Raises:
-            InternalError: If dpdk-devbind.py could not be found.
-        """
-        if not isinstance(self._node.main_session, LinuxSession):
-            return
-
-        if self.build:
-            devbind_script_path = self._node.main_session.join_remote_path(
-                self.build.remote_dpdk_tree_path, "usertools", "dpdk-devbind.py"
-            )
-        else:
-            local_script_path = Path("..", "usertools", "dpdk-devbind.py").resolve()
-            if not local_script_path.exists():
-                raise InternalError("Could not find dpdk-devbind.py locally.")
-
-            devbind_script_path = self._node.main_session.join_remote_path(
-                self._node.tmp_dir, local_script_path.name
-            )
-
-            self._node.main_session.copy_to(local_script_path, devbind_script_path)
-
-        self._node.main_session.devbind_script_path = devbind_script_path
 
     def filter_lcores(
         self,

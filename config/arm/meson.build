@@ -13,7 +13,6 @@ flags_common = [
         #    ['RTE_ARM64_MEMCPY_UNALIGNED_THRESHOLD', 512],
         # Leave below RTE_ARM64_MEMCPY_xxx options commented out,
         # unless there are strong reasons.
-        #    ['RTE_ARM64_MEMCPY_SKIP_GCC_VER_CHECK', false],
         #    ['RTE_ARM64_MEMCPY_ALIGN_MASK', 0xF],
         #    ['RTE_ARM64_MEMCPY_STRICT_ALIGN', false],
 
@@ -84,8 +83,7 @@ part_number_config_arm = {
         ]
     },
     '0xd42': {
-        'march': 'armv8.4-a',
-        'mcpu' : 'cortex-a78ae',
+        'mcpu' : 'mcpu_cortex-a78ae',
         'flags': [
             ['RTE_MAX_LCORE', 16],
             ['RTE_MAX_NUMA_NODES', 1]
@@ -257,6 +255,15 @@ implementer_hisilicon = {
                 ['RTE_MAX_LCORE', 1280],
                 ['RTE_MAX_NUMA_NODES', 16]
             ]
+        },
+        '0xd06': {
+            'mcpu': 'mcpu_hip12',
+            'flags': [
+                ['RTE_MACHINE', '"hip12"'],
+                ['RTE_ARM_FEATURE_ATOMICS', true],
+                ['RTE_MAX_LCORE', 1280],
+                ['RTE_MAX_NUMA_NODES', 16]
+            ]
         }
     }
 }
@@ -285,6 +292,22 @@ implementer_ionic = {
                 ['RTE_LIBRTE_IONIC_PMD_BARRIER_ERRATA', true],
             ]
         }
+    }
+}
+
+implementer_microsoft = {
+    'description': 'Microsoft Corporation',
+    'flags': [],
+    'part_number_config': {
+        '0xd49': {
+            'mcpu': 'cobalt-100',
+            'flags': [
+                ['RTE_MACHINE', '"neoverse-n2"'],
+                ['RTE_ARM_FEATURE_ATOMICS', true],
+                ['RTE_MAX_LCORE', 128],
+                ['RTE_MAX_NUMA_NODES', 2]
+            ]
+        },
     }
 }
 
@@ -344,6 +367,7 @@ implementers = {
     '0x48': implementer_hisilicon,
     '0x50': implementer_ampere,
     '0x51': implementer_qualcomm,
+    '0x6d': implementer_microsoft,
     '0x70': implementer_phytium,
     '0x75': implementer_ionic,
     '0xc0': implementer_ampere,
@@ -464,6 +488,14 @@ soc_cn10k = {
     'sve_acle': false
 }
 
+soc_cobalt100 = {
+    'description' : 'Microsoft Azure Cobalt 100',
+    'implementer' : '0x6d',
+    'part_number': '0xd49',
+    'extra_march_features': ['crypto'],
+    'numa': true
+}
+
 soc_dpaa = {
     'description': 'NXP DPAA',
     'implementer': '0x41',
@@ -540,6 +572,25 @@ soc_hip10 = {
     'numa': true
 }
 
+soc_hip12 = {
+    'description': 'HiSilicon HIP12',
+    'implementer': '0x48',
+    'part_number': '0xd06',
+    'numa': true
+}
+
+soc_imx = {
+    'description': 'NXP IMX',
+    'implementer': '0x41',
+    'part_number': '0xd05',
+    'flags': [
+        ['RTE_MACHINE', '"armv8a"'],
+        ['RTE_MAX_LCORE', 6],
+        ['RTE_MAX_NUMA_NODES', 1],
+    ],
+    'numa': false,
+}
+
 soc_kunpeng920 = {
     'description': 'HiSilicon Kunpeng 920',
     'implementer': '0x48',
@@ -568,7 +619,7 @@ soc_n2 = {
     'description': 'Arm Neoverse N2',
     'implementer': '0x41',
     'part_number': '0xd49',
-    'numa': false
+    'numa': true
 }
 
 soc_n3 = {
@@ -653,11 +704,19 @@ mcpu_defs = {
         'march': 'armv8-a',
         'march_extensions': ['crc']
     },
+    'mcpu_cortex-a78ae': {
+        'march': 'armv8.4-a',
+        'march_extensions': ['crypto']
+    },
     'mcpu_ft2000plus': {
         'march': 'armv8-a',
         'march_extensions': ['crc']
     },
     'mcpu_hip10': {
+        'march': 'armv8.5-a',
+        'march_extensions': ['crypto', 'sve']
+    },
+    'mcpu_hip12': {
         'march': 'armv8.5-a',
         'march_extensions': ['crypto', 'sve']
     },
@@ -706,6 +765,7 @@ cdx:             AMD CDX
 centriq2400:     Qualcomm Centriq 2400
 cn9k:            Marvell OCTEON 9
 cn10k:           Marvell OCTEON 10
+cobalt100:       Microsoft Azure Cobalt 100
 dpaa:            NXP DPAA
 elba:            AMD Pensando Elba
 emag:            Ampere eMAG
@@ -715,6 +775,8 @@ graviton2:       AWS Graviton2
 graviton3:       AWS Graviton3
 graviton4:       AWS Graviton4
 hip10:           HiSilicon HIP10
+hip12:           HiSilicon HIP12
+imx:             NXP IMX
 kunpeng920:      HiSilicon Kunpeng 920
 kunpeng930:      HiSilicon Kunpeng 930
 n1sdp:           Arm Neoverse N1SDP
@@ -747,6 +809,7 @@ socs = {
     'centriq2400': soc_centriq2400,
     'cn9k': soc_cn9k,
     'cn10k' : soc_cn10k,
+    'cobalt100' : soc_cobalt100,
     'dpaa': soc_dpaa,
     'elba': soc_elba,
     'emag': soc_emag,
@@ -756,6 +819,8 @@ socs = {
     'graviton3': soc_graviton3,
     'graviton4': soc_graviton4,
     'hip10': soc_hip10,
+    'hip12': soc_hip12,
+    'imx': soc_imx,
     'kunpeng920': soc_kunpeng920,
     'kunpeng930': soc_kunpeng930,
     'n1sdp': soc_n1sdp,

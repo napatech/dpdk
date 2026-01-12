@@ -130,10 +130,6 @@ static void hn_remove_delayed(void *args)
 		PMD_DRV_LOG(ERR, "rte_eth_dev_stop failed port_id=%u ret=%d",
 			    port_id, ret);
 
-	/* Record the device parameters for possible hotplug events */
-	if (dev->devargs && dev->devargs->args)
-		hv->vf_devargs = strdup(dev->devargs->args);
-
 	ret = rte_eth_dev_close(port_id);
 	if (ret)
 		PMD_DRV_LOG(ERR, "rte_eth_dev_close failed port_id=%u ret=%d",
@@ -681,7 +677,8 @@ void hn_vf_rx_queue_release(struct hn_data *hv, uint16_t queue_id)
 }
 
 int hn_vf_stats_get(struct rte_eth_dev *dev,
-		    struct rte_eth_stats *stats)
+		    struct rte_eth_stats *stats,
+		    struct eth_queue_stats *qstats __rte_unused)
 {
 	struct hn_data *hv = dev->data->dev_private;
 	struct rte_eth_dev *vf_dev;

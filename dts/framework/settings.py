@@ -108,7 +108,7 @@ import sys
 from argparse import Action, ArgumentDefaultsHelpFormatter, _get_action_name
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NoReturn
 
 from pydantic import ValidationError
 
@@ -130,11 +130,17 @@ class Settings:
     """
 
     #:
-    test_run_config_path: Path = Path(__file__).parent.parent.joinpath("test_run.yaml")
+    test_run_config_path: Path = Path(__file__).parent.parent.joinpath(
+        "configurations/test_run.yaml"
+    )
     #:
-    nodes_config_path: Path = Path(__file__).parent.parent.joinpath("nodes.yaml")
+    nodes_config_path: Path = Path(__file__).parent.parent.joinpath("configurations/nodes.yaml")
     #:
-    tests_config_path: Path | None = None
+    tests_config_path: Path | None = (
+        Path(__file__).parent.parent.joinpath("configurations/tests_config.yaml")
+        if os.path.exists("configurations/tests_config.yaml")
+        else None
+    )
     #:
     output_dir: str = "output"
     #:
@@ -174,7 +180,7 @@ def _make_env_var_name(action: Action, env_var_name: str | None) -> str:
     return env_var_name
 
 
-def _get_env_var_name(action: Action) -> str | None:
+def _get_env_var_name(action: Action | None) -> str | None:
     """Get the environment variable name of the given action."""
     return getattr(action, _ENV_VAR_NAME_ATTR, None)
 
@@ -237,12 +243,15 @@ class _DTSArgumentParser(argparse.ArgumentParser):
 
         return action
 
-    def error(self, message):
+    def error(self, message) -> NoReturn:
         """Augments :meth:`~argparse.ArgumentParser.error` with environment variable awareness."""
         for action in self._actions:
             if _is_from_env(action):
                 action_name = _get_action_name(action)
                 env_var_name = _get_env_var_name(action)
+                assert (
+                    env_var_name is not None
+                ), "Action was set from environment, but no environment variable name was found."
                 env_var_value = os.environ.get(env_var_name)
 
                 message = message.replace(
@@ -257,7 +266,7 @@ class _DTSArgumentParser(argparse.ArgumentParser):
 class _EnvVarHelpFormatter(ArgumentDefaultsHelpFormatter):
     """Custom formatter to add environment variables to the help page."""
 
-    def _get_help_string(self, action):
+    def _get_help_string(self, action: Action) -> str | None:
         """Overrides :meth:`ArgumentDefaultsHelpFormatter._get_help_string`."""
         help = super()._get_help_string(action)
 

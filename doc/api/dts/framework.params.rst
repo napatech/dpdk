@@ -12,5 +12,4 @@ params - Command Line Parameters Modelling
    :maxdepth: 1
 
    framework.params.eal
-   framework.params.testpmd
    framework.params.types

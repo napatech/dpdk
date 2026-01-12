@@ -277,6 +277,20 @@ graph_node_fini(struct graph *graph)
 						       graph_node->node->name));
 }
 
+void
+graph_node_replace_all(struct node *old, struct node *new)
+{
+	struct graph_node *graph_node;
+	struct graph *graph;
+
+	STAILQ_FOREACH(graph, &graph_list, next) {
+		STAILQ_FOREACH(graph_node, &graph->node_list, next) {
+			if (graph_node->node == old)
+				graph_node->node = new;
+		}
+	}
+}
+
 static struct rte_graph *
 graph_mem_fixup_node_ctx(struct rte_graph *graph)
 {
@@ -340,17 +354,22 @@ rte_graph_model_mcore_dispatch_core_bind(rte_graph_t id, int lcore)
 {
 	struct graph *graph;
 
-	if (graph_from_id(id) == NULL)
+	if (graph_from_id(id) == NULL) {
+		rte_errno = ENOENT;
 		goto fail;
-	if (!rte_lcore_is_enabled(lcore))
-		SET_ERR_JMP(ENOLINK, fail, "lcore %d not enabled", lcore);
+	}
+
+	if (rte_lcore_has_role(lcore, ROLE_OFF))
+		SET_ERR_JMP(ENOLINK, fail, "lcore %d is invalid", lcore);
 
 	STAILQ_FOREACH(graph, &graph_list, next)
 		if (graph->id == id)
 			break;
 
-	if (graph->graph->model != RTE_GRAPH_MODEL_MCORE_DISPATCH)
+	if (graph->graph->model != RTE_GRAPH_MODEL_MCORE_DISPATCH) {
+		rte_errno = EPERM;
 		goto fail;
+	}
 
 	graph->lcore_id = lcore;
 	graph->graph->dispatch.lcore_id = graph->lcore_id;
@@ -595,9 +614,13 @@ graph_clone(struct graph *parent_graph, const char *name, struct rte_graph_param
 	graph->graph->model = parent_graph->graph->model;
 
 	/* Create the graph schedule work queue */
-	if (rte_graph_worker_model_get(graph->graph) == RTE_GRAPH_MODEL_MCORE_DISPATCH &&
-	    graph_sched_wq_create(graph, parent_graph, prm))
-		goto graph_mem_destroy;
+	if (rte_graph_worker_model_get(graph->graph) == RTE_GRAPH_MODEL_MCORE_DISPATCH) {
+		if (graph_sched_wq_create(graph, parent_graph, prm))
+			goto graph_mem_destroy;
+
+		graph->graph->dispatch.notify_cb = prm->dispatch.notify_cb;
+		graph->graph->dispatch.cb_priv = prm->dispatch.cb_priv;
+	}
 
 	/* Call init() of the all the nodes in the graph */
 	if (graph_node_init(graph))

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -46,8 +45,8 @@
 
 #define RAW_ENCAP_DECAP_ELEMS_MAX 16
 
-extern uint64_t rte_tsc_freq;
-extern rte_spinlock_t hwlock;
+extern uint64_t nthw_tsc_freq;
+extern rte_spinlock_t nthw_lock;
 
 /*
  * Flow eth dev profile determines how the FPGA module resources are

@@ -552,6 +552,7 @@ cleanup_pdump_resources(void)
 		}
 
 	}
+	rte_pdump_uninit();
 	cleanup_rings();
 }
 
@@ -822,6 +823,9 @@ enable_pdump(void)
 	struct pdump_tuples *pt;
 	int ret = 0, ret1 = 0;
 
+	if (rte_pdump_init() < 0)
+		rte_exit(EXIT_FAILURE, "pdump init failed\n");
+
 	for (i = 0; i < num_tuples; i++) {
 		pt = &pdump_t[i];
 		if (pt->dir == RTE_PDUMP_FLAG_RXTX) {
@@ -982,9 +986,9 @@ main(int argc, char **argv)
 	int ret;
 	int i;
 
-	char n_flag[] = "-n4";
 	char mp_flag[] = "--proc-type=secondary";
-	char *argp[argc + 2];
+	char *argp[argc + 2];  /* add proc-type, and final NULL entry */
+	int n_argp = 0;
 
 	/* catch ctrl-c so we can cleanup on exit */
 	sigemptyset(&action.sa_mask);
@@ -995,28 +999,27 @@ main(int argc, char **argv)
 	if (origaction.sa_handler == SIG_DFL)
 		sigaction(SIGHUP, &action, NULL);
 
-	argp[0] = argv[0];
-	argp[1] = n_flag;
-	argp[2] = mp_flag;
+	argp[n_argp++] = argv[0];
+	argp[n_argp++] = mp_flag;
 
-	for (i = 1; i < argc; i++)
-		argp[i + 2] = argv[i];
+	for (i = 1; i < argc; i++) {
+		argp[n_argp] = argv[i];
+		/* drop any user-provided proc-type to avoid dup flags */
+		if (strncmp(argv[i], mp_flag, strlen("--proc-type")) != 0)
+			n_argp++;
+	}
+	argp[n_argp] = NULL;
 
-	argc += 2;
-
-	diag = rte_eal_init(argc, argp);
+	diag = rte_eal_init(n_argp, argp);
 	if (diag < 0)
 		rte_panic("Cannot init EAL\n");
 
 	if (rte_eth_dev_count_avail() == 0)
 		rte_exit(EXIT_FAILURE, "No Ethernet ports - bye\n");
 
-	argc -= diag;
-	argv += (diag - 2);
-
 	/* parse app arguments */
-	if (argc > 1) {
-		ret = launch_args_parse(argc, argv, argp[0]);
+	if (n_argp - diag > 1) {
+		ret = launch_args_parse(n_argp - diag, argp + diag, argp[0]);
 		if (ret < 0)
 			rte_exit(EXIT_FAILURE, "Invalid argument\n");
 	}
@@ -1028,13 +1031,15 @@ main(int argc, char **argv)
 	dump_packets();
 
 	disable_primary_monitor();
-	cleanup_pdump_resources();
+
 	/* dump debug stats */
 	print_pdump_stats();
 
-	ret = rte_eal_cleanup();
-	if (ret)
-		printf("Error from rte_eal_cleanup(), %d\n", ret);
+	/* If primary has exited, do not try and communicate with it */
+	if (!rte_eal_primary_proc_alive(NULL))
+		return 0;
 
-	return 0;
+	cleanup_pdump_resources();
+
+	return rte_eal_cleanup() ? EXIT_FAILURE : 0;
 }

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -160,7 +159,7 @@ static int nthw_fpga_rst9563_clock_synth_init(nthw_fpga_t *p_fpga,
 	const char *const p_adapter_id_str = p_fpga->p_fpga_info->mp_adapter_id_str;
 	const int n_fpga_product_id = p_fpga->mn_product_id;
 	int res;
-	const struct clk9563_ops *clk9563_ops = get_clk9563_ops();
+	const struct clk9563_ops *clk9563_ops = nthw_get_clk9563_ops();
 
 	if (clk9563_ops == NULL) {
 		NT_LOG(INF, NTNIC, "CLK9563 module not included");
@@ -220,7 +219,7 @@ static int nthw_fpga_rst9563_init(struct fpga_info_s *p_fpga_info,
 		return res;
 	}
 
-	const struct rst_nt200a0x_ops *rst_ops = get_rst_nt200a0x_ops();
+	const struct rst_nt200a0x_ops *rst_ops = nthw_get_rst_nt200a0x_ops();
 	res = rst_ops != NULL ? rst_ops->nthw_fpga_rst_nt200a0x_reset(p_fpga, p_rst) : -1;
 
 	if (res) {
@@ -233,8 +232,8 @@ static int nthw_fpga_rst9563_init(struct fpga_info_s *p_fpga_info,
 
 static struct rst9563_ops rst9563_ops = { .nthw_fpga_rst9563_init = nthw_fpga_rst9563_init };
 
-void rst9563_ops_init(void)
+void nthw_rst9563_ops_init(void)
 {
 	NT_LOG(DBG, NTHW, "RST9563 OPS INIT");
-	register_rst9563_ops(&rst9563_ops);
+	nthw_reg_rst9563_ops(&rst9563_ops);
 }

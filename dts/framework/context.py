@@ -4,8 +4,9 @@
 """Runtime contexts."""
 
 import functools
+from collections.abc import Callable
 from dataclasses import MISSING, dataclass, field, fields
-from typing import TYPE_CHECKING, ParamSpec
+from typing import TYPE_CHECKING, Any, Optional, ParamSpec, Union
 
 from framework.exception import InternalError
 from framework.remote_session.shell_pool import ShellPool
@@ -16,6 +17,8 @@ from framework.testbed_model.topology import Topology
 
 if TYPE_CHECKING:
     from framework.remote_session.dpdk import DPDKBuildEnvironment, DPDKRuntimeEnvironment
+    from framework.test_suite import TestCase, TestSuite
+    from framework.testbed_model.capability import TestProtocol
     from framework.testbed_model.traffic_generator.traffic_generator import TrafficGenerator
 
 P = ParamSpec("P")
@@ -26,6 +29,8 @@ class LocalContext:
     """Updatable context local to test suites and cases.
 
     Attributes:
+        current_test_suite: The currently running test suite, if any.
+        current_test_case: The currently running test case, if any.
         lcore_filter_specifier: A number of lcores/cores/sockets to use or a list of lcore ids to
             use. The default will select one lcore for each of two cores on one socket, in ascending
             order of core ids.
@@ -37,6 +42,8 @@ class LocalContext:
             and no output is gathered within the timeout, an exception is thrown.
     """
 
+    current_test_suite: Union["TestSuite", None] = None
+    current_test_case: Union[type["TestCase"], None] = None
     lcore_filter_specifier: LogicalCoreCount | LogicalCoreList = field(
         default_factory=LogicalCoreCount
     )
@@ -69,7 +76,8 @@ class Context:
     topology: Topology
     dpdk_build: "DPDKBuildEnvironment"
     dpdk: "DPDKRuntimeEnvironment"
-    tg: "TrafficGenerator"
+    func_tg: Optional["TrafficGenerator"]
+    perf_tg: Optional["TrafficGenerator"]
     local: LocalContext = field(default_factory=LocalContext)
     shell_pool: ShellPool = field(default_factory=ShellPool)
 
@@ -97,12 +105,12 @@ def init_ctx(ctx: Context) -> None:
 
 def filter_cores(
     specifier: LogicalCoreCount | LogicalCoreList, ascending_cores: bool | None = None
-):
+) -> Callable[[type["TestProtocol"]], Callable]:
     """Decorates functions that require a temporary update to the lcore specifier."""
 
-    def decorator(func):
+    def decorator(func: type["TestProtocol"]) -> Callable:
         @functools.wraps(func)
-        def wrapper(*args: P.args, **kwargs: P.kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
             local_ctx = get_ctx().local
 
             old_specifier = local_ctx.lcore_filter_specifier

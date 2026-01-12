@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 #include "rte_spinlock.h"
@@ -18,7 +17,7 @@
 		name, #name   \
 	}
 
-const char *dbg_res_descr[] = {
+const char *nthw_dbg_res_descr[] = {
 	[RES_QUEUE] = "RES_QUEUE",
 	[RES_CAT_CFN] = "RES_CAT_CFN",
 	[RES_CAT_COT] = "RES_CAT_COT",
@@ -41,7 +40,7 @@ const char *dbg_res_descr[] = {
 	[RES_INVALID] = "RES_INVALID",
 };
 
-static_assert(RTE_DIM(dbg_res_descr) == RES_END,
+static_assert(RTE_DIM(nthw_dbg_res_descr) == RES_END,
 	"The list of debug descriptions is not fully completed");
 
 static struct flow_nic_dev *dev_base;
@@ -212,7 +211,7 @@ void nthw_flow_nic_free_resource(struct flow_nic_dev *ndev, enum res_type_e res_
 int nthw_flow_nic_ref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int index)
 {
 	NT_LOG(DBG, FILTER, "Reference resource %s idx %i (before ref cnt %" PRIu32 ")",
-		dbg_res_descr[res_type], index, ndev->res[res_type].ref[index]);
+		nthw_dbg_res_descr[res_type], index, ndev->res[res_type].ref[index]);
 	RTE_ASSERT(flow_nic_is_resource_used(ndev, res_type, index));
 
 	if (ndev->res[res_type].ref[index] == (uint32_t)-1)
@@ -225,7 +224,7 @@ int nthw_flow_nic_ref_resource(struct flow_nic_dev *ndev, enum res_type_e res_ty
 int nthw_flow_nic_deref_resource(struct flow_nic_dev *ndev, enum res_type_e res_type, int index)
 {
 	NT_LOG(DBG, FILTER, "De-reference resource %s idx %i (before ref cnt %" PRIu32 ")",
-		dbg_res_descr[res_type], index, ndev->res[res_type].ref[index]);
+		nthw_dbg_res_descr[res_type], index, ndev->res[res_type].ref[index]);
 	RTE_ASSERT(flow_nic_is_resource_used(ndev, res_type, index));
 	RTE_ASSERT(ndev->res[res_type].ref[index]);
 	/* deref */
@@ -292,40 +291,40 @@ static struct flow_handle *flow_create(struct flow_eth_dev *dev __rte_unused,
 	const struct rte_flow_action action[] __rte_unused,
 	struct rte_flow_error *error __rte_unused)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
 		return NULL;
 	}
 
-	return profile_inline_ops->flow_create_profile_inline(dev, attr,
+	return profile_inline_ops->nthw_flow_create_profile_inline(dev, attr,
 		forced_vlan_vid, caller_id,  item, action, error);
 }
 
 static int flow_destroy(struct flow_eth_dev *dev __rte_unused,
 	struct flow_handle *flow __rte_unused,	struct rte_flow_error *error __rte_unused)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
 		return -1;
 	}
 
-	return profile_inline_ops->flow_destroy_profile_inline(dev, flow, error);
+	return profile_inline_ops->nthw_flow_destroy_profile_inline(dev, flow, error);
 }
 
 static int flow_flush(struct flow_eth_dev *dev, uint16_t caller_id, struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_flush_profile_inline(dev, caller_id, error);
+	return profile_inline_ops->nthw_flow_flush_profile_inline(dev, caller_id, error);
 }
 
 static int flow_actions_update(struct flow_eth_dev *dev,
@@ -333,14 +332,15 @@ static int flow_actions_update(struct flow_eth_dev *dev,
 	const struct rte_flow_action action[],
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_actions_update_profile_inline(dev, flow, action, error);
+	return profile_inline_ops->nthw_flow_actions_update_profile_inline(dev,
+		flow, action, error);
 }
 
 /*
@@ -375,70 +375,9 @@ static int nic_remove_eth_port_dev(struct flow_nic_dev *ndev, struct flow_eth_de
 	return -1;
 }
 
-static void flow_ndev_reset(struct flow_nic_dev *ndev)
+static int nthw_flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
-
-	if (profile_inline_ops == NULL) {
-		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
-		return;
-	}
-
-	/* Delete all eth-port devices created on this NIC device */
-	while (ndev->eth_base) {
-		nthw_flow_delete_eth_dev(ndev->eth_base);
-		ndev->eth_base = NULL;
-	}
-
-	/* Error check */
-	while (ndev->flow_base) {
-		NT_LOG(ERR, FILTER,
-			"ERROR : Flows still defined but all eth-ports deleted. Flow %p",
-			ndev->flow_base);
-
-		profile_inline_ops->flow_destroy_profile_inline(ndev->flow_base->dev,
-			ndev->flow_base, NULL);
-	}
-
-	profile_inline_ops->done_flow_management_of_ndev_profile_inline(ndev);
-
-	km_free_ndev_resource_management(&ndev->km_res_handle);
-	kcc_free_ndev_resource_management(&ndev->kcc_res_handle);
-
-	ndev->flow_unique_id_counter = 0;
-
-	/*
-	 * free all resources default allocated, initially for this NIC DEV
-	 * Is not really needed since the bitmap will be freed in a sec. Therefore
-	 * only in debug mode
-	 */
-
-	/* Check if all resources has been released */
-	NT_LOG(DBG, FILTER, "Delete NIC DEV Adaptor %i", ndev->adapter_no);
-
-	for (unsigned int i = 0; i < RES_COUNT; i++) {
-		int err = 0;
-		NT_LOG(DBG, FILTER, "RES state for: %s", dbg_res_descr[i]);
-
-		for (unsigned int ii = 0; ii < ndev->res[i].resource_count; ii++) {
-			int ref = ndev->res[i].ref[ii];
-			int used = flow_nic_is_resource_used(ndev, i, ii);
-
-			if (ref || used) {
-				NT_LOG(DBG, FILTER, "  [%u]: ref cnt %i, used %i", ii, ref,
-					used);
-				err = 1;
-			}
-		}
-
-		if (err)
-			NT_LOG(DBG, FILTER, "ERROR - some resources not freed");
-	}
-}
-
-int nthw_flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
-{
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
@@ -466,7 +405,7 @@ int nthw_flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
 	while (flow) {
 		if (flow->dev == eth_dev) {
 			struct flow_handle *flow_next = flow->next;
-			profile_inline_ops->flow_destroy_locked_profile_inline(eth_dev, flow,
+			profile_inline_ops->nthw_flow_destroy_locked_profile_inline(eth_dev, flow,
 				NULL);
 			flow = flow_next;
 
@@ -479,19 +418,19 @@ int nthw_flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
 	 * remove unmatched queue if setup in QSL
 	 * remove exception queue setting in QSL UNM
 	 */
-	hw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_DEST_QUEUE, eth_dev->port, 0);
-	hw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_EN, eth_dev->port, 0);
-	hw_mod_qsl_unmq_flush(&ndev->be, eth_dev->port, 1);
+	nthw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_DEST_QUEUE, eth_dev->port, 0);
+	nthw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_EN, eth_dev->port, 0);
+	nthw_mod_qsl_unmq_flush(&ndev->be, eth_dev->port, 1);
 
 	if (ndev->flow_profile == FLOW_ETH_DEV_PROFILE_INLINE) {
 		for (int i = 0; i < eth_dev->num_queues; ++i) {
 			uint32_t qen_value = 0;
 			uint32_t queue_id = (uint32_t)eth_dev->rx_queue[i].hw_id;
 
-			hw_mod_qsl_qen_get(&ndev->be, HW_QSL_QEN_EN, queue_id / 4, &qen_value);
-			hw_mod_qsl_qen_set(&ndev->be, HW_QSL_QEN_EN, queue_id / 4,
+			nthw_mod_qsl_qen_get(&ndev->be, HW_QSL_QEN_EN, queue_id / 4, &qen_value);
+			nthw_mod_qsl_qen_set(&ndev->be, HW_QSL_QEN_EN, queue_id / 4,
 				qen_value & ~(1U << (queue_id % 4)));
-			hw_mod_qsl_qen_flush(&ndev->be, queue_id / 4, 1);
+			nthw_mod_qsl_qen_flush(&ndev->be, queue_id / 4, 1);
 		}
 	}
 
@@ -510,6 +449,68 @@ int nthw_flow_delete_eth_dev(struct flow_eth_dev *eth_dev)
 
 	return 0;
 }
+
+static void flow_ndev_reset(struct flow_nic_dev *ndev)
+{
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
+
+	if (profile_inline_ops == NULL) {
+		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
+		return;
+	}
+
+	/* Delete all eth-port devices created on this NIC device */
+	while (ndev->eth_base) {
+		nthw_flow_delete_eth_dev(ndev->eth_base);
+		ndev->eth_base = NULL;
+	}
+
+	/* Error check */
+	while (ndev->flow_base) {
+		NT_LOG(ERR, FILTER,
+			"ERROR : Flows still defined but all eth-ports deleted. Flow %p",
+			ndev->flow_base);
+
+		profile_inline_ops->nthw_flow_destroy_profile_inline(ndev->flow_base->dev,
+			ndev->flow_base, NULL);
+	}
+
+	profile_inline_ops->nthw_done_flow_mgmnt_of_ndev_profile_inline(ndev);
+
+	nthw_km_free_ndev_resource_management(&ndev->km_res_handle);
+	nthw_kcc_free_ndev_resource_mgmnt(&ndev->kcc_res_handle);
+
+	ndev->flow_unique_id_counter = 0;
+
+	/*
+	 * free all resources default allocated, initially for this NIC DEV
+	 * Is not really needed since the bitmap will be freed in a sec. Therefore
+	 * only in debug mode
+	 */
+
+	/* Check if all resources has been released */
+	NT_LOG(DBG, FILTER, "Delete NIC DEV Adaptor %i", ndev->adapter_no);
+
+	for (unsigned int i = 0; i < RES_COUNT; i++) {
+		int err = 0;
+		NT_LOG(DBG, FILTER, "RES state for: %s", nthw_dbg_res_descr[i]);
+
+		for (unsigned int ii = 0; ii < ndev->res[i].resource_count; ii++) {
+			int ref = ndev->res[i].ref[ii];
+			int used = flow_nic_is_resource_used(ndev, i, ii);
+
+			if (ref || used) {
+				NT_LOG(DBG, FILTER, "  [%u]: ref cnt %i, used %i", ii, ref,
+					used);
+				err = 1;
+			}
+		}
+
+		if (err)
+			NT_LOG(DBG, FILTER, "ERROR - some resources not freed");
+	}
+}
+
 
 /*
  * Flow API NIC Setup
@@ -584,7 +585,7 @@ static struct flow_eth_dev *flow_get_eth_dev(uint8_t adapter_no, uint8_t port_no
 	int *rss_target_id, enum flow_eth_dev_profile flow_profile,
 	uint32_t exception_path)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL)
 		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
@@ -655,7 +656,7 @@ static struct flow_eth_dev *flow_get_eth_dev(uint8_t adapter_no, uint8_t port_no
 
 		/* Initialize modules if needed - recipe 0 is used as no-match and must be setup */
 		if (profile_inline_ops != NULL &&
-			profile_inline_ops->initialize_flow_management_of_ndev_profile_inline(ndev))
+			profile_inline_ops->nthw_init_flow_mgmnt_of_ndev_profile_inline(ndev))
 			goto err_exit0;
 
 	} else {
@@ -677,14 +678,14 @@ static struct flow_eth_dev *flow_get_eth_dev(uint8_t adapter_no, uint8_t port_no
 			 * Init QSL UNM - unmatched - redirects otherwise discarded
 			 * packets in QSL
 			 */
-			if (hw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_DEST_QUEUE, eth_dev->port,
+			if (nthw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_DEST_QUEUE, eth_dev->port,
 				eth_dev->rx_queue[0].hw_id) < 0)
 				goto err_exit0;
 
-			if (hw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_EN, eth_dev->port, 1) < 0)
+			if (nthw_mod_qsl_unmq_set(&ndev->be, HW_QSL_UNMQ_EN, eth_dev->port, 1) < 0)
 				goto err_exit0;
 
-			if (hw_mod_qsl_unmq_flush(&ndev->be, eth_dev->port, 1) < 0)
+			if (nthw_mod_qsl_unmq_flush(&ndev->be, eth_dev->port, 1) < 0)
 				goto err_exit0;
 		}
 
@@ -698,10 +699,10 @@ static struct flow_eth_dev *flow_get_eth_dev(uint8_t adapter_no, uint8_t port_no
 			uint32_t qen_value = 0;
 			uint32_t queue_id = (uint32_t)eth_dev->rx_queue[i].hw_id;
 
-			hw_mod_qsl_qen_get(&ndev->be, HW_QSL_QEN_EN, queue_id / 4, &qen_value);
-			hw_mod_qsl_qen_set(&ndev->be, HW_QSL_QEN_EN, queue_id / 4,
+			nthw_mod_qsl_qen_get(&ndev->be, HW_QSL_QEN_EN, queue_id / 4, &qen_value);
+			nthw_mod_qsl_qen_set(&ndev->be, HW_QSL_QEN_EN, queue_id / 4,
 				qen_value | (1 << (queue_id % 4)));
-			hw_mod_qsl_qen_flush(&ndev->be, queue_id / 4, 1);
+			nthw_mod_qsl_qen_flush(&ndev->be, queue_id / 4, 1);
 		}
 	}
 
@@ -981,7 +982,7 @@ static struct rss_type_info rss_to_string[] = {
 	RSS_TO_STRING(RTE_ETH_RSS_L3_SRC_ONLY),
 };
 
-int sprint_nt_rss_mask(char *str, uint16_t str_len, const char *prefix, uint64_t hash_mask)
+int nthw_sprint_rss_mask(char *str, uint16_t str_len, const char *prefix, uint64_t hash_mask)
 {
 	if (str == NULL || str_len == 0)
 		return -1;
@@ -1013,14 +1014,15 @@ static int flow_dev_dump(struct flow_eth_dev *dev,
 	FILE *file,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG(ERR, FILTER, "%s: profile_inline module uninitialized", __func__);
 		return -1;
 	}
 
-	return profile_inline_ops->flow_dev_dump_profile_inline(dev, flow, caller_id, file, error);
+	return profile_inline_ops->nthw_flow_dev_dump_profile_inline(dev,
+		flow, caller_id, file, error);
 }
 
 static int flow_get_aged_flows(struct flow_eth_dev *dev,
@@ -1029,7 +1031,7 @@ static int flow_get_aged_flows(struct flow_eth_dev *dev,
 	uint32_t nb_contexts,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline_ops uninitialized");
@@ -1042,7 +1044,7 @@ static int flow_get_aged_flows(struct flow_eth_dev *dev,
 		return -1;
 	}
 
-	return profile_inline_ops->flow_get_aged_flows_profile_inline(dev, caller_id, context,
+	return profile_inline_ops->nthw_flow_get_aged_flows_profile_inline(dev, caller_id, context,
 			nb_contexts, error);
 }
 
@@ -1050,14 +1052,14 @@ static int flow_info_get(struct flow_eth_dev *dev, uint8_t caller_id,
 	struct rte_flow_port_info *port_info, struct rte_flow_queue_info *queue_info,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_info_get_profile_inline(dev, caller_id, port_info,
+	return profile_inline_ops->nthw_flow_info_get_profile_inline(dev, caller_id, port_info,
 			queue_info, error);
 }
 
@@ -1065,14 +1067,14 @@ static int flow_configure(struct flow_eth_dev *dev, uint8_t caller_id,
 	const struct rte_flow_port_attr *port_attr, uint16_t nb_queue,
 	const struct rte_flow_queue_attr *queue_attr[], struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_configure_profile_inline(dev, caller_id, port_attr,
+	return profile_inline_ops->nthw_flow_configure_profile_inline(dev, caller_id, port_attr,
 			nb_queue, queue_attr, error);
 }
 
@@ -1085,29 +1087,29 @@ flow_pattern_template_create(struct flow_eth_dev *dev,
 	const struct rte_flow_pattern_template_attr *template_attr, uint16_t caller_id,
 	const struct rte_flow_item pattern[], struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 			return NULL;
 	}
 
-	return profile_inline_ops->flow_pattern_template_create_profile_inline(dev, template_attr,
-		caller_id, pattern, error);
+	return profile_inline_ops->nthw_flow_pattern_template_create_profile_inline(dev,
+		template_attr, caller_id, pattern, error);
 }
 
 static int flow_pattern_template_destroy(struct flow_eth_dev *dev,
 	struct flow_pattern_template *pattern_template,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_pattern_template_destroy_profile_inline(dev,
+	return profile_inline_ops->nthw_flow_pattern_template_destroy_profile_inline(dev,
 			pattern_template,
 			error);
 }
@@ -1118,29 +1120,29 @@ flow_actions_template_create(struct flow_eth_dev *dev,
 	const struct rte_flow_action actions[], const struct rte_flow_action masks[],
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return NULL;
 	}
 
-	return profile_inline_ops->flow_actions_template_create_profile_inline(dev, template_attr,
-		caller_id, actions, masks, error);
+	return profile_inline_ops->nthw_flow_actions_template_create_profile_inline(dev,
+		template_attr, caller_id, actions, masks, error);
 }
 
 static int flow_actions_template_destroy(struct flow_eth_dev *dev,
 	struct flow_actions_template *actions_template,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_actions_template_destroy_profile_inline(dev,
+	return profile_inline_ops->nthw_flow_actions_template_destroy_profile_inline(dev,
 			actions_template,
 			error);
 }
@@ -1151,14 +1153,14 @@ static struct flow_template_table *flow_template_table_create(struct flow_eth_de
 	uint8_t nb_pattern_templates, struct flow_actions_template *actions_templates[],
 	uint8_t nb_actions_templates, struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return NULL;
 	}
 
-	return profile_inline_ops->flow_template_table_create_profile_inline(dev, table_attr,
+	return profile_inline_ops->nthw_flow_template_table_create_profile_inline(dev, table_attr,
 		forced_vlan_vid, caller_id, pattern_templates, nb_pattern_templates,
 		actions_templates, nb_actions_templates, error);
 }
@@ -1167,15 +1169,15 @@ static int flow_template_table_destroy(struct flow_eth_dev *dev,
 	struct flow_template_table *template_table,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_template_table_destroy_profile_inline(dev, template_table,
-			error);
+	return profile_inline_ops->nthw_flow_template_table_destroy_profile_inline(dev,
+		template_table, error);
 }
 
 static struct flow_handle *
@@ -1185,14 +1187,14 @@ flow_async_create(struct flow_eth_dev *dev, uint32_t queue_id,
 	const struct rte_flow_action actions[], uint8_t actions_template_index, void *user_data,
 	struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return NULL;
 	}
 
-	return profile_inline_ops->flow_async_create_profile_inline(dev, queue_id, op_attr,
+	return profile_inline_ops->nthw_flow_async_create_profile_inline(dev, queue_id, op_attr,
 			template_table, pattern, pattern_template_index, actions,
 			actions_template_index, user_data, error);
 }
@@ -1201,38 +1203,52 @@ static int flow_async_destroy(struct flow_eth_dev *dev, uint32_t queue_id,
 	const struct rte_flow_op_attr *op_attr, struct flow_handle *flow,
 	void *user_data, struct rte_flow_error *error)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL) {
 		NT_LOG_DBGX(ERR, FILTER, "profile_inline module uninitialized");
 		return -1;
 	}
 
-	return profile_inline_ops->flow_async_destroy_profile_inline(dev, queue_id, op_attr, flow,
-			user_data, error);
+	return profile_inline_ops->nthw_flow_async_destroy_profile_inline(dev, queue_id,
+		op_attr, flow, user_data, error);
 }
+
+static int flow_pull(struct flow_eth_dev *dev, uint16_t caller_id, uint32_t queue_id,
+	struct rte_flow_op_result res[], uint16_t n_res, struct rte_flow_error *error)
+{
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
+	if (profile_inline_ops == NULL) {
+		NT_LOG(ERR, FILTER, "profile_inline module uninitialized");
+		return -1;
+	}
+
+	return profile_inline_ops->nthw_flow_pull_profile_inline(dev, caller_id,
+		queue_id, res, n_res, error);
+}
+
 int nthw_flow_get_flm_stats(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL)
 		return -1;
 
 	if (ndev->flow_profile == FLOW_ETH_DEV_PROFILE_INLINE)
-		return profile_inline_ops->flow_get_flm_stats_profile_inline(ndev, data, size);
+		return profile_inline_ops->nthw_flow_get_flm_stats_profile_inline(ndev, data, size);
 
 	return -1;
 }
 
 int nthw_flow_get_ifr_stats(struct flow_nic_dev *ndev, uint64_t *data, uint8_t port_count)
 {
-	const struct profile_inline_ops *profile_inline_ops = get_profile_inline_ops();
+	const struct profile_inline_ops *profile_inline_ops = nthw_get_profile_inline_ops();
 
 	if (profile_inline_ops == NULL)
 		return -1;
 
 	if (ndev->flow_profile == FLOW_ETH_DEV_PROFILE_INLINE) {
-		return profile_inline_ops->flow_get_ifr_stats_profile_inline(ndev, data,
+		return profile_inline_ops->nthw_flow_get_ifr_stats_profile_inline(ndev, data,
 				port_count);
 	}
 
@@ -1271,14 +1287,15 @@ static const struct flow_filter_ops ops = {
 	.flow_template_table_destroy = flow_template_table_destroy,
 	.flow_async_create = flow_async_create,
 	.flow_async_destroy = flow_async_destroy,
+	.flow_pull = flow_pull,
 
 	/*
 	 * Other
 	 */
-	 .hw_mod_hsh_rcp_flush = hw_mod_hsh_rcp_flush,
+	 .nthw_mod_hsh_rcp_flush = nthw_mod_hsh_rcp_flush,
 };
 
 void nthw_init_flow_filter(void)
 {
-	register_flow_filter_ops(&ops);
+	nthw_reg_flow_filter_ops(&ops);
 }

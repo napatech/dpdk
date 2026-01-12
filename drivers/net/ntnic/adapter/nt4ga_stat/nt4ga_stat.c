@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -128,7 +127,7 @@ static int nt4ga_stat_setup(struct adapter_info_s *p_adapter_info)
 		int numa_node = p_adapter_info->fpga_info.numa_node;
 
 		/* FPGA needs a 16K alignment on Statistics */
-		p_dma = nt_dma_alloc(n_stat_size, 0x4000, numa_node);
+		p_dma = nthw_dma_alloc(n_stat_size, 0x4000, numa_node);
 
 		if (!p_dma) {
 			NT_LOG_DBGX(ERR, NTNIC, "p_dma alloc failed");
@@ -191,7 +190,7 @@ static int nt4ga_stat_setup(struct adapter_info_s *p_adapter_info)
 		return -1;
 	}
 
-	if (get_flow_filter_ops() != NULL) {
+	if (nthw_get_flow_filter_ops() != NULL) {
 		struct flow_nic_dev *ndev = p_adapter_info->nt4ga_filter.mp_flow_device;
 		p_nt4ga_stat->flm_stat_ver = ndev->be.flm.ver;
 		p_nt4ga_stat->mp_stat_structs_flm = calloc(1, sizeof(struct flm_counters_v1));
@@ -244,7 +243,7 @@ static int nt4ga_stat_collect_cap_v1_stats(struct adapter_info_s *p_adapter_info
 	uint32_t *p_stat_dma_virtual)
 {
 	(void)p_adapter_info;
-	const struct flow_filter_ops *flow_filter_ops = get_flow_filter_ops();
+	const struct flow_filter_ops *flow_filter_ops = nthw_get_flow_filter_ops();
 
 	if (flow_filter_ops == NULL || p_nt4ga_stat == NULL)
 		return -1;
@@ -593,8 +592,8 @@ static struct nt4ga_stat_ops ops = {
 	.nt4ga_stat_collect = nt4ga_stat_collect
 };
 
-void nt4ga_stat_ops_init(void)
+void nthw_stat_ops_init(void)
 {
 	NT_LOG_DBGX(DBG, NTNIC, "Stat module was initialized");
-	register_nt4ga_stat_ops(&ops);
+	nthw_reg_nt4ga_stat_ops(&ops);
 }

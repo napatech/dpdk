@@ -71,6 +71,7 @@ libraries = [
 ]
 
 always_enable = [
+        'argparse',
         'cmdline',
         'eal',
         'ethdev',
@@ -208,13 +209,9 @@ foreach l:libraries
 
     dpdk_libs_enabled += name
     dpdk_conf.set('RTE_LIB_' + name.to_upper(), 1)
-    install_headers(headers)
-    install_headers(indirect_headers)
-    if get_option('enable_driver_sdk')
-        install_headers(driver_sdk_headers)
-    endif
-    dpdk_chkinc_headers += headers
-    dpdk_chkinc_headers += driver_sdk_headers
+    dpdk_headers += headers
+    dpdk_indirect_headers += indirect_headers
+    dpdk_drivers_headers += driver_sdk_headers
 
     libname = 'rte_' + name
     includes += include_directories(l)
@@ -244,7 +241,7 @@ foreach l:libraries
         cflags += '-DRTE_USE_FUNCTION_VERSIONING'
     endif
     cflags += '-DRTE_LOG_DEFAULT_LOGTYPE=lib.' + l
-    if annotate_locks and cc.get_id() == 'clang' and cc.version().version_compare('>=3.5.0')
+    if annotate_locks and cc.get_id() == 'clang'
         cflags += '-DRTE_ANNOTATE_LOCKS'
         cflags += '-Wthread-safety'
     endif

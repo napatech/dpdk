@@ -80,6 +80,34 @@
 #define ICE_TX_OFFLOAD_NOTSUP_MASK \
 		(RTE_MBUF_F_TX_OFFLOAD_MASK ^ ICE_TX_OFFLOAD_MASK)
 
+/* basic scalar path */
+#define ICE_RX_SCALAR_OFFLOADS (				\
+			RTE_ETH_RX_OFFLOAD_VLAN_STRIP |		\
+			RTE_ETH_RX_OFFLOAD_KEEP_CRC |		\
+			RTE_ETH_RX_OFFLOAD_SCATTER |		\
+			RTE_ETH_RX_OFFLOAD_VLAN_FILTER |	\
+			RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |		\
+			RTE_ETH_RX_OFFLOAD_UDP_CKSUM |		\
+			RTE_ETH_RX_OFFLOAD_TCP_CKSUM |		\
+			RTE_ETH_RX_OFFLOAD_QINQ_STRIP |		\
+			RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |	\
+			RTE_ETH_RX_OFFLOAD_VLAN_EXTEND |	\
+			RTE_ETH_RX_OFFLOAD_RSS_HASH |		\
+			RTE_ETH_RX_OFFLOAD_TIMESTAMP |		\
+			RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT)
+/* basic vector paths */
+#define ICE_RX_VECTOR_OFFLOADS (				\
+			RTE_ETH_RX_OFFLOAD_KEEP_CRC |		\
+			RTE_ETH_RX_OFFLOAD_SCATTER |		\
+			RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM)
+/* vector offload paths */
+#define ICE_RX_VECTOR_OFFLOAD_OFFLOADS (	\
+		ICE_RX_VECTOR_OFFLOADS |	\
+		RTE_ETH_RX_OFFLOAD_CHECKSUM |	\
+		RTE_ETH_RX_OFFLOAD_VLAN_STRIP |	\
+		RTE_ETH_RX_OFFLOAD_VLAN_FILTER |\
+		RTE_ETH_RX_OFFLOAD_RSS_HASH)
+
 /* Max header size can be 2K - 64 bytes */
 #define ICE_RX_HDR_BUF_SIZE    (2048 - 64)
 
@@ -201,7 +229,7 @@ uint16_t ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 void ice_set_tx_function_flag(struct rte_eth_dev *dev,
 			      struct ci_tx_queue *txq);
 void ice_set_tx_function(struct rte_eth_dev *dev);
-uint32_t ice_rx_queue_count(void *rx_queue);
+int ice_rx_queue_count(void *rx_queue);
 void ice_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		      struct rte_eth_rxq_info *qinfo);
 void ice_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
@@ -261,6 +289,7 @@ uint16_t ice_xmit_pkts_vec_avx512_offload(void *tx_queue,
 int ice_fdir_programming(struct ice_pf *pf, struct ice_fltr_desc *fdir_desc);
 int ice_tx_done_cleanup(void *txq, uint32_t free_cnt);
 int ice_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc);
+enum rte_vect_max_simd ice_get_max_simd_bitwidth(void);
 
 #define FDIR_PARSING_ENABLE_PER_QUEUE(ad, on) do { \
 	int i; \

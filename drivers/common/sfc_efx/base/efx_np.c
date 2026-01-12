@@ -397,8 +397,7 @@ efx_np_link_state(
 	v3_flags = MCDI_OUT_DWORD(req, LINK_STATE_OUT_V3_FLAGS);
 	memset(lsp, 0, sizeof (*lsp));
 
-	if (status_flags & (1U << MC_CMD_LINK_STATUS_FLAGS_AN_ABLE) &&
-	    MCDI_OUT_DWORD(req, LINK_STATE_OUT_V2_LOCAL_AN_SUPPORT) !=
+	if (MCDI_OUT_DWORD(req, LINK_STATE_OUT_V2_LOCAL_AN_SUPPORT) !=
 	    MC_CMD_AN_NONE)
 		lsp->enls_an_supported = B_TRUE;
 
@@ -437,7 +436,7 @@ efx_np_link_state(
 	    MCDI_OUT2(req, const uint8_t, LINK_STATE_OUT_ADVERTISED_ABILITIES),
 	    &lsp->enls_adv_cap_mask);
 
-	if (lsp->enls_an_supported != B_FALSE)
+	if (status_flags & (1U << MC_CMD_LINK_STATUS_FLAGS_AN_ABLE))
 		lsp->enls_lp_cap_mask |= 1U << EFX_PHY_CAP_AN;
 
 	efx_np_cap_hw_data_to_sw_mask(
@@ -750,7 +749,7 @@ efx_np_stat_describe(
 	return;
 
 found:
-	if (sw_id >= lut_nentries) {
+	if ((unsigned int)sw_id >= lut_nentries) {
 		/*
 		 * Static mapping size and the size of lookup
 		 * table are out-of-sync. Should never happen.
@@ -782,7 +781,6 @@ efx_np_stats_describe(
 	EFX_MCDI_DECLARE_BUF(payload,
 	    MC_CMD_MAC_STATISTICS_DESCRIPTOR_IN_LEN,
 	    MC_CMD_MAC_STATISTICS_DESCRIPTOR_OUT_LENMAX_MCDI2);
-	efx_port_t *epp = &(enp->en_port);
 	uint32_t nprocessed;
 	efx_mcdi_req_t req;
 	uint8_t *entries;
@@ -1024,6 +1022,15 @@ efx_np_attach(
 
 	epp->ep_mac_pdu = ms.enms_pdu;
 
+	/* For faster link up, use autoneg. flow control by default. */
+	epp->ep_fcntl_autoneg = B_TRUE;
+
+	/*
+	 * We have no way of knowing which 'FEC_MODE' choice the previous
+	 * client driver passed via 'LINK_CTRL'. Assume 'AUTO' by default.
+	 */
+	epp->ep_np_prev_fec_ctrl = MC_CMD_FEC_AUTO;
+
 	/* Subscribe to link change events. */
 	rc = efx_np_set_event_mask(enp, epp->ep_np_handle, B_TRUE);
 	if (rc != 0)
@@ -1186,7 +1193,6 @@ efx_np_cap_sw_mask_to_hw_enum(
 	__out_opt			uint16_t *enum_hwp)
 {
 	unsigned int sw_nflags_req = 0;
-	unsigned int sw_nflags_sup = 0;
 	uint32_t sw_check_mask = 0;
 	unsigned int i;
 
@@ -1275,6 +1281,8 @@ efx_np_link_ctrl(
 	__in		efx_link_mode_t loopback_link_mode,
 	__in		efx_loopback_type_t loopback_mode,
 	__in		efx_phy_lane_count_t lane_count,
+	__in		boolean_t keep_prev_fec_ctrl,
+	__inout		uint8_t *prev_fec_ctrlp,
 	__in		uint32_t cap_mask_sw,
 	__in		boolean_t fcntl_an)
 {
@@ -1289,7 +1297,6 @@ efx_np_link_ctrl(
 	uint16_t cap_enum_hw;
 	boolean_t supported;
 	efx_mcdi_req_t req;
-	boolean_t phy_an;
 	efx_rc_t rc;
 	uint8_t fec;
 
@@ -1352,6 +1359,7 @@ efx_np_link_ctrl(
 			    NULL, NULL, cap_mask_hw_pausep);
 		}
 
+		flags |= 1U << MC_CMD_LINK_FLAGS_PARALLEL_DETECT_EN;
 		flags |= 1U << MC_CMD_LINK_FLAGS_AUTONEG_EN;
 		link_tech = MC_CMD_ETH_TECH_AUTO;
 	} else {
@@ -1366,8 +1374,10 @@ efx_np_link_ctrl(
 		}
 	}
 
-	/* The software mask may have no requested FEC bits. Default is NONE. */
-	cap_enum_hw = MC_CMD_FEC_NONE;
+	if ((cap_mask_sw & EFX_PHY_CAP_FEC_MASK) == 0)
+		cap_enum_hw = MC_CMD_FEC_NONE;
+	else
+		cap_enum_hw = MC_CMD_FEC_AUTO;
 
 	/*
 	 * Compared to older EF10 interface, in netport MCDI, FEC mode is a
@@ -1376,17 +1386,38 @@ efx_np_link_ctrl(
 	 *
 	 * No requested FEC bits in the original mask gives supported=TRUE.
 	 */
-	EFX_NP_CAP_SW_MASK_TO_HW_ENUM(efx_np_cap_map_fec_req,
-	    ETH_AN_FIELDS_FEC_REQ, cap_data_raw, cap_mask_sw,
-	    NULL, NULL, &supported, &cap_enum_hw);
+	if (keep_prev_fec_ctrl == B_FALSE) {
+		/*
+		 * Enforce what the user has asked for. If the mask has got
+		 * no 'FEC_REQUESTED' bits, use 'NONE' or 'AUTO' from above.
+		 */
+		EFX_NP_CAP_SW_MASK_TO_HW_ENUM(efx_np_cap_map_fec_req,
+		    ETH_AN_FIELDS_FEC_REQ, cap_data_raw, cap_mask_sw,
+		    NULL, NULL, &supported, &cap_enum_hw);
 
-	if ((cap_mask_sw & EFX_PHY_CAP_FEC_MASK) != 0 && supported == B_FALSE) {
-		rc = ENOTSUP;
-		goto fail5;
+		if ((cap_mask_sw & EFX_PHY_CAP_FEC_MASK) != 0
+		    && supported == B_FALSE) {
+			rc = ENOTSUP;
+			goto fail5;
+		}
+	} else {
+		/*
+		 * At this stage, the FEC mask does not draw any input from
+		 * the client driver. If the active link was autonegotiated,
+		 * it might contain 'FEC_REQUESTED' bits translated earlier
+		 * from 'ADVERTISED_ABILITIES_FEC_REQ' of 'LINK_STATE' MCDI.
+		 * If the link is fixed, it does not have any of these bits.
+		 *
+		 * Either way, translating it into a fixed enum will result
+		 * in a fixed FEC choice. If that does not match the choice
+		 * of the previous user, a lengthy link renegotiation might
+		 * follow. Pass previous choice to avoid long link-up times.
+		 */
+		cap_enum_hw = *prev_fec_ctrlp;
 	}
 
 	EFSYS_ASSERT(cap_enum_hw <= UINT8_MAX);
-	fec = cap_enum_hw;
+	fec = (uint8_t)cap_enum_hw;
 
 	MCDI_IN_SET_WORD(req, LINK_CTRL_IN_LINK_TECHNOLOGY, link_tech);
 	MCDI_IN_SET_DWORD(req, LINK_CTRL_IN_CONTROL_FLAGS, flags);
@@ -1400,6 +1431,7 @@ efx_np_link_ctrl(
 		goto fail6;
 	}
 
+	*prev_fec_ctrlp = fec;
 	return (0);
 
 fail6:

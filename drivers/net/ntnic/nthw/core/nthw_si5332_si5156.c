@@ -1,9 +1,7 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
-#include <pthread.h>
 #include "generic/rte_spinlock.h"
 #include "nt_util.h"
 #include "ntlog.h"
@@ -43,7 +41,7 @@ int nthw_pca9849_set_channel(nthw_pca9849_t *p, uint8_t channel)
 			return res;
 
 		p->m_current_channel = channel;
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 	}
 
 	return 0;

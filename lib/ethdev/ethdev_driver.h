@@ -24,6 +24,27 @@
 extern "C" {
 #endif
 
+#define RTE_ETHDEV_QUEUE_STAT_CNTRS 16 /* max 256 */
+
+/**
+ * @internal
+ * Structure used to pass queue stats back to ethdev
+ * for drivers which rely on ethdev to add the queue stats automatically to xstats.
+ */
+struct eth_queue_stats {
+	/* Queue stats are limited to max 256 queues. */
+	/** Total number of queue Rx packets. */
+	uint64_t q_ipackets[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+	/** Total number of queue Tx packets. */
+	uint64_t q_opackets[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+	/** Total number of successfully received queue bytes. */
+	uint64_t q_ibytes[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+	/** Total number of successfully transmitted queue bytes. */
+	uint64_t q_obytes[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+	/** Total number of queue packets received that are dropped. */
+	uint64_t q_errors[RTE_ETHDEV_QUEUE_STAT_CNTRS];
+};
+
 /**
  * @internal
  * Structure used to hold information about the callbacks to be called for a
@@ -426,9 +447,21 @@ typedef int (*eth_speed_lanes_get_capability_t)(struct rte_eth_dev *dev,
 						struct rte_eth_speed_lanes_capa *speed_lanes_capa,
 						unsigned int num);
 
-/** @internal Get global I/O statistics of an Ethernet device. */
+/**
+ * @internal
+ * Get global I/O statistics of an Ethernet device.
+ *
+ * @param dev
+ *   Device being queried.
+ * @param stats
+ *   The stats structure to be completed by the driver and returned to the user.
+ * @param qstats
+ *   Any queue statistics to be returned.
+ *   @note: This parameter can be NULL
+ */
 typedef int (*eth_stats_get_t)(struct rte_eth_dev *dev,
-				struct rte_eth_stats *igb_stats);
+			       struct rte_eth_stats *stats,
+			       struct eth_queue_stats *qstats);
 
 /**
  * @internal
@@ -1875,6 +1908,77 @@ rte_eth_pkt_burst_dummy(void *queue __rte_unused,
 		uint16_t nb_pkts __rte_unused);
 
 /**
+ * @internal
+ * Dummy DPDK callback for Tx packet prepare.
+ *
+ * @param queue
+ *  Pointer to Tx queue
+ * @param pkts
+ *  Packet array
+ * @param nb_pkts
+ *  Number of packets in packet array
+ */
+__rte_internal
+uint16_t
+rte_eth_tx_pkt_prepare_dummy(void *queue __rte_unused,
+		struct rte_mbuf **pkts __rte_unused,
+		uint16_t nb_pkts __rte_unused);
+
+/**
+ * @internal
+ * Dummy DPDK callback for queue count.
+ *
+ * @param queue
+ *  Pointer to Rx/Tx queue
+ */
+__rte_internal
+int
+rte_eth_queue_count_dummy(void *queue __rte_unused);
+
+/**
+ * @internal
+ * Dummy DPDK callback for descriptor status.
+ *
+ * @param queue
+ *  Pointer to Rx/Tx queue
+ * @param offset
+ *  The offset of the descriptor starting from tail (0 is the next
+ *  packet to be received by the driver).
+ */
+__rte_internal
+int
+rte_eth_descriptor_status_dummy(void *queue __rte_unused,
+		uint16_t offset __rte_unused);
+
+/**
+ * @internal
+ * Dummy DPDK callback for recycle Tx mbufs reuse.
+ *
+ * @param queue
+ *  Pointer to Tx queue
+ * @param recycle_rxq_info
+ *  Pointer to recycle Rx queue info
+ */
+__rte_internal
+uint16_t
+rte_eth_recycle_tx_mbufs_reuse_dummy(void *queue __rte_unused,
+		struct rte_eth_recycle_rxq_info *recycle_rxq_info __rte_unused);
+
+/**
+ * @internal
+ * Dummy DPDK callback Rx descriptor refill.
+ *
+ * @param queue
+ *  Pointer Rx queue
+ * @param offset
+ *  number of descriptors to refill
+ */
+__rte_internal
+void
+rte_eth_recycle_rx_descriptors_refill_dummy(void *queue __rte_unused,
+		uint16_t nb __rte_unused);
+
+/**
  * Allocate an unique switch domain identifier.
  *
  * A pool of switch domain identifiers which can be allocated on request. This
@@ -1908,6 +2012,10 @@ __rte_internal
 int
 rte_eth_switch_domain_free(uint16_t domain_id);
 
+/* Flags for rte_eth_devargs::flags. */
+/* When enclosed in parentheses, the PF representor is not required. */
+#define RTE_ETH_DEVARG_REPRESENTOR_IGNORE_PF RTE_BIT32(0)
+
 /**
  * Generic Ethernet device arguments
  *
@@ -1922,6 +2030,7 @@ struct rte_eth_devargs {
 	/** port/s number to enable on a multi-port single function */
 	uint16_t nb_ports;
 	/** number of ports in ports field */
+	uint32_t flags; /* see RTE_ETH_DEVARG_* */
 	uint16_t representor_ports[RTE_MAX_ETHPORTS];
 	/** representor port/s identifier to enable on device */
 	uint16_t nb_representor_ports;

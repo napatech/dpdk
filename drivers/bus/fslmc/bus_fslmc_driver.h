@@ -20,7 +20,6 @@
 #include <sys/queue.h>
 #include <stdint.h>
 #include <inttypes.h>
-#include <linux/vfio.h>
 
 #include <rte_compat.h>
 #include <rte_debug.h>
@@ -36,6 +35,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+struct vfio_device_info;
 
 #define FSLMC_OBJECT_MAX_LEN 32   /**< Length of each device on bus */
 
@@ -81,6 +82,7 @@ enum rte_dpaa2_dev_type {
 	DPAA2_MPORTAL,  /**< DPMCP type device */
 	DPAA2_QDMA,     /**< DPDMAI type device */
 	DPAA2_MUX,	/**< DPDMUX type device */
+	DPAA2_SW,       /**< DPSW type device */
 	DPAA2_DPRTC,	/**< DPRTC type device */
 	DPAA2_DPRC,	/**< DPRC type device */
 	DPAA2_MAC,	/**< DPMAC type device */
@@ -95,12 +97,6 @@ enum rte_dpaa2_dev_type {
 struct rte_dpaa2_device {
 	TAILQ_ENTRY(rte_dpaa2_device) next; /**< Next probed DPAA2 device. */
 	struct rte_device device;           /**< Inherit core device */
-	union {
-		struct rte_eth_dev *eth_dev;        /**< ethernet device */
-		struct rte_cryptodev *cryptodev;    /**< Crypto Device */
-		struct rte_dma_dev *dmadev;          /**< DMA Device */
-		struct rte_rawdev *rawdev;          /**< Raw Device */
-	};
 	enum rte_dpaa2_dev_type dev_type;   /**< Device Type */
 	uint16_t object_id;                 /**< DPAA2 Object ID */
 	enum rte_dpaa2_dev_type ep_dev_type;   /**< Endpoint Device Type */

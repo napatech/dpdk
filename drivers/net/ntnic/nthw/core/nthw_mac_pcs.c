@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -15,6 +14,11 @@
 
 static const uint8_t c_pcs_lanes = NTHW_MAC_PCS_LANES;
 static const uint8_t c_mac_pcs_receiver_mode_dfe;
+
+static void nthw_mac_pcs_set_port_no(nthw_mac_pcs_t *p, uint8_t port_no)
+{
+	p->m_port_no = port_no;
+}
 
 /*
  * Parameters:
@@ -424,17 +428,6 @@ void nthw_mac_pcs_set_tx_sel_host(nthw_mac_pcs_t *p, bool enable)
 		nthw_field_clr_flush(p->mp_fld_phymac_misc_tx_sel_host);
 }
 
-void nthw_mac_pcs_set_tx_sel_tfg(nthw_mac_pcs_t *p, bool enable)
-{
-	nthw_field_get_updated(p->mp_fld_phymac_misc_tx_sel_tfg);
-
-	if (enable)
-		nthw_field_set_flush(p->mp_fld_phymac_misc_tx_sel_tfg);
-
-	else
-		nthw_field_clr_flush(p->mp_fld_phymac_misc_tx_sel_tfg);
-}
-
 void nthw_mac_pcs_set_ts_eop(nthw_mac_pcs_t *p, bool enable)
 {
 	if (p->mp_fld_phymac_misc_ts_eop) {
@@ -448,7 +441,7 @@ void nthw_mac_pcs_set_ts_eop(nthw_mac_pcs_t *p, bool enable)
 	}
 }
 
-void nthw_mac_pcs_tx_path_rst(nthw_mac_pcs_t *p, bool enable)
+static void nthw_mac_pcs_tx_path_rst(nthw_mac_pcs_t *p, bool enable)
 {
 	nthw_field_get_updated(p->mp_fld_pcs_config_tx_path_rst);
 
@@ -579,21 +572,6 @@ void nthw_mac_pcs_get_link_summary(nthw_mac_pcs_t *p,
 		*p_remote_fault = nthw_field_get_val32(p->mp_fld_link_summary_remote_fault);
 }
 
-/*
- * Returns true if the lane/block lock bits indicate that a reset is required.
- * This is the case if Block/Lane lock is not all zero but not all set either.
- */
-bool nthw_mac_pcs_reset_required(nthw_mac_pcs_t *p)
-{
-	uint32_t block_lock = nthw_mac_pcs_get_fld_block_lock_lock(p);
-	uint32_t lane_lock = nthw_mac_pcs_get_fld_lane_lock_lock(p);
-	uint32_t block_lock_mask = nthw_mac_pcs_get_fld_block_lock_lock_mask(p);
-	uint32_t lane_lock_mask = nthw_mac_pcs_get_fld_lane_lock_lock_mask(p);
-
-	return ((block_lock != 0) && (block_lock != block_lock_mask)) ||
-		((lane_lock != 0) && (lane_lock != lane_lock_mask));
-}
-
 void nthw_mac_pcs_set_fec(nthw_mac_pcs_t *p, bool enable)
 {
 	NT_LOG(DBG, NTHW, "Port %u: Set FEC: %u", p->m_port_no, enable);
@@ -609,11 +587,11 @@ void nthw_mac_pcs_set_fec(nthw_mac_pcs_t *p, bool enable)
 	/* Both Rx and Tx must be reset for new FEC state to become active */
 	nthw_mac_pcs_rx_path_rst(p, true);
 	nthw_mac_pcs_tx_path_rst(p, true);
-	nt_os_wait_usec(10000);	/* 10ms */
+	nthw_os_wait_usec(10000);	/* 10ms */
 
 	nthw_mac_pcs_rx_path_rst(p, false);
 	nthw_mac_pcs_tx_path_rst(p, false);
-	nt_os_wait_usec(10000);	/* 10ms */
+	nthw_os_wait_usec(10000);	/* 10ms */
 }
 
 bool nthw_mac_pcs_get_fec_bypass(nthw_mac_pcs_t *p)
@@ -761,7 +739,7 @@ void nthw_mac_pcs_set_receiver_equalization_mode(nthw_mac_pcs_t *p, uint8_t mode
 	nthw_field_set_val32(p->mp_field_gty_ctl_rx_equa_rst2, 1);
 	nthw_field_set_val_flush32(p->mp_field_gty_ctl_rx_equa_rst3, 1);
 
-	nt_os_wait_usec(1000);	/* 1ms */
+	nthw_os_wait_usec(1000);	/* 1ms */
 
 	nthw_field_set_val32(p->mp_field_gty_ctl_rx_equa_rst0, 0);
 	nthw_field_set_val32(p->mp_field_gty_ctl_rx_equa_rst1, 0);
@@ -838,27 +816,37 @@ void nthw_mac_pcs_set_timestamp_comp_rx(nthw_mac_pcs_t *p, uint16_t rx_dly)
 	}
 }
 
-void nthw_mac_pcs_set_port_no(nthw_mac_pcs_t *p, uint8_t port_no)
-{
-	p->m_port_no = port_no;
-}
-
-uint32_t nthw_mac_pcs_get_fld_block_lock_lock(nthw_mac_pcs_t *p)
+static uint32_t nthw_mac_pcs_get_fld_block_lock_lock(nthw_mac_pcs_t *p)
 {
 	return nthw_field_get_updated(p->mp_fld_block_lock_lock);
 }
 
-uint32_t nthw_mac_pcs_get_fld_block_lock_lock_mask(nthw_mac_pcs_t *p)
+static uint32_t nthw_mac_pcs_get_fld_block_lock_lock_mask(nthw_mac_pcs_t *p)
 {
 	return p->m_fld_block_lock_lock_mask;
 }
 
-uint32_t nthw_mac_pcs_get_fld_lane_lock_lock(nthw_mac_pcs_t *p)
+static uint32_t nthw_mac_pcs_get_fld_lane_lock_lock(nthw_mac_pcs_t *p)
 {
 	return nthw_field_get_updated(p->mp_fld_vl_demuxed_lock);
 }
 
-uint32_t nthw_mac_pcs_get_fld_lane_lock_lock_mask(nthw_mac_pcs_t *p)
+static uint32_t nthw_mac_pcs_get_fld_lane_lock_lock_mask(nthw_mac_pcs_t *p)
 {
 	return p->m_fld_vl_demuxed_lock_mask;
+}
+
+/*
+ * Returns true if the lane/block lock bits indicate that a reset is required.
+ * This is the case if Block/Lane lock is not all zero but not all set either.
+ */
+bool nthw_mac_pcs_reset_required(nthw_mac_pcs_t *p)
+{
+	uint32_t block_lock = nthw_mac_pcs_get_fld_block_lock_lock(p);
+	uint32_t lane_lock = nthw_mac_pcs_get_fld_lane_lock_lock(p);
+	uint32_t block_lock_mask = nthw_mac_pcs_get_fld_block_lock_lock_mask(p);
+	uint32_t lane_lock_mask = nthw_mac_pcs_get_fld_lane_lock_lock_mask(p);
+
+	return ((block_lock != 0) && (block_lock != block_lock_mask)) ||
+		((lane_lock != 0) && (lane_lock != lane_lock_mask));
 }

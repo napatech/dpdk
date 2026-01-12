@@ -829,9 +829,6 @@ bnxt_ulp_promisc_mode_set(struct bnxt *bp, uint8_t enable)
 	    !bp->ulp_ctx)
 		return rc;
 
-	if (!BNXT_CHIP_P5(bp))
-		return rc;
-
 	port_id = bp->eth_dev->data->port_id;
 	info = &bp->ulp_ctx->cfg_data->df_rule_info[port_id];
 
@@ -963,12 +960,6 @@ bnxt_ulp_grp_miss_act_set(struct rte_eth_dev *dev,
 	/* Perform the rte flow post process */
 	bnxt_ulp_rte_parser_post_process(&params);
 
-#ifdef	RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef	RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_PARSER
-	/* Dump the rte flow action */
-	ulp_parser_act_info_dump(&params);
-#endif
-#endif
 
 	ret = ulp_matcher_action_match(&params, &params.act_tmpl);
 	if (unlikely(ret != BNXT_TF_RC_SUCCESS))
@@ -992,4 +983,33 @@ release_lock:
 	bnxt_ulp_cntxt_release_fdb_lock(ulp_ctx);
 flow_error:
 	return ret;
+}
+
+int32_t
+bnxt_ulp_hot_upgrade_process(struct bnxt *bp)
+{
+	uint32_t flow_type = BNXT_ULP_TEMPLATE_HOT_UPGRADE;
+	uint16_t port_id = bp->eth_dev->data->port_id;
+	struct ulp_tlv_param param_list[] = {
+		{
+			.type = BNXT_ULP_DF_PARAM_TYPE_DEV_PORT_ID,
+			.length = 2,
+			.value = {(port_id >> 8) & 0xff, port_id & 0xff}
+		},
+		{
+			.type = BNXT_ULP_DF_PARAM_TYPE_LAST,
+			.length = 0,
+			.value = {0}
+		}
+	};
+
+	if (!BNXT_CHIP_P7(bp))
+		return -EPERM;
+
+	if (ulp_flow_template_process(bp, param_list, flow_type,
+				      port_id, 0))
+		return -EIO;
+
+	BNXT_DRV_DBG(DEBUG, "Hot upgrade operation performed\n");
+	return 0;
 }

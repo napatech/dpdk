@@ -613,8 +613,11 @@ cnxk_nix_mtu_set(struct rte_eth_dev *eth_dev, uint16_t mtu)
 	 */
 	if (data->dev_started && frame_size > buffsz &&
 	    !(dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SCATTER)) {
-		plt_err("Scatter offload is not enabled for mtu");
-		goto exit;
+		if (!roc_nix_is_sdp(nix)) {
+			plt_err("Scatter offload is not enabled for mtu");
+			goto exit;
+		}
+		plt_warn("Scatter offload is not enabled for mtu on SDP interface");
 	}
 
 	/* Check <seg size> * <max_seg>  >= max_frame */
@@ -887,7 +890,7 @@ cnxk_nix_txq_info_get(struct rte_eth_dev *eth_dev, uint16_t qid,
 	memcpy(&qinfo->conf, &txq_sp->qconf.conf.tx, sizeof(qinfo->conf));
 }
 
-uint32_t
+int
 cnxk_nix_rx_queue_count(void *rxq)
 {
 	struct cnxk_eth_rxq_sp *rxq_sp = cnxk_eth_rxq_to_sp(rxq);

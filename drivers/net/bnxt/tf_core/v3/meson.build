@@ -21,7 +21,8 @@ sources += files(
         'tfc_idx_tbl.c',
         'tfc_if_tbl.c',
         'tfc_init.c',
-        'tfc_mpc_table.c',
+        'tfc_mpc_debug.c',
+        'tfc_tcam_debug.c',
         'tfc_msg.c',
         'tfc_priv.c',
         'tfc_resources.c',
@@ -31,4 +32,5 @@ sources += files(
         'tfc_util.c',
         'tfo.c',
         'tfc_vf2pf_msg.c',
+        'tfc_hot_upgrade.c',
 )

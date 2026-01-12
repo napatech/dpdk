@@ -67,6 +67,30 @@ enum i40e_header_split_mode {
 			       I40E_HEADER_SPLIT_UDP_TCP | \
 			       I40E_HEADER_SPLIT_SCTP)
 
+#define I40E_RX_SCALAR_OFFLOADS (			\
+		RTE_ETH_RX_OFFLOAD_VLAN_STRIP |		\
+		RTE_ETH_RX_OFFLOAD_QINQ_STRIP |		\
+		RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_UDP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_TCP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |	\
+		RTE_ETH_RX_OFFLOAD_KEEP_CRC |		\
+		RTE_ETH_RX_OFFLOAD_SCATTER |		\
+		RTE_ETH_RX_OFFLOAD_VLAN_EXTEND |	\
+		RTE_ETH_RX_OFFLOAD_VLAN_FILTER |	\
+		RTE_ETH_RX_OFFLOAD_RSS_HASH)
+
+#define I40E_RX_VECTOR_OFFLOADS (			\
+		RTE_ETH_RX_OFFLOAD_VLAN_STRIP |		\
+		RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_UDP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_TCP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |	\
+		RTE_ETH_RX_OFFLOAD_KEEP_CRC |		\
+		RTE_ETH_RX_OFFLOAD_SCATTER |		\
+		RTE_ETH_RX_OFFLOAD_VLAN_FILTER |	\
+		RTE_ETH_RX_OFFLOAD_RSS_HASH)
+
 /** Offload features */
 union i40e_tx_offload {
 	uint64_t data;
@@ -126,7 +150,7 @@ int i40e_tx_done_cleanup(void *txq, uint32_t free_cnt);
 int i40e_alloc_rx_queue_mbufs(struct ci_rx_queue *rxq);
 void i40e_rx_queue_release_mbufs(struct ci_rx_queue *rxq);
 
-uint32_t i40e_dev_rx_queue_count(void *rx_queue);
+int i40e_dev_rx_queue_count(void *rx_queue);
 int i40e_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
 int i40e_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);
 
@@ -167,6 +191,7 @@ uint16_t i40e_recv_scattered_pkts_vec_avx512(void *rx_queue,
 uint16_t i40e_xmit_pkts_vec_avx512(void *tx_queue,
 				   struct rte_mbuf **tx_pkts,
 				   uint16_t nb_pkts);
+enum rte_vect_max_simd i40e_get_max_simd_bitwidth(void);
 
 /* For each value it means, datasheet of hardware can tell more details
  *

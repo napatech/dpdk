@@ -5,9 +5,11 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <eal_export.h>
 #include <rte_log.h>
+#include <rte_os.h>
 
 #include "rte_argparse.h"
 
@@ -53,6 +55,7 @@ is_valid_value_type_field(const struct rte_argparse_arg *arg)
 	case RTE_ARGPARSE_VALUE_TYPE_U64:
 	case RTE_ARGPARSE_VALUE_TYPE_STR:
 	case RTE_ARGPARSE_VALUE_TYPE_BOOL:
+	case RTE_ARGPARSE_VALUE_TYPE_CORELIST:
 		return true;
 	/* omit default case so compiler warns on any missing enum values */
 	}
@@ -286,6 +289,13 @@ verify_argparse(const struct rte_argparse *obj, size_t *nb_args)
 		return -EINVAL;
 	}
 
+	for (idx = 0; idx < RTE_DIM(obj->reserved_flags); idx++) {
+		if (obj->reserved_flags[idx]) {
+			ARGPARSE_LOG(ERR, "reserved flags cannot be set!");
+			return -EINVAL;
+		}
+	}
+
 	for (idx = 0; idx < RTE_DIM(obj->reserved); idx++) {
 		if (obj->reserved[idx] != 0) {
 			ARGPARSE_LOG(ERR, "reserved field must be zero!");
@@ -295,6 +305,10 @@ verify_argparse(const struct rte_argparse *obj, size_t *nb_args)
 
 	idx = 0;
 	while (obj->args[idx].name_long != NULL) {
+		if (is_arg_positional(&obj->args[idx]) && obj->ignore_non_flag_args) {
+			ARGPARSE_LOG(ERR, "Error validating argparse object: positional args are not allowed when ignore_non_flag_args is set!");
+			return -EINVAL;
+		}
 		ret = verify_argparse_arg(obj, idx);
 		if (ret != 0)
 			return ret;
@@ -555,6 +569,77 @@ parse_arg_bool(const struct rte_argparse_arg *arg, const char *value)
 }
 
 static int
+parse_arg_corelist(const struct rte_argparse_arg *arg, const char *value)
+{
+	rte_cpuset_t *cpuset = arg->val_saver;
+	const char *last = value;
+	int min = -1;
+
+	if (value == NULL) {
+		*cpuset = *(rte_cpuset_t *)arg->val_set;
+		return 0;
+	}
+
+	CPU_ZERO(cpuset);
+	while (*last != '\0') {
+		char *end;
+		int64_t idx;
+		int32_t max;
+
+		while (isblank(*value))
+			value++;
+
+		if (!isdigit(*value)) {
+			ARGPARSE_LOG(ERR, "argument %s has an unexpected non digit character!",
+				arg->name_long);
+			return -EINVAL;
+		}
+
+		errno = 0;
+		idx = strtol(value, &end, 10);
+		last = end;
+		if (errno || idx > UINT16_MAX) {
+			ARGPARSE_LOG(ERR, "argument %s contains a numerical value out of range!",
+				arg->name_long);
+			return -EINVAL;
+		}
+
+		if (*end == '-') {
+			if (min != -1) { /* can't have '-' within a range */
+				ARGPARSE_LOG(ERR, "argument %s has an unexpected - character!",
+					arg->name_long);
+				return -EINVAL;
+			}
+			min = idx; /* start of range, move to next loop stage */
+		} else if (*end == ',' || *end == '\0') {
+			/* single value followed by comma or end (min is set only by '-') */
+			if (min == -1) {
+				min = max = idx;
+			} else if (min > idx) {
+				/* we have range from high to low */
+				max = min;
+				min = idx;
+			} else {
+				/* range from low to high */
+				max = idx;
+			}
+
+			for (; min <= max; min++)
+				CPU_SET(min, cpuset);
+
+			min = -1; /* no longer in a range */
+		} else {
+			/* end is an unexpected character, return error */
+			ARGPARSE_LOG(ERR, "argument %s has an unexpected character!",
+				arg->name_long);
+			return -EINVAL;
+		}
+		value = last + 1;
+	}
+	return 0;
+}
+
+static int
 parse_arg_autosave(const struct rte_argparse_arg *arg, const char *value)
 {
 	switch (arg->value_type) {
@@ -575,6 +660,8 @@ parse_arg_autosave(const struct rte_argparse_arg *arg, const char *value)
 		return parse_arg_str(arg, value);
 	case RTE_ARGPARSE_VALUE_TYPE_BOOL:
 		return parse_arg_bool(arg, value);
+	case RTE_ARGPARSE_VALUE_TYPE_CORELIST:
+		return parse_arg_corelist(arg, value);
 	/* omit default case so compiler warns on missing enum values */
 	}
 	return -EINVAL;
@@ -613,12 +700,20 @@ parse_args(const struct rte_argparse *obj, bool *arg_parsed,
 	const struct rte_argparse_arg *arg;
 	uint32_t position_index = 0;
 	const char *arg_name;
+	size_t n_args_to_move;
+	char **args_to_move;
 	uint32_t arg_idx;
 	char *curr_argv;
-	char *has_equal;
 	char *value;
 	int ret;
 	int i;
+
+	n_args_to_move = 0;
+	args_to_move = calloc(argc, sizeof(args_to_move[0]));
+	if (args_to_move == NULL) {
+		ARGPARSE_LOG(ERR, "failed to allocate memory for internal flag processing!");
+		return -ENOMEM;
+	}
 
 	for (i = 1; i < argc; i++) {
 		curr_argv = argv[i];
@@ -629,16 +724,23 @@ parse_args(const struct rte_argparse *obj, bool *arg_parsed,
 		}
 
 		if (curr_argv[0] != '-') {
+			if (obj->ignore_non_flag_args) {
+				/* Move non-flag args to args_to_move array. */
+				args_to_move[n_args_to_move++] = curr_argv;
+				argv[i] = NULL;
+				continue;
+			}
 			/* process positional parameters. */
 			position_index++;
 			if (position_index > position_count) {
 				ARGPARSE_LOG(ERR, "too many positional arguments %s!", curr_argv);
-				return -EINVAL;
+				ret = -EINVAL;
+				goto err_out;
 			}
 			arg = find_position_arg(obj, position_index);
 			ret = parse_arg_val(obj, arg->name_long, arg, curr_argv);
 			if (ret != 0)
-				return ret;
+				goto err_out;
 			continue;
 		}
 
@@ -648,31 +750,38 @@ parse_args(const struct rte_argparse *obj, bool *arg_parsed,
 			continue;
 		}
 
-		has_equal = strchr(curr_argv, '=');
+		value = strchr(curr_argv, '=');
+		if (value == NULL && curr_argv[1] != '-' && strlen(curr_argv) > 2)
+			value = &curr_argv[2];
 		arg_name = NULL;
-		arg = find_option_arg(obj, &arg_idx, curr_argv, has_equal, &arg_name);
+		arg = find_option_arg(obj, &arg_idx, curr_argv, value, &arg_name);
 		if (arg == NULL || arg_name == NULL) {
 			ARGPARSE_LOG(ERR, "unknown argument %s!", curr_argv);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto err_out;
 		}
 
 		if (arg_parsed[arg_idx] && !arg_attr_flag_multi(arg)) {
 			ARGPARSE_LOG(ERR, "argument %s should not occur multiple times!", arg_name);
-			return -EINVAL;
+			ret = -EINVAL;
+			goto err_out;
 		}
 
-		value = (has_equal != NULL ? has_equal + 1 : NULL);
+		if (value != NULL && value[0] == '=')
+			value++; /* skip '=' */
 		if (arg->value_required == RTE_ARGPARSE_VALUE_NONE) {
 			if (value != NULL) {
 				ARGPARSE_LOG(ERR, "argument %s should not take value!", arg_name);
-				return -EINVAL;
+				ret = -EINVAL;
+				goto err_out;
 			}
 		} else if (arg->value_required == RTE_ARGPARSE_VALUE_REQUIRED) {
 			if (value == NULL) {
 				if (i >= argc - 1) {
 					ARGPARSE_LOG(ERR, "argument %s doesn't have value!",
 							arg_name);
-					return -EINVAL;
+					ret = -EINVAL;
+					goto err_out;
 				}
 				/* Set value and make i move next. */
 				value = argv[++i];
@@ -683,13 +792,28 @@ parse_args(const struct rte_argparse *obj, bool *arg_parsed,
 
 		ret = parse_arg_val(obj, arg_name, arg, value);
 		if (ret != 0)
-			return ret;
+			goto err_out;
 
 		/* This argument parsed success! then mark it parsed. */
 		arg_parsed[arg_idx] = true;
 	}
 
-	return i;
+	ret = i;
+	if (n_args_to_move > 0) {
+		/* Close the gaps in argv array by moving elements down filling in the NULLs. */
+		int j = 1;
+		for (i = 1; i < ret; i++) {
+			if (argv[i] != NULL)
+				argv[j++] = argv[i];
+		}
+		ret = j; /* only return args actually handled */
+		/* Then put contents of the args_to_move array into the argv in the space left. */
+		for (i = 0; i < (int)n_args_to_move; i++)
+			argv[j++] = args_to_move[i];
+	}
+err_out:
+	free(args_to_move);
+	return ret;
 }
 
 static uint32_t
@@ -716,23 +840,23 @@ calc_help_align(const struct rte_argparse *obj)
 }
 
 static void
-show_oneline_help(const struct rte_argparse_arg *arg, uint32_t width)
+show_oneline_help(FILE *stream, const struct rte_argparse_arg *arg, uint32_t width)
 {
 	uint32_t len = 0;
 	uint32_t i;
 
 	if (arg->name_short != NULL)
-		len = printf(" %s,", arg->name_short);
-	len += printf(" %s", arg->name_long);
+		len = fprintf(stream, " %s,", arg->name_short);
+	len += fprintf(stream, " %s", arg->name_long);
 
 	for (i = len; i < width; i++)
-		printf(" ");
+		fprintf(stream, " ");
 
-	printf("%s\n", arg->help);
+	fprintf(stream, "%s\n", arg->help);
 }
 
 static void
-show_args_pos_help(const struct rte_argparse *obj, uint32_t align)
+show_args_pos_help(FILE *stream, const struct rte_argparse *obj, uint32_t align)
 {
 	uint32_t position_count = calc_position_count(obj);
 	const struct rte_argparse_arg *arg;
@@ -741,19 +865,19 @@ show_args_pos_help(const struct rte_argparse *obj, uint32_t align)
 	if (position_count == 0)
 		return;
 
-	printf("\npositional arguments:\n");
+	fprintf(stream, "\npositional arguments:\n");
 	for (i = 0; /* NULL */; i++) {
 		arg = &obj->args[i];
 		if (arg->name_long == NULL)
 			break;
 		if (!is_arg_positional(arg))
 			continue;
-		show_oneline_help(arg, align);
+		show_oneline_help(stream, arg, align);
 	}
 }
 
 static void
-show_args_opt_help(const struct rte_argparse *obj, uint32_t align)
+show_args_opt_help(FILE *stream, const struct rte_argparse *obj, uint32_t align)
 {
 	static const struct rte_argparse_arg help = {
 		.name_long = "--help",
@@ -763,34 +887,35 @@ show_args_opt_help(const struct rte_argparse *obj, uint32_t align)
 	const struct rte_argparse_arg *arg;
 	uint32_t i;
 
-	printf("\noptions:\n");
-	show_oneline_help(&help, align);
+	fprintf(stream, "\noptions:\n");
+	show_oneline_help(stream, &help, align);
 	for (i = 0; /* NULL */; i++) {
 		arg = &obj->args[i];
 		if (arg->name_long == NULL)
 			break;
 		if (!is_arg_optional(arg))
 			continue;
-		show_oneline_help(arg, align);
+		show_oneline_help(stream, arg, align);
 	}
 }
 
-static void
-show_args_help(const struct rte_argparse *obj)
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_argparse_print_help, 25.11)
+void
+rte_argparse_print_help(FILE *stream, const struct rte_argparse *obj)
 {
 	uint32_t align = calc_help_align(obj);
 
-	printf("usage: %s %s\n", obj->prog_name, obj->usage);
+	fprintf(stream, "usage: %s %s\n", obj->prog_name, obj->usage);
 	if (obj->descriptor != NULL)
-		printf("\ndescriptor: %s\n", obj->descriptor);
+		fprintf(stream, "\ndescriptor: %s\n", obj->descriptor);
 
-	show_args_pos_help(obj, align);
-	show_args_opt_help(obj, align);
+	show_args_pos_help(stream, obj, align);
+	show_args_opt_help(stream, obj, align);
 
 	if (obj->epilog != NULL)
-		printf("\n%s\n", obj->epilog);
+		fprintf(stream, "\n%s\n", obj->epilog);
 	else
-		printf("\n");
+		fprintf(stream, "\n");
 }
 
 RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_argparse_parse, 24.03)
@@ -820,7 +945,10 @@ rte_argparse_parse(const struct rte_argparse *obj, int argc, char **argv)
 		goto error;
 
 	if (show_help) {
-		show_args_help(obj);
+		if (obj->print_help != NULL)
+			obj->print_help(obj);
+		else
+			rte_argparse_print_help(stdout, obj);
 		exit(0);
 	}
 

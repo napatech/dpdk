@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -683,7 +682,7 @@ void nthw_phy_tile_set_rx_reset(nthw_phy_tile_t *p, uint8_t intf_no, bool reset)
 			int32_t count = 1000;
 
 			do {
-				nt_os_wait_usec(1000);	/* 1ms */
+				nthw_os_wait_usec(1000);	/* 1ms */
 			} while (nthw_field_get_updated(p->mp_fld_port_status_rx_reset_ackn
 				[intf_no]) && (--count > 0));
 
@@ -711,7 +710,7 @@ void nthw_phy_tile_set_tx_reset(nthw_phy_tile_t *p, uint8_t intf_no, bool reset)
 			int32_t count = 1000;
 
 			do {
-				nt_os_wait_usec(1000);	/* 1ms */
+				nthw_os_wait_usec(1000);	/* 1ms */
 			} while (nthw_field_get_updated(p->mp_fld_port_status_tx_reset_ackn
 				[intf_no]) && (--count > 0));
 
@@ -734,7 +733,7 @@ uint32_t nthw_phy_tile_read_xcvr(nthw_phy_tile_t *p, uint8_t intf_no, uint8_t la
 	nthw_field_set_val_flush32(p->mp_fld_port_xcvr_base_ptr[intf_no][lane], address);
 
 	while (nthw_field_get_updated(p->mp_fld_port_xcvr_base_busy[intf_no][lane]) == 1)
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 
 	return nthw_field_get_updated(p->mp_fld_port_xcvr_data_data[intf_no][lane]);
 }
@@ -749,7 +748,7 @@ void nthw_phy_tile_write_xcvr(nthw_phy_tile_t *p, uint8_t intf_no, uint8_t lane,
 
 	while (nthw_field_get_updated(p->mp_fld_port_xcvr_base_busy[intf_no][lane]) == 1)
 		/* NT_LOG(INF, NTHW, "busy"); */
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 }
 
 static uint32_t nthw_phy_tile_read_dyn_reconfig(nthw_phy_tile_t *p, uint32_t address)
@@ -759,7 +758,7 @@ static uint32_t nthw_phy_tile_read_dyn_reconfig(nthw_phy_tile_t *p, uint32_t add
 	nthw_field_set_val_flush32(p->mp_fld_dyn_reconfig_base_ptr, address);
 
 	while (nthw_field_get_updated(p->mp_fld_dyn_reconfig_base_busy) == 1)
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 
 	uint32_t value = nthw_field_get_updated(p->mp_fld_dyn_reconfig_data_data);
 	/*
@@ -781,7 +780,7 @@ static void nthw_phy_tile_write_dyn_reconfig(nthw_phy_tile_t *p, uint32_t addres
 
 	while (nthw_field_get_updated(p->mp_fld_dyn_reconfig_base_busy) == 1)
 		/* NT_LOG(INF, NTHW, "busy"); */
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 }
 
 static uint32_t nthw_phy_tile_cpi_request(nthw_phy_tile_t *p, uint8_t intf_no, uint8_t lane,
@@ -803,7 +802,7 @@ static uint32_t nthw_phy_tile_cpi_request(nthw_phy_tile_t *p, uint8_t intf_no, u
 
 	nthw_phy_tile_write_xcvr(p, intf_no, lane, link_addr + lane_offset, cpi_cmd);
 
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 
 	for (int i = 20; i >= 0; i--) {
 		data = nthw_phy_tile_read_xcvr(p, intf_no, lane, phy_addr + lane_offset);
@@ -815,7 +814,7 @@ static uint32_t nthw_phy_tile_cpi_request(nthw_phy_tile_t *p, uint8_t intf_no, u
 		if (((value & bit_cpi_assert) == cpi_assert) && ((value & cpi_in_reset) == 0))
 			break;
 
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 
 		if (i == 0)
 			NT_LOG(ERR, NTHW, "Time out");
@@ -954,19 +953,20 @@ uint32_t nthw_phy_tile_get_timestamp_comp_rx(nthw_phy_tile_t *p, uint8_t intf_no
 	return nthw_field_get_val32(p->mp_fld_port_comp_rx_compensation[intf_no]);
 }
 
-uint32_t nthw_phy_tile_read_eth(nthw_phy_tile_t *p, uint8_t intf_no, uint32_t address)
+static uint32_t nthw_phy_tile_read_eth(nthw_phy_tile_t *p, uint8_t intf_no, uint32_t address)
 {
 	nthw_register_update(p->mp_reg_port_eth_base[intf_no]);
 	nthw_field_set_val32(p->mp_fld_port_eth_base_cmd[intf_no], 0);
 	nthw_field_set_val_flush32(p->mp_fld_port_eth_base_ptr[intf_no], address);
 
 	while (nthw_field_get_updated(p->mp_fld_port_eth_base_busy[intf_no]) == 1)
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 
 	return nthw_field_get_updated(p->mp_fld_port_eth_data_data[intf_no]);
 }
 
-void nthw_phy_tile_write_eth(nthw_phy_tile_t *p, uint8_t intf_no, uint32_t address, uint32_t data)
+static void nthw_phy_tile_write_eth(nthw_phy_tile_t *p, uint8_t intf_no,
+	uint32_t address, uint32_t data)
 {
 	nthw_field_set_val_flush32(p->mp_fld_port_eth_data_data[intf_no], data);
 	nthw_register_update(p->mp_reg_port_eth_base[intf_no]);
@@ -975,7 +975,7 @@ void nthw_phy_tile_write_eth(nthw_phy_tile_t *p, uint8_t intf_no, uint32_t addre
 
 	while (nthw_field_get_updated(p->mp_fld_port_eth_base_busy[intf_no]) == 1)
 		/* NT_LOG(INF, NTHW, "busy"); */
-		nt_os_wait_usec(100);
+		nthw_os_wait_usec(100);
 }
 
 bool nthw_phy_tile_configure_fec(nthw_phy_tile_t *p, uint8_t intf_no, bool enable)
@@ -1046,7 +1046,7 @@ bool nthw_phy_tile_configure_fec(nthw_phy_tile_t *p, uint8_t intf_no, bool enabl
 		nthw_phy_tile_write_eth(p, intf_no, eth_soft_csr2,
 			(0 << 9) + (0 << 6) + (0 << 3) + (final_fec_profile << 0));
 
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 		nthw_phy_tile_set_reset(p, intf_no, false);
 		nthw_phy_tile_set_tx_reset(p, intf_no, false);
 
@@ -1073,7 +1073,7 @@ bool nthw_phy_tile_configure_fec(nthw_phy_tile_t *p, uint8_t intf_no, bool enabl
 	NT_LOG(DBG, NTHW, "intf_no %u: Step 1 Wait for DR NIOS", intf_no);
 
 	while ((nthw_phy_tile_read_dyn_reconfig(p, dyn_rcfg_dr_trigger_reg) & 0x02) != 0x02)
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 
 	/* Step 2: Triggering Reconfiguration */
 	NT_LOG(DBG, NTHW, "intf_no %u: Step 2: Triggering Reconfiguration", intf_no);
@@ -1081,12 +1081,12 @@ bool nthw_phy_tile_configure_fec(nthw_phy_tile_t *p, uint8_t intf_no, bool enabl
 	nthw_phy_tile_set_reset(p, intf_no, true);
 	nthw_phy_tile_set_rx_reset(p, intf_no, true);
 	nthw_phy_tile_set_tx_reset(p, intf_no, true);
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 
 	/* Disable original profile */
 	nthw_phy_tile_write_dyn_reconfig(p, dyn_rcfg_dr_next_profile_0_reg,
 		(1U << 18) + (0U << 15) + original_dr_profile_id);
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 	NT_LOG(DBG, NTHW, "intf_no %u: dyn_rcfg_dr_next_profile_0_reg: %#010x", intf_no,
 		nthw_phy_tile_read_dyn_reconfig(p, dyn_rcfg_dr_next_profile_0_reg));
 
@@ -1097,7 +1097,7 @@ bool nthw_phy_tile_configure_fec(nthw_phy_tile_t *p, uint8_t intf_no, bool enabl
 	 * Enable profile 2 and terminate dyn reconfig by
 	 * setting next profile to 0 and deactivate it
 	 */
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 	NT_LOG(DBG, NTHW, "intf_no %u: dyn_rcfg_dr_next_profile_1_reg: %#010x", intf_no,
 		nthw_phy_tile_read_dyn_reconfig(p, dyn_rcfg_dr_next_profile_1_reg));
 
@@ -1109,38 +1109,38 @@ bool nthw_phy_tile_configure_fec(nthw_phy_tile_t *p, uint8_t intf_no, bool enabl
 	nthw_phy_tile_write_dyn_reconfig(p, dyn_rcfg_dr_next_profile_2_reg,
 		(0U << 15) + neutral_dr_profile + (0U << 31) +
 		(neutral_dr_profile << 16));
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 	NT_LOG(DBG, NTHW, "intf_no %u: dyn_rcfg_dr_next_profile_2_reg: %#010x", intf_no,
 		nthw_phy_tile_read_dyn_reconfig(p, dyn_rcfg_dr_next_profile_2_reg));
 
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 
 	/* Step 3: Trigger DR interrupt */
 	NT_LOG(DBG, NTHW, "intf_no %u: Step 3: Trigger DR interrupt", intf_no);
 	nthw_phy_tile_write_dyn_reconfig(p, dyn_rcfg_dr_trigger_reg, 0x00000001);
 
-	nt_os_wait_usec(1000000);
+	nthw_os_wait_usec(1000000);
 
 	/* Step 4: Wait for interrupt Acknowledge */
 	NT_LOG(DBG, NTHW, "intf_no %u: Step 4: Wait for interrupt Acknowledge", intf_no);
 
 	while ((nthw_phy_tile_read_dyn_reconfig(p, dyn_rcfg_dr_trigger_reg) & 0x01) != 0x00)
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 
-	nt_os_wait_usec(10000);
+	nthw_os_wait_usec(10000);
 
 	/* Step 5: Wait Until DR config is done */
 	NT_LOG(DBG, NTHW, "intf_no %u: Step 5: Wait Until DR config is done", intf_no);
 
 	while ((nthw_phy_tile_read_dyn_reconfig(p, dyn_rcfg_dr_trigger_reg) & 0x02) != 0x02)
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 
-	nt_os_wait_usec(1000000);
+	nthw_os_wait_usec(1000000);
 
 	/* Write Fec status to scratch register */
 	nthw_phy_tile_write_fec_enabled_by_scratch(p, intf_no, enable);
 
-	nt_os_wait_usec(1000000);
+	nthw_os_wait_usec(1000000);
 
 	nthw_phy_tile_set_reset(p, intf_no, false);
 	nthw_phy_tile_set_tx_reset(p, intf_no, false);

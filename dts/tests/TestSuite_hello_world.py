@@ -8,7 +8,8 @@ Starts and stops a testpmd session to verify EAL parameters
 are properly configured.
 """
 
-from framework.remote_session.testpmd_shell import TestPmdShell
+from api.test import log
+from api.testpmd import TestPmd
 from framework.test_suite import BaseConfig, TestSuite, func_test
 
 
@@ -25,14 +26,15 @@ class TestHelloWorld(TestSuite):
     config: Config
 
     @func_test
-    def test_hello_world(self) -> None:
+    def hello_world(self) -> None:
         """EAL confidence test.
 
         Steps:
-            Start testpmd session and check status.
+            * Start testpmd session and check status.
+
         Verify:
-            The testpmd session throws no errors.
+            * Testpmd session throws no errors.
         """
-        with TestPmdShell() as testpmd:
+        with TestPmd() as testpmd:
             testpmd.start()
-        self.log(self.config.msg)
+        log(self.config.msg)

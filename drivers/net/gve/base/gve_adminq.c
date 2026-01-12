@@ -276,8 +276,6 @@ void gve_adminq_release(struct gve_priv *priv)
 			msleep(GVE_ADMINQ_SLEEP_LEN);
 		}
 	}
-	gve_clear_device_rings_ok(priv);
-	gve_clear_device_resources_ok(priv);
 	gve_clear_admin_queue_ok(priv);
 }
 
@@ -584,7 +582,7 @@ static int gve_adminq_create_tx_queue(struct gve_priv *priv, u32 queue_index)
 		cmd.create_tx_queue.tx_comp_ring_addr =
 			cpu_to_be64(txq->compl_ring_phys_addr);
 		cmd.create_tx_queue.tx_comp_ring_size =
-			cpu_to_be16(txq->sw_size);
+			cpu_to_be16(txq->nb_complq_desc);
 	}
 
 	return gve_adminq_issue_cmd(priv, &cmd);
@@ -1082,4 +1080,3 @@ out:
 		gve_free_dma_mem(&rss_key_dma_mem);
 	return err;
 }
-

@@ -24,6 +24,8 @@
 #include "test_cryptodev_mod_test_vectors.h"
 #include "test_cryptodev_rsa_test_vectors.h"
 #include "test_cryptodev_sm2_test_vectors.h"
+#include "test_cryptodev_ml_kem_test_vectors.h"
+#include "test_cryptodev_ml_dsa_test_vectors.h"
 #include "test_cryptodev_asym_util.h"
 #include "test.h"
 
@@ -1716,6 +1718,29 @@ test_ecdsa_sign_verify_all_curve(void)
 }
 
 static int
+test_ecdsa_sign_verify_qat_curves(void)
+{
+	int status, overall_status = TEST_SUCCESS;
+	enum curve curve_id;
+	int test_index = 0;
+	const char *msg;
+
+	for (curve_id = SECP256R1; curve_id <= SECP521R1; curve_id++) {
+
+		status = test_ecdsa_sign_verify(curve_id);
+		if (status == TEST_SUCCESS) {
+			msg = "succeeded";
+		} else {
+			msg = "failed";
+			overall_status = status;
+		}
+		printf("  %u) TestCase Sign/Veriy Curve %s  %s\n",
+		       test_index ++, curve[curve_id], msg);
+	}
+	return overall_status;
+}
+
+static int
 test_ecpm(enum curve curve_id)
 {
 	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
@@ -1868,6 +1893,28 @@ test_ecpm_all_curve(void)
 		    curve_id == ED25519 || curve_id == ED448)
 			continue;
 
+		status = test_ecpm(curve_id);
+		if (status == TEST_SUCCESS) {
+			msg = "succeeded";
+		} else {
+			msg = "failed";
+			overall_status = status;
+		}
+		printf("  %u) TestCase EC Point Mul Curve %s  %s\n",
+		       test_index ++, curve[curve_id], msg);
+	}
+	return overall_status;
+}
+
+static int
+test_ecpm_qat_curves(void)
+{
+	int status, overall_status = TEST_SUCCESS;
+	enum curve curve_id;
+	int test_index = 0;
+	const char *msg;
+
+	for (curve_id = SECP256R1; curve_id <= SECP521R1; curve_id++) {
 		status = test_ecpm(curve_id);
 		if (status == TEST_SUCCESS) {
 			msg = "succeeded";
@@ -2673,6 +2720,56 @@ test_ecdh_all_curve(void)
 
 	return overall_status;
 }
+
+static int
+test_ecdh_qat_curves(void)
+{
+	int status, overall_status = TEST_SUCCESS;
+	enum curve curve_id;
+	int test_index = 0;
+	const char *msg;
+
+	for (curve_id = SECP256R1; curve_id <= SECP521R1; curve_id++) {
+		status = test_ecdh_pub_key_generate(curve_id);
+		if (status == TEST_SUCCESS) {
+			msg = "succeeded";
+		} else if (status == TEST_SKIPPED) {
+			msg = "skipped";
+		} else {
+			msg = "failed";
+			overall_status = status;
+		}
+		printf("  %u) TestCase ECDH public key generation for Curve %s %s\n",
+		       test_index ++, curve[curve_id], msg);
+	}
+
+	for (curve_id = SECP256R1; curve_id <= SECP521R1; curve_id++) {
+		status = test_ecdh_pub_key_verify(curve_id);
+		if (status == TEST_SUCCESS) {
+			msg = "succeeded";
+		} else {
+			msg = "failed";
+			overall_status = status;
+		}
+		printf("  %u) TestCase ECDH public key verification for Curve %s %s\n",
+		       test_index ++, curve[curve_id], msg);
+	}
+
+	for (curve_id = SECP256R1; curve_id <= SECP521R1; curve_id++) {
+		status = test_ecdh_shared_secret(curve_id);
+		if (status == TEST_SUCCESS) {
+			msg = "succeeded";
+		} else {
+			msg = "failed";
+			overall_status = status;
+		}
+		printf("  %u) TestCase ECDH shared secret compute for Curve %s %s\n",
+		       test_index ++, curve[curve_id], msg);
+	}
+
+	return overall_status;
+}
+
 
 static int
 test_sm2_sign(void)
@@ -3629,6 +3726,33 @@ static int send_one(void)
 	return TEST_SUCCESS;
 }
 
+static int send_one_no_status_check(void)
+{
+	int ticks = 0;
+
+	if (rte_cryptodev_enqueue_burst(params->valid_devs[0], 0,
+			&self->op, 1) != 1) {
+		RTE_LOG(ERR, USER1,
+			"line %u FAILED: Error sending packet for operation on device %d",
+			__LINE__, params->valid_devs[0]);
+		return TEST_FAILED;
+	}
+	while (rte_cryptodev_dequeue_burst(params->valid_devs[0], 0,
+			&self->result_op, 1) == 0) {
+		rte_delay_ms(1);
+		ticks++;
+		if (ticks >= DEQ_TIMEOUT) {
+			RTE_LOG(ERR, USER1,
+				"line %u FAILED: Cannot dequeue the crypto op on device %d",
+				__LINE__, params->valid_devs[0]);
+			return TEST_FAILED;
+		}
+	}
+	TEST_ASSERT_NOT_NULL(self->result_op,
+		"Failed to process asym crypto op");
+	return TEST_SUCCESS;
+}
+
 static int
 modular_cmpeq(const uint8_t *a, size_t a_len, const uint8_t *b, size_t b_len)
 {
@@ -3733,6 +3857,827 @@ modular_multiplicative_inverse(const void *test_data)
 		"Incorrect reminder\n");
 
 	return TEST_SUCCESS;
+}
+
+static int
+mlkem_keygen(const void *test_data)
+{
+	const struct crypto_testsuite_mlkem_params *vector = test_data;
+	const uint8_t dev_id = params->valid_devs[0];
+	struct rte_crypto_asym_xform xform = {0};
+	uint8_t ek[TEST_DATA_SIZE] = {0};
+	uint8_t dk[TEST_DATA_SIZE] = {0};
+
+	xform.mlkem.type = vector->type;
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_KEM;
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+	self->op->asym->mlkem.op = RTE_CRYPTO_ML_KEM_OP_KEYGEN;
+	self->op->asym->mlkem.keygen.d.data = vector->d.data;
+	self->op->asym->mlkem.keygen.d.length = vector->d.length;
+	self->op->asym->mlkem.keygen.z.data = vector->z.data;
+	self->op->asym->mlkem.keygen.z.length = vector->z.length;
+	self->op->asym->mlkem.keygen.dk.data = dk;
+	self->op->asym->mlkem.keygen.dk.length = 0;
+	self->op->asym->mlkem.keygen.ek.data = ek;
+	self->op->asym->mlkem.keygen.ek.length = 0;
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-KEM KeyGen)");
+	debug_hexdump(stdout, "Decapsulation key",
+		self->result_op->asym->mlkem.keygen.dk.data,
+		self->result_op->asym->mlkem.keygen.dk.length);
+	debug_hexdump(stdout, "Encapsulation key",
+		self->result_op->asym->mlkem.keygen.ek.data,
+		self->result_op->asym->mlkem.keygen.ek.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.keygen.dk.length,
+		rte_crypto_ml_kem_privkey_size[vector->type],
+		"Incorrect Decapsulation key length\n");
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.keygen.ek.length,
+		rte_crypto_ml_kem_pubkey_size[vector->type],
+		"Incorrect Encapsulation key length\n");
+
+	/* If the seed is all zero, keys are deterministic */
+	if (memcmp(vector->d.data, (uint8_t [32]) {0},
+			vector->d.length) == 0) {
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->dk.data,
+			self->result_op->asym->mlkem.keygen.dk.data,
+			self->result_op->asym->mlkem.keygen.dk.length,
+			"Incorrect Decapsulation key\n");
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->ek.data,
+			self->result_op->asym->mlkem.keygen.ek.data,
+			self->result_op->asym->mlkem.keygen.ek.length,
+			"Incorrect Encapsulation key\n");
+		RTE_LOG(DEBUG, USER1, "Deterministic keygen test passed\n");
+	}
+
+	rte_cryptodev_asym_session_free(dev_id, self->sess);
+	return TEST_SUCCESS;
+}
+
+static int
+mlkem_encap(const void *test_data)
+{
+	const struct crypto_testsuite_mlkem_params *vector = test_data;
+	const uint8_t dev_id = params->valid_devs[0];
+	struct rte_crypto_asym_xform xform = {0};
+	uint8_t cipher[TEST_DATA_SIZE] = {0};
+	uint8_t skcopy[TEST_DATA_SIZE] = {0};
+	uint8_t sk[TEST_DATA_SIZE] = {0};
+	size_t cipher_len;
+
+	xform.mlkem.type = vector->type;
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_KEM;
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+
+	/* Encapsulate */
+	self->op->asym->mlkem.op = RTE_CRYPTO_ML_KEM_OP_ENCAP;
+	self->op->asym->mlkem.encap.message.data = vector->message.data;
+	self->op->asym->mlkem.encap.message.length = vector->message.length;
+	self->op->asym->mlkem.encap.ek.data = vector->ek.data;
+	self->op->asym->mlkem.encap.ek.length = vector->ek.length;
+	self->op->asym->mlkem.encap.cipher.data = cipher;
+	self->op->asym->mlkem.encap.cipher.length =
+		rte_crypto_ml_kem_cipher_size[vector->type];
+	self->op->asym->mlkem.encap.sk.data = sk;
+	self->op->asym->mlkem.encap.sk.length = 32;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-KEM Encap)");
+	debug_hexdump(stdout, "Cipher",
+		self->result_op->asym->mlkem.encap.cipher.data,
+		self->result_op->asym->mlkem.encap.cipher.length);
+	debug_hexdump(stdout, "Shared secret from encap",
+		self->result_op->asym->mlkem.encap.sk.data,
+		self->result_op->asym->mlkem.encap.sk.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.encap.cipher.length,
+		rte_crypto_ml_kem_cipher_size[vector->type],
+		"Incorrect Cipher length\n");
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.encap.sk.length, 32,
+		"Incorrect Shared key length\n");
+
+	/* If random message is set, cipher and shared secret are deterministic */
+	if (vector->message.length != 0) {
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->cipher.data,
+			self->result_op->asym->mlkem.encap.cipher.data,
+			self->result_op->asym->mlkem.encap.cipher.length,
+			"Incorrect Cipher\n");
+
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->sk.data,
+			self->result_op->asym->mlkem.encap.sk.data,
+			self->result_op->asym->mlkem.encap.sk.length,
+			"Incorrect Shared secret\n");
+		RTE_LOG(DEBUG, USER1, "Deterministic encap test passed\n");
+	}
+
+	/* Decapsulate and verify */
+	cipher_len = self->result_op->asym->mlkem.encap.cipher.length;
+	memcpy(skcopy, self->result_op->asym->mlkem.encap.sk.data,
+		self->result_op->asym->mlkem.encap.sk.length);
+	memset(sk, 0, sizeof(sk));
+
+	self->op->asym->mlkem.op = RTE_CRYPTO_ML_KEM_OP_DECAP;
+	self->op->asym->mlkem.decap.dk.data = vector->dk.data;
+	self->op->asym->mlkem.decap.dk.length = vector->dk.length;
+	self->op->asym->mlkem.decap.cipher.data = cipher;
+	self->op->asym->mlkem.decap.cipher.length = cipher_len;
+	self->op->asym->mlkem.decap.sk.data = sk;
+	self->op->asym->mlkem.decap.sk.length = 32;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-KEM Decap)");
+
+	debug_hexdump(stdout, "Shared secret from decap",
+		self->result_op->asym->mlkem.decap.sk.data,
+		self->result_op->asym->mlkem.decap.sk.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.decap.sk.length, 32,
+		"Incorrect Shared secret length\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(self->result_op->asym->mlkem.decap.sk.data,
+		skcopy, self->result_op->asym->mlkem.decap.sk.length,
+		"Incorrect Shared secret\n");
+
+	/* Negative test */
+	cipher[0] ^= 0x01;
+	memset(sk, 0, sizeof(sk));
+
+	self->op->asym->mlkem.op = RTE_CRYPTO_ML_KEM_OP_DECAP;
+	self->op->asym->mlkem.decap.dk.data = vector->dk.data;
+	self->op->asym->mlkem.decap.dk.length = vector->dk.length;
+	self->op->asym->mlkem.decap.cipher.data = cipher;
+	self->op->asym->mlkem.decap.cipher.length = cipher_len;
+	self->op->asym->mlkem.decap.sk.data = sk;
+	self->op->asym->mlkem.decap.sk.length = 32;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-KEM Decap)");
+
+	debug_hexdump(stdout, "Shared secret from negative test",
+		self->result_op->asym->mlkem.decap.sk.data,
+		self->result_op->asym->mlkem.decap.sk.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.decap.sk.length, 32,
+		"Incorrect Shared secret length\n");
+
+	if (!memcmp(self->result_op->asym->mlkem.decap.sk.data, skcopy, 32)) {
+		rte_cryptodev_asym_session_free(dev_id, self->sess);
+		return TEST_FAILED;
+	}
+
+	rte_cryptodev_asym_session_free(dev_id, self->sess);
+	return TEST_SUCCESS;
+}
+
+static int
+mlkem_decap(const void *test_data)
+{
+	const struct crypto_testsuite_mlkem_params *vector = test_data;
+	const uint8_t dev_id = params->valid_devs[0];
+	struct rte_crypto_asym_xform xform = {0};
+	uint8_t cipher[TEST_DATA_SIZE] = {0};
+	uint8_t sk[TEST_DATA_SIZE] = {0};
+	size_t cipher_len;
+
+	xform.mlkem.type = vector->type;
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_KEM;
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+
+	/* Decapsulate and verify */
+	self->op->asym->mlkem.op = RTE_CRYPTO_ML_KEM_OP_DECAP;
+	self->op->asym->mlkem.decap.dk.data = vector->dk.data;
+	self->op->asym->mlkem.decap.dk.length = vector->dk.length;
+	self->op->asym->mlkem.decap.cipher.data = vector->cipher.data;
+	self->op->asym->mlkem.decap.cipher.length = vector->cipher.length;
+	self->op->asym->mlkem.decap.sk.data = sk;
+	self->op->asym->mlkem.decap.sk.length = 32;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-KEM Decap)");
+
+	debug_hexdump(stdout, "Shared secret from decap",
+		self->result_op->asym->mlkem.decap.sk.data,
+		self->result_op->asym->mlkem.decap.sk.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.decap.sk.length, 32,
+		"Incorrect Shared secret length\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(self->result_op->asym->mlkem.decap.sk.data,
+		vector->sk.data, vector->sk.length,
+		"Incorrect Shared secret\n");
+
+	/* Negative test */
+	memcpy(cipher, vector->cipher.data, vector->cipher.length);
+	cipher_len = vector->cipher.length;
+	cipher[0] ^= 0x01;
+	memset(sk, 0, sizeof(sk));
+
+	self->op->asym->mlkem.op = RTE_CRYPTO_ML_KEM_OP_DECAP;
+	self->op->asym->mlkem.decap.dk.data = vector->dk.data;
+	self->op->asym->mlkem.decap.dk.length = vector->dk.length;
+	self->op->asym->mlkem.decap.cipher.data = cipher;
+	self->op->asym->mlkem.decap.cipher.length = cipher_len;
+	self->op->asym->mlkem.decap.sk.data = sk;
+	self->op->asym->mlkem.decap.sk.length = 32;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-KEM Decap)");
+
+	debug_hexdump(stdout, "Shared secret from negative test",
+		self->result_op->asym->mlkem.decap.sk.data,
+		self->result_op->asym->mlkem.decap.sk.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mlkem.decap.sk.length, 32,
+		"Incorrect Shared secret length\n");
+
+	if (!memcmp(self->result_op->asym->mlkem.decap.sk.data,
+		vector->sk.data, vector->sk.length)) {
+		rte_cryptodev_asym_session_free(dev_id, self->sess);
+		return TEST_FAILED;
+	}
+
+	rte_cryptodev_asym_session_free(dev_id, self->sess);
+	return TEST_SUCCESS;
+}
+
+static int
+mldsa_keygen(const void *test_data)
+{
+	const struct crypto_testsuite_mldsa_params *vector = test_data;
+	const uint8_t dev_id = params->valid_devs[0];
+	struct rte_crypto_asym_xform xform = {0};
+	uint8_t privkey[TEST_DATA_SIZE] = {0};
+	uint8_t pubkey[TEST_DATA_SIZE] = {0};
+
+	xform.mldsa.type = vector->type;
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+	self->op->asym->mldsa.op = RTE_CRYPTO_ML_DSA_OP_KEYGEN;
+	self->op->asym->mldsa.keygen.seed.data = vector->seed.data;
+	self->op->asym->mldsa.keygen.seed.length = vector->seed.length;
+	self->op->asym->mldsa.keygen.privkey.data = privkey;
+	self->op->asym->mldsa.keygen.privkey.length = 0;
+	self->op->asym->mldsa.keygen.pubkey.data = pubkey;
+	self->op->asym->mldsa.keygen.pubkey.length = 0;
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-DSA KeyGen)");
+
+	debug_hexdump(stdout, "Private key",
+		self->result_op->asym->mldsa.keygen.privkey.data,
+		self->result_op->asym->mldsa.keygen.privkey.length);
+	debug_hexdump(stdout, "Public key",
+		self->result_op->asym->mldsa.keygen.pubkey.data,
+		self->result_op->asym->mldsa.keygen.pubkey.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mldsa.keygen.privkey.length,
+		rte_crypto_ml_dsa_privkey_size[vector->type],
+		"Incorrect Private key length\n");
+	TEST_ASSERT_EQUAL(self->result_op->asym->mldsa.keygen.pubkey.length,
+		rte_crypto_ml_dsa_pubkey_size[vector->type],
+		"Incorrect Public key length\n");
+
+	/* If the seed is all zero, keys are deterministic */
+	if (memcmp(vector->seed.data, (uint8_t [32]) {0},
+			vector->seed.length) == 0) {
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->privkey.data,
+			self->result_op->asym->mldsa.keygen.privkey.data,
+			self->result_op->asym->mldsa.keygen.privkey.length,
+			"Incorrect Private key\n");
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->pubkey.data,
+			self->result_op->asym->mldsa.keygen.pubkey.data,
+			self->result_op->asym->mldsa.keygen.pubkey.length,
+			"Incorrect Public key\n");
+		RTE_LOG(DEBUG, USER1, "Deterministic keygen test passed\n");
+	}
+
+	rte_cryptodev_asym_session_free(dev_id, self->sess);
+	return TEST_SUCCESS;
+}
+
+static int
+mldsa_sign(const void *test_data)
+{
+	const struct crypto_testsuite_mldsa_params *vector = test_data;
+	const uint8_t dev_id = params->valid_devs[0];
+	struct rte_crypto_asym_xform xform = {0};
+	struct rte_cryptodev_info dev_info;
+	uint8_t sign[TEST_DATA_SIZE] = {0};
+	size_t sign_len;
+
+	xform.mldsa.type = vector->type;
+	xform.mldsa.sign_deterministic = vector->sign_deterministic;
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+
+	rte_cryptodev_info_get(dev_id, &dev_info);
+
+	/* Check if prehash is supported */
+	if (vector->hash) {
+		if (!(dev_info.feature_flags & RTE_CRYPTODEV_FF_MLDSA_SIGN_PREHASH)) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support prehash in ML-DSA signature generation. Test skipped\n");
+			return TEST_SKIPPED;
+		}
+	}
+
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+
+	/* Sign */
+	self->op->asym->mldsa.op = RTE_CRYPTO_ML_DSA_OP_SIGN;
+	self->op->asym->mldsa.siggen.seed.data = vector->seed.data;
+	self->op->asym->mldsa.siggen.seed.length = vector->seed.length;
+	self->op->asym->mldsa.siggen.privkey.data = vector->privkey.data;
+	self->op->asym->mldsa.siggen.privkey.length = vector->privkey.length;
+	self->op->asym->mldsa.siggen.message.data = vector->message.data;
+	self->op->asym->mldsa.siggen.message.length = vector->message.length;
+	self->op->asym->mldsa.siggen.ctx.data = vector->context.data;
+	self->op->asym->mldsa.siggen.ctx.length = vector->context.length;
+	self->op->asym->mldsa.siggen.mu.data = vector->mu.data;
+	self->op->asym->mldsa.siggen.mu.length = vector->mu.length;
+	self->op->asym->mldsa.siggen.sign.data = sign;
+	self->op->asym->mldsa.siggen.sign.length =
+		rte_crypto_ml_dsa_sign_size[vector->type];
+	self->op->asym->mldsa.siggen.hash = vector->hash;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-DSA Sign)");
+
+	debug_hexdump(stdout, "Signature",
+		self->result_op->asym->mldsa.siggen.sign.data,
+		self->result_op->asym->mldsa.siggen.sign.length);
+
+	/* Verify the result with the test vector */
+	TEST_ASSERT_EQUAL(self->result_op->asym->mldsa.siggen.sign.length,
+		rte_crypto_ml_dsa_sign_size[vector->type],
+		"Incorrect Signature length\n");
+
+	/* Verify signature if it is deterministic */
+	if (vector->sign_deterministic) {
+		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->sign.data,
+			self->result_op->asym->mldsa.siggen.sign.data,
+			self->result_op->asym->mldsa.siggen.sign.length,
+			"Incorrect Signature\n");
+		RTE_LOG(DEBUG, USER1, "Deterministic signature test passed\n");
+	}
+
+	/* Verify the signature */
+	sign_len = self->result_op->asym->mldsa.siggen.sign.length;
+
+	self->op->asym->mldsa.op = RTE_CRYPTO_ML_DSA_OP_VERIFY;
+	self->op->asym->mldsa.sigver.message.data = vector->message.data;
+	self->op->asym->mldsa.sigver.message.length = vector->message.length;
+	self->op->asym->mldsa.sigver.ctx.data = vector->context.data;
+	self->op->asym->mldsa.sigver.ctx.length = vector->context.length;
+	self->op->asym->mldsa.sigver.mu.data = vector->mu.data;
+	self->op->asym->mldsa.sigver.mu.length = vector->mu.length;
+	self->op->asym->mldsa.sigver.pubkey.data = vector->pubkey.data;
+	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
+	self->op->asym->mldsa.sigver.sign.data = sign;
+	self->op->asym->mldsa.sigver.sign.length = sign_len;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-DSA Verify)");
+
+	/* Verify the result */
+	TEST_ASSERT_EQUAL(self->result_op->status, RTE_CRYPTO_OP_STATUS_SUCCESS,
+		"Failed to verify the signature");
+
+	/* Negative test */
+	sign[0] ^= 0x01;
+
+	self->op->asym->mldsa.op = RTE_CRYPTO_ML_DSA_OP_VERIFY;
+	self->op->asym->mldsa.sigver.message.data = vector->message.data;
+	self->op->asym->mldsa.sigver.message.length = vector->message.length;
+	self->op->asym->mldsa.sigver.ctx.data = vector->context.data;
+	self->op->asym->mldsa.sigver.ctx.length = vector->context.length;
+	self->op->asym->mldsa.sigver.mu.data = vector->mu.data;
+	self->op->asym->mldsa.sigver.mu.length = vector->mu.length;
+	self->op->asym->mldsa.sigver.pubkey.data = vector->pubkey.data;
+	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
+	self->op->asym->mldsa.sigver.sign.data = sign;
+	self->op->asym->mldsa.sigver.sign.length = sign_len;
+
+	TEST_ASSERT_SUCCESS(send_one_no_status_check(),
+		"Failed to process crypto op (ML-DSA Verify)");
+
+	/* Verify the result */
+	if (self->result_op->status == RTE_CRYPTO_OP_STATUS_SUCCESS) {
+		rte_cryptodev_asym_session_free(dev_id, self->sess);
+		return TEST_FAILED;
+	}
+
+	rte_cryptodev_asym_session_free(dev_id, self->sess);
+	return TEST_SUCCESS;
+}
+
+static int
+mldsa_verify(const void *test_data)
+{
+	const struct crypto_testsuite_mldsa_params *vector = test_data;
+	const uint8_t dev_id = params->valid_devs[0];
+	struct rte_crypto_asym_xform xform = {0};
+	uint8_t sign[TEST_DATA_SIZE] = {0};
+	size_t sign_len;
+
+	xform.mldsa.type = vector->type;
+	xform.mldsa.sign_deterministic = vector->sign_deterministic;
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+
+	/* Verify the signature */
+	self->op->asym->mldsa.op = RTE_CRYPTO_ML_DSA_OP_VERIFY;
+	self->op->asym->mldsa.sigver.message.data = vector->message.data;
+	self->op->asym->mldsa.sigver.message.length = vector->message.length;
+	self->op->asym->mldsa.sigver.ctx.data = vector->context.data;
+	self->op->asym->mldsa.sigver.ctx.length = vector->context.length;
+	self->op->asym->mldsa.sigver.mu.data = vector->mu.data;
+	self->op->asym->mldsa.sigver.mu.length = vector->mu.length;
+	self->op->asym->mldsa.sigver.pubkey.data = vector->pubkey.data;
+	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
+	self->op->asym->mldsa.sigver.sign.data = vector->sign.data;
+	self->op->asym->mldsa.sigver.sign.length = vector->sign.length;
+
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op (ML-DSA Verify)");
+
+	/* Verify the result */
+	TEST_ASSERT_EQUAL(self->result_op->status, RTE_CRYPTO_OP_STATUS_SUCCESS,
+		"Failed to verify the signature");
+
+	/* Negative test */
+	memcpy(sign, vector->sign.data, vector->sign.length);
+	sign_len = vector->sign.length;
+	sign[0] ^= 0x01;
+
+	self->op->asym->mldsa.op = RTE_CRYPTO_ML_DSA_OP_VERIFY;
+	self->op->asym->mldsa.sigver.message.data = vector->message.data;
+	self->op->asym->mldsa.sigver.message.length = vector->message.length;
+	self->op->asym->mldsa.sigver.ctx.data = vector->context.data;
+	self->op->asym->mldsa.sigver.ctx.length = vector->context.length;
+	self->op->asym->mldsa.sigver.mu.data = vector->mu.data;
+	self->op->asym->mldsa.sigver.mu.length = vector->mu.length;
+	self->op->asym->mldsa.sigver.pubkey.data = vector->pubkey.data;
+	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
+	self->op->asym->mldsa.sigver.sign.data = sign;
+	self->op->asym->mldsa.sigver.sign.length = sign_len;
+
+	TEST_ASSERT_SUCCESS(send_one_no_status_check(),
+		"Failed to process crypto op (ML-DSA Verify)");
+
+	/* Verify the result */
+	if (self->result_op->status == RTE_CRYPTO_OP_STATUS_SUCCESS) {
+		rte_cryptodev_asym_session_free(dev_id, self->sess);
+		return TEST_FAILED;
+	}
+
+	rte_cryptodev_asym_session_free(dev_id, self->sess);
+	return TEST_SUCCESS;
+}
+
+static int
+test_mlkem_keygen(void)
+{
+	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+	struct rte_cryptodev_asym_capability_idx idx;
+	uint8_t dev_id = ts_params->valid_devs[0];
+	int overall_status = TEST_SUCCESS;
+	int ret;
+
+	/* Check if ML-KEM is supported */
+	idx.type = RTE_CRYPTO_ASYM_XFORM_ML_KEM;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-KEM. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	if (!(capa->op_types & (1 <<  RTE_CRYPTO_ML_KEM_OP_KEYGEN))) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-KEM keygen operation. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	for (uint8_t i = 0; i < RTE_DIM(mlkem_keygen_test_vectors); i++) {
+		if (!(capa->mlkem_capa[RTE_CRYPTO_ML_KEM_OP_KEYGEN] &
+			(1 << mlkem_keygen_test_vectors[i].type))) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support ML-KEM param %u. TestCase %s skipped\n",
+				mlkem_keygen_test_vectors[i].type,
+				mlkem_keygen_test_vectors[i].name);
+			printf("  %u) TestCase %s: skipped\n", i,
+				mlkem_keygen_test_vectors[i].name);
+			continue;
+		}
+		ret = mlkem_keygen(&mlkem_keygen_test_vectors[i]);
+		if (ret == TEST_SUCCESS || ret == TEST_SKIPPED) {
+			printf("  %u) TestCase %s: %s\n", i, mlkem_keygen_test_vectors[i].name,
+				(ret == TEST_SKIPPED) ? "skipped" : "passed");
+				continue;
+		}
+
+		printf("  %u) TestCase %s: failed\n", i, mlkem_keygen_test_vectors[i].name);
+		overall_status = TEST_FAILED;
+	}
+
+	return overall_status;
+}
+
+static int
+test_mlkem_encap(void)
+{
+	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+	struct rte_cryptodev_asym_capability_idx idx;
+	uint8_t dev_id = ts_params->valid_devs[0];
+	int overall_status = TEST_SUCCESS;
+	int ret;
+
+	/* Check if ML-KEM is supported */
+	idx.type = RTE_CRYPTO_ASYM_XFORM_ML_KEM;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-KEM. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	if (!(capa->op_types & (1 <<  RTE_CRYPTO_ML_KEM_OP_ENCAP))) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-KEM encap operation. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	for (uint8_t i = 0; i < RTE_DIM(mlkem_encap_test_vectors); i++) {
+		if (!(capa->mlkem_capa[RTE_CRYPTO_ML_KEM_OP_ENCAP] &
+			(1 << mlkem_encap_test_vectors[i].type))) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support ML-KEM param %u. TestCase %s skipped\n",
+				mlkem_encap_test_vectors[i].type,
+				mlkem_encap_test_vectors[i].name);
+			printf("  %u) TestCase %s: skipped\n", i,
+				mlkem_encap_test_vectors[i].name);
+			continue;
+		}
+		ret = mlkem_encap(&mlkem_encap_test_vectors[i]);
+		if (ret == TEST_SUCCESS || ret == TEST_SKIPPED) {
+			printf("  %u) TestCase %s: %s\n", i, mlkem_encap_test_vectors[i].name,
+				(ret == TEST_SKIPPED) ? "skipped" : "passed");
+				continue;
+		}
+
+		printf("  %u) TestCase %s: failed\n", i, mlkem_encap_test_vectors[i].name);
+		overall_status = TEST_FAILED;
+	}
+
+	return overall_status;
+}
+
+static int
+test_mlkem_decap(void)
+{
+	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+	struct rte_cryptodev_asym_capability_idx idx;
+	uint8_t dev_id = ts_params->valid_devs[0];
+	int overall_status = TEST_SUCCESS;
+	int ret;
+
+	/* Check if ML-KEM is supported */
+	idx.type = RTE_CRYPTO_ASYM_XFORM_ML_KEM;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-KEM. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	if (!(capa->op_types & (1 <<  RTE_CRYPTO_ML_KEM_OP_DECAP))) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-KEM decap operation. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	for (uint8_t i = 0; i < RTE_DIM(mlkem_decap_test_vectors); i++) {
+		if (!(capa->mlkem_capa[RTE_CRYPTO_ML_KEM_OP_DECAP] &
+			(1 << mlkem_decap_test_vectors[i].type))) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support ML-KEM param %u. TestCase %s skipped\n",
+				mlkem_decap_test_vectors[i].type,
+				mlkem_decap_test_vectors[i].name);
+			printf("  %u) TestCase %s: skipped\n", i,
+				mlkem_decap_test_vectors[i].name);
+			continue;
+		}
+		ret = mlkem_decap(&mlkem_decap_test_vectors[i]);
+		if (ret == TEST_SUCCESS || ret == TEST_SKIPPED) {
+			printf("  %u) TestCase %s: %s\n", i, mlkem_decap_test_vectors[i].name,
+				(ret == TEST_SKIPPED) ? "skipped" : "passed");
+				continue;
+		}
+
+		printf("  %u) TestCase %s: failed\n", i, mlkem_decap_test_vectors[i].name);
+		overall_status = TEST_FAILED;
+	}
+
+	return overall_status;
+}
+
+static int
+test_mldsa_keygen(void)
+{
+	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+	struct rte_cryptodev_asym_capability_idx idx;
+	uint8_t dev_id = ts_params->valid_devs[0];
+	int overall_status = TEST_SUCCESS;
+	int ret;
+
+	/* Check if ML-DSA is supported */
+	idx.type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-DSA. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	if (!(capa->op_types & (1 <<  RTE_CRYPTO_ML_DSA_OP_KEYGEN))) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-DSA keygen operation. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	for (uint8_t i = 0; i < RTE_DIM(mldsa_keygen_test_vectors); i++) {
+		if (!(capa->mldsa_capa[RTE_CRYPTO_ML_DSA_OP_KEYGEN] &
+			(1 << mldsa_keygen_test_vectors[i].type))) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support ML-DSA param %u. TestCase %s skipped\n",
+				mldsa_keygen_test_vectors[i].type,
+				mldsa_keygen_test_vectors[i].name);
+			printf("  %u) TestCase %s: skipped\n", i,
+				mldsa_keygen_test_vectors[i].name);
+			continue;
+		}
+		ret = mldsa_keygen(&mldsa_keygen_test_vectors[i]);
+		if (ret == TEST_SUCCESS || ret == TEST_SKIPPED) {
+			printf("  %u) TestCase %s: %s\n", i, mldsa_keygen_test_vectors[i].name,
+				(ret == TEST_SKIPPED) ? "skipped" : "passed");
+				continue;
+		}
+
+		printf("  %u) TestCase %s: failed\n", i, mldsa_keygen_test_vectors[i].name);
+		overall_status = TEST_FAILED;
+	}
+
+	return overall_status;
+}
+
+static int
+test_mldsa_sign(void)
+{
+	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+	struct rte_cryptodev_asym_capability_idx idx;
+	uint8_t dev_id = ts_params->valid_devs[0];
+	int overall_status = TEST_SUCCESS;
+	int ret;
+
+	/* Check if ML-DSA is supported */
+	idx.type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-DSA. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	if (!(capa->op_types & (1 <<  RTE_CRYPTO_ML_DSA_OP_SIGN))) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-DSA sign operation. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	for (uint8_t i = 0; i < RTE_DIM(mldsa_sign_test_vectors); i++) {
+		if (!(capa->mldsa_capa[RTE_CRYPTO_ML_DSA_OP_SIGN] &
+			(1 << mldsa_sign_test_vectors[i].type))) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support ML-DSA param %u. TestCase %s skipped\n",
+				mldsa_sign_test_vectors[i].type,
+				mldsa_sign_test_vectors[i].name);
+			printf("  %u) TestCase %s: skipped\n", i,
+				mldsa_sign_test_vectors[i].name);
+			continue;
+		}
+		ret = mldsa_sign(&mldsa_sign_test_vectors[i]);
+		if (ret == TEST_SUCCESS || ret == TEST_SKIPPED) {
+			printf("  %u) TestCase %s: %s\n", i, mldsa_sign_test_vectors[i].name,
+				(ret == TEST_SKIPPED) ? "skipped" : "passed");
+				continue;
+		}
+
+		printf("  %u) TestCase %s: failed\n", i, mldsa_sign_test_vectors[i].name);
+		overall_status = TEST_FAILED;
+	}
+
+	return overall_status;
+}
+
+static int
+test_mldsa_verify(void)
+{
+	struct crypto_testsuite_params_asym *ts_params = &testsuite_params;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+	struct rte_cryptodev_asym_capability_idx idx;
+	uint8_t dev_id = ts_params->valid_devs[0];
+	int overall_status = TEST_SUCCESS;
+	int ret;
+
+	/* Check if ML-DSA is supported */
+	idx.type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-DSA. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	if (!(capa->op_types & (1 <<  RTE_CRYPTO_ML_DSA_OP_VERIFY))) {
+		RTE_LOG(DEBUG, USER1,
+			"Device doesn't support ML-DSA verify operation. Test skipped\n");
+		return TEST_SKIPPED;
+	}
+
+	for (uint8_t i = 0; i < RTE_DIM(mldsa_verify_test_vectors); i++) {
+		if (!(capa->mldsa_capa[RTE_CRYPTO_ML_DSA_OP_VERIFY] &
+			(1 << mldsa_verify_test_vectors[i].type))) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support ML-DSA param %u. TestCase %s skipped\n",
+				mldsa_verify_test_vectors[i].type,
+				mldsa_verify_test_vectors[i].name);
+			printf("  %u) TestCase %s: skipped\n", i,
+				mldsa_verify_test_vectors[i].name);
+			continue;
+		}
+		ret = mldsa_verify(&mldsa_verify_test_vectors[i]);
+		if (ret == TEST_SUCCESS || ret == TEST_SKIPPED) {
+			printf("  %u) TestCase %s: %s\n", i, mldsa_verify_test_vectors[i].name,
+				(ret == TEST_SKIPPED) ? "skipped" : "passed");
+				continue;
+		}
+
+		printf("  %u) TestCase %s: failed\n", i, mldsa_verify_test_vectors[i].name);
+		overall_status = TEST_FAILED;
+	}
+
+	return overall_status;
 }
 
 #define SET_RSA_PARAM(arg, vector, coef) \
@@ -3924,6 +4869,132 @@ kat_rsa_decrypt_crt(const void *data)
 	return 0;
 }
 
+static int
+test_sm2_partial_encryption(const void *data)
+{
+	struct rte_crypto_asym_xform xform = { 0 };
+	const uint8_t dev_id = params->valid_devs[0];
+	const struct crypto_testsuite_sm2_params *test_vector = data;
+	uint8_t result_C1_x1[TEST_DATA_SIZE] = { 0 };
+	uint8_t result_C1_y1[TEST_DATA_SIZE] = { 0 };
+	uint8_t result_kP_x1[TEST_DATA_SIZE] = { 0 };
+	uint8_t result_kP_y1[TEST_DATA_SIZE] = { 0 };
+	struct rte_cryptodev_asym_capability_idx idx;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+
+	idx.type = RTE_CRYPTO_ASYM_XFORM_SM2;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL)
+		return TEST_SKIPPED;
+	if (!rte_cryptodev_asym_xform_capability_check_opcap(capa,
+			RTE_CRYPTO_ASYM_OP_ENCRYPT, RTE_CRYPTO_SM2_PARTIAL)) {
+		return TEST_SKIPPED;
+	}
+
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_SM2;
+	xform.ec.curve_id = RTE_CRYPTO_EC_GROUP_SM2;
+	xform.ec.q = test_vector->pubkey;
+	self->op->asym->sm2.op_type = RTE_CRYPTO_ASYM_OP_ENCRYPT;
+	self->op->asym->sm2.k = test_vector->k;
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+
+	self->op->asym->sm2.c1.x.data = result_C1_x1;
+	self->op->asym->sm2.c1.y.data = result_C1_y1;
+	self->op->asym->sm2.kp.x.data = result_kP_x1;
+	self->op->asym->sm2.kp.y.data = result_kP_y1;
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op");
+
+	debug_hexdump(stdout, "C1[x]", self->op->asym->sm2.c1.x.data,
+		self->op->asym->sm2.c1.x.length);
+	debug_hexdump(stdout, "C1[y]", self->op->asym->sm2.c1.y.data,
+		self->op->asym->sm2.c1.y.length);
+	debug_hexdump(stdout, "kP[x]", self->op->asym->sm2.kp.x.data,
+		self->op->asym->sm2.kp.x.length);
+	debug_hexdump(stdout, "kP[y]", self->op->asym->sm2.kp.y.data,
+		self->op->asym->sm2.kp.y.length);
+
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(test_vector->C1.x.data,
+		self->op->asym->sm2.c1.x.data,
+		test_vector->C1.x.length,
+		"Incorrect value of C1[x]\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(test_vector->C1.y.data,
+		self->op->asym->sm2.c1.y.data,
+		test_vector->C1.y.length,
+		"Incorrect value of C1[y]\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(test_vector->kP.x.data,
+		self->op->asym->sm2.kp.x.data,
+		test_vector->kP.x.length,
+		"Incorrect value of kP[x]\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(test_vector->kP.y.data,
+		self->op->asym->sm2.kp.y.data,
+		test_vector->kP.y.length,
+		"Incorrect value of kP[y]\n");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_sm2_partial_decryption(const void *data)
+{
+	struct rte_crypto_asym_xform xform = {};
+	const uint8_t dev_id = params->valid_devs[0];
+	const struct crypto_testsuite_sm2_params *test_vector = data;
+	uint8_t result_kP_x1[TEST_DATA_SIZE] = { 0 };
+	uint8_t result_kP_y1[TEST_DATA_SIZE] = { 0 };
+	struct rte_cryptodev_asym_capability_idx idx;
+	const struct rte_cryptodev_asymmetric_xform_capability *capa;
+
+	idx.type = RTE_CRYPTO_ASYM_XFORM_SM2;
+	capa = rte_cryptodev_asym_capability_get(dev_id, &idx);
+	if (capa == NULL)
+		return TEST_SKIPPED;
+	if (!rte_cryptodev_asym_xform_capability_check_opcap(capa,
+			RTE_CRYPTO_ASYM_OP_DECRYPT, RTE_CRYPTO_SM2_PARTIAL)) {
+		return TEST_SKIPPED;
+	}
+
+	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_SM2;
+	xform.ec.pkey = test_vector->pkey;
+	self->op->asym->sm2.op_type = RTE_CRYPTO_ASYM_OP_DECRYPT;
+	self->op->asym->sm2.c1 = test_vector->C1;
+
+	if (rte_cryptodev_asym_session_create(dev_id, &xform,
+			params->session_mpool, &self->sess) < 0) {
+		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
+			__LINE__);
+		return TEST_FAILED;
+	}
+	rte_crypto_op_attach_asym_session(self->op, self->sess);
+
+	self->op->asym->sm2.kp.x.data = result_kP_x1;
+	self->op->asym->sm2.kp.y.data = result_kP_y1;
+	TEST_ASSERT_SUCCESS(send_one(),
+		"Failed to process crypto op");
+
+	debug_hexdump(stdout, "kP[x]", self->op->asym->sm2.kp.x.data,
+		self->op->asym->sm2.c1.x.length);
+	debug_hexdump(stdout, "kP[y]", self->op->asym->sm2.kp.y.data,
+		self->op->asym->sm2.c1.y.length);
+
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(test_vector->kP.x.data,
+		self->op->asym->sm2.kp.x.data,
+		test_vector->kP.x.length,
+		"Incorrect value of kP[x]\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(test_vector->kP.y.data,
+		self->op->asym->sm2.kp.y.data,
+		test_vector->kP.y.length,
+		"Incorrect value of kP[y]\n");
+
+	return 0;
+}
+
 static struct unit_test_suite cryptodev_openssl_asym_testsuite  = {
 	.suite_name = "Crypto Device OPENSSL ASYM Unit Test Suite",
 	.setup = testsuite_setup,
@@ -3987,6 +5058,7 @@ static struct unit_test_suite cryptodev_openssl_asym_testsuite  = {
 			ut_setup_asym, ut_teardown_asym,
 			modular_exponentiation, &modex_group_test_cases[7]),
 		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_eddsa_sign_verify_all_curve),
+
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };
@@ -3996,6 +5068,14 @@ static struct unit_test_suite cryptodev_qat_asym_testsuite  = {
 	.setup = testsuite_setup,
 	.teardown = testsuite_teardown,
 	.unit_test_cases = {
+		TEST_CASE_NAMED_WITH_DATA(
+			"SM2 encryption - test case 1",
+			ut_setup_asym, ut_teardown_asym,
+			test_sm2_partial_encryption, &sm2_enc_hw_t1),
+		TEST_CASE_NAMED_WITH_DATA(
+			"SM2 decryption - test case 1",
+			ut_setup_asym, ut_teardown_asym,
+			test_sm2_partial_decryption, &sm2_enc_hw_t1),
 		TEST_CASE_NAMED_WITH_DATA(
 			"Modular Exponentiation (mod=128, base=20, exp=3, res=128)",
 			ut_setup_asym, ut_teardown_asym,
@@ -4023,6 +5103,19 @@ static struct unit_test_suite cryptodev_qat_asym_testsuite  = {
 			"RSA Decryption (n=128, pt=20, e=3) CRT, Padding: NONE",
 			ut_setup_asym, ut_teardown_asym,
 			kat_rsa_decrypt_crt, &rsa_vector_128_20_3_none),
+		TEST_CASE_NAMED_ST(
+			"ECDH Elliptic Curve tests",
+			ut_setup_asym, ut_teardown_asym,
+			test_ecdh_qat_curves),
+		TEST_CASE_NAMED_ST(
+			"ECPM Elliptic Curve tests",
+			ut_setup_asym, ut_teardown_asym,
+			test_ecpm_qat_curves),
+		TEST_CASE_NAMED_ST(
+			"ECDSA Elliptic Curve tests",
+			ut_setup_asym, ut_teardown_asym,
+			test_ecdsa_sign_verify_qat_curves),
+
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };
@@ -4090,6 +5183,12 @@ static struct unit_test_suite cryptodev_octeontx_asym_testsuite  = {
 		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym,
 				test_ecpm_all_curve),
 		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_eddsa_sign_verify_all_curve),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_mlkem_keygen),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_mlkem_encap),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_mlkem_decap),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_mldsa_keygen),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_mldsa_sign),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_mldsa_verify),
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };

@@ -67,13 +67,14 @@ Command File Functions
 To facilitate loading large number of commands or to avoid cutting and pasting where not
 practical or possible testpmd supports alternative methods for executing commands.
 
-* If started with the ``--cmdline-file=FILENAME`` command line argument testpmd
-  will execute all CLI commands contained within the file immediately before
+* If started with the ``--cmdline-file=FILENAME``
+  or ``--cmdline-file-noecho=FILENAME`` command line argument,
+  testpmd will execute all CLI commands contained within the file immediately before
   starting packet forwarding or entering interactive mode.
 
 .. code-block:: console
 
-   ./dpdk-testpmd -n4 -r2 ... -- -i --cmdline-file=/home/ubuntu/flow-create-commands.txt
+   ./dpdk-testpmd ... -- -i --cmdline-file-noecho=/home/ubuntu/flow-create-commands.txt
    Interactive-mode selected
    CLI commands to be read from /home/ubuntu/flow-create-commands.txt
    Configuring Port 0 (socket 0)
@@ -90,12 +91,12 @@ practical or possible testpmd supports alternative methods for executing command
    ...
    Flow rule #498 created
    Flow rule #499 created
-   Read all CLI commands from /home/ubuntu/flow-create-commands.txt
+   Finished reading all CLI commands from /home/ubuntu/flow-create-commands.txt
    testpmd>
 
 
 * At run-time additional commands can be loaded in bulk by invoking the ``load FILENAME``
-  command.
+  or ``load_echo FILENAME`` command.
 
 .. code-block:: console
 
@@ -106,7 +107,7 @@ practical or possible testpmd supports alternative methods for executing command
    ...
    Flow rule #498 created
    Flow rule #499 created
-   Read all CLI commands from /home/ubuntu/flow-create-commands.txt
+   Finished reading all CLI commands from /home/ubuntu/flow-create-commands.txt
    testpmd>
 
 
@@ -568,70 +569,83 @@ dump physmem
 
 Dumps all physical memory segment layouts::
 
-   testpmd> dump_physmem
+   testpmd> dump physmem
 
 dump memzone
 ~~~~~~~~~~~~
 
 Dumps the layout of all memory zones::
 
-   testpmd> dump_memzone
+   testpmd> dump memzone
 
 dump socket memory
 ~~~~~~~~~~~~~~~~~~
 
 Dumps the memory usage of all sockets::
 
-   testpmd> dump_socket_mem
+   testpmd> dump socket_mem
 
 dump struct size
 ~~~~~~~~~~~~~~~~
 
 Dumps the size of all memory structures::
 
-   testpmd> dump_struct_sizes
+   testpmd> dump struct_sizes
 
 dump ring
 ~~~~~~~~~
 
 Dumps the status of all or specific element in DPDK rings::
 
-   testpmd> dump_ring [ring_name]
+   testpmd> dump ring [ring_name]
 
 dump mempool
 ~~~~~~~~~~~~
 
 Dumps the statistics of all or specific memory pool::
 
-   testpmd> dump_mempool [mempool_name]
+   testpmd> dump mempool [mempool_name]
 
 dump devargs
 ~~~~~~~~~~~~
 
 Dumps the user device list::
 
-   testpmd> dump_devargs
+   testpmd> dump devargs
 
 dump lcores
 ~~~~~~~~~~~
 
 Dumps the logical cores list::
 
-   testpmd> dump_lcores
+   testpmd> dump lcores
 
 dump trace
 ~~~~~~~~~~
 
 Dumps the tracing data to the folder according to the current EAL settings::
 
-   testpmd> dump_trace
+   testpmd> dump trace
 
 dump log types
 ~~~~~~~~~~~~~~
 
 Dumps the log level for all the dpdk modules::
 
-   testpmd> dump_log_types
+   testpmd> dump log_types
+
+dump mbuf history
+~~~~~~~~~~~~~~~~~
+
+The mbuf history is tracked
+if enabled at compilation with ``RTE_MBUF_HISTORY_DEBUG``.
+
+This tracking can be displayed or saved to a file
+for all mbufs or specific ones selected by pointer or mempool name::
+
+   testpmd> dump mbuf history all [file]
+   testpmd> dump mbuf history <mbuf_addr> [file]
+   testpmd> dump mbuf pool history <mp_name> [file]
 
 show (raw_encap|raw_decap)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1473,6 +1487,22 @@ Where:
 * ``pause_time`` (integer): Pause quanta filled in the PFC frame for which
   interval, remote Tx will be paused. Valid only if Tx pause is on.
 
+Set dcb fwd_tc
+~~~~~~~~~~~~~~
+
+Config DCB forwarding on specify TCs, if bit-n in tc-mask is 1, then TC-n's
+forwarding is enabled, and vice versa::
+
+   testpmd> set dcb fwd_tc (tc_mask)
+
+set dcb fwd_tc_cores
+~~~~~~~~~~~~~~~~~~~~
+
+Config DCB forwarding cores per-TC, 1-means one core process all queues of a TC,
+2-means two cores process all queues of a TC, and so on::
+
+   testpmd> set dcb fwd_tc_cores (tc_cores)
+
 Set Rx queue available descriptors threshold
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2090,7 +2120,7 @@ port config - speed
 
 Set the speed and duplex mode for all ports or a specific port::
 
-   testpmd> port config (port_id|all) speed (10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto) \
+   testpmd> port config (port_id|all) speed (10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|800000|auto) \
             duplex (half|full|auto)
 
 port config - queues/descriptors
@@ -5391,6 +5421,10 @@ rules like above for the peer port.
 ::
 
  testpmd> flow indirect_action 0 update 0 action conntrack_update dir / end
+
+Inspect the conntrack action state through the following command::
+
+   testpmd> flow indirect_action 0 query <action ID>
 
 Sample meter with policy rules
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

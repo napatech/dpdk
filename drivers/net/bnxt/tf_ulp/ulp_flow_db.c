@@ -9,6 +9,8 @@
 #include "bnxt.h"
 #include "bnxt_tf_common.h"
 #include "bnxt_ulp_utils.h"
+#include "bnxt_ulp_tfc.h"
+#include "ulp_utils.h"
 #include "ulp_template_struct.h"
 #include "ulp_mapper.h"
 #include "ulp_flow_db.h"
@@ -530,9 +532,6 @@ ulp_flow_db_fid_alloc(struct bnxt_ulp_context *ulp_ctxt,
 	if (flow_type == BNXT_ULP_FDB_TYPE_REGULAR)
 		ulp_flow_db_func_id_set(flow_db, *fid, func_id);
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-	BNXT_DRV_DBG(DEBUG, "flow_id = %u:%u allocated\n", flow_type, *fid);
-#endif
 	/* return success */
 	return 0;
 }
@@ -803,9 +802,6 @@ ulp_flow_db_fid_free(struct bnxt_ulp_context *ulp_ctxt,
 	if (flow_type == BNXT_ULP_FDB_TYPE_REGULAR)
 		ulp_flow_db_func_id_set(flow_db, fid, 0);
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-	BNXT_DRV_DBG(DEBUG, "flow_id = %u:%u freed\n", flow_type, fid);
-#endif
 	/* all good, return success */
 	return 0;
 }
@@ -883,7 +879,7 @@ ulp_flow_db_resource_get(struct bnxt_ulp_context *ulp_ctxt,
  *
  * returns 0 on success and negative on failure.
  */
-static int32_t
+int32_t
 ulp_flow_db_next_entry_get(struct bnxt_ulp_flow_db *flow_db,
 			   enum bnxt_ulp_fdb_type flow_type,
 			   uint32_t *fid)

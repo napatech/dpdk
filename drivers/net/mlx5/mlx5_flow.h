@@ -21,6 +21,9 @@
 #include "hws/mlx5dr.h"
 #include "mlx5_tx.h"
 
+#define MLX5_HW_PORT_IS_PROXY(priv) \
+	(!!((priv)->sh->esw_mode && (priv)->master))
+
 /* E-Switch Manager port, used for rte_flow_item_port_id. */
 #define MLX5_PORT_ESW_MGR UINT32_MAX
 
@@ -99,6 +102,11 @@ enum mlx5_indirect_type {
 
 #define MLX5_INDIRECT_ACT_CT_GET_IDX(index) \
 	((index) & ((1 << MLX5_INDIRECT_ACT_CT_OWNER_SHIFT) - 1))
+
+#define MLX5_FLOW_CONNTRACK_PKT_STATE_ALL \
+	(RTE_FLOW_CONNTRACK_PKT_STATE_VALID | RTE_FLOW_CONNTRACK_PKT_STATE_CHANGED | \
+	 RTE_FLOW_CONNTRACK_PKT_STATE_INVALID | RTE_FLOW_CONNTRACK_PKT_STATE_DISABLED | \
+	 RTE_FLOW_CONNTRACK_PKT_STATE_BAD)
 
 /*
  * When HW steering flow engine is used, the CT action handles are encoded in a following way:
@@ -216,9 +224,6 @@ struct mlx5_mirror {
 	struct mlx5dr_action *mirror_action;
 	struct mlx5_mirror_clone clone[MLX5_MIRROR_MAX_CLONES_NUM];
 };
-
-/* Default queue number. */
-#define MLX5_RSSQ_DEFAULT_NUM 16
 
 #define MLX5_FLOW_LAYER_OUTER_L2 (1u << 0)
 #define MLX5_FLOW_LAYER_OUTER_L3_IPV4 (1u << 1)
@@ -464,10 +469,6 @@ struct mlx5_mirror {
 
 #define MLX5_FLOW_XCAP_ACTIONS (MLX5_FLOW_ACTION_ENCAP | MLX5_FLOW_ACTION_DECAP)
 
-#ifndef IPPROTO_MPLS
-#define IPPROTO_MPLS 137
-#endif
-
 #define MLX5_IPV6_HDR_ECN_MASK 0x3
 #define MLX5_IPV6_HDR_DSCP_SHIFT 2
 
@@ -483,6 +484,9 @@ struct mlx5_mirror {
 
 /* UDP port numbers for GENEVE. */
 #define MLX5_UDP_PORT_GENEVE 6081
+
+/* UDP port numbers for ESP. */
+#define MLX5_UDP_PORT_ESP 4500
 
 /* Lowest priority indicator. */
 #define MLX5_FLOW_LOWEST_PRIO_INDICATOR ((uint32_t)-1)
@@ -510,9 +514,6 @@ struct mlx5_mirror {
 	(RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_FRAG_IPV4 | \
 	 RTE_ETH_RSS_NONFRAG_IPV4_TCP | RTE_ETH_RSS_NONFRAG_IPV4_UDP | \
 	 RTE_ETH_RSS_NONFRAG_IPV4_OTHER)
-
-/* Valid L4 RSS types */
-#define MLX5_L4_RSS_TYPES (RTE_ETH_RSS_L4_SRC_ONLY | RTE_ETH_RSS_L4_DST_ONLY)
 
 /* IBV hash source bits  for IPV4. */
 #define MLX5_IPV4_IBV_RX_HASH (IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4)
@@ -1650,6 +1651,23 @@ struct mlx5_flow_group {
 	struct mlx5_list *matchers;
 };
 
+/**
+ * Returns true if a group with the given index is a root group.
+ *
+ * @param group_id
+ *   Group index.
+ *   It is assumed that provided index is already translated from user index to PMD index
+ *   (as is for transfer groups for example).
+ *
+ * @returns
+ *   True if group is a root group.
+ *   False otherwise.
+ */
+static inline bool
+mlx5_group_id_is_root(uint32_t group_id)
+{
+	return group_id == 0;
+}
 
 #define MLX5_HW_TBL_MAX_ITEM_TEMPLATE 32
 #define MLX5_HW_TBL_MAX_ACTION_TEMPLATE 32
@@ -1726,7 +1744,7 @@ struct rte_flow_template_table {
 	struct rte_flow_pattern_template *its[MLX5_HW_TBL_MAX_ITEM_TEMPLATE];
 	/* Action templates bind to the table. */
 	struct mlx5_hw_action_template ats[MLX5_HW_TBL_MAX_ACTION_TEMPLATE];
-	struct mlx5_indexed_pool *flow; /* The table's flow ipool. */
+	struct mlx5_indexed_pool *flow_pool; /* The table's flow ipool. */
 	struct rte_flow_hw_aux *flow_aux; /**< Auxiliary data stored per flow. */
 	struct mlx5_indexed_pool *resource; /* The table's resource ipool. */
 	struct mlx5_flow_template_table_cfg cfg;
@@ -1746,6 +1764,10 @@ struct rte_flow_template_table {
 	 */
 	struct mlx5_dr_rule_action_container rule_acts[];
 };
+
+bool mlx5_vport_rx_metadata_passing_enabled(const struct mlx5_dev_ctx_shared *sh);
+bool mlx5_vport_tx_metadata_passing_enabled(const struct mlx5_dev_ctx_shared *sh);
+bool mlx5_esw_metadata_passing_enabled(const struct mlx5_dev_ctx_shared *sh);
 
 static __rte_always_inline struct mlx5dr_matcher *
 mlx5_table_matcher(const struct rte_flow_template_table *table)
@@ -1788,9 +1810,15 @@ flow_hw_get_reg_id_by_domain(struct rte_eth_dev *dev,
 	switch (type) {
 	case RTE_FLOW_ITEM_TYPE_META:
 		if (sh->config.dv_esw_en &&
-		    sh->config.dv_xmeta_en == MLX5_XMETA_MODE_META32_HWS) {
+		    (sh->config.dv_xmeta_en == MLX5_XMETA_MODE_META32_HWS ||
+		     mlx5_esw_metadata_passing_enabled(sh))) {
 			return REG_C_1;
 		}
+		if ((mlx5_vport_rx_metadata_passing_enabled(sh) &&
+		     domain_type == MLX5DR_TABLE_TYPE_NIC_RX) ||
+		    (mlx5_vport_tx_metadata_passing_enabled(sh) &&
+		     domain_type == MLX5DR_TABLE_TYPE_NIC_TX))
+			return REG_C_1;
 		/*
 		 * On root table - PMD allows only egress META matching, thus
 		 * REG_A matching is sufficient.
@@ -1809,7 +1837,8 @@ flow_hw_get_reg_id_by_domain(struct rte_eth_dev *dev,
 	case RTE_FLOW_ITEM_TYPE_TAG:
 		if (id == RTE_PMD_MLX5_LINEAR_HASH_TAG_INDEX)
 			return REG_C_3;
-		MLX5_ASSERT(id < MLX5_FLOW_HW_TAGS_MAX);
+		if (id >= MLX5_FLOW_HW_TAGS_MAX)
+			return REG_NON;
 		return reg->hw_avl_tags[id];
 	default:
 		return REG_NON;
@@ -1890,26 +1919,30 @@ flow_hw_get_reg_id_from_ctx(void *dr_ctx, enum rte_flow_item_type type,
 		(((func) == RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ) || \
 		 ((func) == RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ_SORT))
 
-/* extract next protocol type from Ethernet & VLAN headers */
-#define MLX5_ETHER_TYPE_FROM_HEADER(_s, _m, _itm, _prt) do { \
-	(_prt) = ((const struct _s *)(_itm)->mask)->_m;       \
-	(_prt) &= ((const struct _s *)(_itm)->spec)->_m;      \
-	(_prt) = rte_be_to_cpu_16((_prt));                    \
-} while (0)
 
-/* array of valid combinations of RX Hash fields for RSS */
-static const uint64_t mlx5_rss_hash_fields[] = {
-	MLX5_RSS_HASH_IPV4,
-	MLX5_RSS_HASH_IPV4_TCP,
-	MLX5_RSS_HASH_IPV4_UDP,
-	MLX5_RSS_HASH_IPV4_ESP,
-	MLX5_RSS_HASH_IPV6,
-	MLX5_RSS_HASH_IPV6_TCP,
-	MLX5_RSS_HASH_IPV6_UDP,
-	MLX5_RSS_HASH_IPV6_ESP,
-	MLX5_RSS_HASH_ESP_SPI,
-	MLX5_RSS_HASH_NONE,
+/**
+ * Each enum variant corresponds to a single valid protocols combination for hrxq configuration
+ * Each variant serves as an index into #mlx5_rss_hash_fields array containing default
+ * bitmaps of ibv_rx_hash_fields flags for given protocols combination.
+ */
+enum {
+	MLX5_RSS_HASH_IDX_IPV4,
+	MLX5_RSS_HASH_IDX_IPV4_TCP,
+	MLX5_RSS_HASH_IDX_IPV4_UDP,
+	MLX5_RSS_HASH_IDX_IPV4_ESP,
+	MLX5_RSS_HASH_IDX_IPV6,
+	MLX5_RSS_HASH_IDX_IPV6_TCP,
+	MLX5_RSS_HASH_IDX_IPV6_UDP,
+	MLX5_RSS_HASH_IDX_IPV6_ESP,
+	MLX5_RSS_HASH_IDX_TCP,
+	MLX5_RSS_HASH_IDX_UDP,
+	MLX5_RSS_HASH_IDX_ESP_SPI,
+	MLX5_RSS_HASH_IDX_NONE,
+	MLX5_RSS_HASH_IDX_MAX,
 };
+
+/** Array of valid combinations of RX Hash fields for RSS. */
+extern const uint64_t mlx5_rss_hash_fields[];
 
 /* Shared RSS action structure */
 struct mlx5_shared_action_rss {
@@ -1919,7 +1952,7 @@ struct mlx5_shared_action_rss {
 	uint8_t key[MLX5_RSS_HASH_KEY_LEN]; /**< RSS hash key. */
 	struct mlx5_ind_table_obj *ind_tbl;
 	/**< Hash RX queues (hrxq, hrxq_tunnel fields) indirection table. */
-	uint32_t hrxq[MLX5_RSS_HASH_FIELDS_LEN];
+	uint32_t hrxq[MLX5_RSS_HASH_IDX_MAX];
 	/**< Hash RX queue indexes mapped to mlx5_rss_hash_fields */
 	rte_spinlock_t action_rss_sl; /**< Shared RSS action spinlock. */
 };
@@ -2031,6 +2064,8 @@ flow_hw_get_sqn(struct rte_eth_dev *dev, uint16_t tx_queue, uint32_t *sqn)
 	}
 	if (mlx5_is_external_txq(dev, tx_queue)) {
 		ext_txq = mlx5_ext_txq_get(dev, tx_queue);
+		if (ext_txq == NULL)
+			return -EINVAL;
 		*sqn = ext_txq->hw_id;
 		return 0;
 	}
@@ -2999,12 +3034,15 @@ struct mlx5_flow_hw_ctrl_fdb {
 	struct rte_flow_pattern_template *port_items_tmpl;
 	struct rte_flow_actions_template *jump_one_actions_tmpl;
 	struct rte_flow_template_table *hw_esw_zero_tbl;
-	struct rte_flow_pattern_template *tx_meta_items_tmpl;
-	struct rte_flow_actions_template *tx_meta_actions_tmpl;
-	struct rte_flow_template_table *hw_tx_meta_cpy_tbl;
 	struct rte_flow_pattern_template *lacp_rx_items_tmpl;
 	struct rte_flow_actions_template *lacp_rx_actions_tmpl;
 	struct rte_flow_template_table *hw_lacp_rx_tbl;
+};
+
+struct mlx5_flow_hw_ctrl_nic {
+	struct rte_flow_pattern_template *tx_meta_items_tmpl;
+	struct rte_flow_actions_template *tx_meta_actions_tmpl;
+	struct rte_flow_template_table *hw_tx_meta_cpy_tbl;
 };
 
 #define MLX5_CTRL_PROMISCUOUS    (RTE_BIT32(0))
@@ -3016,6 +3054,8 @@ struct mlx5_flow_hw_ctrl_fdb {
 #define MLX5_CTRL_VLAN_FILTER    (RTE_BIT32(6))
 
 int mlx5_flow_hw_ctrl_flows(struct rte_eth_dev *dev, uint32_t flags);
+int mlx5_flow_hw_create_ctrl_rx_tables(struct rte_eth_dev *dev);
+void mlx5_flow_hw_cleanup_ctrl_rx_tables(struct rte_eth_dev *dev);
 
 /** Create a control flow rule for matching unicast DMAC with VLAN (Verbs and DV). */
 int mlx5_legacy_dmac_flow_create(struct rte_eth_dev *dev, const struct rte_ether_addr *addr);
@@ -3572,10 +3612,13 @@ int mlx5_flow_hw_flush_ctrl_flows(struct rte_eth_dev *dev);
 int mlx5_flow_hw_esw_create_sq_miss_flow(struct rte_eth_dev *dev,
 					 uint32_t sqn, bool external);
 int mlx5_flow_hw_esw_destroy_sq_miss_flow(struct rte_eth_dev *dev,
-					  uint32_t sqn);
+					  uint32_t sqn, bool external);
 int mlx5_flow_hw_esw_create_default_jump_flow(struct rte_eth_dev *dev);
-int mlx5_flow_hw_create_tx_default_mreg_copy_flow(struct rte_eth_dev *dev);
-int mlx5_flow_hw_tx_repr_matching_flow(struct rte_eth_dev *dev, uint32_t sqn, bool external);
+int mlx5_flow_hw_create_nic_tx_default_mreg_copy_flow(struct rte_eth_dev *dev, uint32_t sqn);
+int mlx5_flow_hw_create_tx_repr_matching_flow(struct rte_eth_dev *dev,
+					      uint32_t sqn, bool external);
+int mlx5_flow_hw_destroy_tx_repr_matching_flow(struct rte_eth_dev *dev,
+					       uint32_t sqn, bool external);
 int mlx5_flow_hw_lacp_rx_flow(struct rte_eth_dev *dev);
 int mlx5_flow_actions_validate(struct rte_eth_dev *dev,
 		const struct rte_flow_actions_template_attr *attr,
@@ -3592,6 +3635,8 @@ int mlx5_flow_item_field_width(struct rte_eth_dev *dev,
 			   enum rte_flow_field_id field, int inherit,
 			   const struct rte_flow_attr *attr,
 			   struct rte_flow_error *error);
+void mlx5_flow_rxq_mark_flag_set(struct rte_eth_dev *dev);
+void mlx5_flow_rxq_flags_clear(struct rte_eth_dev *dev);
 uintptr_t flow_legacy_list_create(struct rte_eth_dev *dev, enum mlx5_flow_type type,
 				const struct rte_flow_attr *attr,
 				const struct rte_flow_item items[],
@@ -3666,8 +3711,18 @@ flow_hw_get_ipv6_route_ext_mod_id_from_ctx(void *dr_ctx, uint8_t idx)
 #endif
 	return 0;
 }
+
+static inline bool
+mlx5_dv_modify_ipv6_traffic_class_supported(struct mlx5_priv *priv)
+{
+	return priv->sh->phdev->config.ipv6_tc_fallback == MLX5_IPV6_TC_OK;
+}
+
 void
 mlx5_indirect_list_handles_release(struct rte_eth_dev *dev);
+
+bool mlx5_flow_is_steering_disabled(void);
+
 #ifdef HAVE_MLX5_HWS_SUPPORT
 
 #define MLX5_REPR_STC_MEMORY_LOG 11
@@ -3768,5 +3823,5 @@ mlx5_flow_hw_action_flags_get(const struct rte_flow_action actions[],
 
 #include "mlx5_nta_sample.h"
 
-#endif
+#endif /* HAVE_MLX5_HWS_SUPPORT */
 #endif /* RTE_PMD_MLX5_FLOW_H_ */

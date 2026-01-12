@@ -972,22 +972,28 @@ rx_desc_status_to_pkt_flags(uint32_t rx_status, uint64_t vlan_flags)
 }
 
 static inline uint64_t
-rx_desc_error_to_pkt_flags(uint32_t rx_status)
+rx_desc_error_to_pkt_flags(uint32_t rx_status, struct ngbe_rx_queue *rxq)
 {
 	uint64_t pkt_flags = 0;
 
 	/* checksum offload can't be disabled */
-	if (rx_status & NGBE_RXD_STAT_IPCS)
+	if (rx_status & NGBE_RXD_STAT_IPCS) {
 		pkt_flags |= (rx_status & NGBE_RXD_ERR_IPCS
 				? RTE_MBUF_F_RX_IP_CKSUM_BAD : RTE_MBUF_F_RX_IP_CKSUM_GOOD);
+		rxq->csum_err += !!(rx_status & NGBE_RXD_ERR_IPCS);
+	}
 
-	if (rx_status & NGBE_RXD_STAT_L4CS)
+	if (rx_status & NGBE_RXD_STAT_L4CS) {
 		pkt_flags |= (rx_status & NGBE_RXD_ERR_L4CS
 				? RTE_MBUF_F_RX_L4_CKSUM_BAD : RTE_MBUF_F_RX_L4_CKSUM_GOOD);
+		rxq->csum_err += !!(rx_status & NGBE_RXD_ERR_L4CS);
+	}
 
 	if (rx_status & NGBE_RXD_STAT_EIPCS &&
-	    rx_status & NGBE_RXD_ERR_EIPCS)
+	    rx_status & NGBE_RXD_ERR_EIPCS) {
 		pkt_flags |= RTE_MBUF_F_RX_OUTER_IP_CKSUM_BAD;
+		rxq->csum_err += !!(rx_status & NGBE_RXD_ERR_EIPCS);
+	}
 
 	return pkt_flags;
 }
@@ -1060,7 +1066,7 @@ ngbe_rx_scan_hw_ring(struct ngbe_rx_queue *rxq)
 			/* convert descriptor fields to rte mbuf flags */
 			pkt_flags = rx_desc_status_to_pkt_flags(s[j],
 					rxq->vlan_flags);
-			pkt_flags |= rx_desc_error_to_pkt_flags(s[j]);
+			pkt_flags |= rx_desc_error_to_pkt_flags(s[j], rxq);
 			pkt_flags |=
 				ngbe_rxd_pkt_info_to_pkt_flags(pkt_info[j]);
 			mb->ol_flags = pkt_flags;
@@ -1393,7 +1399,7 @@ ngbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 		pkt_flags = rx_desc_status_to_pkt_flags(staterr,
 					rxq->vlan_flags);
-		pkt_flags |= rx_desc_error_to_pkt_flags(staterr);
+		pkt_flags |= rx_desc_error_to_pkt_flags(staterr, rxq);
 		pkt_flags |= ngbe_rxd_pkt_info_to_pkt_flags(pkt_info);
 		rxm->ol_flags = pkt_flags;
 		rxm->packet_type = ngbe_rxd_pkt_info_to_pkt_type(pkt_info,
@@ -1464,7 +1470,7 @@ ngbe_fill_cluster_head_buf(struct rte_mbuf *head, struct ngbe_rx_desc *desc,
 	head->vlan_tci = rte_le_to_cpu_16(desc->qw1.hi.tag);
 	pkt_info = rte_le_to_cpu_32(desc->qw0.dw0);
 	pkt_flags = rx_desc_status_to_pkt_flags(staterr, rxq->vlan_flags);
-	pkt_flags |= rx_desc_error_to_pkt_flags(staterr);
+	pkt_flags |= rx_desc_error_to_pkt_flags(staterr, rxq);
 	pkt_flags |= ngbe_rxd_pkt_info_to_pkt_flags(pkt_info);
 	head->ol_flags = pkt_flags;
 	head->packet_type = ngbe_rxd_pkt_info_to_pkt_type(pkt_info,
@@ -1915,7 +1921,7 @@ ngbe_set_tx_function(struct rte_eth_dev *dev, struct ngbe_tx_queue *txq)
 	if (txq->offloads == 0 &&
 			txq->tx_free_thresh >= RTE_PMD_NGBE_TX_MAX_BURST) {
 		PMD_INIT_LOG(DEBUG, "Using simple tx code path");
-		dev->tx_pkt_prepare = NULL;
+		dev->tx_pkt_prepare = rte_eth_tx_pkt_prepare_dummy;
 		if (txq->tx_free_thresh <= RTE_NGBE_TX_MAX_FREE_BUF_SZ &&
 				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128 &&
 				(rte_eal_process_type() != RTE_PROC_PRIMARY ||
@@ -2052,13 +2058,9 @@ ngbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	if (txq == NULL)
 		return -ENOMEM;
 
-	/*
-	 * Allocate Tx ring hardware descriptors. A memzone large enough to
-	 * handle the maximum ring size is allocated in order to allow for
-	 * resizing in later calls to the queue setup function.
-	 */
+	/* Allocate Tx ring hardware descriptors. */
 	tz = rte_eth_dma_zone_reserve(dev, "tx_ring", queue_idx,
-			sizeof(struct ngbe_tx_desc) * NGBE_RING_DESC_MAX,
+			sizeof(struct ngbe_tx_desc) * nb_desc,
 			NGBE_ALIGN, socket_id);
 	if (tz == NULL) {
 		ngbe_tx_queue_release(txq);
@@ -2266,6 +2268,7 @@ ngbe_reset_rx_queue(struct ngbe_adapter *adapter, struct ngbe_rx_queue *rxq)
 	rxq->rx_free_trigger = (uint16_t)(rxq->rx_free_thresh - 1);
 	rxq->rx_tail = 0;
 	rxq->nb_rx_hold = 0;
+	rxq->csum_err = 0;
 	rte_pktmbuf_free(rxq->pkt_first_seg);
 	rxq->pkt_first_seg = NULL;
 	rxq->pkt_last_seg = NULL;
@@ -2317,6 +2320,7 @@ ngbe_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	uint16_t len;
 	struct ngbe_adapter *adapter = ngbe_dev_adapter(dev);
 	uint64_t offloads;
+	uint32_t size;
 
 	PMD_INIT_FUNC_TRACE();
 	hw = ngbe_dev_hw(dev);
@@ -2350,13 +2354,10 @@ ngbe_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->rx_deferred_start = rx_conf->rx_deferred_start;
 	rxq->offloads = offloads;
 
-	/*
-	 * Allocate Rx ring hardware descriptors. A memzone large enough to
-	 * handle the maximum ring size is allocated in order to allow for
-	 * resizing in later calls to the queue setup function.
-	 */
+	/* Allocate Rx ring hardware descriptors. */
+	size = (nb_desc + RTE_PMD_NGBE_RX_MAX_BURST) * sizeof(struct ngbe_rx_desc);
 	rz = rte_eth_dma_zone_reserve(dev, "rx_ring", queue_idx,
-				      RX_RING_SZ, NGBE_ALIGN, socket_id);
+				      size, NGBE_ALIGN, socket_id);
 	if (rz == NULL) {
 		ngbe_rx_queue_release(rxq);
 		return -ENOMEM;
@@ -2366,7 +2367,7 @@ ngbe_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	/*
 	 * Zero init all the descriptors in the ring.
 	 */
-	memset(rz->addr, 0, RX_RING_SZ);
+	memset(rz->addr, 0, size);
 
 	rxq->rdt_reg_addr = NGBE_REG_ADDR(hw, NGBE_RXWP(rxq->reg_idx));
 	rxq->rdh_reg_addr = NGBE_REG_ADDR(hw, NGBE_RXRP(rxq->reg_idx));
@@ -2442,7 +2443,7 @@ ngbe_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	return 0;
 }
 
-uint32_t
+int
 ngbe_dev_rx_queue_count(void *rx_queue)
 {
 #define NGBE_RXQ_SCAN_INTERVAL 4
@@ -3558,7 +3559,7 @@ ngbevf_dev_rx_init(struct rte_eth_dev *dev)
 		 */
 		buf_size = (uint16_t)(rte_pktmbuf_data_room_size(rxq->mb_pool) -
 			RTE_PKTMBUF_HEADROOM);
-		buf_size = ROUND_UP(buf_size, 1 << 10);
+		buf_size = ROUND_DOWN(buf_size, 1 << 10);
 		srrctl |= NGBE_RXCFG_PKTLEN(buf_size);
 
 		/*

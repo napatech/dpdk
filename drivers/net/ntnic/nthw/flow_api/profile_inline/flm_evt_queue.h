@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2024 Napatech A/S
  */
 
@@ -51,5 +50,6 @@ void nthw_flm_inf_sta_queue_free_all(uint8_t caller);
 void nthw_flm_inf_queue_put(uint8_t port, bool remote, struct flm_info_event_s *obj);
 int nthw_flm_inf_queue_get(uint8_t port, bool remote, struct flm_info_event_s *obj);
 int nthw_flm_sta_queue_put(uint8_t port, bool remote, struct flm_status_event_s *obj);
+int nthw_flm_sta_queue_get(uint8_t port, bool remote, struct flm_status_event_s *obj);
 
 #endif	/* _FLM_EVT_QUEUE_H_ */

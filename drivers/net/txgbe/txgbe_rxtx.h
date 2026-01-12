@@ -323,6 +323,7 @@ struct txgbe_rx_queue {
 	/** hold packets to return to application */
 	struct rte_mbuf *rx_stage[RTE_PMD_TXGBE_RX_MAX_BURST * 2];
 	const struct rte_memzone *mz;
+	uint64_t            csum_err;
 };
 
 /**
@@ -414,6 +415,9 @@ struct txgbe_tx_queue {
 	const struct rte_memzone *mz;
 	uint64_t	    desc_error;
 	bool		    resetting;
+	const struct rte_memzone *headwb;
+	uint64_t             headwb_dma;
+	volatile uint32_t    *headwb_mem;
 };
 
 struct txgbe_txq_ops {

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -12,7 +11,7 @@ int nthw_flow_filter_init(nthw_fpga_t *p_fpga, struct flow_nic_dev **p_flow_devi
 	void *be_dev = NULL;
 	struct flow_nic_dev *flow_nic;
 
-	const struct flow_backend_ops *flow_backend_ops = get_flow_backend_ops();
+	const struct flow_backend_ops *flow_backend_ops = nthw_get_flow_backend_ops();
 
 	if (flow_backend_ops == NULL) {
 		NT_LOG(ERR, FILTER, "%s: flow_backend module uninitialized", __func__);
@@ -41,7 +40,7 @@ int nthw_flow_filter_done(struct flow_nic_dev *dev)
 	int res = nthw_flow_api_done(dev);
 
 	if (be_dev) {
-		const struct flow_backend_ops *flow_backend_ops = get_flow_backend_ops();
+		const struct flow_backend_ops *flow_backend_ops = nthw_get_flow_backend_ops();
 
 		if (flow_backend_ops == NULL) {
 			NT_LOG(WRN, FILTER, "%s: flow_backend module uninitialized", __func__);

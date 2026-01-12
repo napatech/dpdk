@@ -121,6 +121,8 @@ enum {
 	TESTPMD_OPT_ENABLE_DROP_EN_NUM,
 #define TESTPMD_OPT_DISABLE_RSS "disable-rss"
 	TESTPMD_OPT_DISABLE_RSS_NUM,
+#define TESTPMD_OPT_ENABLE_RSS "enable-rss"
+	TESTPMD_OPT_ENABLE_RSS_NUM,
 #define TESTPMD_OPT_PORT_TOPOLOGY "port-topology"
 	TESTPMD_OPT_PORT_TOPOLOGY_NUM,
 #define TESTPMD_OPT_FORWARD_MODE "forward-mode"
@@ -310,6 +312,7 @@ static const struct option long_options[] = {
 	NO_ARG(TESTPMD_OPT_ENABLE_HW_QINQ_STRIP),
 	NO_ARG(TESTPMD_OPT_ENABLE_DROP_EN),
 	NO_ARG(TESTPMD_OPT_DISABLE_RSS),
+	NO_ARG(TESTPMD_OPT_ENABLE_RSS),
 	REQUIRED_ARG(TESTPMD_OPT_PORT_TOPOLOGY),
 	REQUIRED_ARG(TESTPMD_OPT_FORWARD_MODE),
 	NO_ARG(TESTPMD_OPT_RSS_IP),
@@ -454,6 +457,7 @@ usage(char* progname)
 	printf("  --enable-hw-qinq-strip: enable hardware qinq strip.\n");
 	printf("  --enable-drop-en: enable per queue packet drop.\n");
 	printf("  --disable-rss: disable rss.\n");
+	printf("  --enable-rss: Force rss even for single-queue operation.\n");
 	printf("  --port-topology=<paired|chained|loop>: set port topology (paired "
 	       "is default).\n");
 	printf("  --forward-mode=N: set forwarding mode (N: %s).\n",
@@ -920,6 +924,9 @@ parse_link_speed(int n)
 	case 400000:
 		speed |= RTE_ETH_LINK_SPEED_400G;
 		break;
+	case 800000:
+		speed |= RTE_ETH_LINK_SPEED_800G;
+		break;
 	case 100:
 	case 10:
 	default:
@@ -960,13 +967,18 @@ launch_args_parse(int argc, char** argv)
 			exit(EXIT_SUCCESS);
 			break;
 		case TESTPMD_OPT_CMDLINE_FILE_NUM:
-			echo_cmdline_file = true;
-			/* fall-through */
 		case TESTPMD_OPT_CMDLINE_FILE_NOECHO_NUM:
-			printf("CLI commands to be read from %s\n",
-				optarg);
-			strlcpy(cmdline_filename, optarg,
-				sizeof(cmdline_filename));
+			if (cmdline_file_count >= RTE_DIM(cmdline_files)) {
+				fprintf(stderr, "Too many cmdline files specified (maximum %zu)\n",
+					RTE_DIM(cmdline_files));
+				exit(EXIT_FAILURE);
+			}
+			printf("CLI commands to be read from %s\n", optarg);
+			strlcpy(cmdline_files[cmdline_file_count].filename, optarg,
+				sizeof(cmdline_files[cmdline_file_count].filename));
+			cmdline_files[cmdline_file_count].echo =
+				(opt == TESTPMD_OPT_CMDLINE_FILE_NUM);
+			cmdline_file_count++;
 			break;
 		case TESTPMD_OPT_TX_FIRST_NUM:
 			printf("Ports to start sending a burst of "
@@ -1244,7 +1256,16 @@ launch_args_parse(int argc, char** argv)
 			rx_drop_en = 1;
 			break;
 		case TESTPMD_OPT_DISABLE_RSS_NUM:
+			if (force_rss)
+				rte_exit(EXIT_FAILURE, "Invalid option combination, %s and %s\n",
+						TESTPMD_OPT_DISABLE_RSS, TESTPMD_OPT_ENABLE_RSS);
 			rss_hf = 0;
+			break;
+		case TESTPMD_OPT_ENABLE_RSS_NUM:
+			if (rss_hf == 0)
+				rte_exit(EXIT_FAILURE, "Invalid option combination, %s and %s\n",
+						TESTPMD_OPT_DISABLE_RSS, TESTPMD_OPT_ENABLE_RSS);
+			force_rss = true;
 			break;
 		case TESTPMD_OPT_PORT_TOPOLOGY_NUM:
 			if (!strcmp(optarg, "paired"))
@@ -1753,6 +1774,27 @@ launch_args_parse(int argc, char** argv)
 			"The multi-process option '%s(%d)' should be less than '%s(%u)'\n",
 			TESTPMD_OPT_PROC_ID, proc_id,
 			TESTPMD_OPT_NUM_PROCS, num_procs);
+
+	/* check for multiple segments without scattered flag enabled */
+	if (mbuf_data_size_n > 1 && (rx_offloads & RTE_ETH_RX_OFFLOAD_SCATTER) == 0)
+		TESTPMD_LOG(WARNING, "Warning: multiple mbuf sizes specified but scattered Rx not enabled\n");
+
+	/* check for max packet size greater than mbuf size, without scatter or multi-seg flags */
+	if (max_rx_pkt_len > mbuf_data_size[0]) {
+		if ((rx_offloads & RTE_ETH_RX_OFFLOAD_SCATTER) == 0)
+			TESTPMD_LOG(WARNING, "Warning: max-pkt-len (%u) is greater than mbuf size (%u) without scattered Rx enabled\n",
+					max_rx_pkt_len, mbuf_data_size[0]);
+		if ((tx_offloads & RTE_ETH_TX_OFFLOAD_MULTI_SEGS) == 0)
+			TESTPMD_LOG(WARNING, "Warning: max-pkt-len (%u) is greater than mbuf size (%u) without multi-segment Tx enabled\n",
+					max_rx_pkt_len, mbuf_data_size[0]);
+	}
+
+	/* check for scattered Rx enabled without also having multi-segment Tx */
+	if ((rx_offloads & RTE_ETH_RX_OFFLOAD_SCATTER) != 0 &&
+			(tx_offloads & RTE_ETH_TX_OFFLOAD_MULTI_SEGS) == 0) {
+		TESTPMD_LOG(WARNING, "Warning: Scattered RX offload enabled, but TX multi-segment support not enabled.\n");
+		TESTPMD_LOG(WARNING, "         Multi-segment packets can be received but not transmitted.\n");
+	}
 
 	/* Set offload configuration from command line parameters. */
 	rx_mode.offloads = rx_offloads;

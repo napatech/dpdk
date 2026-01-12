@@ -229,6 +229,7 @@ enum zxdh_msg_type {
 	ZXDH_VLAN_FILTER_ADD = 18,
 	ZXDH_VLAN_FILTER_DEL = 19,
 	ZXDH_VLAN_OFFLOAD = 21,
+	ZXDH_VLAN_SET_TPID = 23,
 
 	ZXDH_PORT_ATTRS_SET = 25,
 	ZXDH_PORT_PROMISC_SET = 26,
@@ -239,6 +240,11 @@ enum zxdh_msg_type {
 	ZXDH_PLCR_CAR_PROFILE_CFG_SET,
 	ZXDH_PLCR_CAR_QUEUE_CFG_SET = 40,
 	ZXDH_PORT_METER_STAT_GET = 42,
+
+	ZXDH_FLOW_HW_ADD = 46,
+	ZXDH_FLOW_HW_DEL = 47,
+	ZXDH_FLOW_HW_GET = 48,
+	ZXDH_FLOW_HW_FLUSH = 49,
 
 	ZXDH_MSG_TYPE_END,
 };
@@ -418,6 +424,21 @@ struct zxdh_ifc_mtr_profile_info_bits {
 	uint8_t profile_id[0x40];
 };
 
+struct err_reason {
+	uint8_t err_type;
+	uint8_t rsv[3];
+	char reason[512];
+};
+
+struct zxdh_flow_op_rsp {
+	struct zxdh_flow  dh_flow;
+	uint8_t rev[4];
+	union {
+		struct rte_flow_query_count count;
+		struct err_reason error;
+	};
+};
+
 struct zxdh_ifc_msg_reply_body_bits {
 	uint8_t flag[0x8];
 	union {
@@ -432,6 +453,7 @@ struct zxdh_ifc_msg_reply_body_bits {
 		struct zxdh_ifc_agent_mac_module_eeprom_msg_bits module_eeprom_msg;
 		struct zxdh_ifc_mtr_profile_info_bits  mtr_profile_info;
 		struct zxdh_ifc_mtr_stats_bits hw_mtr_stats;
+		struct zxdh_flow_op_rsp  flow_rsp;
 	};
 };
 
@@ -535,6 +557,14 @@ struct zxdh_plcr_profile_free {
 	uint16_t profile_id;
 };
 
+struct zxdh_vlan_tpid {
+	uint16_t tpid;
+};
+
+struct zxdh_flow_op_msg {
+	struct zxdh_flow dh_flow;
+};
+
 struct zxdh_msg_info {
 	union {
 		uint8_t head_len[ZXDH_MSG_HEAD_LEN];
@@ -551,6 +581,7 @@ struct zxdh_msg_info {
 		struct zxdh_vlan_filter vlan_filter_msg;
 		struct zxdh_vlan_filter_set vlan_filter_set_msg;
 		struct zxdh_vlan_offload vlan_offload_msg;
+		struct zxdh_vlan_tpid zxdh_vlan_tpid;
 		struct zxdh_rss_reta rss_reta;
 		struct zxdh_rss_enable rss_enable;
 		struct zxdh_rss_hf rss_hf;
@@ -561,13 +592,37 @@ struct zxdh_msg_info {
 		struct zxdh_plcr_profile_cfg zxdh_plcr_profile_cfg;
 		struct zxdh_plcr_flow_cfg  zxdh_plcr_flow_cfg;
 		struct zxdh_mtr_stats_query  zxdh_mtr_stats_query;
+		struct zxdh_flow_op_msg flow_msg;
 	} data;
 };
 
+struct inic_to_vcb {
+	uint16_t vqm_vfid;
+	uint16_t opcode;  /* 0:get 1:set */
+	uint16_t cmd;
+	uint16_t version; /* 0:v0.95, 1:v1.0, 2:v1.1 */
+	uint64_t features;
+}; /* 16B */
+
+struct vqm_queue {
+	uint16_t start_qid;
+	uint16_t qp_num;
+}; /* 4B */
+
+struct zxdh_inic_recv_msg {
+	uint32_t reps;
+	uint32_t check_result;
+	union {
+		uint8_t data[36];
+		struct vqm_queue vqm_queue;
+	};
+}; /* 44B */
+
 typedef int (*zxdh_bar_chan_msg_recv_callback)(void *pay_load, uint16_t len,
 		void *reps_buffer, uint16_t *reps_len, void *dev);
-typedef int (*zxdh_msg_process_callback)(struct zxdh_hw *hw, uint16_t vport, void *cfg_data,
-	void *res_info, uint16_t *res_len);
+typedef int (*zxdh_msg_process_callback)(struct zxdh_hw *hw, uint16_t vport,
+		uint16_t pcieid, void *cfg_data,
+		void *res_info, uint16_t *res_len);
 
 typedef int (*zxdh_bar_chan_msg_recv_callback)(void *pay_load, uint16_t len,
 			void *reps_buffer, uint16_t *reps_len, void *dev);
@@ -593,5 +648,7 @@ int32_t zxdh_send_msg_to_riscv(struct rte_eth_dev *dev, void *msg_req,
 			uint16_t msg_req_len, void *reply, uint16_t reply_len,
 			enum ZXDH_BAR_MODULE_ID module_id);
 void zxdh_msg_cb_reg(struct zxdh_hw *hw);
+int zxdh_inic_pf_get_qp_from_vcb(struct zxdh_hw *hw, uint16_t vqm_vfid,
+			uint16_t *qid, uint16_t *qp);
 
 #endif /* ZXDH_MSG_H */

@@ -17,19 +17,22 @@ from scapy.layers.inet import IP
 from scapy.layers.l2 import Ether
 from scapy.packet import Packet, Raw
 
-from framework.params.testpmd import SimpleForwardingModes
-from framework.remote_session.testpmd_shell import (
+from api.capabilities import (
+    LinkTopology,
     NicCapability,
-    RtePTypes,
-    TestPmdShell,
-    TestPmdVerbosePacket,
+    requires_link_topology,
+    requires_nic_capability,
 )
+from api.packet import send_packet_and_capture
+from api.test import verify
+from api.testpmd import TestPmd
+from api.testpmd.config import SimpleForwardingModes
+from api.testpmd.types import RtePTypes, TestPmdVerbosePacket
 from framework.test_suite import TestSuite, func_test
-from framework.testbed_model.capability import TopologyType, requires
 
 
-@requires(NicCapability.PHYSICAL_FUNCTION)
-@requires(topology_type=TopologyType.two_links)
+@requires_nic_capability(NicCapability.PHYSICAL_FUNCTION)
+@requires_link_topology(LinkTopology.TWO_LINKS)
 class TestPortStats(TestSuite):
     """DPDK Port statistics testing suite.
 
@@ -55,7 +58,7 @@ class TestPortStats(TestSuite):
     total_packet_len: ClassVar[int] = 100
 
     @property
-    def send_pkt(self) -> Packet:
+    def _send_pkt(self) -> Packet:
         """Packet to send during testing."""
         return (
             Ether()
@@ -63,7 +66,7 @@ class TestPortStats(TestSuite):
             / Raw(b"X" * (self.total_packet_len - self.ip_header_len - self.ether_header_len))
         )
 
-    def extract_noise_information(
+    def _extract_noise_information(
         self, verbose_out: list[TestPmdVerbosePacket]
     ) -> Tuple[int, int, int, int]:
         """Extract information about packets that were not sent by the framework in `verbose_out`.
@@ -117,7 +120,7 @@ class TestPortStats(TestSuite):
         return recv_noise_bytes, recv_noise_packets, sent_noise_bytes, num_sent_packets
 
     @func_test
-    def test_stats_updates(self) -> None:
+    def stats_updates(self) -> None:
         """Send a packet with a fixed length and verify port stats updated properly.
 
         Send a packet with a total length of `self.total_packet_len` and verify that the rx port
@@ -130,23 +133,23 @@ class TestPortStats(TestSuite):
         testpmd command `show port info all`.
 
         Steps:
-            Start testpmd in MAC forwarding mode and set verbose mode to 3 (Rx and Tx).
-            Start packet forwarding and then clear all port statistics.
-            Send a packet, then stop packet forwarding and collect the port stats.
+            * Start testpmd in MAC forwarding mode and set verbose mode to 3 (Rx and Tx).
+            * Start packet forwarding and then clear all port statistics.
+            * Send a packet, then stop packet forwarding and collect the port stats.
 
         Verify:
-            Parse verbose info from stopping packet forwarding and verify values in port stats.
+            * Port stats showing number of packets received match what we sent.
         """
-        with TestPmdShell(forward_mode=SimpleForwardingModes.mac) as testpmd:
+        with TestPmd(forward_mode=SimpleForwardingModes.mac) as testpmd:
             testpmd.set_verbose(3)
             testpmd.start()
             testpmd.clear_port_stats_all()
-            self.send_packet_and_capture(self.send_pkt)
+            send_packet_and_capture(self._send_pkt)
             port_stats_all, forwarding_info = testpmd.show_port_stats_all()
-            verbose_information = TestPmdShell.extract_verbose_output(forwarding_info)
+            verbose_information = TestPmd.extract_verbose_output(forwarding_info)
 
         # Gather information from irrelevant packets sent/ received on the same port.
-        rx_irr_bytes, rx_irr_pakts, tx_irr_bytes, tx_irr_pakts = self.extract_noise_information(
+        rx_irr_bytes, rx_irr_pakts, tx_irr_bytes, tx_irr_pakts = self._extract_noise_information(
             verbose_information
         )
         recv_relevant_packets = port_stats_all[self.recv_port].rx_packets - rx_irr_pakts
@@ -154,21 +157,21 @@ class TestPortStats(TestSuite):
         recv_relevant_bytes = port_stats_all[self.recv_port].rx_bytes - rx_irr_bytes
         sent_relevant_bytes = port_stats_all[self.send_port].tx_bytes - tx_irr_bytes
 
-        self.verify(
+        verify(
             recv_relevant_packets == 1,
             f"Port {self.recv_port} received {recv_relevant_packets} packets but expected to only "
             "receive 1.",
         )
-        self.verify(
+        verify(
             recv_relevant_bytes == self.total_packet_len,
             f"Number of bytes received by port {self.recv_port} did not match the amount sent.",
         )
-        self.verify(
+        verify(
             sent_relevant_packets == 1,
             f"Number was packets sent by port {self.send_port} was not equal to the number "
             f"received by port {self.recv_port}.",
         )
-        self.verify(
+        verify(
             sent_relevant_bytes == self.total_packet_len,
             f"Number of bytes sent by port {self.send_port} did not match the number of bytes "
             f"received by port {self.recv_port}.",

@@ -17,6 +17,7 @@
 #include <rte_memcpy.h>
 #include <ethdev_driver.h>
 #include <rte_mbuf_dyn.h>
+#include <rte_vfio.h>
 
 #include "private.h"
 #include <fslmc_vfio.h>
@@ -241,7 +242,7 @@ static int
 rte_fslmc_parse(const char *name, void *addr)
 {
 	uint16_t dev_id;
-	char *t_ptr;
+	const char *t_ptr;
 	const char *sep;
 	uint8_t sep_exists = 0;
 	int ret = -1;
@@ -574,9 +575,6 @@ fslmc_all_device_support_iova(void)
 static enum rte_iova_mode
 rte_dpaa2_get_iommu_class(void)
 {
-	bool is_vfio_noiommu_enabled = 1;
-	bool has_iova_va;
-
 	if (rte_eal_iova_mode() == RTE_IOVA_PA)
 		return RTE_IOVA_PA;
 
@@ -584,31 +582,68 @@ rte_dpaa2_get_iommu_class(void)
 		return RTE_IOVA_DC;
 
 	/* check if all devices on the bus support Virtual addressing or not */
-	has_iova_va = fslmc_all_device_support_iova();
-
-#ifdef VFIO_PRESENT
-	is_vfio_noiommu_enabled = rte_vfio_noiommu_is_enabled() == true ?
-						true : false;
-#endif
-
-	if (has_iova_va && !is_vfio_noiommu_enabled)
+	if (fslmc_all_device_support_iova() != 0 && rte_vfio_noiommu_is_enabled() == 0)
 		return RTE_IOVA_VA;
 
 	return RTE_IOVA_PA;
 }
 
 static int
-fslmc_bus_plug(struct rte_device *dev __rte_unused)
+fslmc_bus_plug(struct rte_device *rte_dev)
 {
-	/* No operation is performed while plugging the device */
-	return 0;
+	int ret = 0;
+	struct rte_dpaa2_device *dev = container_of(rte_dev,
+			struct rte_dpaa2_device, device);
+	struct rte_dpaa2_driver *drv;
+
+	TAILQ_FOREACH(drv, &rte_fslmc_bus.driver_list, next) {
+		ret = rte_fslmc_match(drv, dev);
+		if (ret)
+			continue;
+
+		if (!drv->probe)
+			continue;
+
+		if (rte_dev_is_probed(&dev->device))
+			continue;
+
+		if (dev->device.devargs &&
+		    dev->device.devargs->policy == RTE_DEV_BLOCKED) {
+			DPAA2_BUS_DEBUG("%s Blocked, skipping",
+				      dev->device.name);
+			continue;
+		}
+
+		ret = drv->probe(drv, dev);
+		if (ret) {
+			DPAA2_BUS_ERR("Unable to probe");
+		} else {
+			dev->driver = drv;
+			dev->device.driver = &drv->driver;
+			DPAA2_BUS_INFO("%s Plugged",  dev->device.name);
+		}
+		break;
+	}
+
+	return ret;
 }
 
 static int
-fslmc_bus_unplug(struct rte_device *dev __rte_unused)
+fslmc_bus_unplug(struct rte_device *rte_dev)
 {
-	/* No operation is performed while unplugging the device */
-	return 0;
+	struct rte_dpaa2_device *dev = container_of(rte_dev,
+			struct rte_dpaa2_device, device);
+	struct rte_dpaa2_driver *drv = dev->driver;
+
+	if (drv && drv->remove) {
+		drv->remove(dev);
+		dev->driver = NULL;
+		dev->device.driver = NULL;
+		DPAA2_BUS_INFO("%s Un-Plugged",  dev->device.name);
+		return 0;
+	}
+
+	return -ENODEV;
 }
 
 static void *

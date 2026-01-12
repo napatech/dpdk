@@ -41,6 +41,13 @@
 #include "hn_nvs.h"
 #include "ndis.h"
 
+#ifndef LIST_FOREACH_SAFE
+#define LIST_FOREACH_SAFE(var, head, field, tvar)			\
+	for ((var) = LIST_FIRST((head));				\
+	    (var) && ((tvar) = LIST_NEXT((var), field), 1);		\
+	    (var) = (tvar))
+#endif
+
 #define HN_TX_OFFLOAD_CAPS (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM | \
 			    RTE_ETH_TX_OFFLOAD_TCP_CKSUM  | \
 			    RTE_ETH_TX_OFFLOAD_UDP_CKSUM  | \
@@ -94,6 +101,16 @@ static const uint8_t rss_default_key[NDIS_HASH_KEYSIZE_TOEPLITZ] = {
 	0xad, 0x99, 0x44, 0xa7,	0xd9, 0x56, 0x3d, 0x59,
 	0x06, 0x3c, 0x25, 0xf3,	0xfc, 0x1f, 0xdc, 0x2a,
 };
+
+static rte_spinlock_t netvsc_lock = RTE_SPINLOCK_INITIALIZER;
+struct da_cache {
+	LIST_ENTRY(da_cache) list;
+	char name[RTE_DEV_NAME_MAX_LEN];
+	char drv_str[];
+};
+
+static LIST_HEAD(da_cache_list, da_cache) da_cache_list;
+static unsigned int da_cache_usage;
 
 static struct rte_eth_dev *
 eth_dev_vmbus_allocate(struct rte_vmbus_device *dev, size_t private_data_size)
@@ -194,6 +211,7 @@ static int hn_parse_args(const struct rte_eth_dev *dev)
 		NETVSC_ARG_RXBREAK,
 		NETVSC_ARG_TXBREAK,
 		NETVSC_ARG_RX_EXTMBUF_ENABLE,
+		NETVSC_ARG_NUMA_AWARE,
 		NULL
 	};
 	struct rte_kvargs *kvlist;
@@ -623,21 +641,36 @@ static void netvsc_hotplug_retry(void *args)
 		       RTE_DIM(eth_addr.addr_bytes));
 
 		if (rte_is_same_ether_addr(&eth_addr, dev->data->mac_addrs)) {
+			struct da_cache *cache;
+			char *drv_str = NULL;
+
+			rte_spinlock_lock(&netvsc_lock);
+
+			LIST_FOREACH(cache, &da_cache_list, list) {
+				if (strcmp(cache->name, d->name) == 0)
+					break;
+			}
+
+			if (cache)
+				drv_str = strdup(cache->drv_str);
+
+			rte_spinlock_unlock(&netvsc_lock);
+
 			PMD_DRV_LOG(NOTICE,
-				    "Found matching MAC address, adding device %s network name %s",
-				    d->name, dir->d_name);
+				    "Found matching MAC address, adding device %s network name %s args %s",
+				    d->name, dir->d_name, drv_str ? drv_str : "");
 
 			/* If this device has been hot removed from this
 			 * parent device, restore its args.
 			 */
-			ret = rte_eal_hotplug_add(d->bus->name, d->name,
-						  hv->vf_devargs ?
-						  hv->vf_devargs : "");
+			ret = rte_eal_hotplug_add(d->bus->name, d->name, drv_str ? drv_str : "");
 			if (ret) {
 				PMD_DRV_LOG(ERR,
 					    "Failed to add PCI device %s",
 					    d->name);
 			}
+
+			free(drv_str);
 
 			break;
 		}
@@ -651,7 +684,7 @@ free_hotadd_ctx:
 	LIST_REMOVE(hot_ctx, list);
 	rte_spinlock_unlock(&hv->hotadd_lock);
 
-	rte_free(hot_ctx);
+	free(hot_ctx);
 }
 
 static void
@@ -672,8 +705,7 @@ netvsc_hotadd_callback(const char *device_name, enum rte_dev_event_type type,
 		if (hv->vf_ctx.vf_state > vf_removed)
 			break;
 
-		hot_ctx = rte_zmalloc("NETVSC-HOTADD", sizeof(*hot_ctx),
-				      rte_mem_page_size());
+		hot_ctx = calloc(1, sizeof(*hot_ctx));
 
 		if (!hot_ctx) {
 			PMD_DRV_LOG(ERR, "Failed to allocate hotadd context");
@@ -705,7 +737,7 @@ netvsc_hotadd_callback(const char *device_name, enum rte_dev_event_type type,
 		 * sent from VSP
 		 */
 free_ctx:
-		rte_free(hot_ctx);
+		free(hot_ctx);
 		break;
 
 	default:
@@ -792,11 +824,12 @@ static int hn_dev_configure(struct rte_eth_dev *dev)
 }
 
 static int hn_dev_stats_get(struct rte_eth_dev *dev,
-			    struct rte_eth_stats *stats)
+			    struct rte_eth_stats *stats,
+			    struct eth_queue_stats *qstats)
 {
 	unsigned int i;
 
-	hn_vf_stats_get(dev, stats);
+	hn_vf_stats_get(dev, stats, qstats);
 
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
 		const struct hn_tx_queue *txq = dev->data->tx_queues[i];
@@ -808,9 +841,9 @@ static int hn_dev_stats_get(struct rte_eth_dev *dev,
 		stats->obytes += txq->stats.bytes;
 		stats->oerrors += txq->stats.errors;
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_opackets[i] += txq->stats.packets;
-			stats->q_obytes[i] += txq->stats.bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_opackets[i] += txq->stats.packets;
+			qstats->q_obytes[i] += txq->stats.bytes;
 		}
 	}
 
@@ -825,9 +858,9 @@ static int hn_dev_stats_get(struct rte_eth_dev *dev,
 		stats->ierrors += rxq->stats.errors;
 		stats->imissed += rxq->stats.ring_full;
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_ipackets[i] += rxq->stats.packets;
-			stats->q_ibytes[i] += rxq->stats.bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_ipackets[i] += rxq->stats.packets;
+			qstats->q_ibytes[i] += rxq->stats.bytes;
 		}
 	}
 
@@ -1066,7 +1099,7 @@ hn_dev_close(struct rte_eth_dev *dev)
 		hot_ctx = LIST_FIRST(&hv->hotadd_list);
 		rte_eal_alarm_cancel(netvsc_hotplug_retry, hot_ctx);
 		LIST_REMOVE(hot_ctx, list);
-		rte_free(hot_ctx);
+		free(hot_ctx);
 	}
 	rte_spinlock_unlock(&hv->hotadd_lock);
 
@@ -1409,9 +1442,6 @@ eth_hn_dev_uninit(struct rte_eth_dev *eth_dev)
 	ret_stop = hn_dev_stop(eth_dev);
 	hn_dev_close(eth_dev);
 
-	free(hv->vf_devargs);
-	hv->vf_devargs = NULL;
-
 	hn_detach(hv);
 	hn_chim_uninit(eth_dev);
 	rte_vmbus_chan_close(hv->channels[0]);
@@ -1423,6 +1453,54 @@ eth_hn_dev_uninit(struct rte_eth_dev *eth_dev)
 	return ret_stop;
 }
 
+static int populate_cache_list(void)
+{
+	int ret = 0;
+	struct rte_devargs *da;
+
+	rte_spinlock_lock(&netvsc_lock);
+	da_cache_usage++;
+	if (da_cache_usage > 1) {
+		ret = 0;
+		goto out;
+	}
+
+	LIST_INIT(&da_cache_list);
+	RTE_EAL_DEVARGS_FOREACH("pci", da) {
+		struct da_cache *cache;
+
+		cache = calloc(1, sizeof(*cache) + strlen(da->drv_str) + 1);
+		if (!cache) {
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		strlcpy(cache->name, da->name, sizeof(cache->name));
+		strlcpy(cache->drv_str, da->drv_str, strlen(da->drv_str) + 1);
+		LIST_INSERT_HEAD(&da_cache_list, cache, list);
+	}
+out:
+	rte_spinlock_unlock(&netvsc_lock);
+	return ret;
+}
+
+static void remove_cache_list(void)
+{
+	struct da_cache *cache, *tmp;
+
+	rte_spinlock_lock(&netvsc_lock);
+	da_cache_usage--;
+	if (da_cache_usage)
+		goto out;
+
+	LIST_FOREACH_SAFE(cache, &da_cache_list, list, tmp) {
+		LIST_REMOVE(cache, list);
+		free(cache);
+	}
+out:
+	rte_spinlock_unlock(&netvsc_lock);
+}
+
 static int eth_hn_probe(struct rte_vmbus_driver *drv __rte_unused,
 			struct rte_vmbus_device *dev)
 {
@@ -1432,10 +1510,14 @@ static int eth_hn_probe(struct rte_vmbus_driver *drv __rte_unused,
 
 	PMD_INIT_FUNC_TRACE();
 
+	ret = populate_cache_list();
+	if (ret)
+		return ret;
+
 	ret = rte_dev_event_monitor_start();
 	if (ret) {
 		PMD_DRV_LOG(ERR, "Failed to start device event monitoring");
-		return ret;
+		goto fail;
 	}
 
 	eth_dev = eth_dev_vmbus_allocate(dev, sizeof(struct hn_data));
@@ -1452,6 +1534,7 @@ static int eth_hn_probe(struct rte_vmbus_driver *drv __rte_unused,
 		ret = -ENOMEM;
 		goto priv_alloc_failed;
 	}
+
 	process_priv->vmbus_dev = dev;
 	eth_dev->process_private = process_priv;
 
@@ -1471,6 +1554,8 @@ priv_alloc_failed:
 vmbus_alloc_failed:
 	rte_dev_event_monitor_stop();
 
+fail:
+	remove_cache_list();
 	return ret;
 }
 
@@ -1495,6 +1580,9 @@ static int eth_hn_remove(struct rte_vmbus_device *dev)
 
 	eth_dev_vmbus_release(eth_dev);
 	rte_dev_event_monitor_stop();
+
+	remove_cache_list();
+
 	return 0;
 }
 

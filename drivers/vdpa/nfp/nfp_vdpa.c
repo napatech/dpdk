@@ -3,6 +3,8 @@
  * All rights reserved.
  */
 
+#include <uapi/linux/vfio.h>
+
 #include <pthread.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>

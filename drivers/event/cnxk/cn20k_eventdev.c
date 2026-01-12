@@ -20,6 +20,72 @@
 #define CN20K_SET_EVDEV_ENQ_OP(dev, enq_op, enq_ops)                                               \
 	enq_op = enq_ops[dev->tx_offloads & (NIX_TX_OFFLOAD_MAX - 1)]
 
+static uint8_t
+cn20k_sso_hw_weight(uint8_t weight)
+{
+	/* Map DPDK weight 0-255 to HW weight 1-255 */
+	return (weight + 1) > CN20K_SSO_WEIGHT_MAX ? CN20K_SSO_WEIGHT_MAX : (weight + 1);
+}
+
+static int
+cn20k_sso_queue_setup(struct rte_eventdev *event_dev, uint8_t queue_id,
+		      const struct rte_event_queue_conf *queue_conf)
+{
+	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+	uint8_t priority, weight, affinity;
+
+	priority = CNXK_QOS_NORMALIZE(queue_conf->priority, 0, RTE_EVENT_DEV_PRIORITY_LOWEST,
+				      CNXK_SSO_PRIORITY_CNT);
+	weight = cn20k_sso_hw_weight(queue_conf->weight);
+	affinity = CNXK_QOS_NORMALIZE(queue_conf->affinity, 0, RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
+				      CNXK_SSO_AFFINITY_CNT);
+
+	plt_sso_dbg("Queue=%u prio=%u weight=%u affinity=%u", queue_id, priority, weight, affinity);
+
+	return roc_sso_hwgrp_set_priority(&dev->sso, queue_id, weight, affinity, priority);
+}
+
+static int
+cn20k_sso_queue_attribute_set(struct rte_eventdev *event_dev, uint8_t queue_id, uint32_t attr_id,
+			      uint64_t attr_value)
+{
+	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+	uint8_t priority, weight, affinity;
+	struct rte_event_queue_conf *conf;
+
+	conf = &event_dev->data->queues_cfg[queue_id];
+
+	switch (attr_id) {
+	case RTE_EVENT_QUEUE_ATTR_PRIORITY:
+		conf->priority = attr_value;
+		break;
+	case RTE_EVENT_QUEUE_ATTR_WEIGHT:
+		conf->weight = attr_value;
+		break;
+	case RTE_EVENT_QUEUE_ATTR_AFFINITY:
+		conf->affinity = attr_value;
+		break;
+	case RTE_EVENT_QUEUE_ATTR_NB_ATOMIC_FLOWS:
+	case RTE_EVENT_QUEUE_ATTR_NB_ATOMIC_ORDER_SEQUENCES:
+	case RTE_EVENT_QUEUE_ATTR_EVENT_QUEUE_CFG:
+	case RTE_EVENT_QUEUE_ATTR_SCHEDULE_TYPE:
+		/* FALLTHROUGH */
+		plt_sso_dbg("Unsupported attribute id %u", attr_id);
+		return -ENOTSUP;
+	default:
+		plt_err("Invalid attribute id %u", attr_id);
+		return -EINVAL;
+	}
+
+	priority = CNXK_QOS_NORMALIZE(conf->priority, 0, RTE_EVENT_DEV_PRIORITY_LOWEST,
+				      CNXK_SSO_PRIORITY_CNT);
+	weight = cn20k_sso_hw_weight(conf->weight);
+	affinity = CNXK_QOS_NORMALIZE(conf->affinity, 0, RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
+				      CNXK_SSO_AFFINITY_CNT);
+
+	return roc_sso_hwgrp_set_priority(&dev->sso, queue_id, weight, affinity, priority);
+}
+
 static void *
 cn20k_sso_init_hws_mem(void *arg, uint8_t port_id)
 {
@@ -126,7 +192,7 @@ cn20k_sso_hws_flush_events(void *hws, uint8_t queue_id, uintptr_t base, cnxk_han
 
 	while (aq_cnt || cq_ds_cnt || ds_cnt) {
 		plt_write64(req, ws->base + SSOW_LF_GWS_OP_GET_WORK0);
-		cn20k_sso_hws_get_work_empty(ws, &ev, 0);
+		cn20k_sso_hws_get_work_empty(ws, &ev, dev->rx_offloads);
 		if (fn != NULL && ev.u64 != 0)
 			fn(arg, ev);
 		if (ev.sched_type != SSO_TT_EMPTY)
@@ -455,8 +521,7 @@ cn20k_sso_port_quiesce(struct rte_eventdev *event_dev, void *port,
 		ptag = plt_read64(ws->base + SSOW_LF_GWS_PENDSTATE);
 	} while (ptag & (BIT_ULL(62) | BIT_ULL(58) | BIT_ULL(56) | BIT_ULL(54)));
 
-	cn20k_sso_hws_get_work_empty(ws, &ev,
-				     (NIX_RX_OFFLOAD_MAX - 1) | NIX_RX_REAS_F | NIX_RX_MULTI_SEG_F);
+	cn20k_sso_hws_get_work_empty(ws, &ev, dev->rx_offloads);
 	if (is_pend && ev.u64)
 		if (flush_cb)
 			flush_cb(event_dev->data->dev_id, ev, args);
@@ -482,8 +547,7 @@ cn20k_sso_port_quiesce(struct rte_eventdev *event_dev, void *port,
 
 	if (CNXK_TT_FROM_TAG(plt_read64(ws->base + SSOW_LF_GWS_PRF_WQE0)) != SSO_TT_EMPTY) {
 		plt_write64(BIT_ULL(16) | 1, ws->base + SSOW_LF_GWS_OP_GET_WORK0);
-		cn20k_sso_hws_get_work_empty(
-			ws, &ev, (NIX_RX_OFFLOAD_MAX - 1) | NIX_RX_REAS_F | NIX_RX_MULTI_SEG_F);
+		cn20k_sso_hws_get_work_empty(ws, &ev, dev->rx_offloads);
 		if (ev.u64) {
 			if (flush_cb)
 				flush_cb(event_dev->data->dev_id, ev, args);
@@ -1114,9 +1178,9 @@ static struct eventdev_ops cn20k_sso_dev_ops = {
 	.dev_configure = cn20k_sso_dev_configure,
 
 	.queue_def_conf = cnxk_sso_queue_def_conf,
-	.queue_setup = cnxk_sso_queue_setup,
+	.queue_setup = cn20k_sso_queue_setup,
 	.queue_release = cnxk_sso_queue_release,
-	.queue_attr_set = cnxk_sso_queue_attribute_set,
+	.queue_attr_set = cn20k_sso_queue_attribute_set,
 
 	.port_def_conf = cnxk_sso_port_def_conf,
 	.port_setup = cn20k_sso_port_setup,

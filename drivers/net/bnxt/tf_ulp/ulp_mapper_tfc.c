@@ -12,11 +12,15 @@
 #include "bnxt_ulp_utils.h"
 #include "tfc_action_handle.h"
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#include "ulp_template_debug_proto.h"
-#include "ulp_tf_debug.h"
-#include "tfc_debug.h"
-#endif
+
+#define BNXT_METER_MAX_NUM 1024
+static struct bnxt_mtr_stats_id_map mtr_stats[BNXT_METER_MAX_NUM];
+
+static uint32_t CFA_RESTYPE_TO_BLKT(uint8_t idx_tbl_restype)
+{
+	return (idx_tbl_restype > CFA_RSUBTYPE_IDX_TBL_MAX) ?
+			CFA_IDX_TBL_BLKTYPE_RXP : CFA_IDX_TBL_BLKTYPE_CFA;
+}
 
 /* Internal function to write the tcam entry */
 static int32_t
@@ -71,11 +75,6 @@ ulp_mapper_tfc_tcam_tbl_entry_write(struct bnxt_ulp_mapper_parms *parms,
 		return rc;
 	}
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	ulp_mapper_tcam_entry_dump("TCAM", idx, tbl, key, mask, remap);
-#endif
-#endif
 	return rc;
 }
 
@@ -284,11 +283,6 @@ ulp_mapper_tfc_tcam_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 		key = &tkey;
 		mask = &tmask;
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	ulp_mapper_tcam_entry_dump("TCAM", 0, tbl, key, mask, &data);
-#endif
-#endif
 
 	if (alloc_tcam) {
 		tfcp = bnxt_ulp_cntxt_tfcp_get(parms->ulp_ctx);
@@ -307,7 +301,7 @@ ulp_mapper_tfc_tcam_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 		/* allocate the tcam entry, only need the length */
 		(void)ulp_blob_data_get(key, &key_sz_in_bits);
 		key_sz_in_words = ULP_BITS_2_BYTE(key_sz_in_bits);
-		tfc_inf.dir = tbl->direction; /* PKB.need an api */
+		tfc_inf.dir = tbl->direction;
 		tfc_inf.rsubtype = tbl->resource_type;
 
 		rc = tfc_tcam_alloc(tfcp, fw_fid, tt, priority,
@@ -522,11 +516,6 @@ ulp_mapper_tfc_em_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 	ulp_blob_pad_push(&key, align_len_bits);
 	key_len = ULP_BITS_2_BYTE(ulp_blob_data_len_get(&key));
 	ulp_blob_perform_byte_reverse(&key, key_len);
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	ulp_mapper_result_dump("EM Key", tbl, &key);
-#endif
-#endif
 	/* Create the result data blob */
 	rc = ulp_mapper_tbl_result_build(parms, tbl, &data, "EM Result");
 	if (unlikely(rc)) {
@@ -537,11 +526,6 @@ ulp_mapper_tfc_em_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 	key_len = ULP_BITS_2_BYTE(ulp_blob_data_len_get(&data));
 	ulp_blob_perform_byte_reverse(&data, key_len);
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	ulp_mapper_result_dump("EM Result", tbl, &data);
-#endif
-#endif
 	rc = ulp_blob_append(&key, &data, 0, dparms->em_blk_align_bits);
 	if (unlikely(rc)) {
 		BNXT_DRV_DBG(ERR, "EM Failed to append the result to key(%d)",
@@ -557,11 +541,6 @@ ulp_mapper_tfc_em_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 	if (unlikely(rc))
 		return rc;
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	ulp_mapper_result_dump("EM Merged Result", tbl, &key);
-#endif
-#endif
 	iparms.dir		 = tbl->direction;
 	iparms.lkup_key_data	 = ulp_blob_data_get(&key, &tmplen);
 	iparms.lkup_key_sz_words = ULP_BITS_TO_32_BYTE_WORD(tmplen);
@@ -635,11 +614,6 @@ ulp_mapper_tfc_em_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 		return rc;
 	}
 
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	ulp_mapper_tfc_em_dump("EM", &key, &iparms);
-#endif
-#endif
 	/* Mark action process */
 	rc = ulp_mapper_mark_gfid_process(parms, tbl, *iparms.flow_handle);
 	if (unlikely(rc)) {
@@ -857,6 +831,7 @@ ulp_mapper_tfc_index_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 		index = rte_be_to_cpu_64(regval);
 		tbl_info.dir = tbl->direction;
 		tbl_info.rsubtype = tbl->resource_type;
+		tbl_info.blktype = CFA_RESTYPE_TO_BLKT(tbl->resource_type);
 		tbl_info.id = index;
 		/* Nothing has been pushed to blob, so push bit_size */
 		tmplen = ulp_blob_pad_push(&data, bit_size);
@@ -910,6 +885,22 @@ ulp_mapper_tfc_index_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 	if (alloc) {
 		tbl_info.dir = tbl->direction;
 		tbl_info.rsubtype = tbl->resource_type;
+		tbl_info.blktype = CFA_RESTYPE_TO_BLKT(tbl->resource_type);
+		/*
+		 * Read back the operand and pass it into the
+		 * alloc command if its a Dyn UPAR table.
+		 */
+		if (tbl_info.blktype == CFA_IDX_TBL_BLKTYPE_RXP) {
+			if (ulp_regfile_read(parms->regfile,
+					     tbl->tbl_operand, &regval)) {
+				BNXT_DRV_DBG(ERR,
+					     "Failed to get tbl idx from regfile[%d]\n",
+					     tbl->tbl_operand);
+				return -EINVAL;
+			}
+			tbl_info.rsubtype = rte_be_to_cpu_64(regval);
+		}
+
 		rc =  tfc_idx_tbl_alloc(tfcp, fw_fid, tt, &tbl_info);
 		if (unlikely(rc)) {
 			BNXT_DRV_DBG(ERR, "Alloc table[%s][%s] failed rc=%d\n",
@@ -971,6 +962,7 @@ ulp_mapper_tfc_index_tbl_process(struct bnxt_ulp_mapper_parms *parms,
 		data_p = ulp_blob_data_get(&data, &tmplen);
 		tbl_info.dir = tbl->direction;
 		tbl_info.rsubtype = tbl->resource_type;
+		tbl_info.blktype = CFA_RESTYPE_TO_BLKT(tbl->resource_type);
 		tbl_info.id = index;
 		wordlen = ULP_BITS_2_BYTE(tmplen);
 		rc = tfc_idx_tbl_set(tfcp, fw_fid, &tbl_info,
@@ -1021,6 +1013,7 @@ error:
 	 * write to the entry or link the flow
 	 */
 
+	tbl_info.blktype = CFA_RESTYPE_TO_BLKT(tbl->resource_type);
 	if (tfc_idx_tbl_free(tfcp, fw_fid, &tbl_info))
 		BNXT_DRV_DBG(ERR, "Failed to free index entry on failure\n");
 	return rc;
@@ -1050,17 +1043,10 @@ ulp_mapper_tfc_index_entry_free(struct bnxt_ulp_context *ulp_ctx,
 	tbl_info.dir = (enum cfa_dir)res->direction;
 	tbl_info.rsubtype = res->resource_type;
 	tbl_info.id = (uint16_t)res->resource_hndl;
+	tbl_info.blktype = CFA_RESTYPE_TO_BLKT(res->resource_type);
 
 	/* TBD: check to see if the memory needs to be cleaned as well*/
 	rc = tfc_idx_tbl_free(tfcp, fw_fid, &tbl_info);
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	if (!rc)
-		BNXT_DRV_DBG(DEBUG, "Freed Index [%s]:[%s] = 0x%X\n",
-		     tfc_dir_2_str(tbl_info.dir),
-		     tfc_idx_tbl_2_str(tbl_info.rsubtype), tbl_info.id);
-#endif
-#endif
 	return rc;
 }
 
@@ -1556,13 +1542,6 @@ ulp_mapper_tfc_ident_alloc(struct bnxt_ulp_context *ulp_ctx,
 		return rc;
 	}
 	*identifier_id = ident_info.id;
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_INF("Allocated Identifier [%s]:[%s] = 0x%X\n",
-		     tfc_dir_2_str(direction),
-		     tfc_ident_2_str(ident_info.rsubtype), ident_info.id);
-#endif
-#endif
 
 	return rc;
 }
@@ -1596,13 +1575,82 @@ ulp_mapper_tfc_ident_free(struct bnxt_ulp_context *ulp_ctx,
 		BNXT_DRV_DBG(ERR, "free failed %d\n", rc);
 		return rc;
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_DBG(DEBUG, "Freed Identifier [%s]:[%s] = 0x%X\n",
-		     tfc_dir_2_str(ident_info.dir),
-		     tfc_ident_2_str(ident_info.rsubtype), ident_info.id);
-#endif
-#endif
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_tfc_global_ident_alloc(struct bnxt_ulp_context *ulp_ctx,
+				  uint16_t ident_type,
+				  uint8_t direction,
+				  uint8_t *context_id,
+				  uint16_t context_len,
+				  uint64_t *identifier_id)
+{
+	struct tfc *tfcp = NULL;
+	struct tfc_global_id_req glb_req = { 0 };
+	struct tfc_global_id glb_rsp = { 0 };
+	uint16_t fw_fid = 0;
+	int32_t rc = 0;
+	bool first = false;
+
+	if (unlikely(bnxt_ulp_cntxt_fid_get(ulp_ctx, &fw_fid))) {
+		BNXT_DRV_DBG(ERR, "Failed to get func_id\n");
+		return -EINVAL;
+	}
+
+	tfcp = bnxt_ulp_cntxt_tfcp_get(ulp_ctx);
+	if (unlikely(tfcp == NULL)) {
+		BNXT_DRV_DBG(ERR, "Failed to get tfcp pointer\n");
+		return -EINVAL;
+	}
+
+	glb_req.rtype = CFA_RTYPE_IDENT;
+	glb_req.dir = direction;
+	glb_req.rsubtype = ident_type;
+	glb_req.context_len = context_len;
+	glb_req.context_id = context_id;
+
+	rc = tfc_global_id_alloc(tfcp, fw_fid, &glb_req, &glb_rsp, &first);
+	if (unlikely(rc != 0)) {
+		BNXT_DRV_DBG(ERR, "alloc failed %d\n", rc);
+		return rc;
+	}
+	*identifier_id = glb_rsp.id;
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_tfc_global_ident_free(struct bnxt_ulp_context *ulp_ctx,
+				 struct ulp_flow_db_res_params *res)
+{
+	struct tfc_global_id_req glb_req = { 0 };
+	struct tfc *tfcp = NULL;
+	int32_t rc = 0;
+	uint16_t fw_fid = 0;
+
+	if (unlikely(bnxt_ulp_cntxt_fid_get(ulp_ctx, &fw_fid))) {
+		BNXT_DRV_DBG(ERR, "Failed to get func_id\n");
+		return -EINVAL;
+	}
+
+	tfcp = bnxt_ulp_cntxt_tfcp_get(ulp_ctx);
+	if (unlikely(tfcp == NULL)) {
+		BNXT_DRV_DBG(ERR, "Failed to get tfcp pointer\n");
+		return -EINVAL;
+	}
+
+	glb_req.rtype = CFA_RTYPE_IDENT;
+	glb_req.dir = (enum cfa_dir)res->direction;
+	glb_req.rsubtype = res->resource_type;
+	glb_req.resource_id = (uint16_t)res->resource_hndl;
+
+	rc = tfc_global_id_free(tfcp, fw_fid, &glb_req);
+	if (unlikely(rc != 0)) {
+		BNXT_DRV_DBG(ERR, "free failed %d\n", rc);
+		return rc;
+	}
 
 	return rc;
 }
@@ -1634,13 +1682,6 @@ ulp_mapper_tfc_tcam_entry_free(struct bnxt_ulp_context *ulp,
 			    tcam_info.id);
 		return -EINVAL;
 	}
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_DBG(DEBUG, "Freed TCAM [%s]:[%s] = 0x%X\n",
-		     tfc_dir_2_str(tcam_info.dir),
-		     tfc_tcam_2_str(tcam_info.rsubtype), tcam_info.id);
-#endif
-#endif
 	return 0;
 }
 
@@ -1699,13 +1740,6 @@ ulp_mapper_tfc_index_tbl_alloc_process(struct bnxt_ulp_context *ulp,
 	}
 
 	*index = tbl_info.id;
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG
-#ifdef RTE_LIBRTE_BNXT_TRUFLOW_DEBUG_MAPPER
-	BNXT_DRV_DBG(DEBUG, "Allocated Table Index [%s][%s] = 0x%04x\n",
-		     tfc_idx_tbl_2_str(table_type), tfc_dir_2_str(direction),
-		     tbl_info.id);
-#endif
-#endif
 	return rc;
 }
 
@@ -1759,9 +1793,169 @@ ulp_mapper_tfc_mpc_batch_start(struct tfc_mpc_batch_info_t *batch_info)
 	return tfc_mpc_batch_start(batch_info);
 }
 
+static int32_t
+ulp_mapper_tfc_mtr_stats_hndl_set(struct bnxt_ulp_mapper_parms *parms __rte_unused,
+				  uint32_t mtr_id, uint64_t stats_hndl)
+{
+	int32_t i, rc = -ENOMEM;
+
+	for (i = 0; i < BNXT_METER_MAX_NUM; i++)
+		if (!mtr_stats[i].valid) {
+			mtr_stats[i].mtr_id = mtr_id;
+			mtr_stats[i].stats_hndl = stats_hndl;
+			mtr_stats[i].valid = true;
+			rc = 0;
+			break;
+		}
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_tfc_mtr_stats_hndl_get(uint32_t mtr_id, uint64_t *stats_hndl)
+{
+	int32_t i, rc = -EINVAL;
+
+	for (i = 0; i < BNXT_METER_MAX_NUM; i++) {
+		if (mtr_stats[i].valid && mtr_stats[i].mtr_id == mtr_id) {
+			*stats_hndl = mtr_stats[i].stats_hndl;
+			rc = 0;
+			break;
+		}
+	}
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_tfc_mtr_stats_hndl_del(uint32_t mtr_id)
+{
+	int32_t i, rc = -EINVAL;
+
+	for (i = 0; i < BNXT_METER_MAX_NUM; i++)
+		if (mtr_stats[i].valid && mtr_stats[i].mtr_id == mtr_id) {
+			mtr_stats[i].valid = false;
+			rc = 0;
+			break;
+		}
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_tfc_glb_idx_tbl_alloc(struct bnxt_ulp_context *ulp_ctx,
+				 uint16_t sub_type, uint8_t direction,
+				 uint8_t *context_id, uint16_t context_len,
+				 uint64_t *idx_id)
+{
+	struct tfc *tfcp = NULL;
+	struct tfc_global_id_req glb_req = { 0 };
+	struct tfc_global_id glb_rsp = { 0 };
+	uint16_t fw_fid = 0;
+	int32_t rc = 0;
+	bool first = false;
+
+	if (unlikely(bnxt_ulp_cntxt_fid_get(ulp_ctx, &fw_fid))) {
+		BNXT_DRV_DBG(ERR, "Failed to get func_id");
+		return -EINVAL;
+	}
+
+	tfcp = bnxt_ulp_cntxt_tfcp_get(ulp_ctx);
+	if (unlikely(tfcp == NULL)) {
+		BNXT_DRV_DBG(ERR, "Failed to get tfcp pointer");
+		return -EINVAL;
+	}
+
+	glb_req.rtype = CFA_RTYPE_IDX_TBL;
+	glb_req.dir = direction;
+	glb_req.rsubtype = sub_type;
+	glb_req.context_len = context_len;
+	glb_req.context_id = context_id;
+
+	rc = tfc_global_id_alloc(tfcp, fw_fid, &glb_req, &glb_rsp, &first);
+	if (unlikely(rc != 0)) {
+		BNXT_DRV_DBG(ERR, "alloc failed %d", rc);
+		return rc;
+	}
+	*idx_id = glb_rsp.id;
+
+	return rc;
+}
+
+static int32_t
+ulp_mapper_tfc_glb_idx_tbl_free(struct bnxt_ulp_context *ulp_ctx,
+				struct ulp_flow_db_res_params *res)
+{
+	struct tfc_global_id_req glb_req = { 0 };
+	struct tfc *tfcp = NULL;
+	int32_t rc = 0;
+	uint16_t fw_fid = 0;
+
+	if (unlikely(bnxt_ulp_cntxt_fid_get(ulp_ctx, &fw_fid))) {
+		BNXT_DRV_DBG(ERR, "Failed to get func_id");
+		return -EINVAL;
+	}
+
+	tfcp = bnxt_ulp_cntxt_tfcp_get(ulp_ctx);
+	if (unlikely(tfcp == NULL)) {
+		BNXT_DRV_DBG(ERR, "Failed to get tfcp pointer");
+		return -EINVAL;
+	}
+
+	glb_req.rtype = CFA_RTYPE_IDX_TBL;
+	glb_req.dir = (enum cfa_dir)res->direction;
+	glb_req.rsubtype = res->resource_type;
+	glb_req.resource_id = (uint16_t)res->resource_hndl;
+
+	rc = tfc_global_id_free(tfcp, fw_fid, &glb_req);
+	if (unlikely(rc != 0)) {
+		BNXT_DRV_DBG(ERR, "free failed %d", rc);
+		return rc;
+	}
+
+	return rc;
+}
+
+static inline int32_t
+ulp_mapper_tfc_tcam_prio_update(struct bnxt_ulp_mapper_parms *parms,
+				uint8_t dir,
+				enum cfa_track_type tt,
+				enum cfa_resource_subtype_tcam rtype,
+				uint32_t tcam_id,
+				uint16_t priority)
+{
+	struct tfc *tfcp = NULL;
+	struct tfc_tcam_info tcam_info = { 0 };
+	uint16_t fw_fid = 0;
+
+	if (unlikely(bnxt_ulp_cntxt_fid_get(parms->ulp_ctx, &fw_fid))) {
+		BNXT_DRV_DBG(ERR, "Failed to get func_id\n");
+		return -EINVAL;
+	}
+
+	tfcp = bnxt_ulp_cntxt_tfcp_get(parms->ulp_ctx);
+	if (unlikely(tfcp == NULL)) {
+		PMD_DRV_LOG_LINE(ERR, "Failed to get tfcp pointer");
+		return -EINVAL;
+	}
+	tcam_info.dir = (enum cfa_dir)dir;
+	tcam_info.rsubtype = rtype;
+	tcam_info.id = (uint16_t)tcam_id;
+
+	if (unlikely(!tfcp || tfc_tcam_priority_update(tfcp, fw_fid, tt,
+						       &tcam_info,
+						       priority))) {
+		BNXT_DRV_DBG(ERR, "Unable to update tcam priority %u\n",
+			     tcam_info.id);
+		return -EINVAL;
+	}
+	return 0;
+}
+
 const struct ulp_mapper_core_ops ulp_mapper_tfc_core_ops = {
 	.ulp_mapper_core_tcam_tbl_process = ulp_mapper_tfc_tcam_tbl_process,
 	.ulp_mapper_core_tcam_entry_free = ulp_mapper_tfc_tcam_entry_free,
+	.ulp_mapper_core_tcam_prio_update = ulp_mapper_tfc_tcam_prio_update,
 	.ulp_mapper_core_em_tbl_process = ulp_mapper_tfc_em_tbl_process,
 	.ulp_mapper_core_em_entry_free = ulp_mapper_tfc_em_entry_free,
 	.ulp_mapper_core_index_tbl_process = ulp_mapper_tfc_index_tbl_process,
@@ -1771,6 +1965,10 @@ const struct ulp_mapper_core_ops ulp_mapper_tfc_core_ops = {
 	.ulp_mapper_core_if_tbl_process = ulp_mapper_tfc_if_tbl_process,
 	.ulp_mapper_core_ident_alloc_process = ulp_mapper_tfc_ident_alloc,
 	.ulp_mapper_core_ident_free = ulp_mapper_tfc_ident_free,
+	.ulp_mapper_core_global_ident_alloc = ulp_mapper_tfc_global_ident_alloc,
+	.ulp_mapper_core_global_ident_free = ulp_mapper_tfc_global_ident_free,
+	.ulp_mapper_core_glb_idx_tbl_alloc = ulp_mapper_tfc_glb_idx_tbl_alloc,
+	.ulp_mapper_core_glb_idx_tbl_free = ulp_mapper_tfc_glb_idx_tbl_free,
 	.ulp_mapper_core_dyn_tbl_type_get = ulp_mapper_tfc_dyn_tbl_type_get,
 	.ulp_mapper_core_index_tbl_alloc_process =
 		ulp_mapper_tfc_index_tbl_alloc_process,
@@ -1779,5 +1977,8 @@ const struct ulp_mapper_core_ops ulp_mapper_tfc_core_ops = {
 	.ulp_mapper_core_handle_to_offset = ulp_mapper_tfc_handle_to_offset,
 	.ulp_mapper_mpc_batch_start = ulp_mapper_tfc_mpc_batch_start,
 	.ulp_mapper_mpc_batch_started = ulp_mapper_tfc_mpc_batch_started,
-	.ulp_mapper_mpc_batch_end = ulp_mapper_tfc_mpc_batch_end
+	.ulp_mapper_mpc_batch_end = ulp_mapper_tfc_mpc_batch_end,
+	.ulp_mapper_mtr_stats_hndl_set = ulp_mapper_tfc_mtr_stats_hndl_set,
+	.ulp_mapper_mtr_stats_hndl_get = ulp_mapper_tfc_mtr_stats_hndl_get,
+	.ulp_mapper_mtr_stats_hndl_del = ulp_mapper_tfc_mtr_stats_hndl_del
 };

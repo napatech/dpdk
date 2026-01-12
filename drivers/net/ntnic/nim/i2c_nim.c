@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -13,7 +12,7 @@
 #include "qsfp_registers.h"
 #include "nim_defines.h"
 
-int nim_agx_read_id(struct nim_i2c_ctx *ctx);
+static int nim_agx_read_id(struct nim_i2c_ctx *ctx);
 static void nim_agx_read(struct nim_i2c_ctx *ctx, uint8_t dev_addr, uint8_t reg_addr,
 	uint8_t data_len, void *p_data);
 static void nim_agx_write(struct nim_i2c_ctx *ctx, uint8_t dev_addr, uint8_t reg_addr,
@@ -704,7 +703,7 @@ static void qsfp28_wait_for_ready_after_reset(nim_i2c_ctx_p ctx)
 	 * Probably because access to the paged address space is required.
 	 */
 	if (!init_complete_flag_present) {
-		nt_os_wait_usec(500000);
+		nthw_os_wait_usec(500000);
 		return;
 	}
 
@@ -724,7 +723,7 @@ static void qsfp28_wait_for_ready_after_reset(nim_i2c_ctx_p ctx)
 			break;
 		}
 
-		nt_os_wait_usec(100000);/* 100 ms */
+		nthw_os_wait_usec(100000);/* 100 ms */
 		count++;
 	}
 }
@@ -881,7 +880,7 @@ bool nthw_qsfp28_set_fec_enable(nim_i2c_ctx_p ctx, bool media_side_fec, bool hos
 	return true;
 }
 
-void nim_agx_setup(struct nim_i2c_ctx *ctx, nthw_pcal6416a_t *p_io_nim, nthw_i2cm_t *p_nt_i2cm,
+void nthw_nim_agx_setup(struct nim_i2c_ctx *ctx, nthw_pcal6416a_t *p_io_nim, nthw_i2cm_t *p_nt_i2cm,
 	nthw_pca9849_t *p_ca9849)
 {
 	ctx->hwagx.p_nt_i2cm = p_nt_i2cm;
@@ -931,7 +930,7 @@ static void nim_agx_write(struct nim_i2c_ctx *ctx,
 	rte_spinlock_unlock(&p_nt_i2cm->i2cmmutex);
 }
 
-int nim_agx_read_id(struct nim_i2c_ctx *ctx)
+static int nim_agx_read_id(struct nim_i2c_ctx *ctx)
 {
 	nim_agx_read(ctx, 0xA0, 0, sizeof(ctx->nim_id), &ctx->nim_id);
 	return 0;

@@ -36,8 +36,6 @@
 #define IAVF_VPMD_TX_MAX_FREE_BUF      64
 
 #define IAVF_TX_NO_VECTOR_FLAGS (				 \
-		RTE_ETH_TX_OFFLOAD_VLAN_INSERT |		 \
-		RTE_ETH_TX_OFFLOAD_QINQ_INSERT |		 \
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |		 \
 		RTE_ETH_TX_OFFLOAD_TCP_TSO |		 \
 		RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |	 \
@@ -54,14 +52,49 @@
 
 #define IAVF_TX_VECTOR_OFFLOAD_CTX (			\
 		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |	\
-		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM)
+		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |	\
+		RTE_ETH_TX_OFFLOAD_QINQ_INSERT)
 
-#define IAVF_RX_VECTOR_OFFLOAD (				 \
-		RTE_ETH_RX_OFFLOAD_CHECKSUM |		 \
-		RTE_ETH_RX_OFFLOAD_SCTP_CKSUM |		 \
-		RTE_ETH_RX_OFFLOAD_VLAN |		 \
-		RTE_ETH_RX_OFFLOAD_RSS_HASH |    \
-		RTE_ETH_RX_OFFLOAD_TIMESTAMP)
+/* basic scalar path */
+#define IAVF_RX_SCALAR_OFFLOADS (			\
+		RTE_ETH_RX_OFFLOAD_VLAN_STRIP |		\
+		RTE_ETH_RX_OFFLOAD_QINQ_STRIP |		\
+		RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_UDP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_TCP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |	\
+		RTE_ETH_RX_OFFLOAD_SCATTER |		\
+		RTE_ETH_RX_OFFLOAD_VLAN_FILTER |	\
+		RTE_ETH_RX_OFFLOAD_VLAN_EXTEND |	\
+		RTE_ETH_RX_OFFLOAD_RSS_HASH |		\
+		RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM |	\
+		RTE_ETH_RX_OFFLOAD_KEEP_CRC)
+/* scalar path that uses the flex rx desc */
+#define IAVF_RX_SCALAR_FLEX_OFFLOADS (			\
+		IAVF_RX_SCALAR_OFFLOADS |		\
+		RTE_ETH_RX_OFFLOAD_TIMESTAMP |		\
+		RTE_ETH_RX_OFFLOAD_SECURITY)
+/* basic vector paths */
+#define IAVF_RX_VECTOR_OFFLOADS (			\
+		RTE_ETH_RX_OFFLOAD_KEEP_CRC |		\
+		RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |	\
+		RTE_ETH_RX_OFFLOAD_SCATTER)
+/* vector paths that use the flex rx desc */
+#define IAVF_RX_VECTOR_FLEX_OFFLOADS (			\
+		IAVF_RX_VECTOR_OFFLOADS |		\
+		RTE_ETH_RX_OFFLOAD_SECURITY)
+/* vector offload paths */
+#define IAVF_RX_VECTOR_OFFLOAD_OFFLOADS (		\
+		IAVF_RX_VECTOR_OFFLOADS |		\
+		RTE_ETH_RX_OFFLOAD_CHECKSUM |		\
+		RTE_ETH_RX_OFFLOAD_SCTP_CKSUM |		\
+		RTE_ETH_RX_OFFLOAD_VLAN |		\
+		RTE_ETH_RX_OFFLOAD_RSS_HASH)
+/* vector offload paths that use the flex rx desc */
+#define IAVF_RX_VECTOR_OFFLOAD_FLEX_OFFLOADS (		\
+		IAVF_RX_VECTOR_OFFLOAD_OFFLOADS |	\
+		RTE_ETH_RX_OFFLOAD_TIMESTAMP |		\
+		RTE_ETH_RX_OFFLOAD_SECURITY)
 
 /**
  * According to the vlan capabilities returned by the driver and FW, the vlan tci
@@ -471,6 +504,9 @@ enum iavf_tx_ctx_desc_tunnel_l4_tunnel_type {
 /* for iavf_32b_rx_flex_desc.pkt_len member */
 #define IAVF_RX_FLX_DESC_PKT_LEN_M	(0x3FFF) /* 14-bits */
 
+/* Valid indicator bit for the time_stamp_low field */
+#define IAVF_RX_FLX_DESC_TS_VALID	(0x1UL)
+
 int iavf_dev_rx_queue_setup(struct rte_eth_dev *dev,
 			   uint16_t queue_idx,
 			   uint16_t nb_desc,
@@ -516,7 +552,7 @@ void iavf_dev_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 			  struct rte_eth_rxq_info *qinfo);
 void iavf_dev_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 			  struct rte_eth_txq_info *qinfo);
-uint32_t iavf_dev_rxq_count(void *rx_queue);
+int iavf_dev_rxq_count(void *rx_queue);
 int iavf_dev_rx_desc_status(void *rx_queue, uint16_t offset);
 int iavf_dev_tx_desc_status(void *tx_queue, uint16_t offset);
 
@@ -606,6 +642,7 @@ void iavf_tx_queue_release_mbufs_avx512(struct ci_tx_queue *txq);
 void iavf_rx_queue_release_mbufs_sse(struct ci_rx_queue *rxq);
 void iavf_tx_queue_release_mbufs_sse(struct ci_tx_queue *txq);
 void iavf_rx_queue_release_mbufs_neon(struct ci_rx_queue *rxq);
+enum rte_vect_max_simd iavf_get_max_simd_bitwidth(void);
 
 static inline
 void iavf_dump_rx_descriptor(struct ci_rx_queue *rxq,

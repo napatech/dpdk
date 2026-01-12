@@ -1,5 +1,0 @@
-# SPDX-License-Identifier: BSD-3-Clause
-
-# Define the custom test suite configurations
-hello_world:
-  msg: A custom hello world to you!

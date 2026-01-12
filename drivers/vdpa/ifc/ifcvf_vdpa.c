@@ -2,6 +2,8 @@
  * Copyright(c) 2018 Intel Corporation
  */
 
+#include <uapi/linux/vfio.h>
+
 #include <unistd.h>
 #include <pthread.h>
 #include <fcntl.h>

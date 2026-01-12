@@ -15,6 +15,7 @@
 #include <rte_kvargs.h>
 #include <rte_eal_paging.h>
 #include <rte_bitops.h>
+#include <rte_string_fns.h>
 
 #include "xsc_log.h"
 #include "xsc_defs.h"
@@ -63,30 +64,21 @@ xsc_dev_mailbox_exec(struct xsc_dev *xdev, void *data_in,
 }
 
 int
-xsc_dev_set_link_up(struct xsc_dev *xdev)
+xsc_dev_link_status_set(struct xsc_dev *xdev, uint16_t status)
 {
-	if (xdev->dev_ops->set_link_up == NULL)
+	if (xdev->dev_ops->link_status_set == NULL)
 		return -ENOTSUP;
 
-	return xdev->dev_ops->set_link_up(xdev);
+	return xdev->dev_ops->link_status_set(xdev, status);
 }
 
 int
-xsc_dev_set_link_down(struct xsc_dev *xdev)
+xsc_dev_link_get(struct xsc_dev *xdev, struct rte_eth_link *link)
 {
-	if (xdev->dev_ops->set_link_down == NULL)
+	if (xdev->dev_ops->link_get == NULL)
 		return -ENOTSUP;
 
-	return xdev->dev_ops->set_link_down(xdev);
-}
-
-int
-xsc_dev_link_update(struct xsc_dev *xdev, uint8_t funcid_type, int wait_to_complete)
-{
-	if (xdev->dev_ops->link_update == NULL)
-		return -ENOTSUP;
-
-	return xdev->dev_ops->link_update(xdev, funcid_type, wait_to_complete);
+	return xdev->dev_ops->link_get(xdev, link);
 }
 
 int
@@ -328,11 +320,30 @@ xsc_dev_repr_ports_probe(struct xsc_dev *xdev, int nb_repr_ports, int max_eth_po
 	return 0;
 }
 
+static void
+xsc_dev_reg_addr_init(struct xsc_dev *xdev)
+{
+	struct xsc_dev_reg_addr *reg = &xdev->reg_addr;
+	uint8_t *bar_addr = xdev->bar_addr;
+
+	if (xsc_dev_is_vf(xdev) || xdev->bar_len != XSC_DEV_BAR_LEN_256M) {
+		reg->rxq_db_addr = (uint32_t *)(bar_addr + XSC_VF_RX_DB_ADDR);
+		reg->txq_db_addr = (uint32_t *)(bar_addr + XSC_VF_TX_DB_ADDR);
+		reg->cq_db_addr = (uint32_t *)(bar_addr + XSC_VF_CQ_DB_ADDR);
+		reg->cq_pi_start = XSC_VF_CQ_PID_START_ADDR;
+	} else {
+		reg->rxq_db_addr = (uint32_t *)(bar_addr + XSC_PF_RX_DB_ADDR);
+		reg->txq_db_addr = (uint32_t *)(bar_addr + XSC_PF_TX_DB_ADDR);
+		reg->cq_db_addr = (uint32_t *)(bar_addr + XSC_PF_CQ_DB_ADDR);
+		reg->cq_pi_start = XSC_PF_CQ_PID_START_ADDR;
+	}
+}
+
 void
 xsc_dev_uninit(struct xsc_dev *xdev)
 {
 	PMD_INIT_FUNC_TRACE();
-	xsc_dev_pct_uninit();
+	xsc_dev_pct_uninit(xdev);
 	xsc_dev_close(xdev, XSC_DEV_REPR_ID_INVALID);
 	rte_free(xdev);
 }
@@ -362,6 +373,7 @@ xsc_dev_init(struct rte_pci_device *pci_dev, struct xsc_dev **xdev)
 	if (d->dev_ops->dev_init)
 		d->dev_ops->dev_init(d);
 
+	xsc_dev_reg_addr_init(d);
 	xsc_dev_args_parse(d, pci_dev->device.devargs);
 
 	ret = xsc_dev_alloc_vfos_info(d);
@@ -371,7 +383,11 @@ xsc_dev_init(struct rte_pci_device *pci_dev, struct xsc_dev **xdev)
 		goto hwinfo_init_fail;
 	}
 
-	ret = xsc_dev_pct_init();
+	ret = xsc_dev_mac_port_init(d);
+	if (ret)
+		goto hwinfo_init_fail;
+
+	ret = xsc_dev_pct_init(d);
 	if (ret) {
 		PMD_DRV_LOG(ERR, "Failed to init xsc pct");
 		ret = -EINVAL;
@@ -397,4 +413,335 @@ xsc_dev_is_vf(struct xsc_dev *xdev)
 		return true;
 
 	return false;
+}
+
+int
+xsc_dev_fw_version_get(struct xsc_dev *xdev, char *fw_version, size_t fw_size)
+{
+	size_t size = strnlen(xdev->hwinfo.fw_ver, sizeof(xdev->hwinfo.fw_ver)) + 1;
+
+	if (fw_size < size)
+		return size;
+	rte_strlcpy(fw_version, xdev->hwinfo.fw_ver, fw_size);
+
+	return 0;
+}
+
+static int
+xsc_dev_access_reg(struct xsc_dev *xdev, void *data_in, int size_in,
+		   void *data_out, int size_out, uint16_t reg_num)
+{
+	struct xsc_cmd_access_reg_mbox_in *in;
+	struct xsc_cmd_access_reg_mbox_out *out;
+	int ret = -1;
+
+	in = malloc(sizeof(*in) + size_in);
+	if (in == NULL) {
+		rte_errno = ENOMEM;
+		PMD_DRV_LOG(ERR, "Failed to malloc access reg mbox in memory");
+		return -rte_errno;
+	}
+	memset(in, 0, sizeof(*in) + size_in);
+
+	out = malloc(sizeof(*out) + size_out);
+	if (out == NULL) {
+		rte_errno = ENOMEM;
+		PMD_DRV_LOG(ERR, "Failed to malloc access reg mbox out memory");
+		goto alloc_out_fail;
+	}
+	memset(out, 0, sizeof(*out) + size_out);
+
+	memcpy(in->data, data_in, size_in);
+	in->hdr.opcode = rte_cpu_to_be_16(XSC_CMD_OP_ACCESS_REG);
+	in->arg = 0;
+	in->register_id = rte_cpu_to_be_16(reg_num);
+
+	ret = xsc_dev_mailbox_exec(xdev, in, sizeof(*in) + size_in, out,
+				   sizeof(*out) + size_out);
+	if (ret != 0 || out->hdr.status != 0) {
+		rte_errno = ENOEXEC;
+		PMD_DRV_LOG(ERR, "Failed to access reg");
+		goto exit;
+	}
+
+	memcpy(data_out, out->data, size_out);
+
+exit:
+	free(out);
+
+alloc_out_fail:
+	free(in);
+	return ret;
+}
+
+static int
+xsc_dev_query_mcia(struct xsc_dev *xdev,
+		   struct xsc_module_eeprom_query_params *params,
+		   uint8_t *data)
+{
+	struct xsc_dev_reg_mcia in = { };
+	struct xsc_dev_reg_mcia out = { };
+	int ret;
+	void *ptr;
+	uint16_t size;
+
+	size = RTE_MIN(params->size, XSC_EEPROM_MAX_BYTES);
+	in.i2c_device_address = params->i2c_address;
+	in.module = params->module_number & 0x000000FF;
+	in.device_address = params->offset;
+	in.page_number = params->page;
+	in.size = size;
+
+	ret = xsc_dev_access_reg(xdev, &in, sizeof(in), &out, sizeof(out), XSC_REG_MCIA);
+	if (ret != 0)
+		return ret;
+
+	ptr = out.dword_0;
+	memcpy(data, ptr, size);
+
+	return size;
+}
+
+static void
+xsc_dev_sfp_eeprom_params_set(uint16_t *i2c_addr, uint32_t *page_num, uint16_t *offset)
+{
+	*i2c_addr = XSC_I2C_ADDR_LOW;
+	*page_num = 0;
+
+	if (*offset < XSC_EEPROM_PAGE_LENGTH)
+		return;
+
+	*i2c_addr = XSC_I2C_ADDR_HIGH;
+	*offset -= XSC_EEPROM_PAGE_LENGTH;
+}
+
+static int
+xsc_dev_qsfp_eeprom_page(uint16_t offset)
+{
+	if (offset < XSC_EEPROM_PAGE_LENGTH)
+		/* Addresses between 0-255 - page 00 */
+		return 0;
+
+	/*
+	 * Addresses between 256 - 639 belongs to pages 01, 02 and 03
+	 * For example, offset = 400 belongs to page 02:
+	 * 1 + ((400 - 256)/128) = 2
+	 */
+	return 1 + ((offset - XSC_EEPROM_PAGE_LENGTH) / XSC_EEPROM_HIGH_PAGE_LENGTH);
+}
+
+static int
+xsc_dev_qsfp_eeprom_high_page_offset(int page_num)
+{
+	/* Page 0 always start from low page */
+	if (!page_num)
+		return 0;
+
+	/* High page */
+	return page_num * XSC_EEPROM_HIGH_PAGE_LENGTH;
+}
+
+static void
+xsc_dev_qsfp_eeprom_params_set(uint16_t *i2c_addr, uint32_t *page_num, uint16_t *offset)
+{
+	*i2c_addr = XSC_I2C_ADDR_LOW;
+	*page_num = xsc_dev_qsfp_eeprom_page(*offset);
+	*offset -=  xsc_dev_qsfp_eeprom_high_page_offset(*page_num);
+}
+
+static int
+xsc_dev_query_module_id(struct xsc_dev *xdev, uint32_t module_num, uint8_t *module_id)
+{
+	struct xsc_dev_reg_mcia in = { 0 };
+	struct xsc_dev_reg_mcia out = { 0 };
+	int ret;
+	uint8_t *ptr;
+
+	in.i2c_device_address = XSC_I2C_ADDR_LOW;
+	in.module = module_num & 0x000000FF;
+	in.device_address = 0;
+	in.page_number = 0;
+	in.size = 1;
+
+	ret = xsc_dev_access_reg(xdev, &in, sizeof(in), &out, sizeof(out), XSC_REG_MCIA);
+	if (ret != 0)
+		return ret;
+
+	ptr = out.dword_0;
+	*module_id = ptr[0];
+	return 0;
+}
+
+int
+xsc_dev_query_module_eeprom(struct xsc_dev *xdev, uint16_t offset,
+			    uint16_t size, uint8_t *data)
+{
+	struct xsc_module_eeprom_query_params query = { 0 };
+	uint8_t module_id;
+	int ret;
+
+	query.module_number = xdev->hwinfo.mac_phy_port;
+	ret = xsc_dev_query_module_id(xdev, query.module_number, &module_id);
+	if (ret != 0)
+		return ret;
+
+	switch (module_id) {
+	case XSC_MODULE_ID_SFP:
+		xsc_dev_sfp_eeprom_params_set(&query.i2c_address, &query.page, &offset);
+		break;
+	case XSC_MODULE_ID_QSFP:
+	case XSC_MODULE_ID_QSFP_PLUS:
+	case XSC_MODULE_ID_QSFP28:
+	case XSC_MODULE_ID_QSFP_DD:
+	case XSC_MODULE_ID_DSFP:
+	case XSC_MODULE_ID_QSFP_PLUS_CMIS:
+		xsc_dev_qsfp_eeprom_params_set(&query.i2c_address, &query.page, &offset);
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Module ID not recognized: 0x%x", module_id);
+		return -EINVAL;
+	}
+
+	if (offset + size > XSC_EEPROM_PAGE_LENGTH)
+		/* Cross pages read, read until offset 256 in low page */
+		size = XSC_EEPROM_PAGE_LENGTH - offset;
+
+	query.size = size;
+	query.offset = offset;
+
+	return xsc_dev_query_mcia(xdev, &query, data);
+}
+
+int
+xsc_dev_intr_event_get(struct xsc_dev *xdev)
+{
+	if (xdev->dev_ops->intr_event_get == NULL)
+		return -ENOTSUP;
+
+	return xdev->dev_ops->intr_event_get(xdev);
+}
+
+int
+xsc_dev_intr_handler_install(struct xsc_dev *xdev, rte_intr_callback_fn cb, void *cb_arg)
+{
+	if (xdev->dev_ops->intr_handler_install == NULL)
+		return -ENOTSUP;
+
+	return xdev->dev_ops->intr_handler_install(xdev, cb, cb_arg);
+}
+
+int
+xsc_dev_intr_handler_uninstall(struct xsc_dev *xdev)
+{
+	if (xdev->dev_ops->intr_handler_uninstall == NULL)
+		return -ENOTSUP;
+
+	return xdev->dev_ops->intr_handler_uninstall(xdev);
+}
+
+int
+xsc_dev_fec_get(struct xsc_dev *xdev, uint32_t *fec_capa)
+{
+	struct xsc_cmd_query_fecparam_mbox_in in = { };
+	struct xsc_cmd_query_fecparam_mbox_out out = { };
+	int ret = 0, fec;
+
+	in.hdr.opcode = rte_cpu_to_be_16(XSC_CMD_OP_QUERY_FEC_PARAM);
+	ret = xsc_dev_mailbox_exec(xdev, &in, sizeof(in), &out, sizeof(out));
+	if (ret != 0 || out.hdr.status != 0) {
+		PMD_DRV_LOG(ERR, "Failed to get fec, ret=%d, status=%u",
+			    ret, out.hdr.status);
+		rte_errno = ENOEXEC;
+		return -rte_errno;
+	}
+
+	fec = rte_be_to_cpu_32(out.active_fec);
+	switch (fec) {
+	case XSC_DEV_FEC_OFF:
+		fec = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC);
+		break;
+	case XSC_DEV_FEC_BASER:
+		fec = RTE_ETH_FEC_MODE_CAPA_MASK(BASER);
+		break;
+	case XSC_DEV_FEC_RS:
+		fec = RTE_ETH_FEC_MODE_CAPA_MASK(RS);
+		break;
+	default:
+		fec = RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC);
+		break;
+	}
+
+	*fec_capa = fec;
+
+	return 0;
+}
+
+int
+xsc_dev_fec_set(struct xsc_dev *xdev, uint32_t mode)
+{
+	struct xsc_cmd_modify_fecparam_mbox_in in = { };
+	struct xsc_cmd_modify_fecparam_mbox_out out = { };
+	int ret = 0;
+
+	in.hdr.opcode = rte_cpu_to_be_16(XSC_CMD_OP_MODIFY_FEC_PARAM);
+	switch (mode) {
+	case RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC):
+		mode = XSC_DEV_FEC_OFF;
+		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(AUTO):
+		mode = XSC_DEV_FEC_AUTO;
+		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(BASER):
+		mode = XSC_DEV_FEC_BASER;
+		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(RS):
+		mode = XSC_DEV_FEC_RS;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Failed to set fec, fec mode %u not support", mode);
+		return 0;
+	}
+
+	in.fec = rte_cpu_to_be_32(mode);
+	ret = xsc_dev_mailbox_exec(xdev, &in, sizeof(in), &out, sizeof(out));
+	if (ret != 0 || out.hdr.status != 0) {
+		PMD_DRV_LOG(ERR, "Failed to set fec param, ret=%d, status=%u",
+			    ret, out.hdr.status);
+		rte_errno = ENOEXEC;
+		return -rte_errno;
+	}
+
+	return 0;
+}
+
+int
+xsc_dev_mac_port_init(struct xsc_dev *xdev)
+{
+	uint32_t i;
+	uint8_t num = 0;
+	uint32_t mac_port = xdev->hwinfo.mac_phy_port;
+	uint8_t mac_bit = xdev->hwinfo.mac_bit;
+	uint8_t *mac_idx = &xdev->hwinfo.mac_port_idx;
+	uint8_t *mac_num = &xdev->hwinfo.mac_port_num;
+	uint8_t bit_sz = sizeof(mac_bit) * 8;
+
+	*mac_idx = 0xff;
+	for (i = 0; i < bit_sz; i++) {
+		if (mac_bit & (1U << i)) {
+			if (i == mac_port)
+				*mac_idx = num;
+			num++;
+		}
+	}
+	*mac_num = num;
+
+	if (*mac_num == 0 || *mac_idx == 0xff) {
+		PMD_DRV_LOG(ERR, "Failed to parse mac port %u index, mac bit 0x%x",
+			    mac_port, mac_bit);
+		return -1;
+	}
+
+	PMD_DRV_LOG(DEBUG, "Mac port num %u, mac port %u, mac index %u",
+		    *mac_num, mac_port, *mac_idx);
+	return 0;
 }

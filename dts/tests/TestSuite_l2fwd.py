@@ -7,18 +7,27 @@ This testing suites runs basic L2 forwarding on testpmd across multiple differen
 The forwarding test is performed with several packets being sent at once.
 """
 
+from api.capabilities import (
+    LinkTopology,
+    NicCapability,
+    requires_link_topology,
+    requires_nic_capability,
+)
+from api.packet import (
+    get_expected_packets,
+    match_all_packets,
+    send_packets_and_capture,
+)
+from api.testpmd import TestPmd
+from api.testpmd.config import EthPeer, SimpleForwardingModes
 from framework.context import filter_cores
-from framework.params.testpmd import EthPeer, SimpleForwardingModes
-from framework.remote_session.testpmd_shell import NicCapability, TestPmdShell
 from framework.test_suite import TestSuite, func_test
-from framework.testbed_model.capability import requires
 from framework.testbed_model.cpu import LogicalCoreCount
-from framework.testbed_model.topology import TopologyType
 from framework.utils import generate_random_packets
 
 
-@requires(NicCapability.PHYSICAL_FUNCTION)
-@requires(topology_type=TopologyType.two_links)
+@requires_nic_capability(NicCapability.PHYSICAL_FUNCTION)
+@requires_link_topology(LinkTopology.TWO_LINKS)
 class TestL2fwd(TestSuite):
     """L2 forwarding test suite."""
 
@@ -40,17 +49,19 @@ class TestL2fwd(TestSuite):
     def l2fwd_integrity(self) -> None:
         """Test the L2 forwarding integrity.
 
-        Test:
-            Configure a testpmd shell with a different numbers of queues (1, 2, 4 and 8) per run.
-            Start up L2 forwarding, send random packets from the TG and verify they were all
-            received back.
+        Steps:
+            * Configure testpmd with a different numbers of queues (1, 2, 4 and 8) per run.
+            * Start up L2 forwarding, send random packets from the TG.
+
+        Verify:
+            * All packets are received.
         """
         queues = [1, 2, 4, 8]
 
         self.topology.sut_ports[0]
         self.topology.tg_ports[0]
 
-        with TestPmdShell(
+        with TestPmd(
             forward_mode=SimpleForwardingModes.mac,
             eth_peer=[EthPeer(1, self.topology.tg_port_ingress.mac_address)],
             disable_device_start=True,
@@ -60,8 +71,8 @@ class TestL2fwd(TestSuite):
                 shell.set_ports_queues(queues_num)
                 shell.start()
 
-                received_packets = self.send_packets_and_capture(self.packets)
-                expected_packets = self.get_expected_packets(self.packets)
-                self.match_all_packets(expected_packets, received_packets)
+                received_packets = send_packets_and_capture(self.packets)
+                expected_packets = get_expected_packets(self.packets)
+                match_all_packets(expected_packets, received_packets)
 
                 shell.stop()

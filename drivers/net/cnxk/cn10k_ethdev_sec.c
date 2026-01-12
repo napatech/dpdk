@@ -528,7 +528,8 @@ cnxk_pktmbuf_free_no_cache(struct rte_mbuf *mbuf)
 }
 
 void
-cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
+cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, enum nix_inl_event_type type, void *cq_s,
+			  uint32_t port_id)
 {
 	struct rte_eth_event_ipsec_desc desc;
 	struct cn10k_sec_sess_priv sess_priv;
@@ -545,6 +546,7 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 	uint8_t port;
 
 	RTE_SET_USED(args);
+	RTE_SET_USED(cq_s);
 
 	switch ((gw[0] >> 28) & 0xF) {
 	case RTE_EVENT_TYPE_ETHDEV:
@@ -562,7 +564,7 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 		}
 		/* Fall through */
 	default:
-		if (soft_exp_event & 0x1) {
+		if (type == NIX_INL_SOFT_EXPIRY_THRD) {
 			sa = (struct roc_ot_ipsec_outb_sa *)args;
 			priv = roc_nix_inl_ot_ipsec_outb_sa_sw_rsvd(sa);
 			desc.metadata = (uint64_t)priv->userdata;
@@ -572,7 +574,7 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 			else
 				desc.subtype =
 					RTE_ETH_EVENT_IPSEC_SA_BYTE_EXPIRY;
-			eth_dev = &rte_eth_devices[soft_exp_event >> 8];
+			eth_dev = &rte_eth_devices[port_id];
 			rte_eth_dev_callback_process(eth_dev,
 				RTE_ETH_EVENT_IPSEC, &desc);
 		} else {
@@ -845,10 +847,9 @@ cn10k_eth_sec_session_create(void *device,
 		memset(inb_sa_dptr, 0, sizeof(struct roc_ot_ipsec_inb_sa));
 
 		/* Fill inbound sa params */
-		rc = cnxk_ot_ipsec_inb_sa_fill(inb_sa_dptr, ipsec, crypto);
+		rc = cnxk_ot_ipsec_inb_sa_fill(inb_sa_dptr, ipsec, crypto, 0);
 		if (rc) {
-			snprintf(tbuf, sizeof(tbuf),
-				 "Failed to init inbound sa, rc=%d", rc);
+			snprintf(tbuf, sizeof(tbuf), "Failed to init inbound sa, rc=%d", rc);
 			goto err;
 		}
 
@@ -936,10 +937,9 @@ cn10k_eth_sec_session_create(void *device,
 		memset(outb_sa_dptr, 0, sizeof(struct roc_ot_ipsec_outb_sa));
 
 		/* Fill outbound sa params */
-		rc = cnxk_ot_ipsec_outb_sa_fill(outb_sa_dptr, ipsec, crypto);
+		rc = cnxk_ot_ipsec_outb_sa_fill(outb_sa_dptr, ipsec, crypto, 0);
 		if (rc) {
-			snprintf(tbuf, sizeof(tbuf),
-				 "Failed to init outbound sa, rc=%d", rc);
+			snprintf(tbuf, sizeof(tbuf), "Failed to init outbound sa, rc=%d", rc);
 			rc |= cnxk_eth_outb_sa_idx_put(dev, sa_idx);
 			goto err;
 		}
@@ -1148,7 +1148,7 @@ cn10k_eth_sec_session_update(void *device, struct rte_security_session *sess,
 		inb_sa_dptr = (struct roc_ot_ipsec_inb_sa *)dev->inb.sa_dptr;
 		memset(inb_sa_dptr, 0, sizeof(struct roc_ot_ipsec_inb_sa));
 
-		rc = cnxk_ot_ipsec_inb_sa_fill(inb_sa_dptr, ipsec, crypto);
+		rc = cnxk_ot_ipsec_inb_sa_fill(inb_sa_dptr, ipsec, crypto, 0);
 		if (rc)
 			goto err;
 		/* Use cookie for original data */
@@ -1183,7 +1183,7 @@ cn10k_eth_sec_session_update(void *device, struct rte_security_session *sess,
 		outb_sa_dptr = (struct roc_ot_ipsec_outb_sa *)dev->outb.sa_dptr;
 		memset(outb_sa_dptr, 0, sizeof(struct roc_ot_ipsec_outb_sa));
 
-		rc = cnxk_ot_ipsec_outb_sa_fill(outb_sa_dptr, ipsec, crypto);
+		rc = cnxk_ot_ipsec_outb_sa_fill(outb_sa_dptr, ipsec, crypto, 0);
 		if (rc)
 			goto err;
 
@@ -1336,6 +1336,8 @@ cn10k_eth_sec_rx_inject_config(void *device, uint16_t port_id, bool enable)
 	roc_idev_nix_rx_inject_set(port_id, enable);
 
 	inl_lf = roc_nix_inl_inb_inj_lf_get(nix);
+	if (!inl_lf)
+		return -ENOTSUP;
 	sa_base = roc_nix_inl_inb_sa_base_get(nix, dev->inb.inl_dev);
 
 	inj_cfg = &dev->inj_cfg;

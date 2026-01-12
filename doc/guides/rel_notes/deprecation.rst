@@ -17,20 +17,8 @@ Other API and ABI deprecation notices are to be posted below.
 Deprecation Notices
 -------------------
 
-* build: The ``enable_kmods`` option is deprecated and will be removed in a future release.
-  Setting/clearing the option has no impact on the build.
-  Instead, kernel modules will be always built for OS's where out-of-tree kernel modules
-  are required for DPDK operation.
-  Currently, this means that modules will only be built for FreeBSD.
-  No modules are shipped with DPDK for either Linux or Windows.
-
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
-
-* telemetry: The functions ``rte_tel_data_add_array_u64`` and ``rte_tel_data_add_dict_u64``,
-  used by telemetry callbacks for adding unsigned integer values to be returned to the user,
-  are renamed to ``rte_tel_data_add_array_uint`` and ``rte_tel_data_add_dict_uint`` respectively.
-  As such, the old function names are deprecated and will be removed in a future release.
 
 * eal: The ``-c <coremask>`` commandline parameter is deprecated
   and will be removed in a future release.
@@ -57,10 +45,6 @@ Deprecation Notices
   ``__atomic_thread_fence`` must be used for patches that need to be merged in
   20.08 onwards. This change will not introduce any performance degradation.
 
-* lib: Multiple issues relating to unaligned accesses have been detected using the UBSan checker.
-  As part of resolving those issues, alignment in some structures will be updated in 25.11,
-  namely (but not exhaustively): ``struct rte_stack_lf_head`` and ``struct rte_mp_msg``.
-
 * lib: will fix extending some enum/define breaking the ABI. There are multiple
   samples in DPDK that enum/define terminated with a ``.*MAX.*`` value which is
   used by iterators, and arrays holding these values are sized with this
@@ -83,6 +67,12 @@ Deprecation Notices
   the structs ``rte_flow_item_vxlan_gpe``, ``rte_flow_item_vxlan_gpe_mask``,
   and the header struct ``rte_vxlan_gpe_hdr`` with the macro ``RTE_ETHER_VXLAN_GPE_HLEN``
   will be removed in DPDK 25.11.
+
+* ethdev: The queue stats mapping functions
+  ``rte_eth_dev_set_tx_queue_stats_mapping`` and ``rte_eth_dev_set_rx_queue_stats_mapping``
+  are deprecated and will be removed in a future release.
+  Following the removal of queue statistics from the main ethdev statistics structure,
+  these functions are no longer needed.
 
 * ethdev: The flow API matching pattern structures, ``struct rte_flow_item_*``,
   should start with relevant protocol header structure from lib/net/.
@@ -113,13 +103,6 @@ Deprecation Notices
   - ``rte_flow_item_pfcp``
   - ``rte_flow_item_pppoe``
   - ``rte_flow_item_pppoe_proto_id``
-
-* ethdev: Queue specific stats fields will be removed from ``struct rte_eth_stats``.
-  Mentioned fields are: ``q_ipackets``, ``q_opackets``, ``q_ibytes``, ``q_obytes``,
-  ``q_errors``.
-  Instead queue stats will be received via xstats API. Current method support
-  will be limited to maximum 256 queues.
-  Also compile time flag ``RTE_ETHDEV_QUEUE_STAT_CNTRS`` will be removed.
 
 * ethdev: Flow actions ``PF`` and ``VF`` have been deprecated since DPDK 21.11
   and are yet to be removed. That still has not happened because there are net
@@ -164,14 +147,3 @@ Deprecation Notices
   This change will not result in any feature loss,
   as the fallback scalar paths which have feature parity with SSE
   will be used in the cases where the SSE paths would have been used.
-
-* net/mlx5: ``repr_matching_en`` device argument is deprecated
-  and will be removed in DPDK 25.11 release.
-  With disabled representor matching, behavior of Rx datapath in mlx5 PMD
-  is incompatible with current DPDK representor model.
-  Packets from any E-Switch port can arrive on any representor,
-  depending only on created flow rules.
-  Such working model should be exposed directly in DPDK ethdev API,
-  without relying on flow API.
-  Currently there is no alternative API
-  providing the same functionality as with ``repr_matching_en`` set to 0.

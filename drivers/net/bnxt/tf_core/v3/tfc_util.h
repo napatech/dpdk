@@ -88,6 +88,17 @@ const char *tfc_ts_region_2_str(enum cfa_region_type region, enum cfa_dir dir);
 const char *tfc_if_tbl_2_str(enum cfa_resource_subtype_if_tbl if_tbl_stype);
 
 /**
+ * Helper function converting the scope type to text string
+ *
+ * [in] scope_type: table scope type
+ *
+ * Returns:
+ *   Pointer to a char string holding the string for scope type
+ */
+const char *tfc_scope_type_2_str(enum cfa_scope_type scope_type);
+
+
+/**
  * Helper function retrieving field value from the buffer
  *
  * [in] data
@@ -109,6 +120,9 @@ uint32_t tfc_getbits(uint32_t *data, int offset, int blen);
  * exponent of 2.
  */
 uint32_t next_pow2(uint32_t x);
+
+/* returns 0 if power of 2 */
+int32_t is_pow2(uint32_t x);
 
 /*
  * Calculate the largest power of 2 that is less than x.  The return value is

@@ -201,14 +201,10 @@ dpaa2_dev_rx_parse_slow(struct rte_mbuf *mbuf,
 		goto parse_done;
 	}
 
-	if (BIT_ISSET_AT_POS(annotation->word8, DPAA2_ETH_FAS_L3CE))
+	if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_L3CE))
 		mbuf->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_BAD;
-	else
-		mbuf->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_GOOD;
-	if (BIT_ISSET_AT_POS(annotation->word8, DPAA2_ETH_FAS_L4CE))
+	else if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_L4CE))
 		mbuf->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_BAD;
-	else
-		mbuf->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
 
 	if (BIT_ISSET_AT_POS(annotation->word4, L3_IP_1_FIRST_FRAGMENT |
 	    L3_IP_1_MORE_FRAGMENT |
@@ -248,14 +244,10 @@ dpaa2_dev_rx_parse(struct rte_mbuf *mbuf, void *hw_annot_addr)
 	DPAA2_PMD_DP_DEBUG("(fast parse) Annotation = 0x%" PRIx64 "\t",
 			   annotation->word4);
 
-	if (BIT_ISSET_AT_POS(annotation->word8, DPAA2_ETH_FAS_L3CE))
+	if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_L3CE))
 		mbuf->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_BAD;
-	else
-		mbuf->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_GOOD;
-	if (BIT_ISSET_AT_POS(annotation->word8, DPAA2_ETH_FAS_L4CE))
+	else if (BIT_ISSET_AT_POS(annotation->word1, DPAA2_ETH_FAS_L4CE))
 		mbuf->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_BAD;
-	else
-		mbuf->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
 
 	if (unlikely(dpaa2_print_parser_result))
 		dpaa2_print_parse_result(annotation);
@@ -533,6 +525,23 @@ eth_mbuf_to_sg_fd(struct rte_mbuf *mbuf,
 	return 0;
 }
 
+static inline void
+dpaa2_dev_prefetch_next_psr(const struct qbman_result *dq)
+{
+	const struct qbman_fd *fd;
+	const struct dpaa2_annot_hdr *annotation;
+	uint64_t annot_iova;
+
+	dq++;
+
+	fd = qbman_result_DQ_fd(dq);
+	annot_iova = DPAA2_GET_FD_ADDR(fd) + DPAA2_FD_PTA_SIZE;
+	annotation = DPAA2_IOVA_TO_VADDR(annot_iova);
+
+	/** Prefetch from word3 to parse next header.*/
+	rte_prefetch0(&annotation->word3);
+}
+
 static void
 eth_mbuf_to_fd(struct rte_mbuf *mbuf,
 	       struct qbman_fd *fd,
@@ -642,9 +651,11 @@ dump_err_pkts(struct dpaa2_queue *dpaa2_q)
 	const struct qbman_fd *fd;
 	struct qbman_pull_desc pulldesc;
 	struct rte_eth_dev_data *eth_data = dpaa2_q->eth_data;
-	uint32_t lcore_id = rte_lcore_id();
+	uint32_t lcore_id = rte_lcore_id(), i = 0;
 	void *v_addr, *hw_annot_addr;
 	struct dpaa2_fas *fas;
+	struct rte_mbuf *mbuf;
+	char title[32];
 
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
 		ret = dpaa2_affine_qbman_swp();
@@ -700,14 +711,39 @@ dump_err_pkts(struct dpaa2_queue *dpaa2_q)
 		hw_annot_addr = (void *)((size_t)v_addr + DPAA2_FD_PTA_SIZE);
 		fas = hw_annot_addr;
 
-		DPAA2_PMD_ERR("[%d] error packet on port[%d]:"
-			" fd_off: %d, fd_err: %x, fas_status: %x",
-			rte_lcore_id(), eth_data->port_id,
+		if (DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg)
+			mbuf = eth_sg_fd_to_mbuf(fd, eth_data->port_id);
+		else
+			mbuf = eth_fd_to_mbuf(fd, eth_data->port_id);
+
+		if (!dpaa2_print_parser_result) {
+			/** Don't print parse result twice.*/
+			dpaa2_print_parse_result(hw_annot_addr);
+		}
+
+		DPAA2_PMD_ERR("Err pkt on port[%d]:", eth_data->port_id);
+		DPAA2_PMD_ERR("FD offset: %d, FD err: %x, FAS status: %x",
 			DPAA2_GET_FD_OFFSET(fd), DPAA2_GET_FD_ERR(fd),
 			fas->status);
-		rte_hexdump(stderr, "Error packet", v_addr,
-			DPAA2_GET_FD_OFFSET(fd) + DPAA2_GET_FD_LEN(fd));
 
+		if (mbuf)
+			__rte_mbuf_sanity_check(mbuf, 1);
+		if (mbuf->nb_segs > 1) {
+			while (mbuf) {
+				sprintf(title, "Payload seg[%d]", i);
+				rte_hexdump(stderr, title,
+					(char *)mbuf->buf_addr + mbuf->data_off,
+					mbuf->data_len);
+				mbuf = mbuf->next;
+				i++;
+			}
+		} else {
+			rte_hexdump(stderr, "Payload",
+				(char *)mbuf->buf_addr + mbuf->data_off,
+				mbuf->data_len);
+		}
+
+		rte_pktmbuf_free(mbuf);
 		dq_storage++;
 		num_rx++;
 	} while (pending);
@@ -739,7 +775,7 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 
 	q_storage = dpaa2_q->q_storage[rte_lcore_id()];
 
-	if (unlikely(dpaa2_enable_err_queue))
+	if (unlikely(priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG))
 		dump_err_pkts(priv->rx_err_vq);
 
 	if (unlikely(!DPAA2_PER_LCORE_ETHRX_DPIO)) {
@@ -831,18 +867,11 @@ dpaa2_dev_prefetch_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 			if (unlikely((status & QBMAN_DQ_STAT_VALIDFRAME) == 0))
 				continue;
 		}
+		if (dpaa2_svr_family != SVR_LX2160A)
+			/** Packet type is parsed from FRC for LX2160A.*/
+			dpaa2_dev_prefetch_next_psr(dq_storage);
+
 		fd = qbman_result_DQ_fd(dq_storage);
-
-#ifndef RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
-		if (dpaa2_svr_family != SVR_LX2160A) {
-			const struct qbman_fd *next_fd =
-				qbman_result_DQ_fd(dq_storage + 1);
-			/* Prefetch Annotation address for the parse results */
-			rte_prefetch0(DPAA2_IOVA_TO_VADDR((DPAA2_GET_FD_ADDR(
-				next_fd) + DPAA2_FD_PTA_SIZE + 16)));
-		}
-#endif
-
 		if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
 			bufs[num_rx] = eth_sg_fd_to_mbuf(fd, eth_data->port_id);
 		else
@@ -980,7 +1009,7 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	struct rte_eth_dev_data *eth_data = dpaa2_q->eth_data;
 	struct dpaa2_dev_priv *priv = eth_data->dev_private;
 
-	if (unlikely(dpaa2_enable_err_queue))
+	if (unlikely(priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG))
 		dump_err_pkts(priv->rx_err_vq);
 
 	if (unlikely(!DPAA2_PER_LCORE_DPIO)) {
@@ -1045,22 +1074,11 @@ dpaa2_dev_rx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 					QBMAN_DQ_STAT_VALIDFRAME) == 0))
 					continue;
 			}
+			if (dpaa2_svr_family != SVR_LX2160A)
+				/** Packet type is parsed from FRC for LX2160A.*/
+				dpaa2_dev_prefetch_next_psr(dq_storage);
+
 			fd = qbman_result_DQ_fd(dq_storage);
-
-#ifndef RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
-			if (dpaa2_svr_family != SVR_LX2160A) {
-				const struct qbman_fd *next_fd =
-					qbman_result_DQ_fd(dq_storage + 1);
-
-				/* Prefetch Annotation address for the parse
-				 * results.
-				 */
-				rte_prefetch0((DPAA2_IOVA_TO_VADDR(
-					DPAA2_GET_FD_ADDR(next_fd) +
-					DPAA2_FD_PTA_SIZE + 16)));
-			}
-#endif
-
 			if (unlikely(DPAA2_FD_GET_FORMAT(fd) == qbman_fd_sg))
 				bufs[num_rx] = eth_sg_fd_to_mbuf(fd,
 							eth_data->port_id);
@@ -1101,7 +1119,7 @@ uint16_t dpaa2_dev_tx_conf(void *queue)
 	int ret, num_tx_conf = 0, num_pulled;
 	uint8_t pending, status;
 	struct qbman_swp *swp;
-	const struct qbman_fd *fd, *next_fd;
+	const struct qbman_fd *fd;
 	struct qbman_pull_desc pulldesc;
 	struct qbman_release_desc releasedesc;
 	uint32_t bpid;
@@ -1169,14 +1187,11 @@ uint16_t dpaa2_dev_tx_conf(void *queue)
 					QBMAN_DQ_STAT_VALIDFRAME) == 0))
 					continue;
 			}
+			if (dpaa2_svr_family != SVR_LX2160A)
+				/** Packet type is parsed from FRC for LX2160A.*/
+				dpaa2_dev_prefetch_next_psr(dq_storage);
+
 			fd = qbman_result_DQ_fd(dq_storage);
-
-			next_fd = qbman_result_DQ_fd(dq_storage + 1);
-			/* Prefetch Annotation address for the parse results */
-			rte_prefetch0((void *)(size_t)
-				(DPAA2_GET_FD_ADDR(next_fd) +
-				 DPAA2_FD_PTA_SIZE + 16));
-
 			bpid = DPAA2_GET_FD_BPID(fd);
 
 			/* Create a release descriptor required for releasing
@@ -1800,8 +1815,11 @@ dpaa2_dev_tx_ordered(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 		while (qbman_result_SCN_state(dpaa2_q->cscn)) {
 			retry_count++;
 			/* Retry for some time before giving up */
-			if (retry_count > CONG_RETRY_COUNT)
+			if (retry_count > CONG_RETRY_COUNT) {
+				if (dpaa2_q->tm_sw_td)
+					goto sw_td;
 				goto skip_tx;
+			}
 		}
 
 		frames_to_send = (nb_pkts > dpaa2_eqcr_size) ?
@@ -1960,6 +1978,19 @@ skip_tx:
 		if (buf_to_free[loop].pkt_id < num_tx)
 			rte_pktmbuf_free_seg(buf_to_free[loop].seg);
 	}
+
+	return num_tx;
+sw_td:
+	for (loop = 0; loop < free_count; loop++) {
+		if (buf_to_free[loop].pkt_id < num_tx)
+			rte_pktmbuf_free_seg(buf_to_free[loop].seg);
+	}
+
+	/* free the pending buffers */
+	rte_pktmbuf_free_bulk(bufs, nb_pkts);
+
+	num_tx += nb_pkts;
+	dpaa2_q->tx_pkts += num_tx;
 
 	return num_tx;
 }

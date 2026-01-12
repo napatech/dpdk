@@ -4,6 +4,8 @@
  *   Copyright 2016-2022 NXP
  *
  */
+#include <uapi/linux/vfio.h>
+
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>

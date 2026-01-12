@@ -5,7 +5,6 @@
 #ifndef HNS3_ETHDEV_H
 #define HNS3_ETHDEV_H
 
-#include <pthread.h>
 #include <ethdev_driver.h>
 #include <rte_byteorder.h>
 #include <rte_io.h>
@@ -76,6 +75,7 @@
 #define HNS3_DEFAULT_MTU		1500UL
 #define HNS3_DEFAULT_FRAME_LEN		(HNS3_DEFAULT_MTU + HNS3_ETH_OVERHEAD)
 #define HNS3_HIP08_MIN_TX_PKT_LEN	33
+#define HNS3_MIN_TUN_PKT_LEN		65
 
 #define HNS3_BITS_PER_BYTE	8
 
@@ -679,7 +679,6 @@ struct hns3_hw {
 
 	struct hns3_port_base_vlan_config port_base_vlan_cfg;
 
-	pthread_mutex_t flows_lock; /* rte_flow ops lock */
 	struct hns3_fdir_rule_list flow_fdir_list; /* flow fdir rule list */
 	struct hns3_rss_filter_list flow_rss_list; /* flow RSS rule list */
 	struct hns3_flow_mem_list flow_list;

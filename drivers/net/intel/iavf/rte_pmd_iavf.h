@@ -15,6 +15,7 @@
  */
 
 #include <stdio.h>
+
 #include <rte_compat.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
@@ -94,6 +95,19 @@ extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ipv6_flow_mask;
 extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_tcp_mask;
 extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ip_offset_mask;
 extern uint64_t rte_pmd_ifd_dynflag_proto_xtr_ipsec_crypto_said_mask;
+
+/**
+ * Request PF driver to initiate a PF-to-VF RESET and restore the device
+ * following the reset by reconfiguring and restarting the device. The
+ * port must be started before calling this function.
+ *
+ * @param port
+ *   The port identifier of the Ethernet device.
+ * @return
+ *   0 if successful, otherwise if a failure occurs
+ */
+__rte_experimental
+int rte_pmd_iavf_reinit(uint16_t port);
 
 /**
  * The mbuf dynamic field pointer for flexible descriptor's extraction metadata.
@@ -184,6 +198,7 @@ __rte_experimental
 static inline void
 rte_pmd_ifd_dump_proto_xtr_metadata(struct rte_mbuf *m)
 {
+#ifdef ALLOW_EXPERIMENTAL_API
 	union rte_pmd_ifd_proto_xtr_metadata data;
 
 	if (!rte_pmd_ifd_dynf_proto_xtr_metadata_avail())
@@ -243,6 +258,10 @@ rte_pmd_ifd_dump_proto_xtr_metadata(struct rte_mbuf *m)
 	else if (m->ol_flags & RTE_IAVF_PKT_RX_DYNF_PROTO_XTR_IP_OFFSET)
 		printf(" - Flexible descriptor's Extraction: ip_offset=%u",
 		       data.ip_ofs);
+#else
+	RTE_SET_USED(m);
+	RTE_VERIFY(false);
+#endif
 }
 
 #ifdef __cplusplus

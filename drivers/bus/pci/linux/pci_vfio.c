@@ -2,6 +2,8 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
+#include <uapi/linux/vfio.h>
+
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
@@ -26,17 +28,6 @@
 
 #include "pci_init.h"
 #include "private.h"
-
-/**
- * @file
- * PCI probing using Linux VFIO.
- *
- * This code tries to determine if the PCI device is bound to VFIO driver,
- * and initialize it (map BARs, set up interrupts) if that's the case.
- *
- */
-
-#ifdef VFIO_PRESENT
 
 static struct rte_tailq_elem rte_vfio_tailq = {
 	.name = "VFIO_RESOURCE_LIST",
@@ -284,7 +275,6 @@ pci_vfio_setup_interrupts(struct rte_pci_device *dev, int vfio_dev_fd)
 	return -1;
 }
 
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 /*
  * Spinlock for device hot-unplug failure handling.
  * If it tries to access bus or device, such as handle sigbus on bus
@@ -401,7 +391,6 @@ pci_vfio_disable_notifier(struct rte_pci_device *dev)
 
 	return 0;
 }
-#endif
 
 static int
 pci_vfio_is_ioport_bar(const struct rte_pci_device *dev, int vfio_dev_fd,
@@ -676,12 +665,12 @@ pci_vfio_info_cap(struct vfio_region_info *info, int cap)
 	struct vfio_info_cap_header *h;
 	size_t offset;
 
-	if ((info->flags & RTE_VFIO_INFO_FLAG_CAPS) == 0) {
+	if ((info->flags & VFIO_REGION_INFO_FLAG_CAPS) == 0) {
 		/* VFIO info does not advertise capabilities */
 		return NULL;
 	}
 
-	offset = VFIO_CAP_OFFSET(info);
+	offset = info->cap_offset;
 	while (offset != 0) {
 		h = RTE_PTR_ADD(info, offset);
 		if (h->id == cap)
@@ -701,7 +690,7 @@ pci_vfio_msix_is_mappable(int vfio_dev_fd, int msix_region)
 	if (ret < 0)
 		return -1;
 
-	ret = pci_vfio_info_cap(info, RTE_VFIO_CAP_MSIX_MAPPABLE) != NULL;
+	ret = pci_vfio_info_cap(info, VFIO_REGION_INFO_CAP_MSIX_MAPPABLE) != NULL;
 
 	/* cleanup */
 	free(info);
@@ -756,10 +745,8 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 	if (rte_intr_fd_set(dev->intr_handle, -1))
 		return -1;
 
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	if (rte_intr_fd_set(dev->vfio_req_intr_handle, -1))
 		return -1;
-#endif
 
 	/* store PCI address string */
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
@@ -915,13 +902,11 @@ pci_vfio_map_resource_primary(struct rte_pci_device *dev)
 		goto err_map;
 	}
 
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	if (pci_vfio_enable_notifier(dev, vfio_dev_fd) != 0) {
 		PCI_LOG(ERR, "Error setting up notifier!");
 		goto err_map;
 	}
 
-#endif
 	TAILQ_INSERT_TAIL(vfio_res_list, vfio_res, next);
 
 	return 0;
@@ -947,7 +932,7 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 	char pci_addr[PATH_MAX] = {0};
 	int vfio_dev_fd;
 	struct rte_pci_addr *loc = &dev->addr;
-	int i, j, ret;
+	int j, ret, i = 0;
 	struct mapped_pci_resource *vfio_res = NULL;
 	struct mapped_pci_res_list *vfio_res_list =
 		RTE_TAILQ_CAST(rte_vfio_tailq.head, mapped_pci_res_list);
@@ -956,10 +941,8 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 
 	if (rte_intr_fd_set(dev->intr_handle, -1))
 		return -1;
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	if (rte_intr_fd_set(dev->vfio_req_intr_handle, -1))
 		return -1;
-#endif
 
 	/* store PCI address string */
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
@@ -985,7 +968,7 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 
 	ret = pci_vfio_fill_regions(dev, vfio_dev_fd, &device_info);
 	if (ret)
-		return ret;
+		goto err_vfio_dev_fd;
 
 	/* map BARs */
 	maps = vfio_res->maps;
@@ -1013,10 +996,8 @@ pci_vfio_map_resource_secondary(struct rte_pci_device *dev)
 	/* we need save vfio_dev_fd, so it can be used during release */
 	if (rte_intr_dev_fd_set(dev->intr_handle, vfio_dev_fd))
 		goto err_vfio_dev_fd;
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	if (rte_intr_dev_fd_set(dev->vfio_req_intr_handle, vfio_dev_fd))
 		goto err_vfio_dev_fd;
-#endif
 
 	return 0;
 err_vfio_dev_fd:
@@ -1096,14 +1077,12 @@ pci_vfio_unmap_resource_primary(struct rte_pci_device *dev)
 	snprintf(pci_addr, sizeof(pci_addr), PCI_PRI_FMT,
 			loc->domain, loc->bus, loc->devid, loc->function);
 
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	ret = pci_vfio_disable_notifier(dev);
 	if (ret) {
 		PCI_LOG(ERR, "fail to disable req notifier.");
 		return -1;
 	}
 
-#endif
 	if (rte_intr_fd_get(dev->intr_handle) < 0)
 		return -1;
 
@@ -1237,6 +1216,7 @@ pci_vfio_ioport_map(struct rte_pci_device *dev, int bar,
 	return 0;
 }
 
+#define PCI_VFIO_GET_REGION_IDX(x) (x >> 40)
 void
 pci_vfio_ioport_read(struct rte_pci_ioport *p,
 		     void *data, size_t len, off_t offset)
@@ -1250,7 +1230,7 @@ pci_vfio_ioport_read(struct rte_pci_ioport *p,
 	if (pread(vfio_dev_fd, data,
 		    len, p->base + offset) <= 0)
 		PCI_LOG(ERR, "Can't read from PCI bar (%" PRIu64 ") : offset (%x)",
-			VFIO_GET_REGION_IDX(p->base), (int)offset);
+			PCI_VFIO_GET_REGION_IDX(p->base), (int)offset);
 }
 
 void
@@ -1266,7 +1246,7 @@ pci_vfio_ioport_write(struct rte_pci_ioport *p,
 	if (pwrite(vfio_dev_fd, data,
 		     len, p->base + offset) <= 0)
 		PCI_LOG(ERR, "Can't write to PCI bar (%" PRIu64 ") : offset (%x)",
-			VFIO_GET_REGION_IDX(p->base), (int)offset);
+			PCI_VFIO_GET_REGION_IDX(p->base), (int)offset);
 }
 
 int
@@ -1327,4 +1307,3 @@ pci_vfio_is_enabled(void)
 	}
 	return status;
 }
-#endif

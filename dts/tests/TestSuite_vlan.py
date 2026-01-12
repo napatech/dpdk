@@ -15,13 +15,21 @@ VLAN ID should have a specified ID inserted and then be forwarded.
 from scapy.layers.l2 import Dot1Q, Ether
 from scapy.packet import Raw
 
-from framework.remote_session.testpmd_shell import SimpleForwardingModes, TestPmdShell
+from api.capabilities import (
+    LinkTopology,
+    NicCapability,
+    requires_link_topology,
+    requires_nic_capability,
+)
+from api.packet import send_packet_and_capture
+from api.test import verify
+from api.testpmd import TestPmd
+from api.testpmd.config import SimpleForwardingModes
 from framework.test_suite import TestSuite, func_test
-from framework.testbed_model.capability import NicCapability, TopologyType, requires
 
 
-@requires(NicCapability.RX_OFFLOAD_VLAN_FILTER)
-@requires(topology_type=TopologyType.two_links)
+@requires_nic_capability(NicCapability.PORT_RX_OFFLOAD_VLAN_FILTER)
+@requires_link_topology(LinkTopology.TWO_LINKS)
 class TestVlan(TestSuite):
     """DPDK VLAN test suite.
 
@@ -38,7 +46,7 @@ class TestVlan(TestSuite):
     tag when insertion is enabled.
     """
 
-    def send_vlan_packet_and_verify(self, should_receive: bool, strip: bool, vlan_id: int) -> None:
+    def _send_vlan_packet_and_verify(self, should_receive: bool, strip: bool, vlan_id: int) -> None:
         """Generate a VLAN packet, send and verify packet with same payload is received on the dut.
 
         Args:
@@ -49,62 +57,62 @@ class TestVlan(TestSuite):
             vlan_id: Expected VLAN ID.
         """
         packet = Ether() / Dot1Q(vlan=vlan_id) / Raw(load="xxxxx")
-        received_packets = self.send_packet_and_capture(packet)
+        received_packets = send_packet_and_capture(packet)
         test_packet = None
         for packet in received_packets:
             if hasattr(packet, "load") and b"xxxxx" in packet.load:
                 test_packet = packet
                 break
         if should_receive:
-            self.verify(
+            verify(
                 test_packet is not None,
                 "Packet was dropped when it should have been received",
             )
             if test_packet is not None:
                 if strip:
-                    self.verify(
+                    verify(
                         not test_packet.haslayer(Dot1Q),
                         "VLAN tag was not stripped successfully",
                     )
                 else:
-                    self.verify(
+                    verify(
                         test_packet.vlan == vlan_id,
                         "The received tag did not match the expected tag",
                     )
         else:
-            self.verify(
+            verify(
                 test_packet is None,
                 "Packet was received when it should have been dropped",
             )
 
-    def send_packet_and_verify_insertion(self, expected_id: int) -> None:
+    def _send_packet_and_verify_insertion(self, expected_id: int) -> None:
         """Generate a packet with no VLAN tag, send and verify on the dut.
 
         Args:
             expected_id: The VLAN id that is being inserted through tx_offload configuration.
         """
         packet = Ether() / Raw(load="xxxxx")
-        received_packets = self.send_packet_and_capture(packet)
+        received_packets = send_packet_and_capture(packet)
         test_packet = None
         for packet in received_packets:
             if hasattr(packet, "load") and b"xxxxx" in packet.load:
                 test_packet = packet
                 break
-        self.verify(
+        verify(
             test_packet is not None,
             "Packet was dropped when it should have been received",
         )
         if test_packet is not None:
-            self.verify(
+            verify(
                 test_packet.haslayer(Dot1Q) == 1,
                 "The received packet did not have a VLAN tag",
             )
-            self.verify(
+            verify(
                 test_packet.vlan == expected_id,
                 "The received tag did not match the expected tag",
             )
 
-    def vlan_setup(self, testpmd: TestPmdShell, port_id: int, filtered_id: int) -> None:
+    def _vlan_setup(self, testpmd: TestPmd, port_id: int, filtered_id: int) -> None:
         """Setup method for all test cases.
 
         Args:
@@ -118,55 +126,77 @@ class TestVlan(TestSuite):
         testpmd.rx_vlan(vlan=filtered_id, port=port_id, add=True)
 
     @func_test
-    def test_vlan_receipt_no_stripping(self) -> None:
+    def vlan_receipt_no_stripping(self) -> None:
         """Verify packets are received with their VLAN IDs when stripping is disabled.
 
-        Test:
-            Create an interactive testpmd shell and verify a VLAN packet.
-        """
-        with TestPmdShell() as testpmd:
-            self.vlan_setup(testpmd=testpmd, port_id=0, filtered_id=1)
-            testpmd.start()
-            self.send_vlan_packet_and_verify(True, strip=False, vlan_id=1)
+        Steps:
+            * Start testpmd.
+            * Set up VLAN.
+            * Send and capture VLAN packet.
 
-    @requires(NicCapability.RX_OFFLOAD_VLAN_STRIP)
+        Verify:
+            * Packets are received with their VLAN IDS.
+        """
+        with TestPmd() as testpmd:
+            self._vlan_setup(testpmd=testpmd, port_id=0, filtered_id=1)
+            testpmd.start()
+            self._send_vlan_packet_and_verify(should_receive=True, strip=False, vlan_id=1)
+
+    @requires_nic_capability(NicCapability.PORT_RX_OFFLOAD_VLAN_STRIP)
     @func_test
-    def test_vlan_receipt_stripping(self) -> None:
+    def vlan_receipt_stripping(self) -> None:
         """Ensure VLAN packet received with no tag when receipts and header stripping are enabled.
 
-        Test:
-            Create an interactive testpmd shell and verify a VLAN packet.
+        Steps:
+            * Start testpmd.
+            * Set up VLAN.
+            * Send and capture VLAN packet with the packet header stripped.
+
+        Verify:
+            * Packets are received with no tag when receipts and header stripping are enabled.
         """
-        with TestPmdShell() as testpmd:
-            self.vlan_setup(testpmd=testpmd, port_id=0, filtered_id=1)
+        with TestPmd() as testpmd:
+            self._vlan_setup(testpmd=testpmd, port_id=0, filtered_id=1)
             testpmd.set_vlan_strip(port=0, enable=True)
             testpmd.start()
-            self.send_vlan_packet_and_verify(should_receive=True, strip=True, vlan_id=1)
+            self._send_vlan_packet_and_verify(should_receive=True, strip=True, vlan_id=1)
 
     @func_test
-    def test_vlan_no_receipt(self) -> None:
+    def vlan_no_receipt(self) -> None:
         """Ensure VLAN packet dropped when filter is on and sent tag not in the filter list.
 
-        Test:
-            Create an interactive testpmd shell and verify a VLAN packet.
+        Steps:
+            * Start testpmd.
+            * Set up VLAN.
+            * Send VLAN packets.
+
+        Verify:
+            * VLAN packets are dropped.
         """
-        with TestPmdShell() as testpmd:
-            self.vlan_setup(testpmd=testpmd, port_id=0, filtered_id=1)
+        with TestPmd() as testpmd:
+            self._vlan_setup(testpmd=testpmd, port_id=0, filtered_id=1)
             testpmd.start()
-            self.send_vlan_packet_and_verify(should_receive=False, strip=False, vlan_id=2)
+            self._send_vlan_packet_and_verify(should_receive=False, strip=False, vlan_id=2)
 
     @func_test
-    def test_vlan_header_insertion(self) -> None:
+    def vlan_header_insertion(self) -> None:
         """Ensure that VLAN packet is received with the correct inserted VLAN tag.
 
-        Test:
-            Create an interactive testpmd shell and verify a non-VLAN packet.
+        Steps:
+            * Start testpmd.
+            * Set forwarding mode to MAC.
+            * Disable promiscuous mode.
+            * Enable Tx VLAN and set the VLAN tag.
+            * Send and capture VLAN packets.
+
+        Verify:
+            * VLAN packets are received with the correct inserted VLAN tag.
         """
-        with TestPmdShell() as testpmd:
+        with TestPmd() as testpmd:
             testpmd.set_forward_mode(SimpleForwardingModes.mac)
             testpmd.set_promisc(port=0, enable=False)
             testpmd.stop_all_ports()
             testpmd.tx_vlan_set(port=1, enable=True, vlan=51)
             testpmd.start_all_ports()
             testpmd.start()
-            self.send_packet_and_verify_insertion(expected_id=51)
+            self._send_packet_and_verify_insertion(expected_id=51)

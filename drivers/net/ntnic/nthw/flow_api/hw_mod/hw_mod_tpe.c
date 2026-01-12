@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -11,12 +10,12 @@
 #define _MOD_ "TPE"
 #define _VER_ be->tpe.ver
 
-bool hw_mod_tpe_present(struct flow_api_backend_s *be)
+bool nthw_mod_tpe_present(struct flow_api_backend_s *be)
 {
 	return be->iface->get_tpe_present(be->be_dev);
 }
 
-int hw_mod_tpe_alloc(struct flow_api_backend_s *be)
+int nthw_mod_tpe_alloc(struct flow_api_backend_s *be)
 {
 	int nb;
 	_VER_ = be->iface->get_tpe_version(be->be_dev);
@@ -107,7 +106,7 @@ int hw_mod_tpe_alloc(struct flow_api_backend_s *be)
 	return 0;
 }
 
-void hw_mod_tpe_free(struct flow_api_backend_s *be)
+void nthw_mod_tpe_free(struct flow_api_backend_s *be)
 {
 	if (be->tpe.base) {
 		free(be->tpe.base);
@@ -115,7 +114,7 @@ void hw_mod_tpe_free(struct flow_api_backend_s *be)
 	}
 }
 
-int hw_mod_tpe_reset(struct flow_api_backend_s *be)
+int nthw_mod_tpe_reset(struct flow_api_backend_s *be)
 {
 	int err = 0;
 
@@ -123,17 +122,17 @@ int hw_mod_tpe_reset(struct flow_api_backend_s *be)
 	nthw_zero_module_cache((struct common_func_s *)(&be->tpe));
 
 	NT_LOG(DBG, FILTER, "INIT TPE");
-	err |= hw_mod_tpe_rpp_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_ins_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_rpl_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_rpl_ext_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_rpl_rpl_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_cpy_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_hfu_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_csu_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_rpp_ifr_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_ifr_rcp_flush(be, 0, ALL_ENTRIES);
-	err |= hw_mod_tpe_ifr_counters_update(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_rpp_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_ins_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_rpl_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_rpl_ext_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_rpl_rpl_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_cpy_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_hfu_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_csu_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_rpp_ifr_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_ifr_rcp_flush(be, 0, ALL_ENTRIES);
+	err |= nthw_mod_tpe_ifr_counters_update(be, 0, ALL_ENTRIES);
 
 	return err;
 }
@@ -142,7 +141,7 @@ int hw_mod_tpe_reset(struct flow_api_backend_s *be)
  * RPP_IFR_RCP
  */
 
-int hw_mod_tpe_rpp_ifr_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_rpp_ifr_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_ifr_categories;
@@ -197,7 +196,7 @@ static int hw_mod_tpe_rpp_ifr_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe
 	return 0;
 }
 
-int hw_mod_tpe_rpp_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_rpp_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_rpp_ifr_rcp_mod(be, field, index, &value, 0);
@@ -207,7 +206,7 @@ int hw_mod_tpe_rpp_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e fiel
  * RPP_RCP
  */
 
-int hw_mod_tpe_rpp_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_rpp_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rcp_categories;
@@ -290,7 +289,7 @@ static int hw_mod_tpe_rpp_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_rpp_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_rpp_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_rpp_rcp_mod(be, field, index, &value, 0);
@@ -300,7 +299,7 @@ int hw_mod_tpe_rpp_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * IFR_RCP
  */
 
-int hw_mod_tpe_ifr_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_ifr_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_ifr_categories;
@@ -355,7 +354,7 @@ static int hw_mod_tpe_ifr_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_ifr_rcp_mod(be, field, index, &value, 0);
@@ -365,7 +364,7 @@ int hw_mod_tpe_ifr_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * IFR_COUNTER
  */
 
-int hw_mod_tpe_ifr_counters_update(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_ifr_counters_update(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_ifr_categories;
@@ -402,13 +401,7 @@ static int hw_mod_tpe_ifr_counters_mod(struct flow_api_backend_s *be, enum hw_tp
 	return 0;
 }
 
-int hw_mod_tpe_ifr_counters_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
-	uint32_t value)
-{
-	return hw_mod_tpe_ifr_counters_mod(be, field, index, &value, 0);
-}
-
-int hw_mod_tpe_ifr_counters_get(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_ifr_counters_get(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t *value)
 {
 	return hw_mod_tpe_ifr_counters_mod(be, field, index, value, 1);
@@ -418,7 +411,7 @@ int hw_mod_tpe_ifr_counters_get(struct flow_api_backend_s *be, enum hw_tpe_e fie
  * INS_RCP
  */
 
-int hw_mod_tpe_ins_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_ins_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rcp_categories;
@@ -509,7 +502,7 @@ static int hw_mod_tpe_ins_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_ins_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_ins_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_ins_rcp_mod(be, field, index, &value, 0);
@@ -519,7 +512,7 @@ int hw_mod_tpe_ins_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * RPL_RCP
  */
 
-int hw_mod_tpe_rpl_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_rpl_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rcp_categories;
@@ -622,7 +615,7 @@ static int hw_mod_tpe_rpl_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_rpl_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_rpl_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_rpl_rcp_mod(be, field, index, &value, 0);
@@ -632,7 +625,7 @@ int hw_mod_tpe_rpl_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * RPL_EXT
  */
 
-int hw_mod_tpe_rpl_ext_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_rpl_ext_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rpl_ext_categories;
@@ -719,7 +712,7 @@ static int hw_mod_tpe_rpl_ext_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_rpl_ext_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_rpl_ext_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_rpl_ext_mod(be, field, index, &value, 0);
@@ -729,7 +722,7 @@ int hw_mod_tpe_rpl_ext_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * RPL_RPL
  */
 
-int hw_mod_tpe_rpl_rpl_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_rpl_rpl_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rpl_depth;
@@ -819,7 +812,7 @@ static int hw_mod_tpe_rpl_rpl_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_rpl_rpl_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_rpl_rpl_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t *value)
 {
 	return hw_mod_tpe_rpl_rpl_mod(be, field, index, value, 0);
@@ -829,7 +822,7 @@ int hw_mod_tpe_rpl_rpl_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * CPY_RCP
  */
 
-int hw_mod_tpe_cpy_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_cpy_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	const uint32_t cpy_size = be->tpe.nb_cpy_writers * be->tpe.nb_rcp_categories;
 
@@ -928,7 +921,7 @@ static int hw_mod_tpe_cpy_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_cpy_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_cpy_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_cpy_rcp_mod(be, field, index, &value, 0);
@@ -938,7 +931,7 @@ int hw_mod_tpe_cpy_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * HFU_RCP
  */
 
-int hw_mod_tpe_hfu_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_hfu_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rcp_categories;
@@ -1105,7 +1098,7 @@ static int hw_mod_tpe_hfu_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_hfu_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_hfu_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_hfu_rcp_mod(be, field, index, &value, 0);
@@ -1115,7 +1108,7 @@ int hw_mod_tpe_hfu_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, i
  * CSU_RCP
  */
 
-int hw_mod_tpe_csu_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
+int nthw_mod_tpe_csu_rcp_flush(struct flow_api_backend_s *be, int start_idx, int count)
 {
 	if (count == ALL_ENTRIES)
 		count = be->tpe.nb_rcp_categories;
@@ -1210,7 +1203,7 @@ static int hw_mod_tpe_csu_rcp_mod(struct flow_api_backend_s *be, enum hw_tpe_e f
 	return 0;
 }
 
-int hw_mod_tpe_csu_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
+int nthw_mod_tpe_csu_rcp_set(struct flow_api_backend_s *be, enum hw_tpe_e field, int index,
 	uint32_t value)
 {
 	return hw_mod_tpe_csu_rcp_mod(be, field, index, &value, 0);

@@ -128,9 +128,13 @@ i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union ci_rx_desc *rxdp)
 #ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 	if (rte_le_to_cpu_16(rxdp->wb.qword2.ext_status) &
 		(1 << I40E_RX_DESC_EXT_STATUS_L2TAG2P_SHIFT)) {
-		mb->ol_flags |= RTE_MBUF_F_RX_QINQ_STRIPPED | RTE_MBUF_F_RX_QINQ |
-			RTE_MBUF_F_RX_VLAN_STRIPPED | RTE_MBUF_F_RX_VLAN;
-		mb->vlan_tci_outer = mb->vlan_tci;
+		if ((mb->ol_flags & RTE_MBUF_F_RX_VLAN_STRIPPED) == 0) {
+			mb->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
+		} else {
+			/* if two tags, move Tag1 to outer tag field */
+			mb->ol_flags |= RTE_MBUF_F_RX_QINQ_STRIPPED | RTE_MBUF_F_RX_QINQ;
+			mb->vlan_tci_outer = mb->vlan_tci;
+		}
 		mb->vlan_tci = rte_le_to_cpu_16(rxdp->wb.qword2.l2tag2_2);
 		PMD_RX_LOG(DEBUG, "Descriptor l2tag2_1: %u, l2tag2_2: %u",
 			   rte_le_to_cpu_16(rxdp->wb.qword2.l2tag2_1),
@@ -274,6 +278,7 @@ i40e_parse_tunneling_params(uint64_t ol_flags,
 		break;
 	case RTE_MBUF_F_TX_TUNNEL_VXLAN:
 	case RTE_MBUF_F_TX_TUNNEL_GENEVE:
+	case RTE_MBUF_F_TX_TUNNEL_GTP:
 		*cd_tunneling |= I40E_TXD_CTX_UDP_TUNNELING;
 		break;
 	case RTE_MBUF_F_TX_TUNNEL_GRE:
@@ -590,7 +595,7 @@ i40e_rx_alloc_bufs(struct ci_rx_queue *rxq)
 	alloc_idx = (uint16_t)(rxq->rx_free_trigger -
 				(rxq->rx_free_thresh - 1));
 	rxep = &(rxq->sw_ring[alloc_idx]);
-	diag = rte_mempool_get_bulk(rxq->mp, (void *)rxep,
+	diag = rte_mbuf_raw_alloc_bulk(rxq->mp, (void *)rxep,
 					rxq->rx_free_thresh);
 	if (unlikely(diag != 0)) {
 		PMD_DRV_LOG(ERR, "Failed to get mbufs in bulk");
@@ -1355,7 +1360,7 @@ i40e_tx_free_bufs(struct ci_tx_queue *txq)
 					free[i] = txep->mbuf;
 					txep->mbuf = NULL;
 				}
-				rte_mempool_put_bulk(free[0]->pool, (void **)free,
+				rte_mbuf_raw_free_bulk(free[0]->pool, free,
 						I40E_TX_MAX_FREE_BUF_SZ);
 			}
 		}
@@ -1365,7 +1370,7 @@ i40e_tx_free_bufs(struct ci_tx_queue *txq)
 				free[i] = txep->mbuf;
 				txep->mbuf = NULL;
 			}
-			rte_mempool_put_bulk(free[0]->pool, (void **)free, m);
+			rte_mbuf_raw_free_bulk(free[0]->pool, free, m);
 		}
 	} else {
 		for (i = 0; i < txq->tx_rs_thresh; ++i, ++txep) {
@@ -2255,7 +2260,7 @@ i40e_rx_queue_release(void *rxq)
 	rte_free(q);
 }
 
-uint32_t
+int
 i40e_dev_rx_queue_count(void *rx_queue)
 {
 #define I40E_RXQ_SCAN_INTERVAL 4
@@ -3284,192 +3289,189 @@ i40e_recycle_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	}
 }
 
+static const struct ci_rx_path_info i40e_rx_path_infos[] = {
+	[I40E_RX_DEFAULT] = {
+		.pkt_burst = i40e_recv_pkts,
+		.info = "Scalar",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS
+		}
+	},
+	[I40E_RX_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts,
+		.info = "Scalar Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.extra.scattered = true
+		}
+	},
+	[I40E_RX_BULK_ALLOC] = {
+		.pkt_burst = i40e_recv_pkts_bulk_alloc,
+		.info = "Scalar Bulk Alloc",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.extra.bulk_alloc = true
+		}
+	},
 #ifdef RTE_ARCH_X86
-static inline bool
-get_avx_supported(bool request_avx512)
-{
-	if (request_avx512) {
-		if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_512 &&
-		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1 &&
-		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512BW) == 1)
+	[I40E_RX_SSE] = {
+		.pkt_burst = i40e_recv_pkts_vec,
+		.info = "Vector SSE",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_SSE_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec,
+		.info = "Vector SSE Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_AVX2] = {
+		.pkt_burst = i40e_recv_pkts_vec_avx2,
+		.info = "Vector AVX2",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_AVX2_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec_avx2,
+		.info = "Vector AVX2 Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
 #ifdef CC_AVX512_SUPPORT
-			return true;
-#else
-		PMD_DRV_LOG(NOTICE,
-			"AVX512 is not supported in build env");
-		return false;
+	[I40E_RX_AVX512] = {
+		.pkt_burst = i40e_recv_pkts_vec_avx512,
+		.info = "Vector AVX512",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_512,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_AVX512_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec_avx512,
+		.info = "Vector AVX512 Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_512,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
 #endif
-	} else {
-		if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
-				rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 &&
-				rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1)
-			return true;
-	}
-
-	return false;
-}
-#endif /* RTE_ARCH_X86 */
-
+#elif defined(RTE_ARCH_ARM64)
+	[I40E_RX_NEON] = {
+		.pkt_burst = i40e_recv_pkts_vec,
+		.info = "Vector Neon",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_NEON_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec,
+		.info = "Vector Neon Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
+#elif defined(RTE_ARCH_PPC_64)
+	[I40E_RX_ALTIVEC] = {
+		.pkt_burst = i40e_recv_pkts_vec,
+		.info = "Vector AltiVec",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_ALTIVEC_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec,
+		.info = "Vector AltiVec Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
+#endif
+};
 
 void __rte_cold
 i40e_set_rx_function(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
-	uint16_t vector_rx, i;
+	struct ci_rx_path_features req_features = {
+		.rx_offloads = dev->data->dev_conf.rxmode.offloads,
+		.simd_width = RTE_VECT_SIMD_DISABLED,
+	};
+	uint16_t i;
+	enum rte_vect_max_simd rx_simd_width = i40e_get_max_simd_bitwidth();
+
+	/* The primary process selects the rx path for all processes. */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		goto out;
+
 	/* In order to allow Vector Rx there are a few configuration
 	 * conditions to be met and Rx Bulk Allocation should be allowed.
 	 */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-#ifdef RTE_ARCH_X86
-		ad->rx_use_avx512 = false;
-		ad->rx_use_avx2 = false;
-#endif
-		if (i40e_rx_vec_dev_conf_condition_check(dev) ||
-		    !ad->rx_bulk_alloc_allowed) {
-			PMD_INIT_LOG(DEBUG, "Port[%d] doesn't meet"
-				     " Vector Rx preconditions",
-				     dev->data->port_id);
 
-			ad->rx_vec_allowed = false;
-		}
-		if (ad->rx_vec_allowed) {
-			for (i = 0; i < dev->data->nb_rx_queues; i++) {
-				struct ci_rx_queue *rxq =
-					dev->data->rx_queues[i];
+	if (i40e_rx_vec_dev_conf_condition_check(dev) || !ad->rx_bulk_alloc_allowed) {
+		PMD_INIT_LOG(DEBUG, "Port[%d] doesn't meet"
+				" Vector Rx preconditions",
+				dev->data->port_id);
 
-				if (rxq && i40e_rxq_vec_setup(rxq)) {
-					ad->rx_vec_allowed = false;
-					break;
-				}
-			}
-#ifdef RTE_ARCH_X86
-			ad->rx_use_avx512 = get_avx_supported(1);
-
-			if (!ad->rx_use_avx512)
-				ad->rx_use_avx2 = get_avx_supported(0);
-#endif
-		}
+		rx_simd_width = RTE_VECT_SIMD_DISABLED;
 	}
 
-	if (ad->rx_vec_allowed  &&
-	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-#ifdef RTE_ARCH_X86
-		if (dev->data->scattered_rx) {
-			if (ad->rx_use_avx512) {
-#ifdef CC_AVX512_SUPPORT
-				PMD_DRV_LOG(NOTICE,
-					"Using AVX512 Vector Scattered Rx (port %d).",
-					dev->data->port_id);
-				dev->rx_pkt_burst =
-					i40e_recv_scattered_pkts_vec_avx512;
-#endif
-			} else {
-				PMD_INIT_LOG(DEBUG,
-					"Using %sVector Scattered Rx (port %d).",
-					ad->rx_use_avx2 ? "avx2 " : "",
-					dev->data->port_id);
-				dev->rx_pkt_burst = ad->rx_use_avx2 ?
-					i40e_recv_scattered_pkts_vec_avx2 :
-					i40e_recv_scattered_pkts_vec;
-				dev->recycle_rx_descriptors_refill =
-					i40e_recycle_rx_descriptors_refill_vec;
-			}
-		} else {
-			if (ad->rx_use_avx512) {
-#ifdef CC_AVX512_SUPPORT
-				PMD_DRV_LOG(NOTICE,
-					"Using AVX512 Vector Rx (port %d).",
-					dev->data->port_id);
-				dev->rx_pkt_burst =
-					i40e_recv_pkts_vec_avx512;
-#endif
-			} else {
-				PMD_INIT_LOG(DEBUG,
-					"Using %sVector Rx (port %d).",
-					ad->rx_use_avx2 ? "avx2 " : "",
-					dev->data->port_id);
-				dev->rx_pkt_burst = ad->rx_use_avx2 ?
-					i40e_recv_pkts_vec_avx2 :
-					i40e_recv_pkts_vec;
-				dev->recycle_rx_descriptors_refill =
-					i40e_recycle_rx_descriptors_refill_vec;
-			}
-		}
-#else /* RTE_ARCH_X86 */
+	req_features.simd_width = rx_simd_width;
+	if (dev->data->scattered_rx)
+		req_features.extra.scattered = true;
+	if (ad->rx_bulk_alloc_allowed)
+		req_features.extra.bulk_alloc = true;
+
+	ad->rx_func_type = ci_rx_path_select(req_features,
+						&i40e_rx_path_infos[0],
+						RTE_DIM(i40e_rx_path_infos),
+						I40E_RX_DEFAULT);
+	if (i40e_rx_path_infos[ad->rx_func_type].features.simd_width >= RTE_VECT_SIMD_128) {
+		/* Vector function selected. Prepare the rxq accordingly. */
+		for (i = 0; i < dev->data->nb_rx_queues; i++)
+			if (dev->data->rx_queues[i])
+				i40e_rxq_vec_setup(dev->data->rx_queues[i]);
+		ad->rx_vec_allowed = true;
+	}
+
+	if (i40e_rx_path_infos[ad->rx_func_type].features.simd_width >= RTE_VECT_SIMD_128 &&
+			i40e_rx_path_infos[ad->rx_func_type].features.simd_width <
+				RTE_VECT_SIMD_512)
 		dev->recycle_rx_descriptors_refill = i40e_recycle_rx_descriptors_refill_vec;
-		if (dev->data->scattered_rx) {
-			PMD_INIT_LOG(DEBUG,
-				     "Using Vector Scattered Rx (port %d).",
-				     dev->data->port_id);
-			dev->rx_pkt_burst = i40e_recv_scattered_pkts_vec;
-		} else {
-			PMD_INIT_LOG(DEBUG, "Using Vector Rx (port %d).",
-				     dev->data->port_id);
-			dev->rx_pkt_burst = i40e_recv_pkts_vec;
-		}
-#endif /* RTE_ARCH_X86 */
-	} else if (!dev->data->scattered_rx && ad->rx_bulk_alloc_allowed) {
-		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
-				    "satisfied. Rx Burst Bulk Alloc function "
-				    "will be used on port=%d.",
-			     dev->data->port_id);
 
-		dev->rx_pkt_burst = i40e_recv_pkts_bulk_alloc;
-	} else {
-		/* Simple Rx Path. */
-		PMD_INIT_LOG(DEBUG, "Simple Rx path will be used on port=%d.",
-			     dev->data->port_id);
-		dev->rx_pkt_burst = dev->data->scattered_rx ?
-					i40e_recv_scattered_pkts :
-					i40e_recv_pkts;
-	}
-
-	/* Propagate information about RX function choice through all queues. */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		vector_rx =
-			(dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec ||
-#ifdef CC_AVX512_SUPPORT
-			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx512 ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx512 ||
-#endif
-			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx2 ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx2);
-
-		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			struct ci_rx_queue *rxq = dev->data->rx_queues[i];
-
-			if (rxq)
-				rxq->vector_rx = vector_rx;
-		}
-	}
+out:
+	dev->rx_pkt_burst = i40e_rx_path_infos[ad->rx_func_type].pkt_burst;
+	PMD_DRV_LOG(NOTICE, "Using %s (port %d).",
+			i40e_rx_path_infos[ad->rx_func_type].info, dev->data->port_id);
 }
-
-static const struct {
-	eth_rx_burst_t pkt_burst;
-	const char *info;
-} i40e_rx_burst_infos[] = {
-	{ i40e_recv_scattered_pkts,          "Scalar Scattered" },
-	{ i40e_recv_pkts_bulk_alloc,         "Scalar Bulk Alloc" },
-	{ i40e_recv_pkts,                    "Scalar" },
-#ifdef RTE_ARCH_X86
-#ifdef CC_AVX512_SUPPORT
-	{ i40e_recv_scattered_pkts_vec_avx512, "Vector AVX512 Scattered" },
-	{ i40e_recv_pkts_vec_avx512,           "Vector AVX512" },
-#endif
-	{ i40e_recv_scattered_pkts_vec_avx2, "Vector AVX2 Scattered" },
-	{ i40e_recv_pkts_vec_avx2,           "Vector AVX2" },
-	{ i40e_recv_scattered_pkts_vec,      "Vector SSE Scattered" },
-	{ i40e_recv_pkts_vec,                "Vector SSE" },
-#elif defined(RTE_ARCH_ARM64)
-	{ i40e_recv_scattered_pkts_vec,      "Vector Neon Scattered" },
-	{ i40e_recv_pkts_vec,                "Vector Neon" },
-#elif defined(RTE_ARCH_PPC_64)
-	{ i40e_recv_scattered_pkts_vec,      "Vector AltiVec Scattered" },
-	{ i40e_recv_pkts_vec,                "Vector AltiVec" },
-#endif
-};
 
 int
 i40e_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
@@ -3479,10 +3481,10 @@ i40e_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	int ret = -EINVAL;
 	unsigned int i;
 
-	for (i = 0; i < RTE_DIM(i40e_rx_burst_infos); ++i) {
-		if (pkt_burst == i40e_rx_burst_infos[i].pkt_burst) {
+	for (i = 0; i < RTE_DIM(i40e_rx_path_infos); ++i) {
+		if (pkt_burst == i40e_rx_path_infos[i].pkt_burst) {
 			snprintf(mode->info, sizeof(mode->info), "%s",
-				 i40e_rx_burst_infos[i].info);
+				 i40e_rx_path_infos[i].info);
 			ret = 0;
 			break;
 		}
@@ -3527,8 +3529,7 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 #ifdef RTE_ARCH_X86
-		ad->tx_use_avx2 = false;
-		ad->tx_use_avx512 = false;
+		ad->tx_simd_width = i40e_get_max_simd_bitwidth();
 #endif
 		if (ad->tx_vec_allowed) {
 			for (i = 0; i < dev->data->nb_tx_queues; i++) {
@@ -3540,12 +3541,6 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 					break;
 				}
 			}
-#ifdef RTE_ARCH_X86
-			ad->tx_use_avx512 = get_avx_supported(1);
-
-			if (!ad->tx_use_avx512)
-				ad->tx_use_avx2 = get_avx_supported(0);
-#endif
 		}
 	}
 
@@ -3555,17 +3550,22 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 	if (ad->tx_simple_allowed) {
 		if (ad->tx_vec_allowed) {
 #ifdef RTE_ARCH_X86
-			if (ad->tx_use_avx512) {
+			if (ad->tx_simd_width == RTE_VECT_SIMD_512) {
 #ifdef CC_AVX512_SUPPORT
 				PMD_DRV_LOG(NOTICE, "Using AVX512 Vector Tx (port %d).",
 					    dev->data->port_id);
 				dev->tx_pkt_burst = i40e_xmit_pkts_vec_avx512;
+#else
+				PMD_DRV_LOG(ERR, "Invalid Tx SIMD width reported, defaulting to "
+						"using scalar Tx (port %d).",
+						dev->data->port_id);
+				dev->tx_pkt_burst = i40e_xmit_pkts;
 #endif
 			} else {
 				PMD_INIT_LOG(DEBUG, "Using %sVector Tx (port %d).",
-					     ad->tx_use_avx2 ? "avx2 " : "",
+					     ad->tx_simd_width == RTE_VECT_SIMD_256 ? "avx2 " : "",
 					     dev->data->port_id);
-				dev->tx_pkt_burst = ad->tx_use_avx2 ?
+				dev->tx_pkt_burst = ad->tx_simd_width == RTE_VECT_SIMD_256 ?
 						    i40e_xmit_pkts_vec_avx2 :
 						    i40e_xmit_pkts_vec;
 				dev->recycle_tx_mbufs_reuse = i40e_recycle_tx_mbufs_reuse_vec;

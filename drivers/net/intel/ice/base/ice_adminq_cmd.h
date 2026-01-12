@@ -1917,6 +1917,7 @@ struct ice_aqc_get_port_options_elem {
 #define ICE_AQC_PORT_OPT_MAX_LANE_50G	6
 #define ICE_AQC_PORT_OPT_MAX_LANE_100G	7
 #define ICE_AQC_PORT_OPT_MAX_LANE_200G	8
+#define ICE_AQC_PORT_OPT_MAX_LANE_40G	9
 	u8 global_scid[2];
 	u8 phy_scid[2];
 	u8 pf2port_cid[2];
@@ -2385,6 +2386,20 @@ struct ice_aqc_get_set_rss_keys {
 	u8 extended_hash_key[ICE_AQC_GET_SET_RSS_KEY_DATA_HASH_KEY_SIZE];
 };
 
+enum ice_lut_type {
+	ICE_LUT_VSI = 0,
+	ICE_LUT_PF = 1,
+	ICE_LUT_GLOBAL = 2,
+	ICE_LUT_TYPE_MASK = 3
+};
+
+enum ice_lut_size {
+	ICE_LUT_SIZE_64 = 64,
+	ICE_LUT_SIZE_128 = 128,
+	ICE_LUT_SIZE_512 = 512,
+	ICE_LUT_SIZE_2048 = 2048,
+};
+
 /* Get/Set RSS LUT (indirect 0x0B05/0x0B03) */
 struct ice_aqc_get_set_rss_lut {
 #define ICE_AQC_GSET_RSS_LUT_VSI_VALID	BIT(15)
@@ -2393,7 +2408,7 @@ struct ice_aqc_get_set_rss_lut {
 	__le16 vsi_id;
 #define ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_S	0
 #define ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_M	\
-				(0x3 << ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_S)
+		(ICE_LUT_TYPE_MASK << ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_S)
 
 #define ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_VSI	 0
 #define ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF	 1
@@ -2401,7 +2416,7 @@ struct ice_aqc_get_set_rss_lut {
 
 #define ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S	 2
 #define ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_M	 \
-				(0x3 << ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S)
+		(ICE_LUT_TYPE_MASK << ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S)
 
 #define ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_128	 128
 #define ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_128_FLAG 0
@@ -3169,6 +3184,7 @@ struct ice_aqc_set_health_status_config {
 #define ICE_AQC_HEALTH_STATUS_SET_PF_SPECIFIC_MASK	BIT(0)
 #define ICE_AQC_HEALTH_STATUS_SET_ALL_PF_MASK		BIT(1)
 #define ICE_AQC_HEALTH_STATUS_SET_GLOBAL_MASK		BIT(2)
+#define ICE_AQC_HEALTH_STATUS_DISABLE_HISTORY_MASK	BIT(3)
 	u8 reserved[15];
 };
 
@@ -3209,6 +3225,7 @@ struct ice_aqc_set_health_status_config {
 #define ICE_AQC_HEALTH_STATUS_ERR_BMC_RESET			0x50B
 #define ICE_AQC_HEALTH_STATUS_ERR_LAST_MNG_FAIL			0x50C
 #define ICE_AQC_HEALTH_STATUS_ERR_RESOURCE_ALLOC_FAIL		0x50D
+#define ICE_AQC_HEALTH_STATUS_INFO_DPLL_LOCK			0x601
 #define ICE_AQC_HEALTH_STATUS_ERR_FW_LOOP			0x1000
 #define ICE_AQC_HEALTH_STATUS_ERR_FW_PFR_FAIL			0x1001
 #define ICE_AQC_HEALTH_STATUS_ERR_LAST_FAIL_AQ			0x1002

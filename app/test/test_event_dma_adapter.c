@@ -136,7 +136,6 @@ test_dma_adapter_params(void)
 {
 	struct rte_event_dma_adapter_runtime_params out_params;
 	struct rte_event_dma_adapter_runtime_params in_params;
-	struct rte_event event;
 	uint32_t cap;
 	int err, rc;
 
@@ -144,6 +143,8 @@ test_dma_adapter_params(void)
 	TEST_ASSERT_SUCCESS(err, "Failed to get adapter capabilities\n");
 
 	if (cap & RTE_EVENT_DMA_ADAPTER_CAP_INTERNAL_PORT_VCHAN_EV_BIND) {
+		struct rte_event event = { .queue_id = 0, };
+
 		err = rte_event_dma_adapter_vchan_add(TEST_ADAPTER_ID, TEST_DMA_DEV_ID,
 							    TEST_DMA_VCHAN_ID, &event);
 	} else
@@ -234,7 +235,7 @@ test_op_forward_mode(void)
 {
 	struct rte_mbuf *src_mbuf[TEST_MAX_OP];
 	struct rte_mbuf *dst_mbuf[TEST_MAX_OP];
-	struct rte_event_dma_adapter_op *op;
+	struct rte_dma_op *op;
 	struct rte_event ev[TEST_MAX_OP];
 	int ret, i;
 
@@ -266,7 +267,7 @@ test_op_forward_mode(void)
 		op->vchan = TEST_DMA_VCHAN_ID;
 		op->event_meta = dma_response_info.event;
 
-		/* Fill in event info and update event_ptr with rte_event_dma_adapter_op */
+		/* Fill in event info and update event_ptr with rte_dma_op */
 		memset(&ev[i], 0, sizeof(struct rte_event));
 		ev[i].event = 0;
 		ev[i].op = RTE_EVENT_OP_NEW;
@@ -396,7 +397,7 @@ configure_dmadev(void)
 						       rte_socket_id());
 	RTE_TEST_ASSERT_NOT_NULL(params.dst_mbuf_pool, "Can't create DMA_DST_MBUFPOOL\n");
 
-	elt_size = sizeof(struct rte_event_dma_adapter_op) + (sizeof(struct rte_dma_sge) * 2);
+	elt_size = sizeof(struct rte_dma_op) + (sizeof(struct rte_dma_sge) * 2);
 	params.op_mpool = rte_mempool_create("EVENT_DMA_OP_POOL", DMA_OP_POOL_SIZE, elt_size, 0,
 					     0, NULL, NULL, NULL, NULL, rte_socket_id(), 0);
 	RTE_TEST_ASSERT_NOT_NULL(params.op_mpool, "Can't create DMA_OP_POOL\n");
@@ -520,7 +521,6 @@ test_dma_adapter_create(void)
 static int
 test_dma_adapter_vchan_add_del(void)
 {
-	struct rte_event event;
 	uint32_t cap;
 	int ret;
 
@@ -528,6 +528,8 @@ test_dma_adapter_vchan_add_del(void)
 	TEST_ASSERT_SUCCESS(ret, "Failed to get adapter capabilities\n");
 
 	if (cap & RTE_EVENT_DMA_ADAPTER_CAP_INTERNAL_PORT_VCHAN_EV_BIND) {
+		struct rte_event event = { .queue_id = 0, };
+
 		ret = rte_event_dma_adapter_vchan_add(TEST_ADAPTER_ID, TEST_DMA_DEV_ID,
 							    TEST_DMA_VCHAN_ID, &event);
 	} else

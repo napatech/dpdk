@@ -268,6 +268,8 @@ struct mbox_msghdr {
 	M(NPC_CN20K_MCAM_READ_BASE_RULE, 0x601c,                               \
 	  npc_cn20k_read_base_steer_rule, msg_req,                             \
 	  npc_cn20k_mcam_read_base_rule_rsp)                                   \
+	M(NPC_MCAM_READ_DEFAULT_RULE, 0x6023, npc_read_default_rule,           \
+	  msg_req, npc_mcam_read_base_rule_rsp)                                \
 	/* NIX mbox IDs (range 0x8000 - 0xFFFF) */                             \
 	M(NIX_LF_ALLOC, 0x8000, nix_lf_alloc, nix_lf_alloc_req,                \
 	  nix_lf_alloc_rsp)                                                    \
@@ -755,8 +757,17 @@ enum fec_type {
 };
 
 struct phy_s {
-	uint64_t __io can_change_mod_type : 1;
-	uint64_t __io mod_type : 1;
+	struct {
+		uint64_t __io can_change_mod_type : 1;
+		uint64_t __io mod_type : 1;
+		uint64_t __io has_fec_stats : 1;
+	} misc;
+	struct fec_stats_s {
+		uint32_t __io rsfec_corr_cws;
+		uint32_t __io rsfec_uncorr_cws;
+		uint32_t __io brfec_corr_blks;
+		uint32_t __io brfec_uncorr_blks;
+	} fec_stats;
 };
 
 struct cgx_lmac_fwdata_s {
@@ -764,13 +775,18 @@ struct cgx_lmac_fwdata_s {
 	uint64_t __io supported_fec;
 	uint64_t __io supported_an;
 	uint64_t __io supported_link_modes;
-	/* Only applicable if AN is supported */
+	/* only applicable if AN is supported */
 	uint64_t __io advertised_fec;
-	uint64_t __io advertised_link_modes;
+	uint64_t __io advertised_link_modes_own : 1; /* CGX_CMD_OWN */
+	uint64_t __io advertised_link_modes : 63;
 	/* Only applicable if SFP/QSFP slot is present */
 	struct sfp_eeprom_s sfp_eeprom;
 	struct phy_s phy;
-#define LMAC_FWDATA_RESERVED_MEM 1023
+	uint32_t __io lmac_type;
+	uint32_t __io portm_idx;
+	uint64_t __io mgmt_port : 1;
+	uint64_t __io port;
+#define LMAC_FWDATA_RESERVED_MEM 1018
 	uint64_t __io reserved[LMAC_FWDATA_RESERVED_MEM];
 };
 
@@ -798,8 +814,10 @@ struct cgx_set_link_mode_args {
 	uint32_t __io speed;
 	uint8_t __io duplex;
 	uint8_t __io an;
-	uint8_t __io ports;
+	uint8_t __io mode_baseidx;
+	uint8_t __io multimode;
 	uint64_t __io mode;
+	uint64_t __io advertising;
 };
 
 struct cgx_set_link_mode_req {

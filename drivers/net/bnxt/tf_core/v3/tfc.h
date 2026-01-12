@@ -240,7 +240,9 @@ struct tfc_global_id_req {
 	enum cfa_resource_type rtype; /**< Resource type */
 	uint8_t rsubtype; /**< Resource subtype */
 	enum cfa_dir dir; /**< Direction */
-	uint16_t cnt; /**< Number of resources to allocate of this type */
+	uint8_t *context_id;
+	uint16_t context_len;
+	uint16_t resource_id;
 };
 
 /** Global id resource definition
@@ -268,17 +270,8 @@ struct tfc_global_id {
  * @param[in] fid
  *   FID - Function ID to be used
  *
- * @param[in] domain_id
- *   The domain id to associate.
- *
- * @param[in] req_cnt
- *   The number of total resource requests
- *
  * @param[in] glb_id_req
  *   The list of global id requests
- *
- * @param[in,out] rsp_cnt
- *   The number of items in the response buffer
  *
  * @param[out] glb_id_rsp
  *   The number of items in the response buffer
@@ -289,10 +282,36 @@ struct tfc_global_id {
  * @returns
  *   0 for SUCCESS, negative error value for FAILURE (errno.h)
  */
-int tfc_global_id_alloc(struct tfc *tfcp, uint16_t fid, enum tfc_domain_id domain_id,
-			uint16_t req_cnt, const struct tfc_global_id_req *glb_id_req,
-			struct tfc_global_id *glb_id_rsp, uint16_t *rsp_cnt,
+int tfc_global_id_alloc(struct tfc *tfcp, uint16_t fid,
+			const struct tfc_global_id_req *glb_id_req,
+			struct tfc_global_id *glb_id_rsp,
 			bool *first);
+
+/**
+ * Free global Identifier TFC resources
+ *
+ * Some resources are not owned by a single session.  They are "global" in that
+ * they will be in use as long as any associated session exists.  Once all
+ * sessions/functions have been removed, all associated global ids are freed.
+ * There are currently up to 4 global id domain sets.
+ *
+ * TODO: REDUCE PARAMETERS WHEN IMPLEMENTING API
+ *
+ * @param[in] tfcp
+ *   Pointer to TFC handle
+ *
+ * @param[in] fid
+ *   FID - Function ID to be used
+ *
+ * @param[in] glb_id_req
+ *   The list of global id requests
+ *
+ * @returns
+ *   0 for SUCCESS, negative error value for FAILURE (errno.h)
+ */
+int tfc_global_id_free(struct tfc *tfcp, uint16_t fid,
+		       const struct tfc_global_id_req *glb_id_req);
+
 /**
  * @page Identifiers
  *
@@ -372,6 +391,7 @@ struct tfc_idx_tbl_info {
 	enum cfa_resource_subtype_idx_tbl rsubtype; /**< resource subtype */
 	enum cfa_dir dir; /**< direction rx/tx */
 	uint16_t id; /**< alloc/free index */
+	enum cfa_resource_blktype_idx_tbl blktype; /**< block type */
 };
 
 /**
@@ -662,6 +682,33 @@ int tfc_tcam_free(struct tfc *tfcp, uint16_t fid,
 		  const struct tfc_tcam_info *tcam_info);
 
 /**
+ * Update the TFC TCAM entry priority
+ *
+ * @param[in] tfcp
+ *   Pointer to TFC handle
+ *
+ * @param[in] fid
+ *   FID - Function ID to be used
+ *
+ * @param[in] tt
+ *   Track type - either track by session or by function
+ *
+ * @param[in] tcam_info
+ *   All the information related to the requested index table entry (subtype/dir)
+ *   including the id.
+ *
+ * @param[in] priority
+ *  The priority of the tcam entry to be updated with.
+ *
+ * @returns
+ *   0 for SUCCESS, negative error value for FAILURE (errno.h)
+ */
+int tfc_tcam_priority_update(struct tfc *tfcp, uint16_t fid,
+			     enum cfa_track_type tt,
+			     const struct tfc_tcam_info *tcam_info,
+			     uint16_t priority);
+
+/**
  * @page TBM Table Scope
  *
  * @ref tfc_tbl_scope_qcaps
@@ -715,14 +762,12 @@ enum tfc_tbl_scope_bucket_factor {
  * tfc_tbl_scope_size_query API.
  */
 struct tfc_tbl_scope_size_query_parms {
-	/**
-	 * [in] If a shared table scope, dynamic buckets are disabled. This
-	 * affects the calculation for static buckets in this function.
-	 * Initially, if not shared, the size of the static bucket table should
-	 * be double the number of flows supported. Numbers are validated
-	 * against static_cnt and dynamic_cnt
+	/** Scope is one of non-shared, shared-app or global.
+	 * If a shared-app or global table scope, dynamic buckets are disabled.
+	 * this combined with the multiplier affects the calculation for static
+	 * buckets in this function.
 	 */
-	bool shared;
+	enum cfa_scope_type scope_type;
 	/**
 	 * [in] Direction indexed array indicating the number of flows.  Must be
 	 * at least as large as the number entries that the buckets can point
@@ -805,6 +850,12 @@ struct tfc_tbl_scope_size_query_parms {
  * to be used by a table scope.
  */
 struct tfc_tbl_scope_mem_alloc_parms {
+	/** Scope is one of non-shared, shared-app or global.
+	 * If a shared-app or global table scope, dynamic buckets are disabled.
+	 * this combined with the multiplier affects the calculation for static
+	 * buckets in this function.
+	 */
+	enum cfa_scope_type scope_type;
 	/**
 	 * [in] If a shared table scope, indicate whether this is the first
 	 * if, the first, the table scope memory will be allocated.  Otherwise
@@ -873,32 +924,51 @@ struct tfc_tbl_scope_mem_alloc_parms {
 	uint32_t lkup_rec_start_offset[CFA_DIR_MAX];
 };
 
+
+/**
+ * tfc_tbl_scope_qcaps_parms contains the parameters for determining
+ * the table scope capabilities
+ */
+struct tfc_tbl_scope_qcaps_parms {
+	/**
+	 * [out] if true, the device supports a table scope.
+	 */
+	bool tbl_scope_cap;
+	/**
+	 * [out] if true, the device supports a global table scope.
+	 */
+	bool global_cap;
+	/**
+	 * [out] if true, the device supports locked regions.
+	 */
+	bool locked_cap;
+	/**
+	 * [out] the maximum number of static buckets supported.
+	 */
+	uint8_t max_lkup_static_bucket_exp;
+	/**
+	 * [out] The maximum number of minimum sized lkup records supported.
+	 */
+	uint32_t max_lkup_rec_cnt;
+	/**
+	 * [out] The maximum number of  minimum sized action records supported.
+	 */
+	uint32_t max_act_rec_cnt;
+};
+
 /**
  * Determine whether table scopes are supported in the hardware.
  *
  * @param[in] tfcp
  *   Pointer to TFC handle
  *
- * @param[out] tbl_scope_capable
- *   True if table scopes are supported in the firmware.
- *
- * @param[out] max_lkup_rec_cnt
- *   The maximum number of lookup records in a table scope (optional)
- *
- * @param[out] max_act_rec_cnt
- *   The maximum number of action records in a table scope (optional)
- *
- * @param[out] max_lkup_static_buckets_exp
- *   The log2 of the maximum number of lookup static buckets in a table scope
- *   (optional)
+ * @param[in,out] parms
  *
  * @returns
  *   0 for SUCCESS, negative error value for FAILURE (errno.h)
  */
-int tfc_tbl_scope_qcaps(struct tfc *tfcp, bool *tbl_scope_capable,
-			uint32_t *max_lkup_rec_cnt,
-			uint32_t *max_act_rec_cnt,
-			uint8_t	*max_lkup_static_buckets_exp);
+int tfc_tbl_scope_qcaps(struct tfc *tfcp,
+			struct tfc_tbl_scope_qcaps_parms *parms);
 
 /**
  * Determine table scope sizing
@@ -921,8 +991,8 @@ int tfc_tbl_scope_size_query(struct tfc *tfcp,
  * @param[in] tfcp
  *   Pointer to TFC handle
  *
- * @param[in] shared
- *   Create a shared table scope.
+ * @param[in] scope_type
+ *   non-shared, shared-app or global
  *
  * @param[in] app_type
  *   The application type, TF or AFM
@@ -937,7 +1007,7 @@ int tfc_tbl_scope_size_query(struct tfc *tfcp,
  * @returns
  *	 0 for SUCCESS, negative error value for FAILURE (errno.h)
  */
-int tfc_tbl_scope_id_alloc(struct tfc *tfcp, bool shared,
+int tfc_tbl_scope_id_alloc(struct tfc *tfcp, enum cfa_scope_type scope_type,
 			   enum cfa_app_type app_type, uint8_t *tsid,
 			   bool *first);
 
@@ -976,10 +1046,14 @@ int tfc_tbl_scope_mem_alloc(struct tfc *tfcp, uint16_t fid, uint8_t tsid,
  * @param[in] tsid
  *   Table scope identifier
  *
+ * @param[in] fid_cnt
+ *   Used for global scope cleanup.  If a fid remains, do not delete scope
+ *
  * @returns
  *   0 for SUCCESS, negative error value for FAILURE (errno.h)
  */
-int tfc_tbl_scope_mem_free(struct tfc *tfcp, uint16_t fid, uint8_t tsid);
+int tfc_tbl_scope_mem_free(struct tfc *tfcp, uint16_t fid, uint8_t tsid,
+			   uint16_t fid_cnt);
 
 /**
  * tfc_tbl_scope_cpm_alloc_parms contains the parameters for allocating a
@@ -1528,4 +1602,88 @@ int tfc_if_tbl_set(struct tfc *tfcp, uint16_t fid,
 int tfc_if_tbl_get(struct tfc *tfcp, uint16_t fid,
 		   const struct tfc_if_tbl_info *tbl_info,
 		   uint8_t *data, uint8_t *data_sz_in_bytes);
+
+/**
+ * Get a TFC hot upgrade status and application instance count
+ *
+ * @param[in] tfcp
+ *   Pointer to TFC handle
+ *
+ * @param[in] fid
+ *   FID - Function ID to be used
+ *
+ * @param[in] app_inst_id
+ *   the applicatoin instance id.
+ *
+ * @param[out] app_inst_cnt
+ *   Pointer to the application instance count.
+ *
+ * @returns
+ *   0 for SUCCESS, negative error value for FAILURE (errno.h)
+ */
+int
+tfc_hot_up_app_inst_count(struct tfc *tfcp, uint16_t fid,
+			  uint8_t app_inst_id, uint8_t *app_inst_cnt);
+
+/**
+ * Allocate and initialize the TFC hot upgrade state
+ *
+ * @param[in] tfcp
+ *   Pointer to TFC handle
+ *
+ * @param[in] fid
+ *   FID - Function ID to be used
+ *
+ * @param[in] app_inst_id
+ *   the application instance id.
+ *
+ * @param[in] app_inst_cnt
+ *   the application instance count.
+ *
+ * @param[out] session
+ *   the session count.
+ *
+ * @returns
+ *   0 for SUCCESS, negative error value for FAILURE (errno.h)
+ */
+int
+tfc_hot_up_app_inst_alloc(struct tfc *tfcp, uint16_t fid,
+			  uint8_t app_inst_id, uint8_t app_inst_cnt,
+			  uint8_t *session);
+/**
+ * Free the TFC hot upgrade state
+ *
+ * @param[in] tfcp
+ *   Pointer to TFC handle
+ *
+ * @param[in] fid
+ *   FID - Function ID to be used
+ *
+ * @param[in] app_inst_id
+ *   the application instance id.
+ *
+ * @returns
+ *   0 for SUCCESS, negative error value for FAILURE (errno.h)
+ */
+int
+tfc_hot_up_app_inst_free(struct tfc *tfcp, uint16_t fid, uint8_t app_inst_id);
+
+/**
+ * Set the TFC hot upgrade state to primary
+ *
+ * @param[in] tfcp
+ *   Pointer to TFC handle
+ *
+ * @param[in] fid
+ *   FID - Function ID to be used
+ *
+ * @param[in] app_inst_id
+ *   the application instance id.
+ *
+ * @returns
+ *   0 for SUCCESS, negative error value for FAILURE (errno.h)
+ */
+int
+tfc_hot_up_app_inst_set(struct tfc *tfcp, uint16_t fid, uint8_t app_inst_id);
+
 #endif /* _TFC_H_ */

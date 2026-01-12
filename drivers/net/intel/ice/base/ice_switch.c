@@ -2435,6 +2435,7 @@ ice_get_recp_frm_fw(struct ice_hw *hw, struct ice_sw_recipe *recps, u8 rid,
 		    bool *refresh_required)
 {
 	ice_declare_bitmap(result_bm, ICE_MAX_FV_WORDS);
+	struct ice_recp_grp_entry *rg, *tmprg_entry;
 	struct ice_aqc_recipe_data_elem *tmp;
 	u16 num_recps = ICE_MAX_NUM_RECIPES;
 	struct ice_prot_lkup_ext *lkup_exts;
@@ -2480,6 +2481,15 @@ ice_get_recp_frm_fw(struct ice_hw *hw, struct ice_sw_recipe *recps, u8 rid,
 	 * database.
 	 */
 	lkup_exts = &recps[rid].lkup_exts;
+
+	/* Remove duplicate entries */
+	LIST_FOR_EACH_ENTRY_SAFE(rg, tmprg_entry, &recps[rid].rg_list,
+	                         ice_recp_grp_entry, l_entry) {
+		if (rg->rid == rid) {
+			LIST_DEL(&rg->l_entry);
+			ice_free(hw, rg);
+		}
+	}
 
 	for (sub_recps = 0; sub_recps < num_recps; sub_recps++) {
 		struct ice_aqc_recipe_data_elem root_bufs = tmp[sub_recps];
@@ -4103,7 +4113,11 @@ ice_fill_sw_rule(struct ice_hw *hw, struct ice_fltr_info *f_info,
 		CPU_TO_LE16(ICE_AQC_SW_RULES_T_LKUP_TX);
 
 	/* Recipe set depending on lookup type */
-	s_rule->recipe_id = CPU_TO_LE16(f_info->lkup_type);
+	if (f_info->rid_override) {
+		s_rule->recipe_id = CPU_TO_LE16(f_info->rid);
+	} else {
+		s_rule->recipe_id = CPU_TO_LE16(f_info->lkup_type);
+	}
 	s_rule->src = CPU_TO_LE16(f_info->src);
 	s_rule->act = CPU_TO_LE32(act);
 
@@ -7925,6 +7939,20 @@ ice_add_special_words(struct ice_adv_rule_info *rinfo,
 	u16 mask;
 	u16 off;
 
+	/*
+	 * Failing to add direction metadata is not considered an error, because
+	 * the kinds of rules which would trigger this error are already so
+	 * highly specific that they're unlikely to match both Rx and Tx traffic
+	 * at the same time.
+	 */
+	if (lkup_exts->n_val_words < ICE_MAX_CHAIN_WORDS) {
+		u8 word = lkup_exts->n_val_words++;
+
+		lkup_exts->fv_words[word].prot_id = ICE_META_DATA_ID_HW;
+		lkup_exts->fv_words[word].off = ICE_TUN_FLAG_MDID_OFF(0);
+		lkup_exts->field_mask[word] = ICE_FROM_NETWORK_FLAG_MASK;
+	}
+
 	/* If this is a tunneled packet, then add recipe index to match the
 	 * tunnel bit in the packet metadata flags. If this is a tun_and_non_tun
 	 * packet, then add recipe index to match the direction bit in the flag.
@@ -8273,16 +8301,16 @@ ice_add_adv_recipe(struct ice_hw *hw, struct ice_adv_lkup_elem *lkups,
 	 */
 	ice_get_compat_fv_bitmap(hw, rinfo, fv_bitmap);
 
-	status = ice_get_sw_fv_list(hw, lkup_exts, fv_bitmap, &rm->fv_list);
-	if (status)
-		goto err_unroll;
-
 	/* Create any special protocol/offset pairs, such as looking at tunnel
 	 * bits by extracting metadata
 	 */
 	status = ice_add_special_words(rinfo, lkup_exts, ice_is_dvm_ena(hw));
 	if (status)
 		goto err_free_lkup_exts;
+
+	status = ice_get_sw_fv_list(hw, lkup_exts, fv_bitmap, &rm->fv_list);
+	if (status)
+		goto err_unroll;
 
 	/* Group match words into recipes using preferred recipe grouping
 	 * criteria.

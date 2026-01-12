@@ -1,10 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2017-2019 Intel Corporation
 
-if is_ms_compiler
-    subdir_done()
-endif
-
 # Defines the order of dependencies evaluation
 subdirs = [
         'common',
@@ -36,17 +32,48 @@ if meson.is_cross_build()
     enable_drivers += ',' + meson.get_external_property('enable_drivers', '')
 endif
 
-# add cmdline disabled drivers and meson disabled drivers together
-disable_drivers += ',' + get_option('disable_drivers')
-disable_drivers = run_command(list_dir_globs, disable_drivers, check: true).stdout().split()
+# map legacy driver names
+driver_map = {
+    'net/cpfl': 'net/intel/cpfl',
+    'net/e1000': 'net/intel/e1000',
+    'net/fm10k': 'net/intel/fm10k',
+    'net/i40e': 'net/intel/i40e',
+    'net/iavf': 'net/intel/iavf',
+    'net/ice': 'net/intel/ice',
+    'net/idpf': 'net/intel/idpf',
+    'net/ipn3ke': 'net/intel/ipn3ke',
+    'net/ixgbe': 'net/intel/ixgbe',
+}
 
-# add cmdline enabled drivers and meson enabled drivers together
-enable_drivers = ',' + get_option('enable_drivers')
+foreach driver_option : ['disable_drivers', 'enable_drivers']
+    # get list of drivers from the option
+    cmdline_drivers = get_option(driver_option)
+    foreach driver : cmdline_drivers.split(',')
+        if driver == ''
+            continue
+        endif
+        # check if driver has a legacy name which maps to a new name
+        if driver_map.has_key(driver)
+            # use new name instead of legacy name
+            driver = driver_map[driver]
+        elif driver.endswith('/*')
+            # make wildcard recursive to include nested drivers
+            driver = driver + '*'
+        endif
+        if driver_option == 'disable_drivers'
+            disable_drivers += ',' + driver
+        else
+            enable_drivers += ',' + driver
+        endif
+    endforeach
+endforeach
+
+disable_drivers = run_command(list_dir_globs, disable_drivers, check: true).stdout().split()
 enable_drivers = run_command(list_dir_globs, enable_drivers, check: true).stdout().split()
 require_drivers = true
 if enable_drivers.length() == 0
     require_drivers = false
-    enable_drivers = run_command(list_dir_globs, '*/*,*/*/*', check: true).stdout().split()
+    enable_drivers = run_command(list_dir_globs, '**', check: true).stdout().split()
 endif
 
 # these drivers must always be enabled, otherwise the build breaks
@@ -59,7 +86,7 @@ default_cflags = machine_args
 default_cflags += ['-DALLOW_EXPERIMENTAL_API']
 default_cflags += ['-DALLOW_INTERNAL_API']
 
-warning_disable_cflags = ['-Wno-format-truncation', '-Wno-address-of-packed-member']
+warning_disable_cflags = ['-Wno-format-truncation', '-Wno-address-of-packed-member', '-Wno-comma']
 foreach cflag:warning_disable_cflags
     if cc.has_argument(cflag)
         default_cflags += cflag
@@ -237,7 +264,7 @@ foreach subpath:subdirs
         enabled_drivers += name
         lib_name = '_'.join(['rte', class, name])
         cflags += '-DRTE_LOG_DEFAULT_LOGTYPE=' + '.'.join([log_prefix, name])
-        if annotate_locks and cc.get_id() == 'clang' and cc.version().version_compare('>=3.5.0')
+        if annotate_locks and cc.get_id() == 'clang'
             cflags += '-DRTE_ANNOTATE_LOCKS'
             cflags += '-Wthread-safety'
         endif
@@ -245,11 +272,8 @@ foreach subpath:subdirs
 
         dpdk_extra_ldflags += pkgconfig_extra_libs
 
-        install_headers(headers)
-        if get_option('enable_driver_sdk')
-            install_headers(driver_sdk_headers)
-        endif
-        dpdk_chkinc_headers += driver_sdk_headers
+        dpdk_headers += headers
+        dpdk_drivers_headers += driver_sdk_headers
 
         if headers.length() > 0
             dpdk_includes += include_directories(drv_path)

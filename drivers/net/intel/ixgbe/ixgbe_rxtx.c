@@ -141,8 +141,7 @@ ixgbe_tx_free_bufs(struct ci_tx_queue *txq)
 
 		if (nb_free >= IXGBE_TX_MAX_FREE_BUF_SZ ||
 		    (nb_free > 0 && m->pool != free[0]->pool)) {
-			rte_mempool_put_bulk(free[0]->pool,
-					     (void **)free, nb_free);
+			rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 			nb_free = 0;
 		}
 
@@ -150,7 +149,7 @@ ixgbe_tx_free_bufs(struct ci_tx_queue *txq)
 	}
 
 	if (nb_free > 0)
-		rte_mempool_put_bulk(free[0]->pool, (void **)free, nb_free);
+		rte_mbuf_raw_free_bulk(free[0]->pool, free, nb_free);
 
 	/* buffers were freed, update counters */
 	txq->nb_tx_free = (uint16_t)(txq->nb_tx_free + txq->tx_rs_thresh);
@@ -1659,7 +1658,7 @@ ixgbe_rx_alloc_bufs(struct ci_rx_queue *rxq, bool reset_mbuf)
 	/* allocate buffers in bulk directly into the S/W ring */
 	alloc_idx = rxq->rx_free_trigger - (rxq->rx_free_thresh - 1);
 	rxep = &rxq->sw_ring[alloc_idx];
-	diag = rte_mempool_get_bulk(rxq->mp, (void *)rxep,
+	diag = rte_mbuf_raw_alloc_bulk(rxq->mp, (void *)rxep,
 				    rxq->rx_free_thresh);
 	if (unlikely(diag != 0))
 		return -ENOMEM;
@@ -2654,7 +2653,7 @@ ixgbe_set_tx_function(struct rte_eth_dev *dev, struct ci_tx_queue *txq)
 #endif
 			(txq->tx_rs_thresh >= IXGBE_TX_MAX_BURST)) {
 		PMD_INIT_LOG(DEBUG, "Using simple tx code path");
-		dev->tx_pkt_prepare = NULL;
+		dev->tx_pkt_prepare = rte_eth_tx_pkt_prepare_dummy;
 		if (txq->tx_rs_thresh <= IXGBE_TX_MAX_FREE_BUF_SZ &&
 				rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128 &&
 				(rte_eal_process_type() != RTE_PROC_PRIMARY ||
@@ -3354,7 +3353,7 @@ ixgbe_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	return 0;
 }
 
-uint32_t
+int
 ixgbe_dev_rx_queue_count(void *rx_queue)
 {
 #define IXGBE_RXQ_SCAN_INTERVAL 4

@@ -40,6 +40,7 @@
 #include <rte_gro.h>
 #endif
 #include <rte_mbuf_dyn.h>
+#include <rte_mbuf_history.h>
 #include <rte_trace.h>
 
 #include <cmdline_rdline.h>
@@ -266,35 +267,44 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show port (port_id) flow_ctrl"
 			"	Show flow control info of a port.\n\n"
 
-			"dump_physmem\n"
+			"dump physmem\n"
 			"    Dumps all physical memory segment layouts\n\n"
 
-			"dump_socket_mem\n"
+			"dump socket_mem\n"
 			"    Dumps the memory usage of all sockets\n\n"
 
-			"dump_memzone\n"
+			"dump memzone\n"
 			"    Dumps the layout of all memory zones\n\n"
 
-			"dump_struct_sizes\n"
+			"dump struct_sizes\n"
 			"    Dumps the size of all memory structures\n\n"
 
-			"dump_ring\n"
+			"dump ring [name]\n"
 			"    Dumps the status of all or specific element in DPDK rings\n\n"
 
-			"dump_mempool\n"
+			"dump mempool [name]\n"
 			"    Dumps the statistics of all or specific memory pool\n\n"
 
-			"dump_devargs\n"
+			"dump devargs\n"
 			"    Dumps the user device list\n\n"
 
-			"dump_lcores\n"
+			"dump lcores\n"
 			"    Dumps the logical cores list\n\n"
 
-			"dump_trace\n"
+			"dump trace\n"
 			"    Dumps the tracing data to the folder according to the current EAL settings\n\n"
 
-			"dump_log_types\n"
+			"dump log_types\n"
 			"    Dumps the log level for all the dpdk modules\n\n"
+
+			"dump mbuf history all [file_name]\n"
+			"    Dumps the mbuf history for all mempools\n\n"
+
+			"dump mbuf history <mbuf_addr> [file_name]\n"
+			"    Dumps the history for a specific mbuf (use 0x<address> format)\n\n"
+
+			"dump mbuf pool history <mempool_name> [file_name]\n"
+			"    Dumps the history for a specific mempool\n\n"
 
 			"show port (port_id) speed_lanes capabilities"
 			"	Show speed lanes capabilities of a port.\n\n"
@@ -500,6 +510,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"set fwd (%s)\n"
 			"    Set packet forwarding mode.\n\n"
+
+			"set dcb fwd_tc (tc_mask)\n"
+			"    Set DCB forwarding on specify TCs, if bit-n in tc-mask is 1, then TC-n's forwarding is enabled\n\n"
 
 			"mac_addr add (port_id) (XX:XX:XX:XX:XX:XX)\n"
 			"    Add a MAC address on port_id.\n\n"
@@ -710,7 +723,8 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Detach physical or virtual dev by port_id\n\n"
 
 			"port config (port_id|all)"
-			" speed (10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto)"
+			" speed (10|100|1000|2500|5000|10000|25000|40000|50000|"
+			"100000|200000|400000|800000|auto)"
 			" duplex (half|full|auto)\n"
 			"    Set speed and duplex for all ports or port_id\n\n"
 
@@ -1430,6 +1444,8 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 			*speed = RTE_ETH_LINK_SPEED_200G;
 		} else if (!strcmp(speedstr, "400000")) {
 			*speed = RTE_ETH_LINK_SPEED_400G;
+		} else if (!strcmp(speedstr, "800000")) {
+			*speed = RTE_ETH_LINK_SPEED_800G;
 		} else if (!strcmp(speedstr, "auto")) {
 			*speed = RTE_ETH_LINK_SPEED_AUTONEG;
 		} else {
@@ -1480,7 +1496,8 @@ static cmdline_parse_token_string_t cmd_config_speed_all_item1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item1, "speed");
 static cmdline_parse_token_string_t cmd_config_speed_all_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, value1,
-				"10#100#1000#2500#5000#10000#25000#40000#50000#100000#200000#400000#auto");
+		"10#100#1000#2500#5000#10000#25000#40000#50000#"
+		"100000#200000#400000#800000#auto");
 static cmdline_parse_token_string_t cmd_config_speed_all_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item2, "duplex");
 static cmdline_parse_token_string_t cmd_config_speed_all_value2 =
@@ -1491,8 +1508,9 @@ static cmdline_parse_inst_t cmd_config_speed_all = {
 	.f = cmd_config_speed_all_parsed,
 	.data = NULL,
 	.help_str = "port config all speed "
-		"10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
-							"half|full|auto",
+		"10|100|1000|2500|5000|10000|25000|40000|50000|"
+		"100000|200000|400000|800000|auto "
+		"duplex half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_all_port,
 		(void *)&cmd_config_speed_all_keyword,
@@ -1555,7 +1573,8 @@ static cmdline_parse_token_string_t cmd_config_speed_specific_item1 =
 								"speed");
 static cmdline_parse_token_string_t cmd_config_speed_specific_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, value1,
-				"10#100#1000#2500#5000#10000#25000#40000#50000#100000#200000#400000#auto");
+		"10#100#1000#2500#5000#10000#25000#40000#50000#"
+		"100000#200000#400000#800000#auto");
 static cmdline_parse_token_string_t cmd_config_speed_specific_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, item2,
 								"duplex");
@@ -1567,8 +1586,9 @@ static cmdline_parse_inst_t cmd_config_speed_specific = {
 	.f = cmd_config_speed_specific_parsed,
 	.data = NULL,
 	.help_str = "port config <port_id> speed "
-		"10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
-							"half|full|auto",
+		"10|100|1000|2500|5000|10000|25000|40000|50000|"
+		"100000|200000|400000|800000|auto "
+		"duplex half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_specific_port,
 		(void *)&cmd_config_speed_specific_keyword,
@@ -4063,7 +4083,7 @@ parse_item_list(const char *str, const char *item_name, unsigned int max_items,
 	value = 0;
 	nb_item = 0;
 	value_ok = 0;
-	for (i = 0; i < strnlen(str, STR_TOKEN_SIZE); i++) {
+	for (i = 0; i < strnlen(str, STR_MULTI_TOKEN_SIZE); i++) {
 		c = str[i];
 		if ((c >= '0') && (c <= '9')) {
 			value = (unsigned int) (value * 10 + (c - '0'));
@@ -4114,7 +4134,7 @@ parse_item_list(const char *str, const char *item_name, unsigned int max_items,
 struct cmd_set_list_result {
 	cmdline_fixed_string_t cmd_keyword;
 	cmdline_fixed_string_t list_name;
-	cmdline_fixed_string_t list_of_items;
+	cmdline_multi_string_t list_of_items;
 };
 
 static void cmd_set_list_parsed(void *parsed_result,
@@ -4163,7 +4183,7 @@ static cmdline_parse_token_string_t cmd_set_list_name =
 				 "corelist#portlist");
 static cmdline_parse_token_string_t cmd_set_list_of_items =
 	TOKEN_STRING_INITIALIZER(struct cmd_set_list_result, list_of_items,
-				 NULL);
+				 TOKEN_STRING_MULTI);
 
 static cmdline_parse_inst_t cmd_set_fwd_list = {
 	.f = cmd_set_list_parsed,
@@ -6207,6 +6227,106 @@ static void cmd_set_fwd_retry_mode_init(void)
 	token_struct->string_data.str = token;
 }
 
+/* *** set DCB forward TCs *** */
+struct cmd_set_dcb_fwd_tc_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t dcb;
+	cmdline_fixed_string_t fwd_tc;
+	uint8_t                tc_mask;
+};
+
+static void cmd_set_dcb_fwd_tc_parsed(void *parsed_result,
+				      __rte_unused struct cmdline *cl,
+				      __rte_unused void *data)
+{
+	struct cmd_set_dcb_fwd_tc_result *res = parsed_result;
+	int i;
+	if (res->tc_mask == 0) {
+		fprintf(stderr, "TC mask should not be zero!\n");
+		return;
+	}
+	printf("Enabled DCB forwarding TC list:");
+	dcb_fwd_tc_mask = res->tc_mask;
+	for (i = 0; i < RTE_ETH_8_TCS; i++) {
+		if (dcb_fwd_tc_mask & (1u << i))
+			printf(" %d", i);
+	}
+	printf("\n");
+}
+
+static cmdline_parse_token_string_t cmd_set_dcb_fwd_tc_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_dcb_fwd_tc_result,
+			set, "set");
+static cmdline_parse_token_string_t cmd_set_dcb_fwd_tc_dcb =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_dcb_fwd_tc_result,
+			dcb, "dcb");
+static cmdline_parse_token_string_t cmd_set_dcb_fwd_tc_fwdtc =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_dcb_fwd_tc_result,
+			fwd_tc, "fwd_tc");
+static cmdline_parse_token_num_t cmd_set_dcb_fwd_tc_tcmask =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_dcb_fwd_tc_result,
+			tc_mask, RTE_UINT8);
+
+static cmdline_parse_inst_t cmd_set_dcb_fwd_tc = {
+	.f = cmd_set_dcb_fwd_tc_parsed,
+	.data = NULL,
+	.help_str = "config DCB forwarding on specify TCs, if bit-n in tc-mask is 1, then TC-n's forwarding is enabled, and vice versa.",
+	.tokens = {
+		(void *)&cmd_set_dcb_fwd_tc_set,
+		(void *)&cmd_set_dcb_fwd_tc_dcb,
+		(void *)&cmd_set_dcb_fwd_tc_fwdtc,
+		(void *)&cmd_set_dcb_fwd_tc_tcmask,
+		NULL,
+	},
+};
+
+/* *** set DCB forward cores per TC *** */
+struct cmd_set_dcb_fwd_tc_cores_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t dcb;
+	cmdline_fixed_string_t fwd_tc_cores;
+	uint8_t                tc_cores;
+};
+
+static void cmd_set_dcb_fwd_tc_cores_parsed(void *parsed_result,
+					    __rte_unused struct cmdline *cl,
+					    __rte_unused void *data)
+{
+	struct cmd_set_dcb_fwd_tc_cores_result *res = parsed_result;
+	if (res->tc_cores == 0) {
+		fprintf(stderr, "Cores per-TC should not be zero!\n");
+		return;
+	}
+	dcb_fwd_tc_cores = res->tc_cores;
+	printf("Set cores-per-TC: %u\n", dcb_fwd_tc_cores);
+}
+
+static cmdline_parse_token_string_t cmd_set_dcb_fwd_tc_cores_set =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_dcb_fwd_tc_cores_result,
+			set, "set");
+static cmdline_parse_token_string_t cmd_set_dcb_fwd_tc_cores_dcb =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_dcb_fwd_tc_cores_result,
+			dcb, "dcb");
+static cmdline_parse_token_string_t cmd_set_dcb_fwd_tc_cores_fwdtccores =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_dcb_fwd_tc_cores_result,
+			fwd_tc_cores, "fwd_tc_cores");
+static cmdline_parse_token_num_t cmd_set_dcb_fwd_tc_cores_tccores =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_dcb_fwd_tc_cores_result,
+			tc_cores, RTE_UINT8);
+
+static cmdline_parse_inst_t cmd_set_dcb_fwd_tc_cores = {
+	.f = cmd_set_dcb_fwd_tc_cores_parsed,
+	.data = NULL,
+	.help_str = "config DCB forwarding cores per-TC, 1-means one core process all queues of a TC.",
+	.tokens = {
+		(void *)&cmd_set_dcb_fwd_tc_cores_set,
+		(void *)&cmd_set_dcb_fwd_tc_cores_dcb,
+		(void *)&cmd_set_dcb_fwd_tc_cores_fwdtccores,
+		(void *)&cmd_set_dcb_fwd_tc_cores_tccores,
+		NULL,
+	},
+};
+
 /* *** SET BURST TX DELAY TIME RETRY NUMBER *** */
 struct cmd_set_burst_tx_retry_result {
 	cmdline_fixed_string_t set;
@@ -8025,62 +8145,6 @@ static cmdline_parse_inst_t cmd_set_fwd_eth_peer = {
 	},
 };
 
-/* *** CONFIGURE QUEUE STATS COUNTER MAPPINGS *** */
-struct cmd_set_qmap_result {
-	cmdline_fixed_string_t set;
-	cmdline_fixed_string_t qmap;
-	cmdline_fixed_string_t what;
-	portid_t port_id;
-	uint16_t queue_id;
-	uint8_t map_value;
-};
-
-static void
-cmd_set_qmap_parsed(void *parsed_result,
-		       __rte_unused struct cmdline *cl,
-		       __rte_unused void *data)
-{
-	struct cmd_set_qmap_result *res = parsed_result;
-	int is_rx = (strcmp(res->what, "tx") == 0) ? 0 : 1;
-
-	set_qmap(res->port_id, (uint8_t)is_rx, res->queue_id, res->map_value);
-}
-
-static cmdline_parse_token_string_t cmd_setqmap_set =
-	TOKEN_STRING_INITIALIZER(struct cmd_set_qmap_result,
-				 set, "set");
-static cmdline_parse_token_string_t cmd_setqmap_qmap =
-	TOKEN_STRING_INITIALIZER(struct cmd_set_qmap_result,
-				 qmap, "stat_qmap");
-static cmdline_parse_token_string_t cmd_setqmap_what =
-	TOKEN_STRING_INITIALIZER(struct cmd_set_qmap_result,
-				 what, "tx#rx");
-static cmdline_parse_token_num_t cmd_setqmap_portid =
-	TOKEN_NUM_INITIALIZER(struct cmd_set_qmap_result,
-			      port_id, RTE_UINT16);
-static cmdline_parse_token_num_t cmd_setqmap_queueid =
-	TOKEN_NUM_INITIALIZER(struct cmd_set_qmap_result,
-			      queue_id, RTE_UINT16);
-static cmdline_parse_token_num_t cmd_setqmap_mapvalue =
-	TOKEN_NUM_INITIALIZER(struct cmd_set_qmap_result,
-			      map_value, RTE_UINT8);
-
-static cmdline_parse_inst_t cmd_set_qmap = {
-	.f = cmd_set_qmap_parsed,
-	.data = NULL,
-	.help_str = "set stat_qmap rx|tx <port_id> <queue_id> <map_value>: "
-		"Set statistics mapping value on tx|rx queue_id of port_id",
-	.tokens = {
-		(void *)&cmd_setqmap_set,
-		(void *)&cmd_setqmap_qmap,
-		(void *)&cmd_setqmap_what,
-		(void *)&cmd_setqmap_portid,
-		(void *)&cmd_setqmap_queueid,
-		(void *)&cmd_setqmap_mapvalue,
-		NULL,
-	},
-};
-
 /* *** SET OPTION TO HIDE ZERO VALUES FOR XSTATS  DISPLAY *** */
 struct cmd_set_xstats_hide_zero_result {
 	cmdline_fixed_string_t keyword;
@@ -9078,9 +9142,33 @@ static cmdline_parse_inst_t cmd_cfg_tunnel_udp_port = {
 
 /* ******************************************************************************** */
 
-struct cmd_dump_result {
+struct cmd_dump_simple_result {
 	cmdline_fixed_string_t dump;
+	cmdline_fixed_string_t obj;
+	cmdline_fixed_string_t name;
 };
+static cmdline_parse_token_string_t cmd_dump_simple_dump =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_simple_result, dump, "dump");
+static cmdline_parse_token_string_t cmd_dump_simple_obj =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_simple_result, obj,
+		"physmem#"
+		"socket_mem#"
+		"memzone#"
+		"struct_sizes#"
+		"ring#"
+		"mempool#"
+		"devargs#"
+		"lcores#"
+		"trace#"
+		"log_types"
+);
+static cmdline_parse_token_string_t cmd_dump_named_obj =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_simple_result, obj,
+		"ring#"
+		"mempool#"
+);
+static cmdline_parse_token_string_t cmd_dump_named_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_simple_result, name, NULL);
 
 static void
 dump_struct_sizes(void)
@@ -9091,7 +9179,6 @@ dump_struct_sizes(void)
 	DUMP_SIZE(struct rte_ring);
 #undef DUMP_SIZE
 }
-
 
 /* Dump the socket memory statistics on console */
 static void
@@ -9106,7 +9193,6 @@ dump_socket_mem(FILE *f)
 	unsigned int n_free = 0;
 	static size_t last_allocs;
 	static size_t last_total;
-
 
 	for (i = 0; i < RTE_MAX_NUMA_NODES; i++) {
 		if (rte_malloc_get_socket_stats(i, &socket_stats) ||
@@ -9142,113 +9228,203 @@ dump_socket_mem(FILE *f)
 	last_total = total;
 }
 
-static void cmd_dump_parsed(void *parsed_result,
-			    __rte_unused struct cmdline *cl,
-			    __rte_unused void *data)
+static void cmd_dump_simple_parsed(void *parsed_result,
+		struct cmdline *cl,
+		__rte_unused void *data)
 {
-	struct cmd_dump_result *res = parsed_result;
+	struct cmd_dump_simple_result *res = parsed_result;
 
-	if (!strcmp(res->dump, "dump_physmem"))
+	if (strcmp(res->obj, "physmem") == 0)
 		rte_dump_physmem_layout(stdout);
-	else if (!strcmp(res->dump, "dump_socket_mem"))
+	else if (strcmp(res->obj, "socket_mem") == 0)
 		dump_socket_mem(stdout);
-	else if (!strcmp(res->dump, "dump_memzone"))
+	else if (strcmp(res->obj, "memzone") == 0)
 		rte_memzone_dump(stdout);
-	else if (!strcmp(res->dump, "dump_struct_sizes"))
+	else if (strcmp(res->obj, "struct_sizes") == 0)
 		dump_struct_sizes();
-	else if (!strcmp(res->dump, "dump_ring"))
-		rte_ring_list_dump(stdout);
-	else if (!strcmp(res->dump, "dump_mempool"))
-		rte_mempool_list_dump(stdout);
-	else if (!strcmp(res->dump, "dump_devargs"))
+	else if (strcmp(res->obj, "ring") == 0) {
+		if (strcmp(res->name, "") == 0) {
+			rte_ring_list_dump(stdout);
+		} else {
+			struct rte_ring *r;
+			r = rte_ring_lookup(res->name);
+			if (r == NULL) {
+				cmdline_printf(cl, "Cannot find ring\n");
+				return;
+			}
+			rte_ring_dump(stdout, r);
+		}
+	} else if (strcmp(res->obj, "mempool") == 0) {
+		if (strcmp(res->name, "") == 0) {
+			rte_mempool_list_dump(stdout);
+		} else {
+			struct rte_mempool *mp;
+			mp = rte_mempool_lookup(res->name);
+			if (mp == NULL) {
+				cmdline_printf(cl, "Cannot find mempool\n");
+				return;
+			}
+			rte_mempool_dump(stdout, mp);
+		}
+	} else if (strcmp(res->obj, "devargs") == 0)
 		rte_devargs_dump(stdout);
-	else if (!strcmp(res->dump, "dump_lcores"))
+	else if (strcmp(res->obj, "lcores") == 0)
 		rte_lcore_dump(stdout);
-#ifndef RTE_EXEC_ENV_WINDOWS
-	else if (!strcmp(res->dump, "dump_trace"))
+	else if (strcmp(res->obj, "trace") == 0)
+#ifdef RTE_EXEC_ENV_WINDOWS
+		cmdline_printf(cl, "trace is not supported on Windows\n");
+#else
 		rte_trace_save();
 #endif
-	else if (!strcmp(res->dump, "dump_log_types"))
+	else if (strcmp(res->obj, "log_types") == 0)
 		rte_log_dump(stdout);
 }
 
-static cmdline_parse_token_string_t cmd_dump_dump =
-	TOKEN_STRING_INITIALIZER(struct cmd_dump_result, dump,
-		"" /* defined at init */);
-
-static void
-cmd_dump_init(void)
-{
-	cmd_dump_dump.string_data.str =
-		"dump_physmem#"
-		"dump_memzone#"
-		"dump_socket_mem#"
-		"dump_struct_sizes#"
-		"dump_ring#"
-		"dump_mempool#"
-		"dump_devargs#"
-		"dump_lcores#"
-#ifndef RTE_EXEC_ENV_WINDOWS
-		"dump_trace#"
-#endif
-		"dump_log_types";
-}
-
-static cmdline_parse_inst_t cmd_dump = {
-	.f = cmd_dump_parsed,  /* function to call */
-	.data = NULL,      /* 2nd arg of func */
-	.help_str = "Dump status",
-	.tokens = {        /* token list, NULL terminated */
-		(void *)&cmd_dump_dump,
+static cmdline_parse_inst_t cmd_dump_simple = {
+	.f = cmd_dump_simple_parsed,
+	.help_str = "Dump objects",
+	.tokens = {
+		(void *)&cmd_dump_simple_dump,
+		(void *)&cmd_dump_simple_obj,
+		NULL,
+	},
+};
+static cmdline_parse_inst_t cmd_dump_named = {
+	.f = cmd_dump_simple_parsed,
+	.help_str = "dump ring|mempool <name>: Dump one ring/mempool",
+	.tokens = {
+		(void *)&cmd_dump_simple_dump,
+		(void *)&cmd_dump_named_obj,
+		(void *)&cmd_dump_named_name,
 		NULL,
 	},
 };
 
-/* ******************************************************************************** */
-
-struct cmd_dump_one_result {
+struct cmd_dump_mbuf_history_result {
 	cmdline_fixed_string_t dump;
+	cmdline_fixed_string_t mbuf;
+	cmdline_fixed_string_t history;
+	cmdline_fixed_string_t obj;
 	cmdline_fixed_string_t name;
+	cmdline_fixed_string_t addr;
+	cmdline_fixed_string_t file;
 };
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_dump =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, dump, "dump");
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_mbuf =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, mbuf, "mbuf");
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_history =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, history, "history");
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_obj =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, obj, NULL);
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_pool =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, obj, "pool");
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, name, NULL);
+static cmdline_parse_token_string_t cmd_dump_mbuf_history_file =
+	TOKEN_STRING_INITIALIZER(struct cmd_dump_mbuf_history_result, file, NULL);
 
-static void cmd_dump_one_parsed(void *parsed_result, struct cmdline *cl,
-				__rte_unused void *data)
+static void cmd_dump_mbuf_history_parsed(void *parsed_result,
+		struct cmdline *cl,
+		__rte_unused void *data)
 {
-	struct cmd_dump_one_result *res = parsed_result;
+	struct cmd_dump_mbuf_history_result *res = parsed_result;
+	FILE *out = stdout;
 
-	if (!strcmp(res->dump, "dump_ring")) {
-		struct rte_ring *r;
-		r = rte_ring_lookup(res->name);
-		if (r == NULL) {
-			cmdline_printf(cl, "Cannot find ring\n");
+	if (strcmp(res->file, "") != 0) {
+		out = fopen(res->file, "w");
+		if (out == NULL) {
+			cmdline_printf(cl,
+					"Failed to open file '%s'\n",
+					res->file);
 			return;
 		}
-		rte_ring_dump(stdout, r);
-	} else if (!strcmp(res->dump, "dump_mempool")) {
-		struct rte_mempool *mp;
-		mp = rte_mempool_lookup(res->name);
-		if (mp == NULL) {
-			cmdline_printf(cl, "Cannot find mempool\n");
-			return;
-		}
-		rte_mempool_dump(stdout, mp);
 	}
+
+	if (strcmp(res->obj, "all") == 0) {
+		rte_mbuf_history_dump_all(out);
+		if (out != stdout)
+			cmdline_printf(cl,
+					"Dump written in '%s'\n",
+					res->file);
+	} else if (strcmp(res->obj, "pool") == 0) {
+		struct rte_mempool *mp = rte_mempool_lookup(res->name);
+		if (mp == NULL) {
+			cmdline_printf(cl,
+					"Failed to find mempool '%s'\n",
+					res->name);
+			return;
+		}
+		rte_mbuf_history_dump_mempool(out, mp);
+		if (out != stdout)
+			cmdline_printf(cl,
+					"Dump for mempool '%s' written in '%s'\n",
+					res->name, res->file);
+	} else {
+		struct rte_mbuf *mbuf;
+		uintptr_t mbuf_addr;
+		if (sscanf(res->obj, "0x%" SCNxPTR, &mbuf_addr) != 1) {
+			cmdline_printf(cl,
+					"Invalid mbuf pointer format. Use 0x<address>\n");
+			return;
+		}
+		mbuf = (struct rte_mbuf *)mbuf_addr;
+		rte_mbuf_history_dump(out, mbuf);
+		if (out != stdout)
+			cmdline_printf(cl,
+					"Dump for mbuf '%p' written in '%s'\n",
+					mbuf, res->file);
+	}
+
+	if (out != stdout)
+		fclose(out);
 }
 
-static cmdline_parse_token_string_t cmd_dump_one_dump =
-	TOKEN_STRING_INITIALIZER(struct cmd_dump_one_result, dump,
-				 "dump_ring#dump_mempool");
-
-static cmdline_parse_token_string_t cmd_dump_one_name =
-	TOKEN_STRING_INITIALIZER(struct cmd_dump_one_result, name, NULL);
-
-static cmdline_parse_inst_t cmd_dump_one = {
-	.f = cmd_dump_one_parsed,  /* function to call */
-	.data = NULL,      /* 2nd arg of func */
-	.help_str = "dump_ring|dump_mempool <name>: Dump one ring/mempool",
-	.tokens = {        /* token list, NULL terminated */
-		(void *)&cmd_dump_one_dump,
-		(void *)&cmd_dump_one_name,
+static cmdline_parse_inst_t cmd_dump_mbuf_history_stdout = {
+	.f = cmd_dump_mbuf_history_parsed,
+	.help_str = "dump mbuf history all|<address>",
+	.tokens = {
+		(void *)&cmd_dump_mbuf_history_dump,
+		(void *)&cmd_dump_mbuf_history_mbuf,
+		(void *)&cmd_dump_mbuf_history_history,
+		(void *)&cmd_dump_mbuf_history_obj,
+		NULL,
+	},
+};
+static cmdline_parse_inst_t cmd_dump_mbuf_history_to_file = {
+	.f = cmd_dump_mbuf_history_parsed,
+	.help_str = "dump mbuf history all|<address> [file]",
+	.tokens = {
+		(void *)&cmd_dump_mbuf_history_dump,
+		(void *)&cmd_dump_mbuf_history_mbuf,
+		(void *)&cmd_dump_mbuf_history_history,
+		(void *)&cmd_dump_mbuf_history_obj,
+		(void *)&cmd_dump_mbuf_history_file,
+		NULL,
+	},
+};
+static cmdline_parse_inst_t cmd_dump_mbuf_pool_history_stdout = {
+	.f = cmd_dump_mbuf_history_parsed,
+	.help_str = "dump mbuf pool history <name>",
+	.tokens = {
+		(void *)&cmd_dump_mbuf_history_dump,
+		(void *)&cmd_dump_mbuf_history_mbuf,
+		(void *)&cmd_dump_mbuf_history_pool,
+		(void *)&cmd_dump_mbuf_history_history,
+		(void *)&cmd_dump_mbuf_history_name,
+		NULL,
+	},
+};
+static cmdline_parse_inst_t cmd_dump_mbuf_pool_history_to_file = {
+	.f = cmd_dump_mbuf_history_parsed,
+	.help_str = "dump mbuf pool history <name> [file]",
+	.tokens = {
+		(void *)&cmd_dump_mbuf_history_dump,
+		(void *)&cmd_dump_mbuf_history_mbuf,
+		(void *)&cmd_dump_mbuf_history_pool,
+		(void *)&cmd_dump_mbuf_history_history,
+		(void *)&cmd_dump_mbuf_history_name,
+		(void *)&cmd_dump_mbuf_history_file,
 		NULL,
 	},
 };
@@ -11646,7 +11822,9 @@ cmd_load_from_file_parsed(
 {
 	struct cmd_cmdfile_result *res = parsed_result;
 
-	cmdline_read_from_file(res->filename);
+	if (cmdline_read_from_file(res->filename, false) != 0) {
+		fprintf(stderr, "Failed to load commands from file: %s\n", res->filename);
+	}
 }
 
 static cmdline_parse_inst_t cmd_load_from_file = {
@@ -11656,6 +11834,41 @@ static cmdline_parse_inst_t cmd_load_from_file = {
 	.tokens = {
 		(void *)&cmd_load_cmdfile,
 		(void *)&cmd_load_cmdfile_filename,
+		NULL,
+	},
+};
+
+/* command to load a file with echoing commands */
+struct cmd_load_echo_result {
+	cmdline_fixed_string_t load_echo;
+	cmdline_fixed_string_t filename;
+};
+
+/* CLI fields for file load with echo command */
+static cmdline_parse_token_string_t cmd_load_echo =
+	TOKEN_STRING_INITIALIZER(struct cmd_load_echo_result, load_echo, "load_echo");
+static cmdline_parse_token_string_t cmd_load_echo_filename =
+	TOKEN_STRING_INITIALIZER(struct cmd_load_echo_result, filename, NULL);
+
+static void
+cmd_load_echo_file_parsed(
+	void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
+{
+	struct cmd_load_echo_result *res = parsed_result;
+
+	if (cmdline_read_from_file(res->filename, true) != 0)
+		fprintf(stderr, "Failed to load commands from file: %s\n", res->filename);
+}
+
+static cmdline_parse_inst_t cmd_load_echo_file = {
+	.f = cmd_load_echo_file_parsed,
+	.data = NULL,
+	.help_str = "load_echo <filename>",
+	.tokens = {
+		(void *)&cmd_load_echo,
+		(void *)&cmd_load_echo_filename,
 		NULL,
 	},
 };
@@ -13865,6 +14078,7 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_help_long,
 	&cmd_quit,
 	&cmd_load_from_file,
+	&cmd_load_echo_file,
 	&cmd_showport,
 	&cmd_showqueue,
 	&cmd_showeeprom,
@@ -13892,6 +14106,8 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_set_fwd_mask,
 	&cmd_set_fwd_mode,
 	&cmd_set_fwd_retry_mode,
+	&cmd_set_dcb_fwd_tc,
+	&cmd_set_dcb_fwd_tc_cores,
 	&cmd_set_burst_tx_retry,
 	&cmd_set_promisc_mode_one,
 	&cmd_set_promisc_mode_all,
@@ -13942,7 +14158,6 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_stop,
 	&cmd_mac_addr,
 	&cmd_set_fwd_eth_peer,
-	&cmd_set_qmap,
 	&cmd_set_xstats_hide_zero,
 	&cmd_set_xstats_show_state,
 	&cmd_set_xstats_hide_disabled,
@@ -13990,8 +14205,12 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_config_rss_hash_key,
 	&cmd_config_rss_hash_algo,
 	&cmd_cleanup_txq_mbufs,
-	&cmd_dump,
-	&cmd_dump_one,
+	&cmd_dump_simple,
+	&cmd_dump_named,
+	&cmd_dump_mbuf_history_stdout,
+	&cmd_dump_mbuf_history_to_file,
+	&cmd_dump_mbuf_pool_history_stdout,
+	&cmd_dump_mbuf_pool_history_to_file,
 	&cmd_flow,
 	&cmd_show_port_meter_cap,
 	&cmd_add_port_meter_profile_srtcm,
@@ -14124,7 +14343,6 @@ init_cmdline(void)
 	/* initialize non-constant commands */
 	cmd_set_fwd_mode_init();
 	cmd_set_fwd_retry_mode_init();
-	cmd_dump_init();
 
 	count = 0;
 	for (i = 0; builtin_ctx[i] != NULL; i++)
@@ -14151,45 +14369,60 @@ init_cmdline(void)
 }
 
 /* read cmdline commands from file */
-void
-cmdline_read_from_file(const char *filename)
+int
+cmdline_read_from_file(const char *filename, bool echo)
 {
 	struct cmdline *cl;
 	int fd = -1;
+	int ret = 0;
 
 	/* cmdline_file_new does not produce any output
 	 * so when echoing is requested we open filename directly
 	 * and then pass that to cmdline_new with stdout as the output path.
 	 */
-	if (!echo_cmdline_file) {
+	if (!echo) {
 		cl = cmdline_file_new(main_ctx, "testpmd> ", filename);
 	} else {
+		/* use basename(filename) as prompt */
+		char prompt[32] = "[] ";
+
+		rte_basename(filename, &prompt[1], sizeof(prompt) - strlen(prompt));
+		strlcat(prompt, "] ", sizeof(prompt));
+
 		fd = open(filename, O_RDONLY);
 		if (fd < 0) {
 			fprintf(stderr, "Failed to open file %s: %s\n",
 				filename, strerror(errno));
-			return;
+			return -1;
 		}
 
-		cl = cmdline_new(main_ctx, "testpmd> ", fd, STDOUT_FILENO);
+		cl = cmdline_new(main_ctx, prompt, fd, STDOUT_FILENO);
 	}
 	if (cl == NULL) {
 		fprintf(stderr,
 			"Failed to create file based cmdline context: %s\n",
 			filename);
+		ret = -1;
 		goto end;
 	}
 
 	cmdline_interact(cl);
-	cmdline_quit(cl);
+	/* when done, if we have echo, we only need to print end of file,
+	 * but if no echo, we need to use printf and include the filename.
+	 */
+	if (echo)
+		cmdline_printf(cl, "<End-Of-File>\n");
+	else
+		printf("Finished reading CLI commands from %s\n", filename);
 
+	cmdline_quit(cl);
 	cmdline_free(cl);
 
-	printf("Read CLI commands from %s\n", filename);
 
 end:
 	if (fd >= 0)
 		close(fd);
+	return ret;
 }
 
 void

@@ -145,14 +145,16 @@ source_file_deps = {
     'test_pmd_ring.c': ['net_ring', 'ethdev', 'bus_vdev'],
     'test_pmd_ring_perf.c': ['ethdev', 'net_ring', 'bus_vdev'],
     'test_pmu.c': ['pmu'],
-    'test_power.c': ['power'],
-    'test_power_cpufreq.c': ['power'],
-    'test_power_intel_uncore.c': ['power'],
-    'test_power_kvm_vm.c': ['power'],
+    'test_power.c': ['power', 'power_acpi', 'power_kvm_vm', 'power_intel_pstate',
+        'power_amd_pstate', 'power_cppc'],
+    'test_power_cpufreq.c': ['power', 'power_acpi', 'power_intel_pstate', 'power_amd_pstate',
+        'power_cppc'],
+    'test_power_intel_uncore.c': ['power', 'power_intel_uncore'],
+    'test_power_kvm_vm.c': ['power', 'power_kvm_vm'],
     'test_prefetch.c': [],
     'test_ptr_compress.c': ['ptr_compress'],
     'test_rand_perf.c': [],
-    'test_rawdev.c': ['rawdev', 'bus_vdev'],
+    'test_rawdev.c': ['rawdev', 'bus_vdev', 'raw_skeleton'],
     'test_rcu_qsbr.c': ['rcu', 'hash'],
     'test_rcu_qsbr_perf.c': ['rcu', 'hash'],
     'test_reassembly_perf.c': ['net', 'ip_frag'],
@@ -278,6 +280,8 @@ if not is_windows
             build_by_default: true,
             install: false)
 endif
+
+subdir('bpf')
 
 subdir('test_cfgfiles')
 

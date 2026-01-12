@@ -634,6 +634,8 @@ device_infos_display_speeds(uint32_t speed_capa)
 		printf(" 200 Gbps  ");
 	if (speed_capa & RTE_ETH_LINK_SPEED_400G)
 		printf(" 400 Gbps  ");
+	if (speed_capa & RTE_ETH_LINK_SPEED_800G)
+		printf(" 800 Gbps  ");
 }
 
 void
@@ -852,6 +854,8 @@ port_infos_display(portid_t port_id)
 
 	if (!rte_eth_dev_get_mtu(port_id, &mtu))
 		printf("MTU: %u\n", mtu);
+	printf("Minimum MTU: %u\n", dev_info.min_mtu);
+	printf("Maximum MTU: %u\n", dev_info.max_mtu);
 
 	printf("Promiscuous mode: %s\n",
 	       rte_eth_promiscuous_get(port_id) ? "enabled" : "disabled");
@@ -1497,7 +1501,7 @@ port_flow_complain(struct rte_flow_error *error)
 		[RTE_FLOW_ERROR_TYPE_ACTION] = "specific action",
 	};
 	const char *errstr;
-	char buf[32];
+	char cause_buf[32] = "";
 	int err = rte_errno;
 
 	if ((unsigned int)error->type >= RTE_DIM(errstrlist) ||
@@ -1505,10 +1509,12 @@ port_flow_complain(struct rte_flow_error *error)
 		errstr = "unknown type";
 	else
 		errstr = errstrlist[error->type];
+
+	if (error->cause)
+		snprintf(cause_buf, sizeof(cause_buf), "cause: %p, ", error->cause);
+
 	fprintf(stderr, "%s(): Caught PMD error type %d (%s): %s%s: %s\n",
-		__func__, error->type, errstr,
-		error->cause ? (snprintf(buf, sizeof(buf), "cause: %p, ",
-					 error->cause), buf) : "",
+		__func__, error->type, errstr, cause_buf,
 		error->message ? error->message : "(no stated reason)",
 		rte_strerror(err));
 
@@ -2167,6 +2173,7 @@ port_action_handle_query(portid_t port_id, uint32_t id)
 	case RTE_FLOW_ACTION_TYPE_AGE:
 	case RTE_FLOW_ACTION_TYPE_COUNT:
 	case RTE_FLOW_ACTION_TYPE_QUOTA:
+	case RTE_FLOW_ACTION_TYPE_CONNTRACK:
 		break;
 	default:
 		fprintf(stderr,
@@ -5105,6 +5112,36 @@ rss_fwd_config_setup(void)
 	}
 }
 
+static int
+dcb_fwd_check_cores_per_tc(void)
+{
+	struct rte_eth_dcb_info dcb_info = {0};
+	uint32_t port, tc, vmdq_idx;
+
+	if (dcb_fwd_tc_cores == 1)
+		return 0;
+
+	for (port = 0; port < nb_fwd_ports; port++) {
+		(void)rte_eth_dev_get_dcb_info(fwd_ports_ids[port], &dcb_info);
+		for (tc = 0; tc < dcb_info.nb_tcs; tc++) {
+			for (vmdq_idx = 0; vmdq_idx < RTE_ETH_MAX_VMDQ_POOL; vmdq_idx++) {
+				if (dcb_info.tc_queue.tc_rxq[vmdq_idx][tc].nb_queue == 0)
+					break;
+				/* make sure nb_rx_queue can be divisible. */
+				if (dcb_info.tc_queue.tc_rxq[vmdq_idx][tc].nb_queue %
+					dcb_fwd_tc_cores)
+					return -1;
+				/* make sure nb_tx_queue can be divisible. */
+				if (dcb_info.tc_queue.tc_txq[vmdq_idx][tc].nb_queue %
+					dcb_fwd_tc_cores)
+					return -1;
+			}
+		}
+	}
+
+	return 0;
+}
+
 static uint16_t
 get_fwd_port_total_tc_num(void)
 {
@@ -5114,21 +5151,60 @@ get_fwd_port_total_tc_num(void)
 
 	for (i = 0; i < nb_fwd_ports; i++) {
 		(void)rte_eth_dev_get_dcb_info(fwd_ports_ids[i], &dcb_info);
-		total_tc_num += dcb_info.nb_tcs;
+		total_tc_num += rte_popcount32(dcb_fwd_tc_mask & ((1u << dcb_info.nb_tcs) - 1));
 	}
 
 	return total_tc_num;
 }
 
+static void
+dcb_fwd_tc_update_dcb_info(struct rte_eth_dcb_info *org_dcb_info)
+{
+	struct rte_eth_dcb_info dcb_info = {0};
+	uint32_t i, vmdq_idx;
+	uint32_t tc = 0;
+
+	if (dcb_fwd_tc_mask == DEFAULT_DCB_FWD_TC_MASK)
+		return;
+
+	/*
+	 * Use compress scheme to update dcb-info.
+	 * E.g. If org_dcb_info->nb_tcs is 4 and dcb_fwd_tc_mask is 0x8, it
+	 *      means only enable TC3, then the new dcb-info's nb_tcs is set to
+	 *      1, and also move corresponding tc_rxq and tc_txq info to new
+	 *      index.
+	 */
+	for (i = 0; i < org_dcb_info->nb_tcs; i++) {
+		if (!(dcb_fwd_tc_mask & (1u << i)))
+			continue;
+		for (vmdq_idx = 0; vmdq_idx < RTE_ETH_MAX_VMDQ_POOL; vmdq_idx++) {
+			dcb_info.tc_queue.tc_rxq[vmdq_idx][tc].base =
+				org_dcb_info->tc_queue.tc_rxq[vmdq_idx][i].base;
+			dcb_info.tc_queue.tc_rxq[vmdq_idx][tc].nb_queue =
+				org_dcb_info->tc_queue.tc_rxq[vmdq_idx][i].nb_queue;
+			dcb_info.tc_queue.tc_txq[vmdq_idx][tc].base =
+				org_dcb_info->tc_queue.tc_txq[vmdq_idx][i].base;
+			dcb_info.tc_queue.tc_txq[vmdq_idx][tc].nb_queue =
+				org_dcb_info->tc_queue.tc_txq[vmdq_idx][i].nb_queue;
+		}
+		tc++;
+	}
+	dcb_info.nb_tcs = tc;
+	*org_dcb_info = dcb_info;
+}
+
 /**
- * For the DCB forwarding test, each core is assigned on each traffic class.
+ * For the DCB forwarding test, each core is assigned on each traffic class
+ * defaultly:
+ *   Each core is assigned a multi-stream, each stream being composed of
+ *   a RX queue to poll on a RX port for input messages, associated with
+ *   a TX queue of a TX port where to send forwarded packets. All RX and
+ *   TX queues are mapping to the same traffic class.
+ *   If VMDQ and DCB co-exist, each traffic class on different POOLs share
+ *   the same core.
  *
- * Each core is assigned a multi-stream, each stream being composed of
- * a RX queue to poll on a RX port for input messages, associated with
- * a TX queue of a TX port where to send forwarded packets. All RX and
- * TX queues are mapping to the same traffic class.
- * If VMDQ and DCB co-exist, each traffic class on different POOLs share
- * the same core
+ * If user set cores-per-TC to other value (e.g. 2), then there will multiple
+ * cores to process one TC.
  */
 static void
 dcb_fwd_config_setup(void)
@@ -5136,9 +5212,10 @@ dcb_fwd_config_setup(void)
 	struct rte_eth_dcb_info rxp_dcb_info, txp_dcb_info;
 	portid_t txp, rxp = 0;
 	queueid_t txq, rxq = 0;
-	lcoreid_t  lc_id;
+	lcoreid_t  lc_id, target_lcores;
 	uint16_t nb_rx_queue, nb_tx_queue;
 	uint16_t i, j, k, sm_id = 0;
+	uint16_t sub_core_idx = 0;
 	uint16_t total_tc_num;
 	struct rte_port *port;
 	uint8_t tc = 0;
@@ -5169,21 +5246,41 @@ dcb_fwd_config_setup(void)
 		}
 	}
 
-	cur_fwd_config.nb_fwd_lcores = (lcoreid_t) nb_fwd_lcores;
+	ret = dcb_fwd_check_cores_per_tc();
+	if (ret != 0) {
+		fprintf(stderr, "Error: check forwarding cores-per-TC failed!\n");
+		cur_fwd_config.nb_fwd_lcores = 0;
+		return;
+	}
+
+	total_tc_num = get_fwd_port_total_tc_num();
+	if (total_tc_num == 0) {
+		fprintf(stderr, "Error: total forwarding TC num is zero!\n");
+		cur_fwd_config.nb_fwd_lcores = 0;
+		return;
+	}
+
+	target_lcores = (lcoreid_t)total_tc_num * (lcoreid_t)dcb_fwd_tc_cores;
+	if (nb_fwd_lcores < target_lcores) {
+		fprintf(stderr, "Error: the number of forwarding cores is insufficient!\n");
+		cur_fwd_config.nb_fwd_lcores = 0;
+		return;
+	}
+
+	cur_fwd_config.nb_fwd_lcores = target_lcores;
 	cur_fwd_config.nb_fwd_ports = nb_fwd_ports;
 	cur_fwd_config.nb_fwd_streams =
 		(streamid_t) (nb_rxq * cur_fwd_config.nb_fwd_ports);
-	total_tc_num = get_fwd_port_total_tc_num();
-	if (cur_fwd_config.nb_fwd_lcores > total_tc_num)
-		cur_fwd_config.nb_fwd_lcores = total_tc_num;
 
 	/* reinitialize forwarding streams */
 	init_fwd_streams();
 	sm_id = 0;
-	txp = 1;
+	txp = fwd_topology_tx_port_get(rxp);
 	/* get the dcb info on the first RX and TX ports */
 	(void)rte_eth_dev_get_dcb_info(fwd_ports_ids[rxp], &rxp_dcb_info);
+	dcb_fwd_tc_update_dcb_info(&rxp_dcb_info);
 	(void)rte_eth_dev_get_dcb_info(fwd_ports_ids[txp], &txp_dcb_info);
+	dcb_fwd_tc_update_dcb_info(&txp_dcb_info);
 
 	for (lc_id = 0; lc_id < cur_fwd_config.nb_fwd_lcores; lc_id++) {
 		fwd_lcores[lc_id]->stream_nb = 0;
@@ -5196,10 +5293,12 @@ dcb_fwd_config_setup(void)
 				break;
 			k = fwd_lcores[lc_id]->stream_nb +
 				fwd_lcores[lc_id]->stream_idx;
-			rxq = rxp_dcb_info.tc_queue.tc_rxq[i][tc].base;
-			txq = txp_dcb_info.tc_queue.tc_txq[i][tc].base;
-			nb_rx_queue = txp_dcb_info.tc_queue.tc_rxq[i][tc].nb_queue;
-			nb_tx_queue = txp_dcb_info.tc_queue.tc_txq[i][tc].nb_queue;
+			nb_rx_queue = rxp_dcb_info.tc_queue.tc_rxq[i][tc].nb_queue /
+						dcb_fwd_tc_cores;
+			nb_tx_queue = txp_dcb_info.tc_queue.tc_txq[i][tc].nb_queue /
+						dcb_fwd_tc_cores;
+			rxq = rxp_dcb_info.tc_queue.tc_rxq[i][tc].base + nb_rx_queue * sub_core_idx;
+			txq = txp_dcb_info.tc_queue.tc_txq[i][tc].base + nb_tx_queue * sub_core_idx;
 			for (j = 0; j < nb_rx_queue; j++) {
 				struct fwd_stream *fs;
 
@@ -5211,11 +5310,14 @@ dcb_fwd_config_setup(void)
 				fs->peer_addr = fs->tx_port;
 				fs->retry_enabled = retry_enabled;
 			}
-			fwd_lcores[lc_id]->stream_nb +=
-				rxp_dcb_info.tc_queue.tc_rxq[i][tc].nb_queue;
+			sub_core_idx++;
+			fwd_lcores[lc_id]->stream_nb += nb_rx_queue;
 		}
 		sm_id = (streamid_t) (sm_id + fwd_lcores[lc_id]->stream_nb);
+		if (sub_core_idx < dcb_fwd_tc_cores)
+			continue;
 
+		sub_core_idx = 0;
 		tc++;
 		if (tc < rxp_dcb_info.nb_tcs)
 			continue;
@@ -5228,13 +5330,12 @@ dcb_fwd_config_setup(void)
 			rxp++;
 		if (rxp >= nb_fwd_ports)
 			return;
+		txp = fwd_topology_tx_port_get(rxp);
 		/* get the dcb information on next RX and TX ports */
-		if ((rxp & 0x1) == 0)
-			txp = (portid_t) (rxp + 1);
-		else
-			txp = (portid_t) (rxp - 1);
 		rte_eth_dev_get_dcb_info(fwd_ports_ids[rxp], &rxp_dcb_info);
+		dcb_fwd_tc_update_dcb_info(&rxp_dcb_info);
 		rte_eth_dev_get_dcb_info(fwd_ports_ids[txp], &txp_dcb_info);
+		dcb_fwd_tc_update_dcb_info(&txp_dcb_info);
 	}
 }
 
@@ -6709,42 +6810,6 @@ tx_vlan_pvid_set(portid_t port_id, uint16_t vlan_id, int on)
 		return;
 
 	rte_eth_dev_set_vlan_pvid(port_id, vlan_id, on);
-}
-
-void
-set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_value)
-{
-	int ret;
-
-	if (port_id_is_invalid(port_id, ENABLED_WARN))
-		return;
-
-	if (is_rx ? (rx_queue_id_is_invalid(queue_id)) : (tx_queue_id_is_invalid(queue_id)))
-		return;
-
-	if (map_value >= RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-		fprintf(stderr, "map_value not in required range 0..%d\n",
-			RTE_ETHDEV_QUEUE_STAT_CNTRS - 1);
-		return;
-	}
-
-	if (!is_rx) { /* tx */
-		ret = rte_eth_dev_set_tx_queue_stats_mapping(port_id, queue_id,
-							     map_value);
-		if (ret) {
-			fprintf(stderr,
-				"failed to set tx queue stats mapping.\n");
-			return;
-		}
-	} else { /* rx */
-		ret = rte_eth_dev_set_rx_queue_stats_mapping(port_id, queue_id,
-							     map_value);
-		if (ret) {
-			fprintf(stderr,
-				"failed to set rx queue stats mapping.\n");
-			return;
-		}
-	}
 }
 
 void

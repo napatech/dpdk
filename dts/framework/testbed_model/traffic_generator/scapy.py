@@ -16,7 +16,7 @@ implement the methods for handling packets by sending commands into the interact
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
 from threading import Event, Thread
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from scapy.compat import base64_bytes
 from scapy.data import ETHER_TYPES, IP_PROTOS
@@ -57,7 +57,7 @@ class ScapyAsyncSniffer(PythonShell):
 
     def __init__(
         self, node: Node, recv_port: Port, name: str | None = None, privileged: bool = True
-    ):
+    ) -> None:
         """Sniffer constructor.
 
         Args:
@@ -170,12 +170,17 @@ class ScapyAsyncSniffer(PythonShell):
         finally:
             self.stop_capturing()
 
-    def start_application(self, prompt: str | None = None) -> None:
+    def start_application(self, prompt: str | None = None, add_to_shell_pool: bool = True) -> None:
         """Overrides :meth:`framework.remote_session.interactive_shell.start_application`.
 
         Prepares the Python shell for scapy and starts the sniffing in a new thread.
+
+        Args:
+            prompt: When starting up the application, expect this string at the end of stdout when
+                the application is ready. If :data:`None`, the class' default prompt will be used.
+            add_to_shell_pool: If :data:`True`, the shell will be registered to the shell pool.
         """
-        super().start_application(prompt)
+        super().start_application(prompt, add_to_shell_pool)
         self.send_command("from scapy.all import *")
         self._sniffer.start()
         self._is_sniffing.wait()
@@ -189,7 +194,7 @@ class ScapyAsyncSniffer(PythonShell):
         self._sniffer.join()
         super().close()
 
-    def _sniff(self, recv_port: Port):
+    def _sniff(self, recv_port: Port) -> None:
         """Sniff packets and use events and queue to communicate with the main thread.
 
         Raises:
@@ -229,7 +234,7 @@ class ScapyAsyncSniffer(PythonShell):
         self._logger.debug("Stop sniffing.")
         self.send_command("\x03")  # send Ctrl+C to trigger a KeyboardInterrupt in `sniff`.
 
-    def _set_packet_filter(self, filter_config: PacketFilteringConfig):
+    def _set_packet_filter(self, filter_config: PacketFilteringConfig) -> None:
         """Make and set a filtering function from `filter_config`.
 
         Args:
@@ -296,7 +301,7 @@ class ScapyTrafficGenerator(CapturingTrafficGenerator):
     #: Padding to add to the start of a line for python syntax compliance.
     _python_indentation: ClassVar[str] = " " * 4
 
-    def __init__(self, tg_node: Node, config: ScapyTrafficGeneratorConfig, **kwargs):
+    def __init__(self, tg_node: Node, config: ScapyTrafficGeneratorConfig, **kwargs: Any) -> None:
         """Extend the constructor with Scapy TG specifics.
 
         Initializes both the traffic generator and the interactive shell used to handle Scapy
@@ -315,24 +320,25 @@ class ScapyTrafficGenerator(CapturingTrafficGenerator):
 
         super().__init__(tg_node=tg_node, config=config, **kwargs)
 
-    def setup(self, topology: Topology):
+    def setup(self, topology: Topology) -> None:
         """Extends :meth:`.traffic_generator.TrafficGenerator.setup`.
 
         Binds the TG node ports to the kernel drivers and starts up the async sniffer.
         """
+        super().setup(topology)
         topology.configure_ports("tg", "kernel")
 
         self._sniffer = ScapyAsyncSniffer(
             self._tg_node, topology.tg_port_ingress, self._sniffer_name
         )
-        self._sniffer.start_application()
+        self._sniffer.start_application(add_to_shell_pool=False)
 
         self._shell = PythonShell(self._tg_node, "scapy", privileged=True)
-        self._shell.start_application()
+        self._shell.start_application(add_to_shell_pool=False)
         self._shell.send_command("from scapy.all import *")
         self._shell.send_command("from scapy.contrib.lldp import *")
 
-    def close(self):
+    def close(self) -> None:
         """Overrides :meth:`.traffic_generator.TrafficGenerator.close`.
 
         Stops the traffic generator and sniffer shells.

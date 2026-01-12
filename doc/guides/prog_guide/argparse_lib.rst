@@ -15,6 +15,8 @@ Features and Capabilities
 
 - Support parsing positional argument (which must take with required-value).
 
+- Support getopt-style argument reordering for non-flag arguments as an alternative to positional arguments.
+
 - Support automatic generate usage information.
 
 - Support issue errors when provide with invalid arguments.
@@ -23,6 +25,8 @@ Features and Capabilities
 
   #. autosave: used for parsing known value types;
   #. callback: will invoke user callback to parse.
+
+- Supports automatic help and usage information.
 
 Usage Guide
 -----------
@@ -113,16 +117,16 @@ the following mode is supported (take above ``--aaa`` as an example):
 For optional arguments which take required-value,
 the following two modes are supported (take above ``--bbb`` as an example):
 
-- The kv mode: ``--bbb=1234`` or ``-b=1234``.
+- The kv mode: ``--bbb=1234`` or ``-b=1234`` or ``-b1234``.
 
-- The split mode: ``--bbb 1234`` or ``-b 1234``.
+- The split mode: ``--bbb 1234`` or ``-b 1234`` or ``-b1234``.
 
 For optional arguments which take optional-value,
 the following two modes are supported (take above ``--ccc`` as an example):
 
 - The single mode: ``--ccc`` or ``-c``.
 
-- The kv mode: ``--ccc=123`` or ``-c=123``.
+- The kv mode: ``--ccc=123`` or ``-c=123`` or ``-c123```.
 
 For positional arguments which must take required-value,
 their values are parsing in the order defined.
@@ -158,6 +162,122 @@ both use this way, the parsing is as follows:
 - For argument ``ooo``, it is positional argument,
   the ``ooo_val`` will be set to user input's value.
 
+Support of non-flag/positional arguments
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+For arguments which are not flags (i.e. don't start with a hyphen '-'),
+there are two ways in which they can be handled by the library:
+
+#. Positional arguments: these are defined in the ``args`` array with a NULL ``short_name`` field,
+   and long_name field that does not start with a hyphen '-'.
+   They are parsed as required-value arguments.
+
+#. As ignored, or unhandled arguments: if the ``ignore_non_flag_args`` field in the ``rte_argparse`` object is set to true,
+   then any non-flag arguments will be ignored by the parser and moved to the end of the argument list.
+   In this mode, no positional arguments are allowed.
+   The return value from ``rte_argparse_parse()`` will indicate the position of the first ignored non-flag argument.
+
+Supported Value Types
+~~~~~~~~~~~~~~~~~~~~~
+
+The argparse library supports automatic parsing of several data types when using
+the autosave method. The parsed values are automatically converted from string
+input to the appropriate data type and stored in the ``val_saver`` field.
+
+Integer Types
+^^^^^^^^^^^^^
+
+The library supports parsing various integer types:
+
+- ``RTE_ARGPARSE_VALUE_TYPE_INT`` - signed integer
+- ``RTE_ARGPARSE_VALUE_TYPE_U8`` - unsigned 8-bit integer
+- ``RTE_ARGPARSE_VALUE_TYPE_U16`` - unsigned 16-bit integer
+- ``RTE_ARGPARSE_VALUE_TYPE_U32`` - unsigned 32-bit integer
+- ``RTE_ARGPARSE_VALUE_TYPE_U64`` - unsigned 64-bit integer
+
+.. code-block:: C
+
+   static int my_int;
+   static uint16_t my_port;
+   static uint32_t my_count;
+
+   static struct rte_argparse obj = {
+      .args = {
+         { "--number", "-n", "Integer value", &my_int, NULL, RTE_ARGPARSE_VALUE_REQUIRED, RTE_ARGPARSE_VALUE_TYPE_INT },
+         { "--port", "-p", "Port number", &my_port, NULL, RTE_ARGPARSE_VALUE_REQUIRED, RTE_ARGPARSE_VALUE_TYPE_U16 },
+         { "--count", "-c", "Count value", &my_count, (void *)1000, RTE_ARGPARSE_VALUE_OPTIONAL, RTE_ARGPARSE_VALUE_TYPE_U32 },
+         ARGPARSE_ARG_END(),
+      },
+   };
+
+String Type
+^^^^^^^^^^^
+
+String arguments are parsed using ``RTE_ARGPARSE_VALUE_TYPE_STR``.
+When using this type, the input value is saved to the provided pointer without any parsing or validation.
+
+.. code-block:: C
+
+   static const char *my_string;
+
+   static struct rte_argparse obj = {
+      .args = {
+         { "--name", "-n", "Name string", &my_string, NULL, RTE_ARGPARSE_VALUE_REQUIRED, RTE_ARGPARSE_VALUE_TYPE_STR },
+         ARGPARSE_ARG_END(),
+      },
+   };
+
+Boolean Type
+^^^^^^^^^^^^
+
+Boolean arguments are parsed using ``RTE_ARGPARSE_VALUE_TYPE_BOOL`` and accept the following input formats:
+
+- ``true``, ``false`` (case-sensitive)
+- ``1``, ``0`` (numeric format)
+
+.. code-block:: C
+
+   static bool my_flag;
+
+   static struct rte_argparse obj = {
+      .args = {
+         { "--enable", "-e", "Enable feature", &my_flag, NULL, RTE_ARGPARSE_VALUE_REQUIRED, RTE_ARGPARSE_VALUE_TYPE_BOOL },
+         ARGPARSE_ARG_END(),
+      },
+   };
+
+Corelist Type
+^^^^^^^^^^^^^
+
+The argparse library supports automatic parsing of CPU core lists using the
+``RTE_ARGPARSE_VALUE_TYPE_CORELIST`` value type. This feature allows users to
+specify CPU cores in a flexible format similar to other DPDK applications.
+
+.. code-block:: C
+
+   #include <rte_os.h>  /* for CPU set operations */
+
+   static rte_cpuset_t cores;
+
+   static struct rte_argparse obj = {
+      .args = {
+         { "--cores", "-c", "CPU cores to use", &cores, NULL, RTE_ARGPARSE_VALUE_REQUIRED, RTE_ARGPARSE_VALUE_TYPE_CORELIST },
+         ARGPARSE_ARG_END(),
+      },
+   };
+
+The corelist parsing supports the following input formats:
+
+- **Single core**: ``--cores 5`` (sets core 5)
+- **Multiple cores**: ``--cores 1,2,5`` (sets cores 1, 2, and 5)
+- **Core ranges**: ``--cores 1-5`` (sets cores 1, 2, 3, 4, and 5)
+- **Mixed format**: ``--cores 0,2-4,7`` (sets cores 0, 2, 3, 4, and 7)
+- **Reverse ranges**: ``--cores 5-1`` (equivalent to 1-5, sets cores 1, 2, 3, 4, and 5)
+- **Empty corelist**: ``--cores ""`` (sets no cores)
+
+The parsed result is stored in an ``rte_cpuset_t`` structure that can be used
+with standard CPU set operations.
+
 Parsing by callback way
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -165,8 +285,8 @@ It could also choose to use callback to parse,
 just define a unique index for the argument
 and make the ``val_save`` field to be NULL also zero value-type.
 
-In the above example, the arguments ``--ddd``/``--eee``/``--fff`` and ``ppp``
-both use this way.
+In the example at the top of this section,
+the arguments ``--ddd``/``--eee``/``--fff`` and ``ppp`` all use this way.
 
 Multiple times argument
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -193,3 +313,17 @@ Then the user input could contain multiple ``--xyz`` arguments.
 
    The multiple times argument only support with optional argument
    and must be parsed by callback way.
+
+Help and Usage Information
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The argparse library supports automatic generation of help and usage information.
+When the input arguments include ``-h`` or ``--help``,
+it will print the usage information to standard output.
+If the default help output is not what is wanted,
+the user can provide a custom help printing function by setting the ``print_help`` field in the ``rte_argparse`` object.
+(If this field is set to NULL, the default help printing function will be used.)
+
+If the custom help printing function wants to use the text produced by the default help function,
+it can call the function ``rte_argparse_print_help()`` to get the help text printed to an output stream,
+for example: stdout or stderr.

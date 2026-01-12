@@ -23,7 +23,7 @@ foreach libname:libnames
     if not lib.found() and not static_ibverbs
         lib = cc.find_library(libname, required:false)
     endif
-    if lib.found()
+    if lib.found() and cc.links(min_c_code, dependencies: lib)
         libs += lib
         if not static_ibverbs and not dlopen_ibverbs
             ext_deps += lib
@@ -47,7 +47,7 @@ endif
 
 libmtcr_ul_found = false
 lib = cc.find_library('mtcr_ul', required:false)
-if lib.found()
+if lib.found() and cc.links(min_c_code, dependencies: lib)
     libmtcr_ul_found = true
     ext_deps += lib
 endif
@@ -213,6 +213,8 @@ has_sym_args = [
             'ibv_is_fork_initialized'],
         [ 'HAVE_IBV_DEVICE_ATTR_ESW_MGR_REG_C0', 'infiniband/mlx5dv.h',
             'MLX5DV_CONTEXT_MASK_REG_C0' ],
+        [ 'HAVE_MLX5DV_FLOW_ACTION_COUNTERS_DEVX_WITH_OFFSET', 'infiniband/mlx5dv.h',
+            'MLX5DV_FLOW_ACTION_COUNTERS_DEVX_WITH_OFFSET' ],
 ]
 if  libmtcr_ul_found
     has_sym_args += [

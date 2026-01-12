@@ -2,13 +2,13 @@
  * Copyright (c) 2023 Red Hat, Inc.
  */
 
+#include <uapi/linux/vduse.h>
+
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <fcntl.h>
 
-
-#include <uapi/linux/vduse.h>
 #include <linux/virtio_net.h>
 
 #include <sys/ioctl.h>
@@ -141,7 +141,7 @@ vduse_vring_setup(struct virtio_net *dev, unsigned int index, bool reconnect)
 {
 	struct vhost_virtqueue *vq = dev->virtqueue[index];
 	struct vhost_vring_addr *ra = &vq->ring_addrs;
-	struct vduse_vq_info vq_info;
+	struct vduse_vq_info vq_info = { 0 };
 	struct vduse_vq_eventfd vq_efd;
 	int ret;
 
@@ -270,6 +270,55 @@ vduse_vring_cleanup(struct virtio_net *dev, unsigned int index)
 	vq->size = 0;
 	vq->last_used_idx = 0;
 	vq->last_avail_idx = 0;
+}
+
+/*
+ * Tests show that virtqueues get ready at the first retry at worst,
+ * but let's be on the safe side and allow more retries.
+ */
+#define VDUSE_VQ_READY_POLL_MAX_RETRIES 100
+
+static int
+vduse_wait_for_virtqueues_ready(struct virtio_net *dev)
+{
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < dev->nr_vring; i++) {
+		int retry_count = 0;
+
+		while (retry_count < VDUSE_VQ_READY_POLL_MAX_RETRIES) {
+			struct vduse_vq_info vq_info = { 0 };
+
+			vq_info.index = i;
+			ret = ioctl(dev->vduse_dev_fd, VDUSE_VQ_GET_INFO, &vq_info);
+			if (ret) {
+				VHOST_CONFIG_LOG(dev->ifname, ERR,
+					"Failed to get VQ %u info while polling ready state: %s",
+					i, strerror(errno));
+				return -1;
+			}
+
+			if (vq_info.ready) {
+				VHOST_CONFIG_LOG(dev->ifname, DEBUG,
+					"VQ %u is ready after %u retries", i, retry_count);
+				break;
+			}
+
+			retry_count++;
+			usleep(1000);
+		}
+
+		if (retry_count >= VDUSE_VQ_READY_POLL_MAX_RETRIES) {
+			VHOST_CONFIG_LOG(dev->ifname, ERR,
+				"VQ %u ready state polling timeout after %u retries",
+				i, VDUSE_VQ_READY_POLL_MAX_RETRIES);
+			return -1;
+		}
+	}
+
+	VHOST_CONFIG_LOG(dev->ifname, INFO, "All virtqueues are ready after polling");
+	return 0;
 }
 
 static void
@@ -414,10 +463,18 @@ vduse_events_handler(int fd, void *arg, int *close __rte_unused)
 	}
 
 	if ((old_status ^ dev->status) & VIRTIO_DEVICE_STATUS_DRIVER_OK) {
-		if (dev->status & VIRTIO_DEVICE_STATUS_DRIVER_OK)
+		if (dev->status & VIRTIO_DEVICE_STATUS_DRIVER_OK) {
+			/* Poll virtqueues ready states before starting device */
+			ret = vduse_wait_for_virtqueues_ready(dev);
+			if (ret < 0) {
+				VHOST_CONFIG_LOG(dev->ifname, ERR,
+					"Failed to wait for virtqueues ready, aborting device start");
+				return;
+			}
 			vduse_device_start(dev, false);
-		else
+		} else {
 			vduse_device_stop(dev);
+		}
 	}
 
 	VHOST_CONFIG_LOG(dev->ifname, INFO, "Request %s (%u) handled successfully",
@@ -615,7 +672,7 @@ out_err:
 }
 
 int
-vduse_device_create(const char *path, bool compliant_ol_flags)
+vduse_device_create(const char *path, bool compliant_ol_flags, bool extbuf, bool linearbuf)
 {
 	int control_fd, dev_fd, vid, ret;
 	uint32_t i, max_queue_pairs, total_queues;
@@ -759,6 +816,12 @@ vduse_device_create(const char *path, bool compliant_ol_flags)
 	}
 
 	vhost_setup_virtio_net(dev->vid, true, compliant_ol_flags, true, true);
+
+	if (extbuf)
+		vhost_enable_extbuf(dev->vid);
+
+	if (linearbuf)
+		vhost_enable_linearbuf(dev->vid);
 
 	for (i = 0; i < total_queues; i++) {
 		struct vduse_vq_config vq_cfg = { 0 };

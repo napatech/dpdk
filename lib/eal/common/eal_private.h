@@ -73,6 +73,27 @@ struct rte_config {
 struct rte_config *rte_eal_get_configuration(void);
 
 /**
+ * Put the argument list into a structure.
+ *
+ * This allows the arguments to then be processed out-of-order.
+ *
+ * @return
+ *  - 0 on success
+ * - Negative on error
+ */
+int eal_collate_args(int argc, char **argv);
+
+/**
+ * Convert an rte_cpuset_t to string form suitable for parsing by argparse.
+ *
+ * @param cpuset
+ *   The cpuset to convert to string form.
+ * @return
+ *   String representation of the cpuset (caller must free), or NULL on error.
+ */
+char *eal_cpuset_to_str(const rte_cpuset_t *cpuset);
+
+/**
  * Initialize the memzone subsystem (private to eal).
  *
  * @return

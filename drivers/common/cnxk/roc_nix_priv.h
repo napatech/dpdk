@@ -41,7 +41,7 @@ struct nix_qint {
 };
 
 /* Traffic Manager */
-#define NIX_TM_MAX_HW_TXSCHQ 1024
+#define NIX_TM_MAX_HW_TXSCHQ 2048
 #define NIX_TM_HW_ID_INVALID UINT32_MAX
 #define NIX_TM_CHAN_INVALID UINT16_MAX
 
@@ -138,6 +138,8 @@ struct nix {
 	uint16_t bpid[NIX_MAX_CHAN];
 	struct nix_qint *qints_mem;
 	struct nix_qint *cints_mem;
+	uint64_t supported_link_modes;
+	uint64_t advertised_link_modes;
 	uint8_t configured_qints;
 	uint8_t configured_cints;
 	uint8_t exact_match_ena;
@@ -152,6 +154,7 @@ struct nix {
 	uint8_t lso_tsov4_idx;
 	uint8_t lso_udp_tun_idx[ROC_NIX_LSO_TUN_MAX];
 	uint8_t lso_tun_idx[ROC_NIX_LSO_TUN_MAX];
+	uint16_t lso_ipv4_idx;
 	uint8_t lf_rx_stats;
 	uint8_t lf_tx_stats;
 	uint8_t rx_chan_cnt;
@@ -387,6 +390,8 @@ nix_tm_tree2str(enum roc_nix_tm_tree tree)
 		return "Rate Limit Tree";
 	else if (tree == ROC_NIX_TM_PFC)
 		return "PFC Tree";
+	else if (tree == ROC_NIX_TM_SDP)
+		return "SDP Tree";
 	else if (tree == ROC_NIX_TM_USER)
 		return "User Tree";
 	return "???";

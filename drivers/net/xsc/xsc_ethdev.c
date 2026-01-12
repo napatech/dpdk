@@ -2,7 +2,9 @@
  * Copyright 2025 Yunsilicon Technology Co., Ltd.
  */
 
+#include <rte_dev_info.h>
 #include <ethdev_pci.h>
+#include <rte_interrupts.h>
 
 #include "xsc_log.h"
 #include "xsc_defs.h"
@@ -92,8 +94,9 @@ xsc_ethdev_txq_release(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 	struct xsc_txq_data *txq_data = xsc_txq_get(priv, idx);
+	uint8_t txq_state = dev->data->tx_queue_state[idx];
 
-	if (txq_data == NULL)
+	if (txq_data == NULL || txq_state == RTE_ETH_QUEUE_STATE_STOPPED)
 		return;
 
 	xsc_dev_set_qpsetid(priv->xdev, txq_data->qpn, 0);
@@ -101,10 +104,7 @@ xsc_ethdev_txq_release(struct rte_eth_dev *dev, uint16_t idx)
 	rte_free(txq_data->fcqs);
 	txq_data->fcqs = NULL;
 	xsc_txq_elts_free(txq_data);
-	rte_free(txq_data);
-	(*priv->txqs)[idx] = NULL;
 
-	dev->data->tx_queues[idx] = NULL;
 	dev->data->tx_queue_state[idx] = RTE_ETH_QUEUE_STATE_STOPPED;
 }
 
@@ -113,15 +113,14 @@ xsc_ethdev_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 {
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 	struct xsc_rxq_data *rxq_data = xsc_rxq_get(priv, idx);
+	uint8_t rxq_state = dev->data->rx_queue_state[idx];
 
-	if (rxq_data == NULL)
+	if (rxq_data == NULL || rxq_state == RTE_ETH_QUEUE_STATE_STOPPED)
 		return;
+
 	xsc_rxq_rss_obj_release(priv->xdev, rxq_data);
 	xsc_rxq_elts_free(rxq_data);
-	rte_free(rxq_data);
-	(*priv->rxqs)[idx] = NULL;
 
-	dev->data->rx_queues[idx] = NULL;
 	dev->data->rx_queue_state[idx] = RTE_ETH_QUEUE_STATE_STOPPED;
 }
 
@@ -143,6 +142,7 @@ xsc_ethdev_enable(struct rte_eth_dev *dev)
 	struct xsc_txq_data *txq;
 	struct xsc_repr_port *repr;
 	struct xsc_repr_info *repr_info;
+	uint8_t mac_filter_en = !dev->data->promiscuous;
 
 	if (priv->funcid_type != XSC_PHYPORT_MAC_FUNCID)
 		return -ENODEV;
@@ -179,7 +179,8 @@ xsc_ethdev_enable(struct rte_eth_dev *dev)
 		xsc_dev_create_vfos_baselp(priv->xdev);
 		xsc_dev_create_epat(priv->xdev, local_dstinfo, pcie_logic_port,
 				    rx_qpn - hwinfo->raw_rss_qp_id_base,
-				    priv->num_rq, &priv->rss_conf);
+				    priv->num_rq, &priv->rss_conf,
+				    mac_filter_en, priv->mac[0].addr_bytes);
 		xsc_dev_create_pct(priv->xdev, repr_id, logical_port, peer_dstinfo);
 		xsc_dev_create_pct(priv->xdev, repr_id, peer_logicalport, local_dstinfo);
 	} else {
@@ -188,7 +189,8 @@ xsc_ethdev_enable(struct rte_eth_dev *dev)
 			xsc_dev_create_ipat(priv->xdev, logical_port, peer_dstinfo);
 		xsc_dev_vf_modify_epat(priv->xdev, local_dstinfo,
 				       rx_qpn - hwinfo->raw_rss_qp_id_base,
-				       priv->num_rq, &priv->rss_conf);
+				       priv->num_rq, &priv->rss_conf,
+				       mac_filter_en, priv->mac[0].addr_bytes);
 	}
 
 	return 0;
@@ -202,8 +204,6 @@ xsc_rxq_stop(struct rte_eth_dev *dev)
 
 	for (i = 0; i != priv->num_rq; ++i)
 		xsc_ethdev_rxq_release(dev, i);
-	priv->rxqs = NULL;
-	priv->flags &= ~XSC_FLAG_RX_QUEUE_INIT;
 }
 
 static void
@@ -214,8 +214,6 @@ xsc_txq_stop(struct rte_eth_dev *dev)
 
 	for (i = 0; i != priv->num_sq; ++i)
 		xsc_ethdev_txq_release(dev, i);
-	priv->txqs = NULL;
-	priv->flags &= ~XSC_FLAG_TX_QUEUE_INIT;
 }
 
 static int
@@ -223,23 +221,16 @@ xsc_txq_start(struct xsc_ethdev_priv *priv)
 {
 	struct xsc_txq_data *txq_data;
 	struct rte_eth_dev *dev = priv->eth_dev;
-	uint64_t offloads = dev->data->dev_conf.txmode.offloads;
 	uint16_t i;
 	int ret;
 	size_t size;
-
-	if (priv->flags & XSC_FLAG_TX_QUEUE_INIT) {
-		for (i = 0; i != priv->num_sq; ++i)
-			dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
-		return 0;
-	}
 
 	for (i = 0; i != priv->num_sq; ++i) {
 		txq_data = xsc_txq_get(priv, i);
 		if (txq_data == NULL)
 			goto error;
 		xsc_txq_elts_alloc(txq_data);
-		ret = xsc_txq_obj_new(priv->xdev, txq_data, offloads, i);
+		ret = xsc_txq_obj_new(priv->xdev, txq_data, i);
 		if (ret < 0)
 			goto error;
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
@@ -255,7 +246,6 @@ xsc_txq_start(struct xsc_ethdev_priv *priv)
 		}
 	}
 
-	priv->flags |= XSC_FLAG_TX_QUEUE_INIT;
 	return 0;
 
 error:
@@ -267,32 +257,25 @@ static int
 xsc_rxq_start(struct xsc_ethdev_priv *priv)
 {
 	struct xsc_rxq_data *rxq_data;
-	struct rte_eth_dev *dev = priv->eth_dev;
 	uint16_t i;
 	int ret;
-
-	if (priv->flags & XSC_FLAG_RX_QUEUE_INIT) {
-		for (i = 0; i != priv->num_sq; ++i)
-			dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
-		return 0;
-	}
 
 	for (i = 0; i != priv->num_rq; ++i) {
 		rxq_data = xsc_rxq_get(priv, i);
 		if (rxq_data == NULL)
 			goto error;
-		if (dev->data->rx_queue_state[i] != RTE_ETH_QUEUE_STATE_STARTED) {
-			ret = xsc_rxq_elts_alloc(rxq_data);
-			if (ret != 0)
-				goto error;
-		}
+		ret = xsc_rxq_elts_alloc(rxq_data);
+		if (ret != 0)
+			goto error;
 	}
 
 	ret = xsc_rxq_rss_obj_new(priv, priv->dev_data->port_id);
 	if (ret != 0)
 		goto error;
 
-	priv->flags |= XSC_FLAG_RX_QUEUE_INIT;
+	for (i = 0; i != priv->num_rq; ++i)
+		priv->dev_data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+
 	return 0;
 error:
 	/* Queue resources are released by xsc_ethdev_start calling the stop interface */
@@ -343,20 +326,14 @@ error:
 static int
 xsc_ethdev_stop(struct rte_eth_dev *dev)
 {
-	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
-	uint16_t i;
-
 	PMD_DRV_LOG(DEBUG, "Port %u stopping", dev->data->port_id);
 	dev->data->dev_started = 0;
 	dev->rx_pkt_burst = rte_eth_pkt_burst_dummy;
 	dev->tx_pkt_burst = rte_eth_pkt_burst_dummy;
 	rte_wmb();
 
-	rte_delay_us_sleep(1000 * priv->num_rq);
-	for (i = 0; i < priv->num_rq; ++i)
-		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
-	for (i = 0; i < priv->num_sq; ++i)
-		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+	xsc_txq_stop(dev);
+	xsc_rxq_stop(dev);
 
 	return 0;
 }
@@ -364,6 +341,9 @@ xsc_ethdev_stop(struct rte_eth_dev *dev)
 static int
 xsc_ethdev_close(struct rte_eth_dev *dev)
 {
+	int idx;
+	struct xsc_rxq_data *rxq_data;
+	struct xsc_txq_data *txq_data;
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 
 	PMD_DRV_LOG(DEBUG, "Port %u closing", dev->data->port_id);
@@ -374,7 +354,24 @@ xsc_ethdev_close(struct rte_eth_dev *dev)
 	xsc_txq_stop(dev);
 	xsc_rxq_stop(dev);
 
+	for (idx = 0; idx < priv->num_rq; idx++) {
+		rxq_data = xsc_rxq_get(priv, idx);
+		rte_free(rxq_data);
+		dev->data->rx_queues[idx] = NULL;
+	}
+
+	for (idx = 0; idx < priv->num_sq; idx++) {
+		txq_data = xsc_txq_get(priv, idx);
+		rte_free(txq_data);
+		dev->data->tx_queues[idx] = NULL;
+	}
+
+	priv->rxqs = NULL;
+	priv->txqs = NULL;
+
 	rte_free(priv->rss_conf.rss_key);
+	if (!xsc_dev_is_vf(priv->xdev))
+		xsc_dev_intr_handler_uninstall(priv->xdev);
 	xsc_dev_close(priv->xdev, priv->representor_id);
 	dev->data->mac_addrs = NULL;
 	return 0;
@@ -386,7 +383,9 @@ xsc_ethdev_set_link_up(struct rte_eth_dev *dev)
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 	struct xsc_dev *xdev = priv->xdev;
 
-	return xsc_dev_set_link_up(xdev);
+	if (xsc_dev_is_vf(xdev))
+		return -ENOTSUP;
+	return xsc_dev_link_status_set(xdev, RTE_ETH_LINK_UP);
 }
 
 static int
@@ -395,24 +394,26 @@ xsc_ethdev_set_link_down(struct rte_eth_dev *dev)
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 	struct xsc_dev *xdev = priv->xdev;
 
-	return xsc_dev_set_link_down(xdev);
+	if (xsc_dev_is_vf(xdev))
+		return -ENOTSUP;
+	return xsc_dev_link_status_set(xdev, RTE_ETH_LINK_DOWN);
 }
 
 static int
-xsc_ethdev_link_update(struct rte_eth_dev *dev,
-		       int wait_to_complete)
+xsc_ethdev_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 {
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 	struct xsc_dev *xdev = priv->xdev;
+	struct rte_eth_link link = { };
 	int ret = 0;
 
-	ret = xsc_dev_link_update(xdev, priv->funcid_type, wait_to_complete);
-	if (ret == 0) {
-		dev->data->dev_link = xdev->pf_dev_link;
-		dev->data->dev_link.link_autoneg = !(dev->data->dev_conf.link_speeds &
-				  RTE_ETH_LINK_SPEED_FIXED);
-	}
-	return ret;
+	RTE_SET_USED(wait_to_complete);
+	ret = xsc_dev_link_get(xdev, &link);
+	if (ret != 0)
+		return ret;
+	rte_eth_linkstatus_set(dev, &link);
+
+	return 0;
 }
 
 static uint64_t
@@ -576,7 +577,8 @@ xsc_ethdev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 }
 
 static int
-xsc_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+xsc_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		struct eth_queue_stats *qstats)
 {
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
 	uint32_t rxqs_n = priv->num_rq;
@@ -591,10 +593,10 @@ xsc_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			continue;
 
 		idx = rxq->idx;
-		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_ipackets[idx] += rxq->stats.rx_pkts;
-			stats->q_ibytes[idx] += rxq->stats.rx_bytes;
-			stats->q_errors[idx] += rxq->stats.rx_errors +
+		if (qstats != NULL && idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_ipackets[idx] += rxq->stats.rx_pkts;
+			qstats->q_ibytes[idx] += rxq->stats.rx_bytes;
+			qstats->q_errors[idx] += rxq->stats.rx_errors +
 						rxq->stats.rx_nombuf;
 		}
 		stats->ipackets += rxq->stats.rx_pkts;
@@ -609,10 +611,10 @@ xsc_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			continue;
 
 		idx = txq->idx;
-		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_opackets[idx] += txq->stats.tx_pkts;
-			stats->q_obytes[idx] += txq->stats.tx_bytes;
-			stats->q_errors[idx] += txq->stats.tx_errors;
+		if (qstats != NULL && idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_opackets[idx] += txq->stats.tx_pkts;
+			qstats->q_obytes[idx] += txq->stats.tx_bytes;
+			qstats->q_errors[idx] += txq->stats.tx_errors;
 		}
 		stats->opackets += txq->stats.tx_pkts;
 		stats->obytes += txq->stats.tx_bytes;
@@ -674,6 +676,183 @@ xsc_ethdev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac, uin
 	return 0;
 }
 
+static int
+xsc_set_promiscuous(struct rte_eth_dev *dev, uint8_t mac_filter_en)
+{
+	int repr_id;
+	struct xsc_repr_port *repr;
+	struct xsc_repr_info *repr_info;
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
+
+	repr_id = priv->representor_id;
+	repr = &priv->xdev->repr_ports[repr_id];
+	repr_info = &repr->info;
+
+	return xsc_dev_modify_epat_mac_filter(priv->xdev,
+					      repr_info->local_dstinfo,
+					      mac_filter_en);
+}
+
+static int
+xsc_ethdev_promiscuous_enable(struct rte_eth_dev *dev)
+{
+	int ret;
+
+	ret = xsc_set_promiscuous(dev, 0);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "Enable port %u promiscuous failure",
+			    dev->data->port_id);
+		return ret;
+	}
+
+	dev->data->promiscuous = 1;
+	return 0;
+}
+
+static int
+xsc_ethdev_promiscuous_disable(struct rte_eth_dev *dev)
+{
+	int ret;
+
+	ret = xsc_set_promiscuous(dev, 1);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "Disable port %u promiscuous failure",
+			    dev->data->port_id);
+		return ret;
+	}
+
+	dev->data->promiscuous = 0;
+	return 0;
+}
+
+static int
+xsc_ethdev_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
+{
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
+
+	return xsc_dev_fw_version_get(priv->xdev, fw_version, fw_size);
+}
+
+static int
+xsc_ethdev_get_module_info(struct rte_eth_dev *dev,
+			   struct rte_eth_dev_module_info *modinfo)
+{
+	int size_read = 0;
+	uint8_t data[4] = { 0 };
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
+
+	size_read = xsc_dev_query_module_eeprom(priv->xdev, 0, 3, data);
+	if (size_read < 3)
+		return -1;
+
+	/* data[0] = identifier byte */
+	switch (data[0]) {
+	case XSC_MODULE_ID_QSFP:
+		modinfo->type       = RTE_ETH_MODULE_SFF_8436;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8436_MAX_LEN;
+		break;
+	case XSC_MODULE_ID_QSFP_PLUS:
+	case XSC_MODULE_ID_QSFP28:
+		/* data[1] = revision id */
+		if (data[0] == XSC_MODULE_ID_QSFP28 || data[1] >= 0x3) {
+			modinfo->type       = RTE_ETH_MODULE_SFF_8636;
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8636_MAX_LEN;
+		} else {
+			modinfo->type       = RTE_ETH_MODULE_SFF_8436;
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8436_MAX_LEN;
+		}
+		break;
+	case XSC_MODULE_ID_SFP:
+		modinfo->type       = RTE_ETH_MODULE_SFF_8472;
+		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+		break;
+	case XSC_MODULE_ID_QSFP_DD:
+	case XSC_MODULE_ID_DSFP:
+	case XSC_MODULE_ID_QSFP_PLUS_CMIS:
+		modinfo->type       = RTE_ETH_MODULE_SFF_8636;
+		/* Verify if module EEPROM is a flat memory. In case of flat
+		 * memory only page 00h (0-255 bytes) can be read. Otherwise
+		 * upper pages 01h and 02h can also be read. Upper pages 10h
+		 * and 11h are currently not supported by the driver.
+		 */
+		if (data[2] & 0x80)
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8636_LEN;
+		else
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Cable type 0x%x not recognized",
+			    data[0]);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int
+xsc_ethdev_get_module_eeprom(struct rte_eth_dev *dev,
+			     struct rte_dev_eeprom_info *info)
+{
+	uint32_t i = 0;
+	uint8_t *data;
+	int size_read;
+	uint32_t offset = info->offset;
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
+
+	if (info->length == 0) {
+		PMD_DRV_LOG(ERR, "Failed to get module eeprom, eeprom length is 0");
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+
+	data = malloc(info->length);
+	if (data == NULL) {
+		PMD_DRV_LOG(ERR, "Failed to get module eeprom, cannot allocate memory");
+		rte_errno = ENOMEM;
+		return -rte_errno;
+	}
+	memset(data, 0, info->length);
+
+	while (i < info->length) {
+		size_read = xsc_dev_query_module_eeprom(priv->xdev, offset,
+							info->length - i, data + i);
+		if (!size_read)
+			/* Done reading */
+			goto exit;
+
+		if (size_read < 0) {
+			PMD_DRV_LOG(ERR, "Failed to get module eeprom, size read=%d",
+				    size_read);
+			goto exit;
+		}
+
+		i += size_read;
+		offset += size_read;
+	}
+
+	memcpy(info->data, data, info->length);
+
+exit:
+	free(data);
+	return 0;
+}
+
+static int
+xsc_ethdev_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
+{
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
+
+	return xsc_dev_fec_get(priv->xdev, fec_capa);
+}
+
+static int
+xsc_ethdev_fec_set(struct rte_eth_dev *dev, uint32_t mode)
+{
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(dev);
+
+	return xsc_dev_fec_set(priv->xdev, mode);
+}
+
 const struct eth_dev_ops xsc_eth_dev_ops = {
 	.dev_configure = xsc_ethdev_configure,
 	.dev_start = xsc_ethdev_start,
@@ -682,6 +861,8 @@ const struct eth_dev_ops xsc_eth_dev_ops = {
 	.dev_set_link_down = xsc_ethdev_set_link_down,
 	.dev_close = xsc_ethdev_close,
 	.link_update = xsc_ethdev_link_update,
+	.promiscuous_enable = xsc_ethdev_promiscuous_enable,
+	.promiscuous_disable = xsc_ethdev_promiscuous_disable,
 	.stats_get = xsc_ethdev_stats_get,
 	.stats_reset = xsc_ethdev_stats_reset,
 	.dev_infos_get = xsc_ethdev_infos_get,
@@ -692,6 +873,11 @@ const struct eth_dev_ops xsc_eth_dev_ops = {
 	.mtu_set = xsc_ethdev_set_mtu,
 	.rss_hash_update = xsc_ethdev_rss_hash_update,
 	.rss_hash_conf_get = xsc_ethdev_rss_hash_conf_get,
+	.fw_version_get = xsc_ethdev_fw_version_get,
+	.get_module_info = xsc_ethdev_get_module_info,
+	.get_module_eeprom = xsc_ethdev_get_module_eeprom,
+	.fec_get = xsc_ethdev_fec_get,
+	.fec_set = xsc_ethdev_fec_set,
 };
 
 static int
@@ -701,7 +887,7 @@ xsc_ethdev_init_one_representor(struct rte_eth_dev *eth_dev, void *init_params)
 	struct xsc_repr_port *repr_port = (struct xsc_repr_port *)init_params;
 	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(eth_dev);
 	struct xsc_dev_config *config = &priv->config;
-	struct rte_ether_addr mac;
+	struct rte_ether_addr mac = priv->mac[0];
 
 	priv->repr_port = repr_port;
 	repr_port->drv_data = eth_dev;
@@ -811,6 +997,14 @@ xsc_ethdev_init_representors(struct rte_eth_dev *eth_dev)
 		}
 	}
 
+	if (!xsc_dev_is_vf(priv->xdev)) {
+		ret = xsc_ethdev_set_link_up(eth_dev);
+		if (ret != 0) {
+			PMD_DRV_LOG(ERR, "Failed to set port %u link up", eth_dev->data->port_id);
+			goto destroy_reprs;
+		}
+	}
+
 	return 0;
 
 destroy_reprs:
@@ -824,6 +1018,25 @@ destroy_reprs:
 	repr_port = &xdev->repr_ports[xdev->num_repr_ports - 1];
 	rte_eth_dev_destroy((struct rte_eth_dev *)repr_port->drv_data, NULL);
 	return ret;
+}
+
+static void
+xsc_ethdev_intr_handler(void *param)
+{
+	struct rte_eth_dev *eth_dev = param;
+	struct xsc_ethdev_priv *priv = TO_XSC_ETHDEV_PRIV(eth_dev);
+	int event_type;
+
+	event_type = xsc_dev_intr_event_get(priv->xdev);
+	switch (event_type) {
+	case XSC_EVENT_TYPE_CHANGE_LINK:
+		PMD_DRV_LOG(DEBUG, "Get intr event type=%04x", event_type);
+		xsc_ethdev_link_update(eth_dev, 0);
+		rte_eth_dev_callback_process(eth_dev, RTE_ETH_EVENT_INTR_LSC, NULL);
+		break;
+	default:
+		break;
+	}
 }
 
 static int
@@ -850,6 +1063,14 @@ xsc_ethdev_init(struct rte_eth_dev *eth_dev)
 		goto uninit_xsc_dev;
 	}
 
+	if (!xsc_dev_is_vf(priv->xdev)) {
+		ret = xsc_dev_intr_handler_install(priv->xdev, xsc_ethdev_intr_handler, eth_dev);
+		if (ret != 0) {
+			PMD_DRV_LOG(ERR, "Failed to install intr handler");
+			goto uninit_xsc_dev;
+		}
+	}
+
 	return 0;
 
 uninit_xsc_dev:
@@ -871,7 +1092,7 @@ xsc_ethdev_uninit(struct rte_eth_dev *eth_dev)
 	}
 
 	ret |= xsc_ethdev_close(eth_dev);
-	xsc_dev_pct_uninit();
+	xsc_dev_pct_uninit(priv->xdev);
 	rte_free(priv->xdev);
 
 	return ret == 0 ? 0 : -EIO;

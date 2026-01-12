@@ -17,10 +17,26 @@
  * with new command and it's version info.
  */
 static uint32_t otx_ep_cmd_versions[OTX_EP_MBOX_CMD_MAX] = {
-	[0 ... OTX_EP_MBOX_CMD_DEV_REMOVE] = OTX_EP_MBOX_VERSION_V1,
-	[OTX_EP_MBOX_CMD_GET_FW_INFO ... OTX_EP_MBOX_NOTIF_LINK_STATUS] = OTX_EP_MBOX_VERSION_V2,
-	[OTX_EP_MBOX_NOTIF_PF_FLR] = OTX_EP_MBOX_VERSION_V3
-
+	/* [0 ... OTX_EP_MBOX_CMD_DEV_REMOVE] = OTX_EP_MBOX_VERSION_V1, */
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	OTX_EP_MBOX_VERSION_V1,
+	/* [OTX_EP_MBOX_CMD_GET_FW_INFO ... OTX_EP_MBOX_NOTIF_LINK_STATUS] =
+	 *		OTX_EP_MBOX_VERSION_V2,
+	 */
+	OTX_EP_MBOX_VERSION_V2,
+	OTX_EP_MBOX_VERSION_V2,
+	OTX_EP_MBOX_VERSION_V2,
+	/* [OTX_EP_MBOX_NOTIF_PF_FLR] = OTX_EP_MBOX_VERSION_V3 */
+	OTX_EP_MBOX_VERSION_V3,
 };
 
 static int
@@ -355,15 +371,21 @@ otx_ep_mbox_init(struct rte_eth_dev *eth_dev)
 	struct otx_ep_device *otx_ep = (struct otx_ep_device *)eth_dev->data->dev_private;
 	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	uint64_t reg_val;
+	int rc;
 
 	otx_ep_mbox_version_check(otx_ep);
 
 	rte_intr_callback_register(pdev->intr_handle, otx_ep_mbox_intr_handler, (void *)eth_dev);
 
-	if (rte_intr_enable(pdev->intr_handle)) {
+	rc = rte_intr_enable(pdev->intr_handle);
+
+	if (!(rc == -1 || rc == 0)) {
 		otx_ep_err("rte_intr_enable failed");
 		return -1;
 	}
+
+	if (rc == -1)
+		return 0;
 
 	reg_val = otx2_read64(otx_ep->hw_addr + CNXK_EP_R_MBOX_PF_VF_INT(0));
 	if (reg_val == UINT64_MAX)

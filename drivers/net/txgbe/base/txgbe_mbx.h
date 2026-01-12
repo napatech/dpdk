@@ -20,6 +20,8 @@
 #define TXGBE_VT_MSGTYPE_NACK	0x40000000
 /* Indicates that VF is still clear to send requests */
 #define TXGBE_VT_MSGTYPE_CTS	0x20000000
+/* Messages below or'd with this are the specific case */
+#define TXGBE_VT_MSGTYPE_SPEC	0x10000000
 
 #define TXGBE_VT_MSGINFO_SHIFT	16
 /* bits 23:16 are used for extra info for certain messages */
@@ -39,6 +41,7 @@ enum txgbe_pfvf_api_rev {
 	txgbe_mbox_api_13,	/* API version 1.3, linux/freebsd VF driver */
 	txgbe_mbox_api_20,	/* API version 2.0, solaris Phase1 VF driver */
 	txgbe_mbox_api_21,	/* API version 2.1 */
+	txgbe_mbox_api_23,	/* API version 2.3 */
 	/* This value should always be last */
 	txgbe_mbox_api_unknown,	/* indicates that API version is not known */
 };
@@ -48,6 +51,8 @@ enum txgbe_pfvf_api_rev {
 #define TXGBE_VF_SET_MAC_ADDR	0x02 /* VF requests PF to set MAC addr */
 #define TXGBE_VF_SET_MULTICAST	0x03 /* VF requests PF to set MC addr */
 #define TXGBE_VF_SET_VLAN	0x04 /* VF requests PF to set VLAN */
+
+#define TXGBE_NOFITY_VF_LINK_STATUS 0x01 /* PF notify VF link status */
 
 /* mailbox API, version 1.0 VF requests */
 #define TXGBE_VF_SET_LPE	0x05 /* VF requests PF to set VMOLR.LPE */
@@ -64,6 +69,9 @@ enum txgbe_pfvf_api_rev {
 
 /* mailbox API, version 2.1 VF requests */
 #define TXGBE_VF_SET_5TUPLE	0x20 /* VF request PF for 5-tuple filter */
+
+/* mailbox API, version 2.3 VF requests */
+#define TXGBE_VF_SET_FDIR	0x22 /* VF request PF for FDIR filter */
 
 #define TXGBE_VF_BACKUP		0x8001 /* VF requests backup */
 
@@ -87,6 +95,21 @@ enum txgbevf_5tuple_msg {
 };
 
 #define TXGBEVF_5T_ADD_SHIFT	31
+
+enum txgbevf_fdir_msg {
+	TXGBEVF_FDIR_REQ = 0,
+	TXGBEVF_FDIR_CMD,
+	TXGBEVF_FDIR_IP4SA,
+	TXGBEVF_FDIR_IP4DA,
+	TXGBEVF_FDIR_PORT,
+	TXGBEVF_FDIR_FLEX,
+	TXGBEVF_FDIR_IP4DM,
+	TXGBEVF_FDIR_IP4SM,
+	TXGBEVF_FDIR_PORTM,
+	TXGBEVF_FDIR_MAX /* must be last */
+};
+
+#define TXGBEVF_FDIR_ADD_SHIFT	31
 
 /* GET_QUEUES return data indices within the mailbox */
 #define TXGBE_VF_TX_QUEUES	1	/* number of Tx queues supported */

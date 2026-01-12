@@ -22,7 +22,7 @@ from framework.exception import (
     InternalError,
     RemoteCommandExecutionError,
 )
-from framework.testbed_model.os_session import PortInfo
+from framework.testbed_model.port import PortInfo
 from framework.utils import expand_range
 
 from .cpu import LogicalCore
@@ -203,6 +203,14 @@ class LinuxSession(PosixSession):
             )
 
         del self._lshw_net_info
+
+    def set_interface_link_up(self, name: str) -> None:
+        """Overrides :meth:`~.os_session.OSSession.set_interface_link_up`."""
+        self.send_command(f"ip link set dev {name} up", privileged=True, verify=True)
+
+    def delete_interface(self, name: str) -> None:
+        """Overrides :meth:`~.os_session.OSSession.delete_interface`."""
+        self.send_command(f"ip link delete {name}", privileged=True)
 
     @cached_property
     def devbind_script_path(self) -> PurePath:

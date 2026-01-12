@@ -189,6 +189,15 @@ static int ice_set_mac_type(struct ice_hw *hw)
 	case ICE_DEV_ID_E830_L_QSFP:
 	case ICE_DEV_ID_E830C_SFP:
 	case ICE_DEV_ID_E830_L_SFP:
+	case ICE_DEV_ID_E835CC_BACKPLANE:
+	case ICE_DEV_ID_E835CC_QSFP56:
+	case ICE_DEV_ID_E835CC_SFP:
+	case ICE_DEV_ID_E835C_BACKPLANE:
+	case ICE_DEV_ID_E835C_QSFP:
+	case ICE_DEV_ID_E835C_SFP:
+	case ICE_DEV_ID_E835_L_BACKPLANE:
+	case ICE_DEV_ID_E835_L_QSFP:
+	case ICE_DEV_ID_E835_L_SFP:
 		hw->mac_type = ICE_MAC_E830;
 		break;
 	default:
@@ -691,51 +700,168 @@ ice_aq_get_link_info(struct ice_port_info *pi, bool ena_lse,
 }
 
 /**
- * ice_fill_tx_timer_and_fc_thresh
+ * ice_get_xoff_pause_quanta
  * @hw: pointer to the HW struct
- * @cmd: pointer to MAC cfg structure
+ * @tc: index of traffic class. Relevant if @pfc is true
+ * @pfc: if true - use @tc to get corresponding quanta
  *
- * Add Tx timer and FC refresh threshold info to Set MAC Config AQ command
- * descriptor
+ * Returns u16 current configured LFC of PFC quanta value.
+ * If @pfc is true returns value of the corresponding @tc traffic class.
+ * If false returns configured LFC quanta
  */
-static void
-ice_fill_tx_timer_and_fc_thresh(struct ice_hw *hw,
-				struct ice_aqc_set_mac_cfg *cmd)
+static u16
+ice_get_xoff_pause_quanta(struct ice_hw *hw, u8 tc, bool pfc)
 {
-	u16 fc_thres_val, tx_timer_val;
-	u32 val;
+	u32 val = 0;
 
-	/* We read back the transmit timer and fc threshold value of
-	 * LFC. Thus, we will use index =
-	 * PRTMAC_HSEC_CTL_TX_PAUSE_QUANTA_MAX_INDEX.
-	 *
-	 * Also, because we are operating on transmit timer and fc
-	 * threshold of LFC, we don't turn on any bit in tx_tmr_priority
-	 */
-#define E800_IDX_OF_LFC E800_PRTMAC_HSEC_CTL_TX_PAUSE_QUANTA_MAX_INDEX
+#define E830_CL01_PAUSE_QUANTA(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+				E830_PRTMAC_200G_CL01_PAUSE_QUANTA : E830_PRTMAC_CL01_PAUSE_QUANTA)
+#define E830_CL23_PAUSE_QUANTA(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+				E830_PRTMAC_200G_CL23_PAUSE_QUANTA : E830_PRTMAC_CL23_PAUSE_QUANTA)
+#define E830_CL45_PAUSE_QUANTA(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+				E830_PRTMAC_200G_CL45_PAUSE_QUANTA : E830_PRTMAC_CL45_PAUSE_QUANTA)
+#define E830_CL67_PAUSE_QUANTA(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+				E830_PRTMAC_200G_CL67_PAUSE_QUANTA : E830_PRTMAC_CL67_PAUSE_QUANTA)
 
 	if ((hw)->mac_type == ICE_MAC_E830) {
-		/* Retrieve the transmit timer */
-		val = rd32(hw, E830_PRTMAC_CL01_PAUSE_QUANTA);
-		tx_timer_val = val & E830_PRTMAC_CL01_PAUSE_QUANTA_CL0_PAUSE_QUANTA_M;
-		cmd->tx_tmr_value = CPU_TO_LE16(tx_timer_val);
+		switch (tc) {
+		case 0:
+		case 1:
+			val = rd32(hw, E830_CL01_PAUSE_QUANTA(hw->port_info));
+			break;
+		case 2:
+		case 3:
+			val = rd32(hw, E830_CL23_PAUSE_QUANTA(hw->port_info));
+			break;
+		case 4:
+		case 5:
+			val = rd32(hw, E830_CL45_PAUSE_QUANTA(hw->port_info));
+			break;
+		case 6:
+		case 7:
+			val = rd32(hw, E830_CL67_PAUSE_QUANTA(hw->port_info));
+			break;
+		}
 
-		/* Retrieve the fc threshold */
-		val = rd32(hw, E830_PRTMAC_CL01_QUANTA_THRESH);
-		fc_thres_val = val & E830_PRTMAC_CL01_QUANTA_THRESH_CL0_QUANTA_THRESH_M;
+		if (tc & 0x1)
+			val >>= 16;
+
 	} else {
-		/* Retrieve the transmit timer */
-		val = rd32(hw, E800_PRTMAC_HSEC_CTL_TX_PAUSE_QUANTA(E800_IDX_OF_LFC));
-		tx_timer_val = val &
+		int prio_idx = (pfc) ? tc : E800_PRTMAC_HSEC_CTL_TX_PAUSE_QUANTA_MAX_INDEX;
+		val = rd32(hw, E800_PRTMAC_HSEC_CTL_TX_PAUSE_QUANTA(prio_idx)) &
 			E800_PRTMAC_HSEC_CTL_TX_PAUSE_QUANTA_HSEC_CTL_TX_PAUSE_QUANTA_M;
-		cmd->tx_tmr_value = CPU_TO_LE16(tx_timer_val);
-
-		/* Retrieve the fc threshold */
-		val = rd32(hw, E800_PRTMAC_HSEC_CTL_TX_PAUSE_REFRESH_TIMER(E800_IDX_OF_LFC));
-		fc_thres_val = val & E800_PRTMAC_HSEC_CTL_TX_PAUSE_REFRESH_TIMER_M;
 	}
 
-	cmd->fc_refresh_threshold = CPU_TO_LE16(fc_thres_val);
+	return CPU_TO_LE16((u16)val);
+}
+
+/**
+ * ice_get_xoff_pause_thresh
+ * @hw: pointer to the HW struct
+ * @tc: index of traffic class. Relevant if @pfc is true
+ * @pfc: if true - use @tc to get corresponding threshold
+ *
+ * Returns u16 current configured LFC of PFC threshold value.
+ * If @pfc is true returns value of the corresponding @tc traffic class.
+ * If false returns configured LFC threshold
+ */
+static u16
+ice_get_xoff_pause_thresh(struct ice_hw *hw, u8 tc, bool pfc)
+{
+	u32 val = 0;
+
+#define E830_CL01_PAUSE_THRESH(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+			E830_PRTMAC_200G_CL01_QUANTA_THRESH : E830_PRTMAC_CL01_QUANTA_THRESH)
+#define E830_CL23_PAUSE_THRESH(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+			E830_PRTMAC_200G_CL23_QUANTA_THRESH : E830_PRTMAC_CL23_QUANTA_THRESH)
+#define E830_CL45_PAUSE_THRESH(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+			E830_PRTMAC_200G_CL45_QUANTA_THRESH : E830_PRTMAC_CL45_QUANTA_THRESH)
+#define E830_CL67_PAUSE_THRESH(pi) (((pi)->phy.link_info.link_speed == ICE_AQ_LINK_SPEED_200GB) ? \
+			E830_PRTMAC_200G_CL67_QUANTA_THRESH : E830_PRTMAC_CL67_QUANTA_THRESH)
+
+	if ((hw)->mac_type == ICE_MAC_E830) {
+		switch (tc) {
+		case 0:
+		case 1:
+			val = rd32(hw, E830_CL01_PAUSE_THRESH(hw->port_info));
+			break;
+		case 2:
+		case 3:
+			val = rd32(hw, E830_CL23_PAUSE_THRESH(hw->port_info));
+			break;
+		case 4:
+		case 5:
+			val = rd32(hw, E830_CL45_PAUSE_THRESH(hw->port_info));
+			break;
+		case 6:
+		case 7:
+			val = rd32(hw, E830_CL67_PAUSE_THRESH(hw->port_info));
+			break;
+		}
+
+		if (tc & 0x1)
+			val >>= 16;
+
+	} else {
+		int prio_idx = (pfc) ? tc : E800_PRTMAC_HSEC_CTL_TX_PAUSE_REFRESH_TIMER_MAX_INDEX;
+		val = rd32(hw, E800_PRTMAC_HSEC_CTL_TX_PAUSE_REFRESH_TIMER(prio_idx)) &
+			E800_PRTMAC_HSEC_CTL_TX_PAUSE_REFRESH_TIMER_M;
+	}
+
+	return CPU_TO_LE16((u16)val);
+}
+
+/**
+ * ice_aq_set_mac_pfc_cfg
+ * @hw: pointer to the HW struct
+ * @max_frame_size: Maximum Frame Size to be supported
+ * @tc_bitmap: Traffic Class bitmap indicating relevant TCs for the following XOFF settings
+ *             0 is used of LFC.
+ *             If any of XOFF settings is zero tc_bitmap must have not more than one bit.
+ * @xoff_quanta: FC XOFF Pause quanta, measured in 64byte slots. 0 means keep current value
+ * @xoff_thresh: FC XOFF Pause refresh threshold, specifies how many slots (64 byte) time
+ *               before XOFF expires to send a new XOFF if CGD is still in a blocked state.
+ *               0 means keep current value
+ * @auto_drop: Tell HW to drop packets if TC queue is blocked
+ * @cd: pointer to command details structure or NULL
+ *
+ * Set MAC configuration (0x0603)
+ */
+int
+ice_aq_set_mac_pfc_cfg(struct ice_hw *hw, u16 max_frame_size, u8 tc_bitmap,
+	u16 xoff_quanta, u16 xoff_thresh, bool auto_drop, struct ice_sq_cd *cd)
+{
+	struct ice_aqc_set_mac_cfg *cmd;
+	struct ice_aq_desc desc;
+
+	cmd = &desc.params.set_mac_cfg;
+
+	if (max_frame_size == 0)
+		return ICE_ERR_PARAM;
+
+	/* when quanta or threshold are 0, we may read values from traffic class
+	 * registers indicated by tc_bitmap. However, the AQC can only store
+	 * data read from one traffic class, so check if there is at most one
+	 * bit set to avoid ambiguity
+	 */
+	if ((xoff_quanta == 0 || xoff_thresh == 0) &&
+			(tc_bitmap != 0 && !ice_is_pow2(tc_bitmap)))
+		return ICE_ERR_PARAM;
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_mac_cfg);
+
+	cmd->max_frame_size = CPU_TO_LE16(max_frame_size);
+
+	if (ice_is_fw_auto_drop_supported(hw) && auto_drop)
+		cmd->drop_opts |= ICE_AQ_SET_MAC_AUTO_DROP_BLOCKING_PKTS;
+	cmd->tx_tmr_priority = tc_bitmap;
+	cmd->tx_tmr_value = (xoff_quanta) ? CPU_TO_LE16(xoff_quanta) :
+		ice_get_xoff_pause_quanta(hw,
+			(tc_bitmap) ? ice_ctz(tc_bitmap) : 0, !!tc_bitmap);
+	cmd->fc_refresh_threshold = (xoff_thresh) ? CPU_TO_LE16(xoff_thresh) :
+		ice_get_xoff_pause_thresh(hw,
+			(tc_bitmap) ? ice_ctz(tc_bitmap) : 0, !!tc_bitmap);
+
+	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
 }
 
 /**
@@ -751,23 +877,7 @@ int
 ice_aq_set_mac_cfg(struct ice_hw *hw, u16 max_frame_size, bool auto_drop,
 		   struct ice_sq_cd *cd)
 {
-	struct ice_aqc_set_mac_cfg *cmd;
-	struct ice_aq_desc desc;
-
-	cmd = &desc.params.set_mac_cfg;
-
-	if (max_frame_size == 0)
-		return ICE_ERR_PARAM;
-
-	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_mac_cfg);
-
-	cmd->max_frame_size = CPU_TO_LE16(max_frame_size);
-
-	if (ice_is_fw_auto_drop_supported(hw) && auto_drop)
-		cmd->drop_opts |= ICE_AQ_SET_MAC_AUTO_DROP_BLOCKING_PKTS;
-	ice_fill_tx_timer_and_fc_thresh(hw, cmd);
-
-	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
+	return ice_aq_set_mac_pfc_cfg(hw, max_frame_size, 0, 0, 0, auto_drop, cd);
 }
 
 /**
@@ -4332,6 +4442,50 @@ ice_aq_read_topo_dev_nvm(struct ice_hw *hw,
 	return 0;
 }
 
+static u16 ice_lut_is_valid_size(u16 lut_type, u16 lut_size)
+{
+	switch (lut_type) {
+	case ICE_LUT_VSI:
+		return lut_size == ICE_LUT_SIZE_64;
+	case ICE_LUT_GLOBAL:
+		switch (lut_size) {
+		case ICE_LUT_SIZE_128:
+		case ICE_LUT_SIZE_512:
+			return true;
+		default:
+			return false;
+		}
+	case ICE_LUT_PF:
+		switch (lut_size) {
+		case ICE_LUT_SIZE_128:
+		case ICE_LUT_SIZE_512:
+		case ICE_LUT_SIZE_2048:
+			return true;
+		default:
+			return false;
+		}
+	default:
+		return false;
+	}
+}
+
+static u16 ice_lut_size_to_flag(u16 lut_size)
+{
+	u16 f = 0;
+
+	switch (lut_size) {
+	case ICE_LUT_SIZE_512:
+		f = ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_512_FLAG;
+		break;
+	case ICE_LUT_SIZE_2048:
+		f = ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_2K_FLAG;
+		break;
+	default:
+		break;
+	}
+	return f << ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S;
+}
+
 /**
  * __ice_aq_get_set_rss_lut
  * @hw: pointer to the hardware structure
@@ -4343,7 +4497,7 @@ ice_aq_read_topo_dev_nvm(struct ice_hw *hw,
 static int
 __ice_aq_get_set_rss_lut(struct ice_hw *hw, struct ice_aq_get_set_rss_lut_params *params, bool set)
 {
-	u16 flags = 0, vsi_id, lut_type, lut_size, glob_lut_idx, vsi_handle;
+	u16 flags, vsi_id, lut_type, lut_size, glob_lut_idx = 0, vsi_handle;
 	struct ice_aqc_get_set_rss_lut *cmd_resp;
 	struct ice_aq_desc desc;
 	int status;
@@ -4355,15 +4509,23 @@ __ice_aq_get_set_rss_lut(struct ice_hw *hw, struct ice_aq_get_set_rss_lut_params
 	vsi_handle = params->vsi_handle;
 	lut = params->lut;
 
-	if (!ice_is_vsi_valid(hw, vsi_handle) || !lut)
-		return ICE_ERR_PARAM;
-
+	lut_type = params->lut_type;
 	lut_size = params->lut_size;
 	lut_type = params->lut_type;
-	glob_lut_idx = params->global_lut_id;
-	vsi_id = ice_get_hw_vsi_num(hw, vsi_handle);
-
 	cmd_resp = &desc.params.get_set_rss_lut;
+	if (lut_type == ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_GLOBAL)
+		glob_lut_idx = params->global_lut_id;
+
+	if (!lut || !ice_is_vsi_valid(hw, vsi_handle))
+		return ICE_ERR_PARAM;
+
+	if (lut_type & ~ICE_LUT_TYPE_MASK)
+		return ICE_ERR_PARAM;
+
+	if (!ice_lut_is_valid_size(lut_type, lut_size))
+		return ICE_ERR_INVAL_SIZE;
+
+	vsi_id = ice_get_hw_vsi_num(hw, vsi_handle);
 
 	if (set) {
 		ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_rss_lut);
@@ -4377,61 +4539,15 @@ __ice_aq_get_set_rss_lut(struct ice_hw *hw, struct ice_aq_get_set_rss_lut_params
 					ICE_AQC_GSET_RSS_LUT_VSI_ID_M) |
 				       ICE_AQC_GSET_RSS_LUT_VSI_VALID);
 
-	switch (lut_type) {
-	case ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_VSI:
-	case ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF:
-	case ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_GLOBAL:
-		flags |= ((lut_type << ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_S) &
-			  ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_M);
-		break;
-	default:
-		status = ICE_ERR_PARAM;
-		goto ice_aq_get_set_rss_lut_exit;
-	}
+	flags = ice_lut_size_to_flag(lut_size) |
+			((lut_type << ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_S) &
+				ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_M) |
+			((glob_lut_idx << ICE_AQC_GSET_RSS_LUT_GLOBAL_IDX_S) &
+				ICE_AQC_GSET_RSS_LUT_GLOBAL_IDX_M);
 
-	if (lut_type == ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_GLOBAL) {
-		flags |= ((glob_lut_idx << ICE_AQC_GSET_RSS_LUT_GLOBAL_IDX_S) &
-			  ICE_AQC_GSET_RSS_LUT_GLOBAL_IDX_M);
-
-		if (!set)
-			goto ice_aq_get_set_rss_lut_send;
-	} else if (lut_type == ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF) {
-		if (!set)
-			goto ice_aq_get_set_rss_lut_send;
-	} else {
-		goto ice_aq_get_set_rss_lut_send;
-	}
-
-	/* LUT size is only valid for Global and PF table types */
-	switch (lut_size) {
-	case ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_128:
-		flags |= (ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_128_FLAG <<
-			  ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S) &
-			 ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_M;
-		break;
-	case ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_512:
-		flags |= (ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_512_FLAG <<
-			  ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S) &
-			 ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_M;
-		break;
-	case ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_2K:
-		if (lut_type == ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF) {
-			flags |= (ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_2K_FLAG <<
-				  ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_S) &
-				 ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_M;
-			break;
-		}
-		/* fall-through */
-	default:
-		status = ICE_ERR_PARAM;
-		goto ice_aq_get_set_rss_lut_exit;
-	}
-
-ice_aq_get_set_rss_lut_send:
 	cmd_resp->flags = CPU_TO_LE16(flags);
 	status = ice_aq_send_cmd(hw, &desc, lut, lut_size, NULL);
-
-ice_aq_get_set_rss_lut_exit:
+	params->lut_size = LE16_TO_CPU(desc.datalen);
 	return status;
 }
 
@@ -6578,4 +6694,52 @@ bool ice_is_fw_auto_drop_supported(struct ice_hw *hw)
 	    hw->api_min_ver >= ICE_FW_API_AUTO_DROP_MIN)
 		return true;
 	return false;
+}
+
+/**
+ * ice_get_port_max_cgd
+ * @hw: pointer to the hardware structure
+ *
+ * Returns the number of congestion domains (cgds) for a port
+ */
+enum ice_cgd_per_port
+ice_get_port_max_cgd(struct ice_hw *hw)
+{
+#define ICE_8_PORTS_LINK_TOPO	0x2
+	u32 link_topo = LE32_TO_CPU(rd32(hw, GLGEN_MAC_LINK_TOPO)) &
+		GLGEN_MAC_LINK_TOPO_LINK_TOPO_M;
+
+	return (link_topo == ICE_8_PORTS_LINK_TOPO) ? ICE_4_CGD_PER_PORT : ICE_8_CGD_PER_PORT;
+}
+
+/**
+ * ice_get_tc_by_priority
+ * @hw: pointer to the hardware structure
+ * @prio: VLAN PCP
+ *
+ * Returns the index of Traffic Class(TC) associated with the User Priority
+ */
+u8
+ice_get_tc_by_priority(struct ice_hw *hw, u8 prio)
+{
+	struct ice_port_info *port_info = hw->port_info;
+	struct ice_qos_cfg *qos_cfg = &port_info->qos_cfg;
+	struct ice_dcbx_cfg *local_dcb_conf = &qos_cfg->local_dcbx_cfg;
+
+	prio &= (ICE_MAX_TRAFFIC_CLASS - 1);
+
+	return local_dcb_conf->etscfg.prio_table[prio];
+}
+
+/**
+ * ice_get_cgd_idx
+ * @hw: pointer to the hardware structure
+ * @tc: index of Traffic Class
+ *
+ * Returns the absolute index of the congestion domain by its TC
+ */
+int
+ice_get_cgd_idx(struct ice_hw *hw, u8 tc)
+{
+	return hw->port_info->lport * ice_get_port_max_cgd(hw) + tc;
 }

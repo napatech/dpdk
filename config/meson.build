@@ -20,6 +20,7 @@ foreach env, id:exec_envs
     dpdk_conf.set10('RTE_EXEC_ENV_IS_' + env.to_upper(), (exec_env == env))
 endforeach
 dpdk_conf.set('RTE_EXEC_ENV', exec_envs[exec_env])
+dpdk_conf.set_quoted('RTE_EXEC_ENV_NAME', exec_env)
 dpdk_conf.set('RTE_EXEC_ENV_' + exec_env.to_upper(), 1)
 
 # MS linker requires special treatment.
@@ -208,7 +209,8 @@ if not is_windows
 endif
 
 # on some OS, maths functions are in a separate library
-if cc.find_library('m', required : false).found()
+math_dep = cc.find_library('m', required : false)
+if math_dep.found() and cc.links(min_c_code, dependencies: math_dep)
     # some libs depend on maths lib
     add_project_link_arguments('-lm', language: 'c')
     dpdk_extra_ldflags += '-lm'
@@ -235,7 +237,7 @@ if meson.is_cross_build() and not meson.get_external_property('numa', true)
 endif
 if find_libnuma
     numa_dep = cc.find_library('numa', required: false)
-    if numa_dep.found() and cc.has_header('numaif.h')
+    if numa_dep.found() and cc.has_header('numaif.h') and cc.links(min_c_code, dependencies: numa_dep)
         dpdk_conf.set10('RTE_HAS_LIBNUMA', true)
         has_libnuma = true
         add_project_link_arguments('-lnuma', language: 'c')
@@ -245,7 +247,7 @@ endif
 
 has_libfdt = false
 fdt_dep = cc.find_library('fdt', required: false)
-if fdt_dep.found() and cc.has_header('fdt.h')
+if fdt_dep.found() and cc.has_header('fdt.h') and cc.links(min_c_code, dependencies: fdt_dep)
     dpdk_conf.set10('RTE_HAS_LIBFDT', true)
     has_libfdt = true
     add_project_link_arguments('-lfdt', language: 'c')
@@ -253,7 +255,7 @@ if fdt_dep.found() and cc.has_header('fdt.h')
 endif
 
 libexecinfo = cc.find_library('execinfo', required: false)
-if libexecinfo.found()
+if libexecinfo.found() and cc.links(min_c_code, dependencies: libexecinfo)
     add_project_link_arguments('-lexecinfo', language: 'c')
     dpdk_extra_ldflags += '-lexecinfo'
 endif
@@ -288,7 +290,8 @@ if not pcap_dep.found()
     # pcap got a pkg-config file only in 1.9.0
     pcap_dep = cc.find_library(pcap_lib, required: false)
 endif
-if pcap_dep.found() and cc.has_header('pcap.h', dependencies: pcap_dep)
+if (pcap_dep.found() and cc.has_header('pcap.h', dependencies: pcap_dep)
+        and cc.links(min_c_code, dependencies: pcap_dep))
     dpdk_conf.set('RTE_HAS_LIBPCAP', 1)
     dpdk_extra_ldflags += '-l@0@'.format(pcap_lib)
 endif
@@ -296,6 +299,9 @@ endif
 # for clang 32-bit compiles we need libatomic for 64-bit atomic ops
 if cc.get_id() == 'clang' and dpdk_conf.get('RTE_ARCH_64') == false
     atomic_dep = cc.find_library('atomic', required: true)
+    if not cc.links(min_c_code, dependencies: atomic_dep)
+        error('broken dependency, "libatomic"')
+    endif
     add_project_link_arguments('-latomic', language: 'c')
     dpdk_extra_ldflags += '-latomic'
 endif
@@ -313,6 +319,7 @@ endif
 global_cflags = [
         # additional warnings in alphabetical order
         '-Wcast-qual',
+        '-Wcomma',
         '-Wdeprecated',
         '-Wformat',
         '-Wformat-nonliteral',
@@ -456,11 +463,7 @@ endif
 # set the install path for the drivers
 dpdk_conf.set_quoted('RTE_EAL_PMD_PATH', eal_pmd_path)
 
-install_headers(['rte_config.h'],
-        subdir: get_option('include_subdir_arch'))
-
-# enable VFIO only if it is linux OS
-dpdk_conf.set('RTE_EAL_VFIO', is_linux)
+dpdk_arch_headers += files('rte_config.h')
 
 # specify -D_GNU_SOURCE unconditionally
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
@@ -492,14 +495,9 @@ if get_option('b_lto')
     else
         error('compiler does not support fat LTO objects - please turn LTO off')
     endif
-    # workaround for gcc bug 81440
-    if cc.get_id() == 'gcc' and cc.version().version_compare('<8.0')
-        add_project_arguments('-Wno-lto-type-mismatch', language: 'c')
-        add_project_link_arguments('-Wno-lto-type-mismatch', language: 'c')
-    endif
 endif
 
-if get_option('b_sanitize') == 'address' or get_option('b_sanitize') == 'address,undefined'
+if get_option('b_sanitize').contains('address')
     if is_windows
         error('ASan is not supported on windows')
     endif
@@ -516,6 +514,22 @@ if get_option('b_sanitize') == 'address' or get_option('b_sanitize') == 'address
 
     if is_linux and dpdk_conf.get('RTE_ARCH_64')
         dpdk_conf.set10('RTE_MALLOC_ASAN', true)
+    endif
+endif
+
+if get_option('b_sanitize').contains('undefined')
+    if is_windows
+        error('UBSan is not supported on windows')
+    endif
+
+    if cc.get_id() == 'gcc'
+        ubsan_dep = cc.find_library('ubsan', required: true)
+        if (not cc.links('int main(int argc, char *argv[]) { return 0; }',
+                dependencies: ubsan_dep))
+            error('broken dependency, "libubsan"')
+        endif
+        add_project_link_arguments('-lubsan', language: 'c')
+        dpdk_extra_ldflags += '-lubsan'
     endif
 endif
 

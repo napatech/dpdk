@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -210,5 +209,5 @@ static const struct port_ops ops = {
 
 void nthw_port_init(void)
 {
-	register_port_ops(&ops);
+	nthw_reg_port_ops(&ops);
 }

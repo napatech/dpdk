@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 #include "nthw_drv.h"
@@ -150,7 +149,7 @@ static int nthw_fpga_rst9574_wait_ddr4_calibration_complete(struct fpga_info_s *
 		complete = nthw_fpga_rst9574_get_ddr4_calib_complete_stat(p_rst);
 
 		if (!complete)
-			nt_os_wait_usec(100);
+			nthw_os_wait_usec(100);
 
 		timeout--;
 
@@ -187,7 +186,7 @@ static int nthw_fpga_rst9574_wait_phy_ftile_rdy(struct fpga_info_s *p_fpga_info,
 		complete = nthw_fpga_rst9574_get_phy_ftile_rdy_stat(p_rst);
 
 		if (!complete) {
-			nt_os_wait_usec(100);
+			nthw_os_wait_usec(100);
 
 		} else {
 			NT_LOG(DBG, NTHW, "%s: PHY FTILE ready, margin to timeout %u",
@@ -221,7 +220,7 @@ static int nthw_fpga_rst9574_wait_phy_ftile_rst_done(struct fpga_info_s *p_fpga_
 		complete = nthw_fpga_rst9574_get_phy_ftile_rst_done_stat(p_rst);
 
 		if (!complete)
-			nt_os_wait_usec(100);
+			nthw_os_wait_usec(100);
 
 		timeout--;
 
@@ -251,7 +250,7 @@ static int nthw_fpga_rst9574_product_reset(struct fpga_info_s *p_fpga_info,
 	/*
 	 * Wait a while before waiting for deasserting ddr4 reset
 	 */
-	nt_os_wait_usec(2000);
+	nthw_os_wait_usec(2000);
 
 	/* (1) De-RTE_ASSERT DDR4 reset: */
 	NT_LOG(DBG, NTHW, "%s: %s: De-asserting DDR4 reset", p_adapter_id_str, __func__);
@@ -261,7 +260,7 @@ static int nthw_fpga_rst9574_product_reset(struct fpga_info_s *p_fpga_info,
 	 * Wait a while before waiting for calibration complete, since calibration complete
 	 * is true while ddr4 is in reset
 	 */
-	nt_os_wait_usec(2000);
+	nthw_os_wait_usec(2000);
 
 	/* (2) Wait until DDR4 calibration complete */
 	res = nthw_fpga_rst9574_wait_ddr4_calibration_complete(p_fpga_info, p_rst);
@@ -273,7 +272,7 @@ static int nthw_fpga_rst9574_product_reset(struct fpga_info_s *p_fpga_info,
 	nthw_fpga_rst9574_set_ddr4_calib_complete_latch(p_rst, 1);
 
 	/* Wait for phy to settle.*/
-	nt_os_wait_usec(20000);
+	nthw_os_wait_usec(20000);
 
 	/* (4) Ensure all latched status bits are still set: */
 	if (!nthw_fpga_rst9574_get_ddr4_calib_complete_latch(p_rst)) {
@@ -301,7 +300,7 @@ static int nthw_fpga_rst9574_product_reset(struct fpga_info_s *p_fpga_info,
 			__func__);
 		nthw_fpga_rst9574_phy_ftile_rst(p_rst, 0);
 
-		nt_os_wait_usec(10000);
+		nthw_os_wait_usec(10000);
 		/* (7) Wait until PHY_FTILE ready */
 		if (nthw_fpga_rst9574_wait_phy_ftile_rdy(p_fpga_info, p_rst) != -1) {
 			success = true;
@@ -331,7 +330,7 @@ static int nthw_fpga_rst9574_product_reset(struct fpga_info_s *p_fpga_info,
 				int32_t count = 1000;
 
 				do {
-					nt_os_wait_usec(1000);
+					nthw_os_wait_usec(1000);
 				} while (!nthw_phy_tile_get_port_status_reset_ack(p_phy_tile, i) &&
 					(--count > 0));
 
@@ -343,7 +342,7 @@ static int nthw_fpga_rst9574_product_reset(struct fpga_info_s *p_fpga_info,
 
 				/* Active low */
 				nthw_phy_tile_set_port_config_rst(p_phy_tile, i, 1);
-				nt_os_wait_usec(20000);
+				nthw_os_wait_usec(20000);
 			}
 		}
 
@@ -371,7 +370,7 @@ static struct rst9574_ops rst9574_ops = {
 	.nthw_fpga_rst9574_setup = nthw_fpga_rst9574_setup,
 };
 
-void rst9574_ops_init(void)
+void nthw_rst9574_ops_init(void)
 {
-	register_rst9574_ops(&rst9574_ops);
+	nthw_reg_rst9574_ops(&rst9574_ops);
 }

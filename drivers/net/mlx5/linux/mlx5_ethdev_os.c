@@ -73,7 +73,7 @@ mlx5_auxiliary_get_ifindex(const char *sf_name)
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-mlx5_get_ifname(const struct rte_eth_dev *dev, char (*ifname)[MLX5_NAMESIZE])
+mlx5_get_ifname(const struct rte_eth_dev *dev, char ifname[MLX5_NAMESIZE])
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int ifindex;
@@ -87,12 +87,11 @@ mlx5_get_ifname(const struct rte_eth_dev *dev, char (*ifname)[MLX5_NAMESIZE])
 	ifindex = mlx5_ifindex(dev);
 	if (!ifindex) {
 		if (!priv->representor)
-			return mlx5_get_ifname_sysfs(priv->sh->ibdev_path,
-						     *ifname);
+			return mlx5_get_ifname_sysfs(priv->sh->ibdev_path, ifname);
 		rte_errno = ENXIO;
 		return -rte_errno;
 	}
-	if (if_indextoname(ifindex, &(*ifname)[0]))
+	if (if_indextoname(ifindex, ifname))
 		return 0;
 	rte_errno = errno;
 	return -rte_errno;
@@ -150,13 +149,43 @@ error:
 static int
 mlx5_ifreq(const struct rte_eth_dev *dev, int req, struct ifreq *ifr)
 {
-	char ifname[sizeof(ifr->ifr_name)];
+	char ifname[MLX5_NAMESIZE];
 	int ret;
 
-	ret = mlx5_get_ifname(dev, &ifname);
+	ret = mlx5_get_ifname(dev, ifname);
 	if (ret)
 		return -rte_errno;
 	return mlx5_ifreq_by_ifname(ifname, req, ifr);
+}
+
+/**
+ * Get device minimum and maximum allowed MTU values.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param[out] min_mtu
+ *   Minimum MTU value output buffer.
+ * @param[out] max_mtu
+ *   Maximum MTU value output buffer.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_os_get_mtu_bounds(struct rte_eth_dev *dev, uint16_t *min_mtu, uint16_t *max_mtu)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	int nl_route;
+	int ret;
+
+	nl_route = mlx5_nl_init(NETLINK_ROUTE, 0);
+	if  (nl_route < 0)
+		return nl_route;
+
+	ret = mlx5_nl_get_mtu_bounds(nl_route, priv->if_index, min_mtu, max_mtu);
+
+	close(nl_route);
+	return ret;
 }
 
 /**
@@ -483,7 +512,7 @@ int
 mlx5_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 {
 	int ret;
-	struct rte_eth_link dev_link;
+	struct rte_eth_link dev_link = { 0 };
 	time_t start_time = time(NULL);
 	int retry = MLX5_GET_LINK_STATUS_RETRY_COUNT;
 
@@ -675,59 +704,6 @@ mlx5_link_update_bond(struct rte_eth_dev *dev)
 }
 
 static void
-mlx5_handle_port_info_update(struct mlx5_dev_info *dev_info, uint32_t if_index,
-			     uint16_t msg_type)
-{
-	struct mlx5_switch_info info = {
-		.master = 0,
-		.representor = 0,
-		.name_type = MLX5_PHYS_PORT_NAME_TYPE_NOTSET,
-		.port_name = 0,
-		.switch_id = 0,
-	};
-	uint32_t i;
-	int nl_route;
-
-	if (dev_info->port_num <= 1 || dev_info->port_info == NULL)
-		return;
-
-	DRV_LOG(DEBUG, "IB device %s ifindex %u received netlink event %u",
-			dev_info->ibname, if_index, msg_type);
-	for (i = 1; i <= dev_info->port_num; i++) {
-		if (!dev_info->port_info[i].valid)
-			continue;
-		if (dev_info->port_info[i].ifindex == if_index)
-			break;
-	}
-	if (msg_type == RTM_NEWLINK && i > dev_info->port_num) {
-		nl_route = mlx5_nl_init(NETLINK_ROUTE, 0);
-		if  (nl_route < 0)
-			goto flush_all;
-
-		if (mlx5_nl_switch_info(nl_route, if_index, &info)) {
-			if (mlx5_sysfs_switch_info(if_index, &info))
-				goto flush_all;
-		}
-
-		if (info.name_type == MLX5_PHYS_PORT_NAME_TYPE_PFSF ||
-		    info.name_type == MLX5_PHYS_PORT_NAME_TYPE_PFVF)
-			goto flush_all;
-		close(nl_route);
-	} else if (msg_type == RTM_DELLINK && i <= dev_info->port_num) {
-		memset(dev_info->port_info + i, 0, sizeof(struct mlx5_port_nl_info));
-	}
-
-	return;
-flush_all:
-	if (nl_route >= 0)
-		close(nl_route);
-	for (i = 1; i <= dev_info->port_num; i++) {
-		if (!dev_info->port_info[i].ifindex)
-			dev_info->port_info[i].valid = 0;
-	}
-}
-
-static void
 mlx5_dev_interrupt_nl_cb(struct nlmsghdr *hdr, void *cb_arg)
 {
 	struct mlx5_dev_ctx_shared *sh = cb_arg;
@@ -736,8 +712,6 @@ mlx5_dev_interrupt_nl_cb(struct nlmsghdr *hdr, void *cb_arg)
 
 	if (mlx5_nl_parse_link_status_update(hdr, &if_index) < 0)
 		return;
-	if (sh->cdev->config.probe_opt && sh->cdev->dev_info.port_num > 1 && !sh->rdma_monitor_supp)
-		mlx5_handle_port_info_update(&sh->cdev->dev_info, if_index, hdr->nlmsg_type);
 
 	for (i = 0; i < sh->max_port; i++) {
 		struct mlx5_dev_shared_port *port = &sh->port[i];
@@ -940,10 +914,18 @@ mlx5_dev_interrupt_handler_ib(void *arg)
 		return;
 
 	if (data.event_type == MLX5_NL_RDMA_NETDEV_ATTACH_EVENT &&
-	    !(data.flags & MLX5_NL_CMD_GET_NET_INDEX))
+	    !(data.flags & MLX5_NL_CMD_GET_NET_INDEX)) {
+		DRV_LOG(WARNING, "Incomplete RDMA ATTACH event for ibdev[%d]",
+			dev_info->ibindex);
+		if (data.flags & MLX5_NL_CMD_GET_PORT_INDEX)
+			memset(dev_info->port_info + data.portnum, 0,
+			       sizeof(struct mlx5_port_nl_info));
+		else
+			goto flush_all;
 		return;
+	}
 
-	DRV_LOG(DEBUG, "Event info: type %d, ibindex %d, ifindex %d, portnum %d,",
+	DRV_LOG(INFO, "Event info: type %d, ibindex %d, ifindex %d, portnum %d,",
 		data.event_type, data.ibindex, data.ifindex, data.portnum);
 
 	/* Changes found in number of SF/VF ports. All information is likely unreliable. */
@@ -962,7 +944,7 @@ mlx5_dev_interrupt_handler_ib(void *arg)
 				goto flush_all;
 		}
 	} else if (data.event_type == MLX5_NL_RDMA_NETDEV_DETACH_EVENT) {
-		memset(dev_info->port_info + data.portnum, 0, sizeof(struct mlx5_port_nl_info));
+		dev_info->port_info[data.portnum].ifindex = 0;
 	}
 	return;
 
@@ -2091,4 +2073,3 @@ int mlx5_txpp_map_hca_bar(struct rte_eth_dev *dev)
 		rte_mem_unmap(base, MLX5_ST_SZ_BYTES(initial_seg));
 	return 0;
 }
-

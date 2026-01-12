@@ -19,6 +19,12 @@ roc_nix_tm_sq_aura_fc(struct roc_nix_sq *sq, bool enable)
 	plt_tm_dbg("Setting SQ %u SQB aura FC to %s", sq->qid,
 		   enable ? "enable" : "disable");
 
+	/* For cn20K, enable/disable SQ count updates if the SQ count pointer
+	 * was allocated based on the enable field.
+	 */
+	if (sq->sq_cnt_ptr)
+		return roc_nix_sq_cnt_update(sq, enable);
+
 	lf = idev_npa_obj_get();
 	if (!lf)
 		return NPA_ERR_DEVICE_NOT_BOUNDED;
@@ -554,7 +560,7 @@ roc_nix_tm_hierarchy_disable(struct roc_nix *roc_nix)
 		tail_off = (val >> 28) & 0x3F;
 
 		if (sqb_cnt > 1 || head_off != tail_off ||
-		    (*(uint64_t *)sq->fc != sq->aura_sqb_bufs))
+		    (!sq->sq_cnt_ptr && (*(uint64_t *)sq->fc != sq->aura_sqb_bufs)))
 			plt_err("Failed to gracefully flush sq %u", sq->qid);
 	}
 
@@ -618,6 +624,13 @@ roc_nix_tm_hierarchy_xmit_enable(struct roc_nix *roc_nix, enum roc_nix_tm_tree t
 		sq_id = node->id;
 		sq = nix->sqs[sq_id];
 
+		if (!sq) {
+			plt_err("nb_rxq %d nb_txq %d sq_id %d lvl %d", nix->nb_rx_queues,
+				nix->nb_tx_queues, sq_id, node->lvl);
+			roc_nix_tm_dump(roc_nix, NULL);
+			roc_nix_dump(roc_nix, NULL);
+			return NIX_ERR_TM_INVALID_NODE;
+		}
 		rc = roc_nix_sq_ena_dis(sq, true);
 		if (rc) {
 			plt_err("TM sw xon failed on SQ %u, rc=%d", node->id,
@@ -1035,7 +1048,10 @@ roc_nix_tm_init(struct roc_nix *roc_nix)
 	}
 
 	/* Prepare default tree */
-	rc = nix_tm_prepare_default_tree(roc_nix);
+	if (roc_nix_is_sdp(roc_nix) && (nix->nb_tx_queues > 1))
+		rc = roc_nix_tm_sdp_prepare_tree(roc_nix);
+	else
+		rc = nix_tm_prepare_default_tree(roc_nix);
 	if (rc) {
 		plt_err("failed to prepare default tm tree, rc=%d", rc);
 		return rc;

@@ -65,14 +65,13 @@ M: Maxime Coquelin <maxime.coquelin@redhat.com>
 T: git://dpdk.org/next/dpdk-next-baseband
 
 Next-dts Tree
-M: Paul Szczepanek <paul.szczepanek@arm.com>
+M: Luca Vizzarro <luca.vizzarro@arm.com>
 M: Patrick Robb <probb@iol.unh.edu>
 T: git://dpdk.org/next/dpdk-next-dts
 
 Stable Branches
 M: Luca Boccassi <bluca@debian.org>
 M: Kevin Traynor <ktraynor@redhat.com>
-M: Christian Ehrhardt <christian.ehrhardt@canonical.com>
 M: Xueming Li <xuemingl@nvidia.com>
 T: git://dpdk.org/dpdk-stable
 
@@ -100,6 +99,7 @@ F: devtools/checkpatches.sh
 F: devtools/get-maintainer.sh
 F: devtools/git-log-fixes.sh
 F: devtools/load-devel-config
+F: devtools/mailmap-ctl.py
 F: devtools/parse-flow-support.sh
 F: devtools/process-iwyu.py
 F: devtools/update-patches.py
@@ -138,7 +138,6 @@ F: devtools/check-meson.py
 
 Public CI
 M: Aaron Conole <aconole@redhat.com>
-M: Michael Santana <maicolgabriel@hotmail.com>
 F: .github/workflows/build.yml
 F: .ci/
 
@@ -159,7 +158,6 @@ Environment Abstraction Layer
 T: git://dpdk.org/dpdk
 
 EAL API and common code
-M: Tyler Retzlaff <roretzla@linux.microsoft.com>
 F: lib/eal/common/
 F: lib/eal/unix/
 F: lib/eal/include/
@@ -254,7 +252,6 @@ F: examples/multi_process/
 F: doc/guides/sample_app_ug/multi_process.rst
 
 Service Cores
-M: Harry van Haaren <harry.van.haaren@intel.com>
 F: lib/eal/include/rte_service.h
 F: lib/eal/include/rte_service_component.h
 F: lib/eal/common/rte_service.c
@@ -321,7 +318,7 @@ F: examples/*/*_neon.*
 F: examples/common/neon/
 
 LoongArch
-M: Min Zhou <zhoumin@loongson.cn>
+M: Bibo Mao <maobibo@loongson.cn>
 F: config/loongarch/
 F: doc/guides/linux_gsg/cross_build_dpdk_for_loongarch.rst
 F: lib/eal/loongarch/
@@ -337,10 +334,12 @@ F: examples/*/*_altivec.*
 F: examples/common/altivec/
 
 RISC-V
-M: Stanislaw Kardach <stanislaw.kardach@gmail.com>
+M: Stanisław Kardach <stanislaw.kardach@gmail.com>
 F: config/riscv/
 F: doc/guides/linux_gsg/cross_build_dpdk_for_riscv.rst
 F: lib/eal/riscv/
+M: Sun Yuechi <sunyuechi@iscas.ac.cn>
+F: lib/**/*rvv*
 
 Intel x86
 M: Bruce Richardson <bruce.richardson@intel.com>
@@ -390,7 +389,6 @@ F: kernel/freebsd/nic_uio/
 
 Windows support
 M: Dmitry Kozlyuk <dmitry.kozliuk@gmail.com>
-M: Tyler Retzlaff <roretzla@linux.microsoft.com>
 F: lib/eal/windows/
 F: doc/guides/windows_gsg/
 
@@ -429,6 +427,7 @@ F: app/test/test_stack*
 F: doc/guides/prog_guide/stack_lib.rst
 
 Packet buffer
+M: Morten Brørup <mb@smartsharesystems.com>
 F: lib/mbuf/
 F: doc/guides/prog_guide/mbuf_lib.rst
 F: app/test/test_mbuf.c
@@ -767,7 +766,8 @@ F: doc/guides/nics/gve.rst
 F: doc/guides/nics/features/gve.ini
 
 Hisilicon hns3
-M: Dengdui Huang <huangdengdui@huawei.com>
+M: Xingui Yang <yangxingui@huawei.com>
+M: Chengwen Feng <fengchengwen@huawei.com>
 F: drivers/net/hns3/
 F: doc/guides/nics/hns3.rst
 F: doc/guides/nics/features/hns3.ini
@@ -778,6 +778,12 @@ M: Xiaoyun Wang <cloud.wangxiaoyun@huawei.com>
 F: drivers/net/hinic/
 F: doc/guides/nics/hinic.rst
 F: doc/guides/nics/features/hinic.ini
+
+Huawei hinic3
+M: Feifei Wang <wangfeifei40@huawei.com>
+F: drivers/net/hinic3/
+F: doc/guides/nics/hinic3.rst
+F: doc/guides/nics/features/hinic3.ini
 
 Intel Network Common Code
 M: Bruce Richardson <bruce.richardson@intel.com>
@@ -971,9 +977,12 @@ F: doc/guides/nics/features/dpaa2.ini
 NXP enetc
 M: Gagandeep Singh <g.singh@nxp.com>
 M: Sachin Saxena <sachin.saxena@oss.nxp.com>
+M: Vanshika Shukla <vanshika.shukla@nxp.com>
 F: drivers/net/enetc/
 F: doc/guides/nics/enetc.rst
+F: doc/guides/nics/enetc4.rst
 F: doc/guides/nics/features/enetc.ini
+F: doc/guides/nics/features/enetc4.ini
 
 NXP enetfec - EXPERIMENTAL
 M: Apeksha Gupta <apeksha.gupta@nxp.com>
@@ -1009,10 +1018,20 @@ F: drivers/net/rnp/
 F: doc/guides/nics/rnp.rst
 F: doc/guides/nics/features/rnp.ini
 
+Nebulamatrix nbl
+M: Dimon Zhao <dimon.zhao@nebula-matrix.com>
+M: Kyo Liu <kyo.liu@nebula-matrix.com>
+M: Leon Yu <leon.yu@nebula-matrix.com>
+M: Sam Chen <sam.chen@nebula-matrix.com>
+F: drivers/net/nbl/
+F: doc/guides/nics/nbl.rst
+F: doc/guides/nics/features/nbl.ini
+
 Realtek r8169
 M: Howard Wang <howard_wang@realsil.com.cn>
 M: Chunhao Lin <hau@realtek.com>
 M: Xing Wang <xing_wang@realsil.com.cn>
+M: Javen Xu <javen_xu@realsil.com.cn>
 F: drivers/net/r8169/
 F: doc/guides/nics/r8169.rst
 F: doc/guides/nics/features/r8169.ini
@@ -1092,7 +1111,7 @@ F: drivers/net/avp/
 F: doc/guides/nics/avp.rst
 F: doc/guides/nics/features/avp.ini
 
-ZTE zxdh - EXPERIMENTAL
+ZTE zxdh
 M: Junlong Wang <wang.junlong1@zte.com.cn>
 M: Lijie Shan <shan.lijie@zte.com.cn>
 F: drivers/net/zxdh/
@@ -1358,10 +1377,15 @@ M: Conor Walsh <conor.walsh@intel.com>
 F: drivers/dma/ioat/
 F: doc/guides/dmadevs/ioat.rst
 
-HiSilicon DMA
+HiSilicon PCIEP DMA
 M: Chengwen Feng <fengchengwen@huawei.com>
-F: drivers/dma/hisilicon/
-F: doc/guides/dmadevs/hisilicon.rst
+F: drivers/dma/hisi_pciep/
+F: doc/guides/dmadevs/hisi_pciep.rst
+
+HiSilicon Accelerator DMA
+M: Chengwen Feng <fengchengwen@huawei.com>
+F: drivers/dma/hisi_acc/
+F: doc/guides/dmadevs/hisi_acc.rst
 
 Marvell CNXK DPI DMA
 M: Vamsi Attunuru <vattunuru@marvell.com>
@@ -1486,7 +1510,6 @@ F: drivers/event/dpaa2/
 F: doc/guides/eventdevs/dpaa2.rst
 
 Software Eventdev PMD
-M: Harry van Haaren <harry.van.haaren@intel.com>
 F: drivers/event/sw/
 F: doc/guides/eventdevs/sw.rst
 F: examples/eventdev_pipeline/
@@ -1884,6 +1907,7 @@ M: Konstantin Ananyev <konstantin.v.ananyev@yandex.ru>
 F: lib/bpf/
 F: examples/bpf/
 F: app/test/test_bpf.c
+F: app/test/bpf/
 F: app/test-pmd/bpf_cmd.*
 F: doc/guides/prog_guide/bpf_lib.rst
 
@@ -1981,7 +2005,7 @@ F: app/proc-info/
 F: doc/guides/tools/proc_info.rst
 
 DTS
-M: Paul Szczepanek <paul.szczepanek@arm.com>
+M: Luca Vizzarro <luca.vizzarro@arm.com>
 M: Patrick Robb <probb@iol.unh.edu>
 T: git://dpdk.org/next/dpdk-next-dts
 F: dts/

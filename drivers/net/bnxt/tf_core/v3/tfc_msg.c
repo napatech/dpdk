@@ -61,6 +61,79 @@ static int tfc_msg_set_fid(struct bnxt *bp, uint16_t req_fid, uint16_t *msg_fid)
 	return 0;
 }
 
+/*
+ * Lookup table to map TFC local blocktype values to HWRM equivalents. Does
+ * this on a per HWRM command basis.
+ */
+enum tfc_hwrm_idx_tbl_cmds {
+	IDX_TBL_ALLOC,
+	IDX_TBL_ALLOC_SET,
+	IDX_TBL_SET,
+	IDX_TBL_GET,
+	IDX_TBL_FREE,
+	IDX_TBL_LAST = IDX_TBL_FREE,
+	IDX_TBL_MAX
+};
+
+#define CMD_TO_HWRM_BLKT(tfc_cmd, blktype)	\
+		HWRM_TFC_##tfc_cmd##_INPUT_BLKTYPE_BLKTYPE_##blktype
+
+uint8_t cfa_res_to_hwrm_blkt_lkup_tbl[IDX_TBL_MAX][CFA_IDX_TBL_BLKTYPE_MAX] = {
+	[IDX_TBL_ALLOC] = {
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC, CFA),
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC, RXP),
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC, RE_GPARSE),
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC, TE_GPARSE),
+	},
+	[IDX_TBL_ALLOC_SET] = {
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC_SET, CFA),
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC_SET, RXP),
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC_SET, RE_GPARSE),
+		CMD_TO_HWRM_BLKT(IDX_TBL_ALLOC_SET, TE_GPARSE),
+	},
+	[IDX_TBL_SET] = {
+		CMD_TO_HWRM_BLKT(IDX_TBL_SET, CFA),
+		CMD_TO_HWRM_BLKT(IDX_TBL_SET, RXP),
+		CMD_TO_HWRM_BLKT(IDX_TBL_SET, RE_GPARSE),
+		CMD_TO_HWRM_BLKT(IDX_TBL_SET, TE_GPARSE),
+	},
+	[IDX_TBL_GET] = {
+		CMD_TO_HWRM_BLKT(IDX_TBL_GET, CFA),
+		CMD_TO_HWRM_BLKT(IDX_TBL_GET, RXP),
+		CMD_TO_HWRM_BLKT(IDX_TBL_GET, RE_GPARSE),
+		CMD_TO_HWRM_BLKT(IDX_TBL_GET, TE_GPARSE),
+	},
+	[IDX_TBL_FREE] = {
+		CMD_TO_HWRM_BLKT(IDX_TBL_FREE, CFA),
+		CMD_TO_HWRM_BLKT(IDX_TBL_FREE, RXP),
+		CMD_TO_HWRM_BLKT(IDX_TBL_FREE, RE_GPARSE),
+		CMD_TO_HWRM_BLKT(IDX_TBL_FREE, TE_GPARSE),
+	},
+};
+
+/*
+ * Maps TFC local blocktype values to HWRM equivalents. This function is
+ * required as each HWRM idx_tbl msg (alloc, alloc_set, get_set, free) has
+ * their own #defines, even though the values are the same across messages.
+ * Using this macro maps the appropriate TFC block type correctly to its HWRM
+ * msg relative equivalent. Returns an ERROR value if either idxtbl cmd OR
+ * blocktype is invalid.
+ */
+#define HWRM_BLKTYPE_ERR	0xff
+static uint8_t
+cfa_res_to_hwrm_blkt_lkup(enum cfa_resource_blktype_idx_tbl blktype,
+			  enum tfc_hwrm_idx_tbl_cmds idxtbl_cmd)
+{
+	if ((idxtbl_cmd) > IDX_TBL_LAST ||
+	    (blktype) > CFA_IDX_TBL_BLKTYPE_LAST) {
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid blocktype [%u]",
+				 __func__, (blktype));
+		return -EINVAL;
+	}
+
+	return cfa_res_to_hwrm_blkt_lkup_tbl[idxtbl_cmd][blktype];
+}
+
 /**
  * Allocates a DMA buffer that can be used for message transfer.
  *
@@ -108,6 +181,8 @@ tfc_msg_free_dma_buf(struct tfc_msg_dma_buf *buf)
 int
 tfc_msg_tbl_scope_qcaps(struct tfc *tfcp,
 			bool *tbl_scope_capable,
+			bool *global_scope_capable,
+			bool *locked_scope_capable,
 			uint32_t *max_lkup_rec_cnt,
 			uint32_t *max_act_rec_cnt,
 			uint8_t	*max_lkup_static_buckets_exp)
@@ -127,8 +202,24 @@ tfc_msg_tbl_scope_qcaps(struct tfc *tfcp,
 		return -EINVAL;
 	}
 
+	if (global_scope_capable == NULL) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "%s: Invalid global_scope_capable pointer",
+				 __func__);
+		return -EINVAL;
+	}
+
+	if (tbl_scope_capable == NULL) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "%s: Invalid locked_scope_capable pointer",
+				 __func__);
+		return -EINVAL;
+	}
+
 	bp = tfcp->bp;
 	*tbl_scope_capable = false;
+	*global_scope_capable = false;
+	*locked_scope_capable = false;
 
 	rc = bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_TBL_SCOPE_QCAPS,
 					 &req, sizeof(req), &resp,
@@ -138,6 +229,10 @@ tfc_msg_tbl_scope_qcaps(struct tfc *tfcp,
 
 	if (resp.tbl_scope_capable) {
 		*tbl_scope_capable = true;
+		if (resp.flags & HWRM_TFC_TBL_SCOPE_QCAPS_OUTPUT_FLAGS_GLOBAL)
+			*global_scope_capable = true;
+		if (resp.flags & HWRM_TFC_TBL_SCOPE_QCAPS_OUTPUT_FLAGS_LOCKED)
+			*locked_scope_capable = true;
 		if (max_lkup_rec_cnt)
 			*max_lkup_rec_cnt =
 				rte_le_to_cpu_32(resp.max_lkup_rec_cnt);
@@ -153,7 +248,7 @@ tfc_msg_tbl_scope_qcaps(struct tfc *tfcp,
 }
 int
 tfc_msg_tbl_scope_id_alloc(struct tfc *tfcp, uint16_t fid,
-			   bool shared, enum cfa_app_type app_type,
+			   enum cfa_scope_type scope_type, enum cfa_app_type app_type,
 			   uint8_t *tsid,
 			   bool *first)
 {
@@ -174,8 +269,21 @@ tfc_msg_tbl_scope_id_alloc(struct tfc *tfcp, uint16_t fid,
 
 	bp = tfcp->bp;
 	req.app_type = app_type;
-	req.shared = shared;
-
+	switch (scope_type) {
+	case CFA_SCOPE_TYPE_NON_SHARED:
+		req.scope_type = HWRM_TFC_TBL_SCOPE_ID_ALLOC_INPUT_SCOPE_TYPE_NON_SHARED;
+		break;
+	case CFA_SCOPE_TYPE_SHARED_APP:
+		req.scope_type = HWRM_TFC_TBL_SCOPE_ID_ALLOC_INPUT_SCOPE_TYPE_SHARED_APP;
+		break;
+	case CFA_SCOPE_TYPE_GLOBAL:
+		req.scope_type = HWRM_TFC_TBL_SCOPE_ID_ALLOC_INPUT_SCOPE_TYPE_GLOBAL;
+		break;
+	default:
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid scope_type",
+				 __func__);
+		return -EINVAL;
+	}
 	rc = tfc_msg_set_fid(bp, fid, &req.fid);
 	if (rc)
 		return rc;
@@ -321,28 +429,6 @@ tfc_msg_backing_store_cfg_v2(struct tfc *tfcp, uint8_t tsid, enum cfa_dir dir,
 }
 
 int
-tfc_msg_tbl_scope_deconfig(struct tfc *tfcp, uint8_t tsid)
-{
-	struct hwrm_tfc_tbl_scope_deconfig_input req = { 0 };
-	struct hwrm_tfc_tbl_scope_deconfig_output resp = { 0 };
-	struct bnxt *bp;
-	int rc;
-
-	if (tfcp == NULL) {
-		PMD_DRV_LOG_LINE(ERR, "Invalid tfcp pointer");
-		return -EINVAL;
-	}
-
-	bp = tfcp->bp;
-	req.tsid = tsid;
-	rc = bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_TBL_SCOPE_DECONFIG,
-					 &req, sizeof(req), &resp,
-					 sizeof(resp));
-
-	return rc;
-}
-
-int
 tfc_msg_tbl_scope_fid_add(struct tfc *tfcp, uint16_t fid,
 			  uint8_t tsid, uint16_t *fid_cnt)
 {
@@ -406,7 +492,7 @@ int
 tfc_msg_idx_tbl_alloc(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 		      enum cfa_track_type tt, enum cfa_dir dir,
 		      enum cfa_resource_subtype_idx_tbl subtype,
-		      uint16_t *id)
+		      uint16_t *id, enum cfa_resource_blktype_idx_tbl blktype)
 
 {
 	int rc = 0;
@@ -430,7 +516,13 @@ tfc_msg_idx_tbl_alloc(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 	if (rc)
 		return rc;
 	req.sid = rte_le_to_cpu_16(sid);
-	req.subtype = rte_le_to_cpu_16(subtype);
+	req.subtype = (uint8_t)subtype;
+	req.blktype = cfa_res_to_hwrm_blkt_lkup(blktype, IDX_TBL_ALLOC);
+	if (req.blktype == HWRM_BLKTYPE_ERR) {
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid blocktype [%u]",
+				 __func__, blktype);
+		return -EINVAL;
+	}
 
 	rc = bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_IDX_TBL_ALLOC,
 					 &req, sizeof(req), &resp, sizeof(resp));
@@ -446,7 +538,7 @@ tfc_msg_idx_tbl_alloc_set(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 			  enum cfa_track_type tt, enum cfa_dir dir,
 			  enum cfa_resource_subtype_idx_tbl subtype,
 			  const uint32_t *dev_data, uint8_t data_size,
-			  uint16_t *id)
+			  uint16_t *id, enum cfa_resource_blktype_idx_tbl blktype)
 
 {
 	int rc = 0;
@@ -473,6 +565,13 @@ tfc_msg_idx_tbl_alloc_set(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 		return rc;
 	req.sid = rte_le_to_cpu_16(sid);
 	req.subtype = rte_le_to_cpu_16(subtype);
+	req.blktype = cfa_res_to_hwrm_blkt_lkup(blktype, IDX_TBL_ALLOC_SET);
+	if (req.blktype == HWRM_BLKTYPE_ERR) {
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid blocktype [%u]",
+				 __func__, blktype);
+		return -EINVAL;
+	}
+
 	req.data_size = rte_le_to_cpu_16(data_size);
 
 	if (req.data_size >= sizeof(req.dev_data)) {
@@ -504,7 +603,8 @@ int
 tfc_msg_idx_tbl_set(struct tfc *tfcp, uint16_t fid,
 		    uint16_t sid, enum cfa_dir dir,
 		    enum cfa_resource_subtype_idx_tbl subtype, uint16_t id,
-		    const uint32_t *dev_data, uint8_t data_size)
+		    const uint32_t *dev_data, uint8_t data_size,
+		    enum cfa_resource_blktype_idx_tbl blktype)
 {
 	int rc = 0;
 	struct bnxt *bp = tfcp->bp;
@@ -526,6 +626,13 @@ tfc_msg_idx_tbl_set(struct tfc *tfcp, uint16_t fid,
 	req.sid = rte_le_to_cpu_16(sid);
 	req.idx_tbl_id = rte_le_to_cpu_16(id);
 	req.subtype = rte_le_to_cpu_16(subtype);
+	req.blktype = cfa_res_to_hwrm_blkt_lkup(blktype, IDX_TBL_SET);
+	if (req.blktype == HWRM_BLKTYPE_ERR) {
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid blocktype [%u]",
+				 __func__, blktype);
+		return -EINVAL;
+	}
+
 	req.data_size = rte_le_to_cpu_16(data_size);
 	rc = tfc_msg_alloc_dma_buf(&buf, data_size);
 	if (rc)
@@ -555,7 +662,8 @@ int
 tfc_msg_idx_tbl_get(struct tfc *tfcp, uint16_t fid,
 		    uint16_t sid, enum cfa_dir dir,
 		    enum cfa_resource_subtype_idx_tbl subtype, uint16_t id,
-		    uint32_t *dev_data, uint8_t *data_size)
+		    uint32_t *dev_data, uint8_t *data_size,
+		    enum cfa_resource_blktype_idx_tbl blktype)
 {
 	int rc = 0;
 	struct bnxt *bp = tfcp->bp;
@@ -576,6 +684,13 @@ tfc_msg_idx_tbl_get(struct tfc *tfcp, uint16_t fid,
 	req.sid = rte_cpu_to_le_16(sid);
 	req.idx_tbl_id = rte_cpu_to_le_16(id);
 	req.subtype = rte_cpu_to_le_16(subtype);
+	req.blktype = cfa_res_to_hwrm_blkt_lkup(blktype, IDX_TBL_GET);
+	if (req.blktype == HWRM_BLKTYPE_ERR) {
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid blocktype [%u]",
+				 __func__, blktype);
+		return -EINVAL;
+	}
+
 	req.buffer_size = rte_cpu_to_le_16(*data_size);
 
 	rc = tfc_msg_alloc_dma_buf(&buf, *data_size);
@@ -600,7 +715,8 @@ cleanup:
 int
 tfc_msg_idx_tbl_free(struct tfc *tfcp, uint16_t fid,
 		     uint16_t sid, enum cfa_dir dir,
-		     enum cfa_resource_subtype_idx_tbl subtype, uint16_t id)
+		     enum cfa_resource_subtype_idx_tbl subtype, uint16_t id,
+		     enum cfa_resource_blktype_idx_tbl blktype)
 {
 	struct bnxt *bp = tfcp->bp;
 	struct hwrm_tfc_idx_tbl_free_input req = { 0 };
@@ -620,62 +736,47 @@ tfc_msg_idx_tbl_free(struct tfc *tfcp, uint16_t fid,
 	req.sid = rte_cpu_to_le_16(sid);
 	req.idx_tbl_id = rte_cpu_to_le_16(id);
 	req.subtype = rte_cpu_to_le_16(subtype);
+	req.blktype = cfa_res_to_hwrm_blkt_lkup(blktype, IDX_TBL_FREE);
+	if (req.blktype == HWRM_BLKTYPE_ERR) {
+		PMD_DRV_LOG_LINE(ERR, "%s: Invalid blocktype [%u]",
+				 __func__, blktype);
+		return -EINVAL;
+	}
 
 	return bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_IDX_TBL_FREE,
 					   &req, sizeof(req), &resp, sizeof(resp));
 }
 
 int tfc_msg_global_id_alloc(struct tfc *tfcp, uint16_t fid, uint16_t sid,
-			    enum tfc_domain_id domain_id, uint16_t req_cnt,
 			    const struct tfc_global_id_req *glb_id_req,
-			    struct tfc_global_id *rsp, uint16_t *rsp_cnt,
+			    struct tfc_global_id *rsp,
 			    bool *first)
 {
 	int rc = 0;
-	int i = 0;
 	struct bnxt *bp = tfcp->bp;
 	struct hwrm_tfc_global_id_alloc_input hwrm_req;
 	struct hwrm_tfc_global_id_alloc_output hwrm_resp;
-	struct tfc_global_id_hwrm_req *req_data;
-	struct tfc_global_id_hwrm_rsp *rsp_data;
-	struct tfc_msg_dma_buf req_buf = { 0 };
-	struct tfc_msg_dma_buf rsp_buf = { 0 };
-	int dma_size;
-	int resp_cnt = 0;
-
-	/* Prepare DMA buffers */
-	dma_size = req_cnt * sizeof(struct tfc_global_id_req);
-	rc = tfc_msg_alloc_dma_buf(&req_buf, dma_size);
-	if (rc)
-		return rc;
-
-	for (i = 0; i < req_cnt; i++)
-		resp_cnt += glb_id_req->cnt;
-	dma_size = resp_cnt * sizeof(struct tfc_global_id);
-	*rsp_cnt = resp_cnt;
-	rc = tfc_msg_alloc_dma_buf(&rsp_buf, dma_size);
-	if (rc) {
-		tfc_msg_free_dma_buf(&req_buf);
-		return rc;
-	}
 
 	/* Populate the request */
 	rc = tfc_msg_set_fid(bp, fid, &hwrm_req.fid);
 	if (rc)
-		goto cleanup;
+		return rc;
 
 	hwrm_req.sid = rte_cpu_to_le_16(sid);
-	hwrm_req.global_id = rte_cpu_to_le_16(domain_id);
-	hwrm_req.req_cnt = req_cnt;
-	hwrm_req.req_addr = rte_cpu_to_le_64(req_buf.pa_addr);
-	hwrm_req.resc_addr = rte_cpu_to_le_64(rsp_buf.pa_addr);
-	req_data = (struct tfc_global_id_hwrm_req *)req_buf.va_addr;
-	for (i = 0; i < req_cnt; i++) {
-		req_data[i].rtype = rte_cpu_to_le_16(glb_id_req[i].rtype);
-		req_data[i].dir = rte_cpu_to_le_16(glb_id_req[i].dir);
-		req_data[i].subtype = rte_cpu_to_le_16(glb_id_req[i].rsubtype);
-		req_data[i].cnt = rte_cpu_to_le_16(glb_id_req[i].cnt);
-	}
+	hwrm_req.rtype = rte_cpu_to_le_16(glb_id_req->rtype);
+	hwrm_req.subtype = glb_id_req->rsubtype;
+
+	if (glb_id_req->dir == CFA_DIR_RX)
+		hwrm_req.flags = HWRM_TFC_GLOBAL_ID_ALLOC_INPUT_FLAGS_DIR_RX;
+	else
+		hwrm_req.flags = HWRM_TFC_GLOBAL_ID_ALLOC_INPUT_FLAGS_DIR_TX;
+
+	/* check the destination length before copy */
+	if (glb_id_req->context_len > sizeof(hwrm_req.context_id))
+		return -EINVAL;
+
+	memcpy(hwrm_req.context_id, glb_id_req->context_id,
+	       glb_id_req->context_len);
 
 	rc = bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_GLOBAL_ID_ALLOC,
 					 &hwrm_req, sizeof(hwrm_req), &hwrm_resp,
@@ -687,29 +788,33 @@ int tfc_msg_global_id_alloc(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 			else
 				*first = false;
 		}
+		rsp->id = hwrm_resp.global_id;
 	}
+	return rc;
+}
+int tfc_msg_global_id_free(struct tfc *tfcp, uint16_t fid, uint16_t sid,
+			   const struct tfc_global_id_req *glb_id_req)
+{
+	int rc = 0;
+	struct bnxt *bp = tfcp->bp;
 
-	/* Process the response
-	 * Should always get expected number of entries
-	 */
-	if (rte_le_to_cpu_32(hwrm_resp.rsp_cnt) != *rsp_cnt) {
-		PMD_DRV_LOG_LINE(ERR, "Alloc message size error, rc:%s",
-				 strerror(-EINVAL));
-		rc = -EINVAL;
-		goto cleanup;
-	}
+	struct hwrm_tfc_global_id_free_input hwrm_req;
+	struct hwrm_tfc_global_id_free_output hwrm_resp;
 
-	rsp_data = (struct tfc_global_id_hwrm_rsp *)rsp_buf.va_addr;
-	for (i = 0; i < *rsp_cnt; i++) {
-		rsp[i].rtype = rte_le_to_cpu_32(rsp_data[i].rtype);
-		rsp[i].dir = rte_le_to_cpu_32(rsp_data[i].dir);
-		rsp[i].rsubtype = rte_le_to_cpu_32(rsp_data[i].subtype);
-		rsp[i].id = rte_le_to_cpu_32(rsp_data[i].id);
-	}
+	/* Populate the request */
+	rc = tfc_msg_set_fid(bp, fid, &hwrm_req.fid);
+	if (rc)
+		return rc;
 
-cleanup:
-	tfc_msg_free_dma_buf(&req_buf);
-	tfc_msg_free_dma_buf(&rsp_buf);
+	hwrm_req.sid = rte_cpu_to_le_16(sid);
+	hwrm_req.rtype = rte_cpu_to_le_16(glb_id_req->rtype);
+	hwrm_req.subtype = glb_id_req->rsubtype;
+	hwrm_req.dir = glb_id_req->dir;
+	hwrm_req.global_id = rte_cpu_to_le_16(glb_id_req->resource_id);
+
+	rc = bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_GLOBAL_ID_FREE,
+					 &hwrm_req, sizeof(hwrm_req), &hwrm_resp,
+					 sizeof(hwrm_resp));
 	return rc;
 }
 
@@ -1092,6 +1197,38 @@ tfc_msg_tcam_free(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 }
 
 int
+tfc_msg_tcam_prioriry_update(struct tfc *tfcp, uint16_t fid, uint16_t sid,
+			     enum cfa_dir dir, enum cfa_track_type tt,
+			     enum cfa_resource_subtype_tcam subtype,
+			     uint16_t tcam_id, uint16_t priority)
+{
+	int rc = 0;
+	struct bnxt *bp = tfcp->bp;
+	struct hwrm_tfc_tcam_pri_update_input req = { 0 };
+	struct hwrm_tfc_tcam_pri_update_output resp = { 0 };
+
+	req.flags = (dir == CFA_DIR_TX ?
+		     HWRM_TFC_TCAM_SET_INPUT_FLAGS_DIR_TX :
+		     HWRM_TFC_TCAM_SET_INPUT_FLAGS_DIR_RX);
+
+	rc = tfc_msg_set_fid(bp, fid, &req.fid);
+	if (rc)
+		return rc;
+	req.sid = rte_le_to_cpu_16(sid);
+	req.tcam_id = rte_le_to_cpu_16(tcam_id);
+	req.subtype = (uint8_t)subtype;
+	req.priority = rte_le_to_cpu_16(priority);
+	req.track_type = (tt == CFA_TRACK_TYPE_FID ?
+			  HWRM_TFC_TCAM_PRI_UPDATE_INPUT_TRACK_TYPE_TRACK_TYPE_FID :
+			  HWRM_TFC_TCAM_PRI_UPDATE_INPUT_TRACK_TYPE_TRACK_TYPE_SID);
+
+	rc = bnxt_hwrm_tf_message_direct(bp, false, HWRM_TFC_TCAM_PRI_UPDATE,
+					 &req, sizeof(req), &resp,
+					 sizeof(resp));
+	return rc;
+}
+
+int
 tfc_msg_if_tbl_set(struct tfc *tfcp, uint16_t fid, uint16_t sid,
 		   enum cfa_dir dir, enum cfa_resource_subtype_if_tbl subtype,
 		   uint16_t index, uint8_t data_size, const uint8_t *data)
@@ -1195,3 +1332,55 @@ int tfc_msg_resc_usage_query(struct tfc *tfcp, uint16_t sid, enum cfa_dir dir,
 	return rc;
 }
 #endif /* TF_FLOW_SCALE_QUERY */
+
+int
+tfc_msg_hot_upgrade_process(struct tfc *tfcp, uint16_t fid, uint16_t sid,
+			    uint8_t app_inst_id,
+			    enum cfa_hot_upgrade_cmd_op cmd_op,
+			    uint8_t cur_cnt,
+			    uint8_t *app_inst_cnt)
+{
+	struct hwrm_tfc_hot_upgrade_process_input req = { 0 };
+	struct hwrm_tfc_hot_upgrade_process_output resp = { 0 };
+	struct bnxt *bp = tfcp->bp;
+	int rc = 0;
+
+	rc = tfc_msg_set_fid(bp, fid, &req.fid);
+	if (rc)
+		return rc;
+	req.sid = rte_le_to_cpu_16(sid);
+	req.app_id = app_inst_id;
+	req.cur_session_cnt = cur_cnt;
+
+	switch (cmd_op) {
+	case CFA_HOT_UPGRADE_CMD_ALLOC:
+		req.cmd = HWRM_TFC_HOT_UPGRADE_PROCESS_INPUT_CMD_ALLOC;
+		break;
+	case CFA_HOT_UPGRADE_CMD_FREE:
+		req.cmd = HWRM_TFC_HOT_UPGRADE_PROCESS_INPUT_CMD_FREE;
+		break;
+	case CFA_HOT_UPGRADE_CMD_GET:
+		req.cmd = HWRM_TFC_HOT_UPGRADE_PROCESS_INPUT_CMD_GET;
+		break;
+	case CFA_HOT_UPGRADE_CMD_SET:
+		req.cmd = HWRM_TFC_HOT_UPGRADE_PROCESS_INPUT_CMD_SET;
+		break;
+	default:
+		PMD_DRV_LOG_LINE(ERR, "invalid command opcode %u",
+				 cmd_op);
+		return -EINVAL;
+	}
+	rc = bnxt_hwrm_tf_message_direct(bp, false,
+					 HWRM_TFC_HOT_UPGRADE_PROCESS,
+					 &req, sizeof(req), &resp,
+					 sizeof(resp));
+	if (rc) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "sid[%u]:instance[%u]:cmd_op[%u] failed",
+				 sid, app_inst_id, cmd_op);
+		return rc;
+	}
+
+	*app_inst_cnt = resp.session_cnt;
+	return rc;
+}

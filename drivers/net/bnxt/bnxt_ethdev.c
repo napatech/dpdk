@@ -107,6 +107,8 @@ static const struct rte_pci_id bnxt_pci_id_map[] = {
 #define BNXT_DEVARG_IEEE_1588	"ieee-1588"
 #define BNXT_DEVARG_CQE_MODE	"cqe-mode"
 #define BNXT_DEVARG_MPC		"mpc"
+#define BNXT_DEVARG_SCALAR_MODE	"scalar-mode"
+#define BNXT_DEVARD_APP_INST_ID "app-instance-id"
 
 static const char *const bnxt_dev_args[] = {
 	BNXT_DEVARG_REPRESENTOR,
@@ -122,6 +124,8 @@ static const char *const bnxt_dev_args[] = {
 	BNXT_DEVARG_IEEE_1588,
 	BNXT_DEVARG_CQE_MODE,
 	BNXT_DEVARG_MPC,
+	BNXT_DEVARG_SCALAR_MODE,
+	BNXT_DEVARD_APP_INST_ID,
 	NULL
 };
 
@@ -149,14 +153,12 @@ static const struct rte_eth_speed_lanes_capa speed_lanes_capa_tbl[] = {
 #define BNXT_DEVARG_CQE_MODE_INVALID(val)		((val) > 1)
 
 /*
- * mpc = an non-negative 8-bit number
- */
-#define BNXT_DEVARG_MPC_INVALID(val)			((val) > 1)
-
-/*
  * app-id = an non-negative 8-bit number
  */
 #define BNXT_DEVARG_APP_ID_INVALID(val)			((val) > 255)
+
+/* app-instance-id = an non-negative 3-bit number */
+#define BNXT_DEVARG_APP_INSTANCE_ID_INVALID(val)	((val) > 8)
 
 /*
  * ieee-1588 = an non-negative 8-bit number
@@ -200,7 +202,6 @@ static const struct rte_eth_speed_lanes_capa speed_lanes_capa_tbl[] = {
 #define BNXT_DEVARG_REP_FC_F2R_INVALID(rep_fc_f2r)	((rep_fc_f2r) > 1)
 
 int bnxt_cfa_code_dynfield_offset = -1;
-unsigned long mpc;
 
 /*
  * max_num_kflows must be >= 32
@@ -918,11 +919,13 @@ skip_cosq_cfg:
 	for (j = 0; j < bp->rx_nr_rings; j++) {
 		struct bnxt_rx_queue *rxq = bp->rx_queues[j];
 
+		__rte_assume(j < RTE_MAX_QUEUES_PER_PORT);
+		/* If not deferred start then change only the state of the */
+		/* queue based on the queue rx_started flag */
 		if (!rxq->rx_deferred_start) {
-			__rte_assume(j < RTE_MAX_QUEUES_PER_PORT);
-			bp->eth_dev->data->rx_queue_state[j] =
+			if (rxq->rx_started)
+				bp->eth_dev->data->rx_queue_state[j] =
 				RTE_ETH_QUEUE_STATE_STARTED;
-			rxq->rx_started = true;
 		}
 	}
 
@@ -1447,7 +1450,7 @@ bnxt_receive_function(struct rte_eth_dev *eth_dev)
 	 * asynchronous completions and receive completions can be placed in
 	 * the same completion ring.
 	 */
-	if ((BNXT_TRUFLOW_EN(bp) && !BNXT_CHIP_P7(bp)) ||
+	if ((BNXT_TRUFLOW_EN(bp) && BNXT_REP_MODE_EN(bp)) ||
 	    !BNXT_NUM_ASYNC_CPR(bp))
 		goto use_scalar_rx;
 
@@ -1523,7 +1526,7 @@ bnxt_transmit_function(__rte_unused struct rte_eth_dev *eth_dev)
 	 */
 	if (eth_dev->data->scattered_rx ||
 	    (offloads & ~RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) ||
-	    (BNXT_TRUFLOW_EN(bp) && !BNXT_CHIP_P7(bp)) ||
+	    (BNXT_TRUFLOW_EN(bp) && BNXT_REP_MODE_EN(bp)) ||
 	    bp->ieee_1588)
 		goto use_scalar_tx;
 
@@ -1750,8 +1753,7 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 	/* Process any remaining notifications in default completion queue */
 	bnxt_int_handler(eth_dev);
 
-	if (mpc != 0)
-		bnxt_mpc_close(bp);
+	bnxt_mpc_close(bp);
 
 	bnxt_shutdown_nic(bp);
 	bnxt_hwrm_if_change(bp, false);
@@ -1847,11 +1849,9 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	if (rc)
 		goto error;
 
-	if (mpc != 0) {
-		rc = bnxt_mpc_open(bp);
-		if (rc != 0)
-			PMD_DRV_LOG_LINE(DEBUG, "MPC open failed");
-	}
+	rc = bnxt_mpc_open(bp);
+	if (rc != 0)
+		PMD_DRV_LOG_LINE(DEBUG, "MPC open failed");
 
 	rc = bnxt_alloc_prev_ring_stats(bp);
 	if (rc)
@@ -2161,9 +2161,15 @@ static int bnxt_promiscuous_enable_op(struct rte_eth_dev *eth_dev)
 	old_flags = vnic->flags;
 	vnic->flags |= BNXT_VNIC_INFO_PROMISC;
 	rc = bnxt_hwrm_cfa_l2_set_rx_mask(bp, vnic, 0, NULL);
-	if (rc != 0)
+	if (rc != 0) {
 		vnic->flags = old_flags;
-
+		return rc;
+	}
+	rc = bnxt_ulp_promisc_mode_set(bp, 1);
+	if (rc != 0) {
+		vnic->flags = old_flags;
+		rc = bnxt_hwrm_cfa_l2_set_rx_mask(bp, vnic, 0, NULL);
+	}
 	return rc;
 }
 
@@ -2184,6 +2190,11 @@ static int bnxt_promiscuous_disable_op(struct rte_eth_dev *eth_dev)
 
 	if (bp->vnic_info == NULL)
 		return 0;
+
+	if (bnxt_ulp_promisc_mode_set(bp, 0)) {
+		PMD_DRV_LOG_LINE(ERR, "Unable to disable promiscuous mode");
+		return -EINVAL;
+	}
 
 	vnic = bnxt_get_default_vnic(bp);
 
@@ -2478,6 +2489,17 @@ static int bnxt_rss_hash_conf_get_op(struct rte_eth_dev *eth_dev,
 			memcpy(rss_conf->rss_key, vnic->rss_hash_key, len);
 		}
 		bnxt_hwrm_rss_to_rte_hash_conf(vnic, &rss_conf->rss_hf);
+		/* HASH_TYPE_IPV6_FLOW_LABEL and HASH_TYPE_IPV6 are mutually
+		 * exclusive in hardware. See related comments in
+		 * bnxt_rte_to_hwrm_hash_types(). If the cached user config
+		 * has both bits enabled, make sure both are reported in
+		 * conf_get_op().
+		 */
+		if (bp->rss_conf.rss_hf &&
+		    (bp->rss_conf.rss_hf &
+		    (RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_IPV6_FLOW_LABEL)) &&
+		    (rss_conf->rss_hf & RTE_ETH_RSS_IPV6_FLOW_LABEL))
+			rss_conf->rss_hf |= RTE_ETH_RSS_IPV6;
 		rss_conf->rss_hf |=
 			bnxt_hwrm_to_rte_rss_level(bp, vnic->hash_mode);
 	} else {
@@ -2604,7 +2626,6 @@ bnxt_udp_tunnel_port_add_op(struct rte_eth_dev *eth_dev,
 				PMD_DRV_LOG_LINE(ERR, "Only one port allowed");
 				return -ENOSPC;
 			}
-			bp->vxlan_port_cnt++;
 			return 0;
 		}
 		tunnel_type =
@@ -2618,7 +2639,6 @@ bnxt_udp_tunnel_port_add_op(struct rte_eth_dev *eth_dev,
 				PMD_DRV_LOG_LINE(ERR, "Only one port allowed");
 				return -ENOSPC;
 			}
-			bp->geneve_port_cnt++;
 			return 0;
 		}
 		tunnel_type =
@@ -2632,7 +2652,6 @@ bnxt_udp_tunnel_port_add_op(struct rte_eth_dev *eth_dev,
 				PMD_DRV_LOG_LINE(ERR, "Only one port allowed");
 				return -ENOSPC;
 			}
-			bp->ecpri_port_cnt++;
 			return 0;
 		}
 		tunnel_type =
@@ -3407,7 +3426,7 @@ bnxt_dev_led_off_op(struct rte_eth_dev *dev)
 	return bnxt_hwrm_port_led_cfg(bp, false);
 }
 
-static uint32_t
+static int
 bnxt_rx_queue_count_op(void *rx_queue)
 {
 	struct bnxt *bp;
@@ -4309,7 +4328,6 @@ static int bnxt_get_module_eeprom(struct rte_eth_dev *dev,
 	return length ? -EINVAL : 0;
 }
 
-#if (RTE_VERSION_NUM(22, 11, 0, 0) <= RTE_VERSION)
 static int bnxt_speed_lanes_set(struct rte_eth_dev *dev, uint32_t speed_lanes)
 {
 	struct bnxt *bp = dev->data->dev_private;
@@ -4406,8 +4424,6 @@ static int bnxt_speed_lanes_get(struct rte_eth_dev *dev, uint32_t *lanes)
 	return 0;
 }
 
-#endif
-
 /*
  * Initialization
  */
@@ -4479,11 +4495,9 @@ static const struct eth_dev_ops bnxt_dev_ops = {
 	.timesync_read_rx_timestamp = bnxt_timesync_read_rx_timestamp,
 	.timesync_read_tx_timestamp = bnxt_timesync_read_tx_timestamp,
 	.mtr_ops_get = bnxt_flow_meter_ops_get,
-#if (RTE_VERSION_NUM(22, 11, 0, 0) <= RTE_VERSION)
 	.speed_lanes_get = bnxt_speed_lanes_get,
 	.speed_lanes_set = bnxt_speed_lanes_set,
 	.speed_lanes_get_capa = bnxt_speed_lanes_get_capa,
-#endif
 };
 
 static uint32_t bnxt_map_reset_regs(struct bnxt *bp, uint32_t reg)
@@ -6060,6 +6074,40 @@ bnxt_parse_devarg_cqe_mode(__rte_unused const char *key,
 }
 
 static int
+bnxt_parse_devarg_app_instance_id(__rte_unused const char *key,
+				  const char *value, void *opaque_arg)
+{
+	struct bnxt *bp = opaque_arg;
+	unsigned long app_instance_id;
+	char *end = NULL;
+
+	if (!opaque_arg) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid param passed to app-instance-id devarg");
+		return -EINVAL;
+	}
+
+	app_instance_id = strtoul(value, &end, 10);
+	if (end == NULL || *end != '\0' ||
+	    (app_instance_id == ULONG_MAX && errno == ERANGE)) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid parameter passed to instance devargs");
+		return -EINVAL;
+	}
+
+	if (BNXT_DEVARG_APP_INSTANCE_ID_INVALID(app_instance_id)) {
+		PMD_DRV_LOG_LINE(ERR, "Invalid app-instance-id(%d) devargs",
+				 (uint16_t)app_instance_id);
+		return -EINVAL;
+	}
+
+	bp->app_instance_id = app_instance_id;
+	PMD_DRV_LOG_LINE(INFO, "app_instance_id=%u feature enabled",
+			 (uint16_t)app_instance_id);
+	return 0;
+}
+
+static int
 bnxt_parse_devarg_app_id(__rte_unused const char *key,
 				 const char *value, void *opaque_arg)
 {
@@ -6096,37 +6144,6 @@ bnxt_parse_devarg_app_id(__rte_unused const char *key,
 }
 
 static int
-bnxt_parse_devarg_mpc(__rte_unused const char *key,
-		      const char *value, __rte_unused void *opaque_arg)
-{
-	char *end = NULL;
-
-	if (!value || !opaque_arg) {
-		PMD_DRV_LOG_LINE(ERR,
-				 "Invalid parameter passed to app-id "
-				 "devargs");
-		return -EINVAL;
-	}
-
-	mpc = strtoul(value, &end, 10);
-	if (end == NULL || *end != '\0' ||
-	    (mpc == ULONG_MAX && errno == ERANGE)) {
-		PMD_DRV_LOG_LINE(ERR, "Invalid parameter passed to mpc "
-				 "devargs");
-		return -EINVAL;
-	}
-
-	if (BNXT_DEVARG_MPC_INVALID(mpc)) {
-		PMD_DRV_LOG_LINE(ERR, "Invalid mpc(%d) devargs",
-				 (uint16_t)mpc);
-		return -EINVAL;
-	}
-
-	PMD_DRV_LOG_LINE(INFO, "MPC%d feature enabled", (uint16_t)mpc);
-	return 0;
-}
-
-static int
 bnxt_parse_devarg_ieee_1588(__rte_unused const char *key,
 			    const char *value, void *opaque_arg)
 {
@@ -6159,6 +6176,14 @@ bnxt_parse_devarg_ieee_1588(__rte_unused const char *key,
 	bp->ieee_1588 = ieee_1588;
 	PMD_DRV_LOG_LINE(INFO, "ieee-1588=%d feature enabled.", (uint16_t)ieee_1588);
 
+	return 0;
+}
+
+static int
+bnxt_parse_devarg_mpc(__rte_unused const char *key,
+		      __rte_unused const char *value, __rte_unused void *opaque_arg)
+{
+	PMD_DRV_LOG_LINE(INFO, "mpc=1 arg not required.");
 	return 0;
 }
 
@@ -6386,6 +6411,64 @@ bnxt_parse_devarg_rep_fc_f2r(__rte_unused const char *key,
 }
 
 static int
+bnxt_parse_devarg_representor_mode(__rte_unused const char *key,
+				   const char *value, void *opaque_arg)
+{
+	struct bnxt *bp = opaque_arg;
+	unsigned long rep;
+	char *end = NULL;
+
+	if (!value || !opaque_arg) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid param passed to rep mode in devargs");
+		return -EINVAL;
+	}
+
+	rep = strtoul(value, &end, 10);
+	if (end == NULL || *end != '\0' ||
+	    (rep == ULONG_MAX && errno == ERANGE)) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid param passed to rep mode in devargs");
+		return -EINVAL;
+	}
+
+	if (rep > 0)
+		bp->flags2 |= BNXT_FLAGS2_REP_MODE;
+	PMD_DRV_LOG_LINE(INFO, "representor feature enabled");
+
+	return 0;
+}
+
+static int
+bnxt_parse_devarg_scalar_mode(__rte_unused const char *key,
+			      const char *value, void *opaque_arg)
+{
+	struct bnxt *bp = opaque_arg;
+	unsigned long rep;
+	char *end = NULL;
+
+	if (!value || !opaque_arg) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid param passed to scalar mode in devargs");
+		return -EINVAL;
+	}
+
+	rep = strtoul(value, &end, 10);
+	if (end == NULL || *end != '\0' ||
+	    (rep == ULONG_MAX && errno == ERANGE)) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid param passed to scalar mode in devargs");
+		return -EINVAL;
+	}
+
+	if (rep > 0)
+		bp->flags2 |= BNXT_FLAGS2_REP_MODE;
+	PMD_DRV_LOG_LINE(INFO, "Scalar mode enabled");
+
+	return 0;
+}
+
+static int
 bnxt_parse_dev_args(struct bnxt *bp, struct rte_devargs *devargs)
 {
 	struct rte_kvargs *kvlist;
@@ -6418,6 +6501,13 @@ bnxt_parse_dev_args(struct bnxt *bp, struct rte_devargs *devargs)
 
 err:
 	/*
+	 * Handler for "mpc" devarg.
+	 * Invoked as for ex: "-a 000:00:0d.0,mpc=1"
+	 */
+	rte_kvargs_process(kvlist, BNXT_DEVARG_MPC,
+			   bnxt_parse_devarg_mpc, bp);
+
+	/*
 	 * Handler for "app-id" devarg.
 	 * Invoked as for ex: "-a 000:00:0d.0,app-id=1"
 	 */
@@ -6432,18 +6522,33 @@ err:
 			   bnxt_parse_devarg_ieee_1588, bp);
 
 	/*
-	 * Handler for "mpc" devarg.
-	 * Invoked as for ex: "-a 000:00:0d.0,mpc=1"
-	 */
-	rte_kvargs_process(kvlist, BNXT_DEVARG_MPC,
-			   bnxt_parse_devarg_mpc, bp);
-
-	/*
 	 * Handler for "cqe-mode" devarg.
 	 * Invoked as for ex: "-a 000:00:0d.0,cqe-mode=1"
 	 */
 	rte_kvargs_process(kvlist, BNXT_DEVARG_CQE_MODE,
 			   bnxt_parse_devarg_cqe_mode, bp);
+
+	/*
+	 * Handler for "representor" devarg.
+	 * Invoked as for ex: "-a 000:00:0d.0,representor=1"
+	 */
+	rte_kvargs_process(kvlist, BNXT_DEVARG_REPRESENTOR,
+			   bnxt_parse_devarg_representor_mode, bp);
+
+	/*
+	 * Handler for "scalar-mode" devarg.
+	 * Invoked as for ex: "-a 000:00:0d.0,scalar-mode=1"
+	 */
+	rte_kvargs_process(kvlist, BNXT_DEVARG_SCALAR_MODE,
+			   bnxt_parse_devarg_scalar_mode, bp);
+
+	/*
+	 * Handler for "app-instance-id" devarg.
+	 * Invoked as for ex: "-a 000:00:0d.0,app-instance-id=1"
+	 * This argument is required for enabling truflow hot upgrade feature.
+	 */
+	rte_kvargs_process(kvlist, BNXT_DEVARD_APP_INST_ID,
+			   bnxt_parse_devarg_app_instance_id, bp);
 
 	rte_kvargs_free(kvlist);
 	return ret;
@@ -6799,16 +6904,9 @@ static int bnxt_rep_port_probe(struct rte_pci_device *pci_dev,
 		return -ENOTSUP;
 	}
 	num_rep = eth_da->nb_representor_ports;
-	if (num_rep > max_vf_reps) {
-		PMD_DRV_LOG_LINE(ERR, "nb_representor_ports = %d > %d MAX VF REPS",
-			    num_rep, max_vf_reps);
-		return -EINVAL;
-	}
-
-	if (num_rep >= RTE_MAX_ETHPORTS) {
-		PMD_DRV_LOG_LINE(ERR,
-			    "nb_representor_ports = %d > %d MAX ETHPORTS",
-			    num_rep, RTE_MAX_ETHPORTS);
+	if (num_rep > max_vf_reps || num_rep > RTE_MAX_ETHPORTS) {
+		PMD_DRV_LOG_LINE(ERR, "nb_representor_ports = %d > %d OR %d MAX VF REPS",
+			    num_rep, max_vf_reps, RTE_MAX_ETHPORTS);
 		return -EINVAL;
 	}
 
@@ -6840,6 +6938,13 @@ static int bnxt_rep_port_probe(struct rte_pci_device *pci_dev,
 		/* representor port net_bdf_port */
 		snprintf(name, sizeof(name), "net_%s_representor_%d",
 			 pci_dev->device.name, eth_da->representor_ports[i]);
+
+		if (rte_eth_dev_allocated(name) != NULL) {
+			PMD_DRV_LOG_LINE(ERR,
+					 "Ethernet device with name %s already allocated",
+					 name);
+			return -EEXIST;
+		}
 
 		kvlist = rte_kvargs_parse(dev_args, bnxt_dev_args);
 		if (kvlist) {
@@ -6977,7 +7082,13 @@ static int bnxt_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 	num_rep = eth_da.nb_representor_ports;
 	PMD_DRV_LOG_LINE(DEBUG, "nb_representor_ports = %d",
-		    num_rep);
+			 num_rep);
+	if (num_rep >= RTE_MAX_ETHPORTS) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "nb_representor_ports = %d > %d MAX ETHPORTS",
+				 num_rep, RTE_MAX_ETHPORTS);
+		return -EINVAL;
+	}
 
 	/* We could come here after first level of probe is already invoked
 	 * as part of an application bringup(OVS-DPDK vswitchd), so first check
@@ -7099,8 +7210,6 @@ static bool bnxt_enable_ulp(struct bnxt *bp)
 	/* not enabling ulp for cli and no truflow apps */
 	if (BNXT_TRUFLOW_EN(bp) && bp->app_id != 254 &&
 	    bp->app_id != 255) {
-		if (BNXT_CHIP_P7(bp) && !mpc)
-			return false;
 		return true;
 	}
 	return false;

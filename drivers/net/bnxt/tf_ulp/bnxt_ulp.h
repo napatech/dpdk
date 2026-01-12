@@ -139,6 +139,7 @@ struct bnxt_ulp_data {
 	uint32_t			max_def_priority;
 	uint32_t			min_flow_priority;
 	uint32_t			max_flow_priority;
+	uint32_t			ha_priority;
 	uint32_t			vxlan_port;
 	uint32_t			vxlan_gpe_port;
 	uint32_t			vxlan_ip_port;
@@ -164,6 +165,8 @@ struct bnxt_ulp_data {
 	uint64_t			default_act_bits;
 	struct ulp_fc_tfc_stats_cache_entry *stats_cache;
 	struct bnxt_ulp_sc_info		*sc_info;
+	struct bnxt_ulp_tfc_ha_mgr_info *tfc_ha_info;
+	uint8_t				app_instance_id;
 };
 
 enum bnxt_ulp_tfo_type {
@@ -326,5 +329,8 @@ bnxt_ulp_grp_miss_act_set(struct rte_eth_dev *dev,
 			  const struct rte_flow_attr *attr,
 			  const struct rte_flow_action actions[],
 			  uint32_t *flow_id);
+
+int32_t
+bnxt_ulp_hot_upgrade_process(struct bnxt *bp);
 
 #endif /* _BNXT_ULP_H_ */

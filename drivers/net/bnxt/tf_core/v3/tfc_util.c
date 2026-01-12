@@ -92,6 +92,8 @@ tfc_idx_tbl_2_str(enum cfa_resource_subtype_idx_tbl tbl_stype)
 		return "idx_tbl_range_prof";
 	case CFA_RSUBTYPE_IDX_TBL_RANGE_ENTRY:
 		return "idx_tbl_range_entry";
+	case CFA_RSUBTYPE_IDX_TBL_DYN_UPAR:
+		return "idx_tbl_dyn_upar";
 	default:
 		return "Invalid idx tbl subtype";
 	}
@@ -140,6 +142,21 @@ tfc_ts_region_2_str(enum cfa_region_type region, enum cfa_dir dir)
 			return "ts_action_invalid_dir";
 	default:
 		return "Invalid ts region";
+	}
+}
+
+const char *
+tfc_scope_type_2_str(enum cfa_scope_type scope_type)
+{
+	switch (scope_type) {
+	case CFA_SCOPE_TYPE_NON_SHARED:
+		return "non_shared";
+	case CFA_SCOPE_TYPE_SHARED_APP:
+		return "shared_app";
+	case CFA_SCOPE_TYPE_GLOBAL:
+		return "global";
+	default:
+		return "Invalid scope type";
 	}
 }
 
@@ -216,6 +233,12 @@ uint32_t prev_pow2(uint32_t x)
 	 *    2^5 = 32
 	 */
 	return x == 1 ? 0 : (BITS_IN_VAR(x) - 1 - __builtin_clz(x - 1));
+}
+
+/* returns 0 if power of 2 */
+int32_t is_pow2(uint32_t x)
+{
+	return (x != 0 && ((x - 1) & x)) ? -1 : 0;
 }
 
 uint32_t roundup32(uint32_t x, uint32_t y)

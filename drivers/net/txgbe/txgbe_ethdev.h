@@ -245,6 +245,7 @@ struct txgbe_filter_info {
 	/* Bit mask for every used 5tuple filter */
 	uint32_t fivetuple_mask[TXGBE_5TUPLE_ARRAY_SIZE];
 	struct txgbe_5tuple_filter_list fivetuple_list;
+	bool ntuple_is_full;
 	/* store the SYN filter info */
 	uint32_t syn_info;
 	/* store the rss filter info */
@@ -453,7 +454,7 @@ int  txgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 		uint16_t nb_tx_desc, unsigned int socket_id,
 		const struct rte_eth_txconf *tx_conf);
 
-uint32_t txgbe_dev_rx_queue_count(void *rx_queue);
+int txgbe_dev_rx_queue_count(void *rx_queue);
 
 int txgbe_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
 int txgbe_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);
@@ -517,7 +518,7 @@ int txgbe_dev_rss_hash_update(struct rte_eth_dev *dev,
 int txgbe_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 				struct rte_eth_rss_conf *rss_conf);
 
-bool txgbe_rss_update_sp(enum txgbe_mac_type mac_type);
+bool txgbe_rss_update(enum txgbe_mac_type mac_type);
 
 int txgbe_add_del_ntuple_filter(struct rte_eth_dev *dev,
 			struct rte_eth_ntuple_filter *filter,
@@ -554,6 +555,8 @@ txgbe_dev_l2_tunnel_filter_del(struct rte_eth_dev *dev,
 			       struct txgbe_l2_tunnel_conf *l2_tunnel);
 void txgbe_filterlist_init(void);
 void txgbe_filterlist_flush(void);
+int txgbe_fdir_filter_init(struct rte_eth_dev *eth_dev);
+int txgbe_fdir_filter_uninit(struct rte_eth_dev *eth_dev);
 
 void txgbe_set_ivar_map(struct txgbe_hw *hw, int8_t direction,
 			       uint8_t queue, uint8_t msix_vector);
@@ -569,7 +572,9 @@ int txgbe_fdir_set_flexbytes_offset(struct rte_eth_dev *dev,
 int txgbe_fdir_filter_program(struct rte_eth_dev *dev,
 			      struct txgbe_fdir_rule *rule,
 			      bool del, bool update);
-
+int txgbevf_fdir_filter_program(struct rte_eth_dev *dev,
+				struct txgbe_fdir_rule *rule,
+				bool del);
 void txgbe_configure_pb(struct rte_eth_dev *dev);
 void txgbe_configure_port(struct rte_eth_dev *dev);
 void txgbe_configure_dcb(struct rte_eth_dev *dev);

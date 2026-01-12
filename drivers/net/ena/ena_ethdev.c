@@ -9,6 +9,7 @@
 #include <rte_version.h>
 #include <rte_net.h>
 #include <rte_kvargs.h>
+#include <rte_eal_paging.h>
 
 #include "ena_ethdev.h"
 #include "ena_logs.h"
@@ -22,7 +23,7 @@
 #include <ena_eth_io_defs.h>
 
 #define DRV_MODULE_VER_MAJOR	2
-#define DRV_MODULE_VER_MINOR	13
+#define DRV_MODULE_VER_MINOR	14
 #define DRV_MODULE_VER_SUBMINOR	0
 
 #define __MERGE_64B_H_L(h, l) (((uint64_t)h << 32) | l)
@@ -30,6 +31,8 @@
 #define GET_L4_HDR_LEN(mbuf)					\
 	((rte_pktmbuf_mtod_offset(mbuf,	struct rte_tcp_hdr *,	\
 		mbuf->l3_len + mbuf->l2_len)->data_off) >> 4)
+
+/* return val clamped to the [min, max] range */
 #define CLAMP_VAL(val, min, max)					\
 	(RTE_MIN(RTE_MAX((val), (typeof(val))(min)), (typeof(val))(max)))
 
@@ -48,6 +51,8 @@
 #define DECIMAL_BASE 10
 
 #define MAX_WIDE_LLQ_DEPTH_UNSUPPORTED 0
+
+#define ENA_TS_OFFSET_UNSET -1
 
 /*
  * We should try to keep ENA_CLEANUP_BUF_THRESH lower than
@@ -270,7 +275,8 @@ static int ena_start(struct rte_eth_dev *dev);
 static int ena_stop(struct rte_eth_dev *dev);
 static int ena_close(struct rte_eth_dev *dev);
 static int ena_dev_reset(struct rte_eth_dev *dev);
-static int ena_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
+static int ena_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+			  struct eth_queue_stats *qstats);
 static void ena_rx_queue_release_all(struct rte_eth_dev *dev);
 static void ena_tx_queue_release_all(struct rte_eth_dev *dev);
 static void ena_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid);
@@ -719,6 +725,13 @@ static inline void ena_rx_mbuf_prepare(struct ena_ring *rx_ring,
 		ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_UNKNOWN;
 	}
 
+	if (rx_ring->ts_mbuf.offset != ENA_TS_OFFSET_UNSET) {
+		*RTE_MBUF_DYNFIELD(mbuf,
+				   rx_ring->ts_mbuf.offset,
+				   rte_mbuf_timestamp_t *) = ena_rx_ctx->timestamp;
+		ol_flags |= rx_ring->ts_mbuf.rx_flag;
+	}
+
 	mbuf->ol_flags = ol_flags;
 	mbuf->packet_type = packet_type;
 }
@@ -908,6 +921,7 @@ static inline void ena_indirect_table_release(struct ena_adapter *adapter)
 		adapter->indirect_table = NULL;
 	}
 }
+
 static int ena_close(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
@@ -930,8 +944,8 @@ static int ena_close(struct rte_eth_dev *dev)
 	if (!adapter->control_path_poll_interval) {
 		rte_intr_disable(intr_handle);
 		rc = rte_intr_callback_unregister_sync(intr_handle, ena_control_path_handler, dev);
-		if (unlikely(rc != 0))
-			PMD_INIT_LOG_LINE(ERR, "Failed to unregister interrupt handler");
+		if (unlikely(rc < 0))
+			PMD_INIT_LOG_LINE(ERR, "Failed to unregister interrupt handler (%d)", rc);
 	} else {
 		rte_eal_alarm_cancel(ena_control_path_poll_handler, dev);
 	}
@@ -942,14 +956,10 @@ static int ena_close(struct rte_eth_dev *dev)
 	ena_indirect_table_release(adapter);
 	rte_free(adapter->drv_stats);
 	adapter->drv_stats = NULL;
-
 	ena_com_set_admin_running_state(ena_dev, false);
-
 	ena_com_rss_destroy(ena_dev);
-
 	ena_com_delete_debug_area(ena_dev);
 	ena_com_delete_host_info(ena_dev);
-
 	ena_com_abort_admin_commands(ena_dev);
 	ena_com_wait_for_abort_completion(ena_dev);
 	ena_com_admin_destroy(ena_dev);
@@ -1011,6 +1021,9 @@ static void ena_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 {
 	struct ena_ring *ring = dev->data->rx_queues[qid];
 
+	if (!ring)
+		return;
+
 	/* Free ring resources */
 	rte_free(ring->rx_buffer_info);
 	ring->rx_buffer_info = NULL;
@@ -1030,6 +1043,9 @@ static void ena_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 static void ena_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 {
 	struct ena_ring *ring = dev->data->tx_queues[qid];
+
+	if (!ring)
+		return;
 
 	/* Free ring resources */
 	rte_free(ring->push_buf_intermediate_buf);
@@ -1240,7 +1256,8 @@ static void ena_stats_restart(struct rte_eth_dev *dev)
 }
 
 static int ena_stats_get(struct rte_eth_dev *dev,
-			  struct rte_eth_stats *stats)
+			  struct rte_eth_stats *stats,
+			  struct eth_queue_stats *qstats)
 {
 	struct ena_admin_basic_stats ena_stats;
 	struct ena_adapter *adapter = dev->data->dev_private;
@@ -1276,26 +1293,29 @@ static int ena_stats_get(struct rte_eth_dev *dev,
 	stats->oerrors = rte_atomic64_read(&adapter->drv_stats->oerrors);
 	stats->rx_nombuf = rte_atomic64_read(&adapter->drv_stats->rx_nombuf);
 
-	max_rings_stats = RTE_MIN(dev->data->nb_rx_queues,
-		RTE_ETHDEV_QUEUE_STAT_CNTRS);
-	for (i = 0; i < max_rings_stats; ++i) {
-		struct ena_stats_rx *rx_stats = &adapter->rx_ring[i].rx_stats;
+	/* Queue statistics */
+	if (qstats) {
+		max_rings_stats = RTE_MIN(dev->data->nb_rx_queues,
+			RTE_ETHDEV_QUEUE_STAT_CNTRS);
+		for (i = 0; i < max_rings_stats; ++i) {
+			struct ena_stats_rx *rx_stats = &adapter->rx_ring[i].rx_stats;
 
-		stats->q_ibytes[i] = rx_stats->bytes;
-		stats->q_ipackets[i] = rx_stats->cnt;
-		stats->q_errors[i] = rx_stats->bad_desc_num +
-			rx_stats->bad_req_id +
-			rx_stats->bad_desc +
-			rx_stats->unknown_error;
-	}
+			qstats->q_ibytes[i] = rx_stats->bytes;
+			qstats->q_ipackets[i] = rx_stats->cnt;
+			qstats->q_errors[i] = rx_stats->bad_desc_num +
+				rx_stats->bad_req_id +
+				rx_stats->bad_desc +
+				rx_stats->unknown_error;
+		}
 
-	max_rings_stats = RTE_MIN(dev->data->nb_tx_queues,
-		RTE_ETHDEV_QUEUE_STAT_CNTRS);
-	for (i = 0; i < max_rings_stats; ++i) {
-		struct ena_stats_tx *tx_stats = &adapter->tx_ring[i].tx_stats;
+		max_rings_stats = RTE_MIN(dev->data->nb_tx_queues,
+			RTE_ETHDEV_QUEUE_STAT_CNTRS);
+		for (i = 0; i < max_rings_stats; ++i) {
+			struct ena_stats_tx *tx_stats = &adapter->tx_ring[i].tx_stats;
 
-		stats->q_obytes[i] = tx_stats->bytes;
-		stats->q_opackets[i] = tx_stats->cnt;
+			qstats->q_obytes[i] = tx_stats->bytes;
+			qstats->q_opackets[i] = tx_stats->cnt;
+		}
 	}
 
 	return 0;
@@ -1321,6 +1341,54 @@ static int ena_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 		PMD_DRV_LOG_LINE(NOTICE, "MTU set to: %d", mtu);
 
 	return rc;
+}
+
+static int ena_set_hw_timestamp_rx_params(struct ena_adapter *adapter,
+					  bool hw_rx_requested)
+{
+	int i, rc, timestamp_offset;
+	uint64_t timestamp_rx_flag;
+	struct ena_ring *rx_ring;
+
+	if (hw_rx_requested) {
+		rc = rte_mbuf_dyn_rx_timestamp_register(&timestamp_offset,
+							&timestamp_rx_flag);
+		if (rc) {
+			PMD_INIT_LOG_LINE(ERR,
+					  "Failed to register Rx timestamp field/flag");
+			return rc;
+		}
+	} else {
+		timestamp_offset = ENA_TS_OFFSET_UNSET;
+		timestamp_rx_flag = 0;
+	}
+
+	for (i = 0; i < adapter->edev_data->nb_rx_queues; i++) {
+		rx_ring = &adapter->rx_ring[i];
+		rx_ring->ts_mbuf.offset = timestamp_offset;
+		rx_ring->ts_mbuf.rx_flag = timestamp_rx_flag;
+	}
+
+	return 0;
+}
+
+static int ena_configure_hw_timestamping(struct ena_adapter *adapter)
+{
+	bool hw_rx_requested = !!(adapter->edev_data->dev_conf.rxmode.offloads &
+				  RTE_ETH_RX_OFFLOAD_TIMESTAMP);
+	int rc;
+
+	rc = ena_com_set_hw_timestamping_configuration(&adapter->ena_dev, false,
+						       hw_rx_requested);
+	if (rc && rc != ENA_COM_UNSUPPORTED) {
+		PMD_INIT_LOG_LINE(ERR,
+				  "Failed to set Rx timestamp configuration");
+		return rc;
+	}
+
+	adapter->ena_dev.use_extended_rx_cdesc = hw_rx_requested;
+
+	return ena_set_hw_timestamp_rx_params(adapter, hw_rx_requested);
 }
 
 static int ena_start(struct rte_eth_dev *dev)
@@ -1438,8 +1506,9 @@ static int ena_create_io_queue(struct rte_eth_dev *dev, struct ena_ring *ring)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ena_com_create_io_ctx ctx =
+		/* policy set to _HOST just to satisfy icc compiler */
 		{ ENA_ADMIN_PLACEMENT_POLICY_HOST,
-		  0, 0, 0, 0, 0 };
+		  0, 0, 0, 0, 0, 0 };
 	uint16_t ena_qid;
 	unsigned int i;
 	int rc;
@@ -1454,6 +1523,7 @@ static int ena_create_io_queue(struct rte_eth_dev *dev, struct ena_ring *ring)
 	} else {
 		ena_qid = ENA_IO_RXQ_IDX(ring->id);
 		ctx.direction = ENA_COM_IO_QUEUE_DIRECTION_RX;
+		ctx.use_extended_cdesc = ena_dev->use_extended_rx_cdesc;
 		if (rte_intr_dp_is_en(intr_handle))
 			ctx.msix_vector =
 				rte_intr_vec_list_index_get(intr_handle,
@@ -1883,7 +1953,7 @@ static int ena_device_init(struct ena_adapter *adapter,
 {
 	struct ena_com_dev *ena_dev = &adapter->ena_dev;
 	uint32_t aenq_groups;
-	int rc;
+	int dma_width, rc;
 	bool readless_supported;
 
 	/* Initialize mmio registers */
@@ -1913,7 +1983,12 @@ static int ena_device_init(struct ena_adapter *adapter,
 		goto err_mmio_read_less;
 	}
 
-	ena_dev->dma_addr_bits = ena_com_get_dma_width(ena_dev);
+	dma_width = ena_com_get_dma_width(ena_dev);
+	if (unlikely(dma_width < 0)) {
+		PMD_DRV_LOG_LINE(ERR, "Invalid dma width value %d", dma_width);
+		rc = dma_width;
+		goto err_mmio_read_less;
+	}
 
 	/* ENA device administration layer init */
 	rc = ena_com_admin_init(ena_dev, &aenq_handlers);
@@ -1936,6 +2011,15 @@ static int ena_device_init(struct ena_adapter *adapter,
 	if (rc) {
 		PMD_DRV_LOG_LINE(ERR,
 			"Cannot get attribute for ENA device, rc: %d", rc);
+		goto err_admin_init;
+	}
+
+	rc = ena_com_get_hw_timestamping_support(ena_dev,
+						 &adapter->ts.hw_tx_supported,
+						 &adapter->ts.hw_rx_supported);
+	if (unlikely(rc && rc != ENA_COM_UNSUPPORTED)) {
+		PMD_DRV_LOG_LINE(ERR,
+			"Cannot get HW timestamping support, rc: %d", rc);
 		goto err_admin_init;
 	}
 
@@ -2285,6 +2369,24 @@ static int ena_init_once(void)
 	return 0;
 }
 
+/*
+ * Returns PCI BAR virtual address.
+ * If the physical address is not page-aligned,
+ * adjusts the virtual address by the page offset.
+ * Assumes page size is a power of 2.
+ */
+static void *pci_bar_addr(struct rte_pci_device *dev, uint32_t bar)
+{
+	const struct rte_mem_resource *res = &dev->mem_resource[bar];
+	size_t offset = res->phys_addr % rte_mem_page_size();
+	void *vaddr = RTE_PTR_ADD(res->addr, offset);
+
+	PMD_INIT_LOG_LINE(INFO, "PCI BAR [%u]: phys_addr=0x%" PRIx64 ", addr=%p, offset=0x%zx, adjusted_addr=%p",
+		bar, res->phys_addr, res->addr, offset, vaddr);
+
+	return vaddr;
+}
+
 static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 {
 	struct ena_calc_queue_size_ctx calc_queue_ctx = { 0 };
@@ -2330,16 +2432,17 @@ static int eth_ena_dev_init(struct rte_eth_dev *eth_dev)
 
 	intr_handle = pci_dev->intr_handle;
 
-	adapter->regs = pci_dev->mem_resource[ENA_REGS_BAR].addr;
-	adapter->dev_mem_base = pci_dev->mem_resource[ENA_MEM_BAR].addr;
-
+	adapter->regs = pci_bar_addr(pci_dev, ENA_REGS_BAR);
 	if (!adapter->regs) {
 		PMD_INIT_LOG_LINE(CRIT, "Failed to access registers BAR(%d)",
 			     ENA_REGS_BAR);
 		return -ENXIO;
 	}
-
 	ena_dev->reg_bar = adapter->regs;
+
+	/* Memory BAR may be NULL on non LLQ supported devices */
+	adapter->dev_mem_base = pci_bar_addr(pci_dev, ENA_MEM_BAR);
+
 	/* Pass device data as a pointer which can be passed to the IO functions
 	 * by the ena_com (for example - the memory allocation).
 	 */
@@ -2560,6 +2663,10 @@ static int ena_dev_configure(struct rte_eth_dev *dev)
 	adapter->tx_cleanup_stall_delay = adapter->missing_tx_completion_to / 2;
 
 	rc = ena_configure_aenq(adapter);
+	if (rc)
+		return rc;
+
+	rc = ena_configure_hw_timestamping(adapter);
 
 	return rc;
 }
@@ -2609,6 +2716,9 @@ static uint64_t ena_get_rx_port_offloads(struct ena_adapter *adapter)
 		port_offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 	port_offloads |= RTE_ETH_RX_OFFLOAD_SCATTER;
+
+	if (adapter->ts.hw_rx_supported)
+		port_offloads |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
 
 	return port_offloads;
 }
@@ -3230,6 +3340,7 @@ static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt)
 	struct ena_ring *tx_ring = (struct ena_ring *)txp;
 	size_t mbuf_cnt = 0;
 	size_t pkt_cnt = 0;
+	uint64_t hw_timestamp = 0;
 	unsigned int total_tx_descs = 0;
 	unsigned int total_tx_pkts = 0;
 	uint16_t cleanup_budget;
@@ -3248,7 +3359,9 @@ static int ena_tx_cleanup(void *txp, uint32_t free_pkt_cnt)
 		struct ena_tx_buffer *tx_info;
 		uint16_t req_id;
 
-		if (ena_com_tx_comp_req_id_get(tx_ring->ena_com_io_cq, &req_id) != 0)
+		if (ena_com_tx_comp_metadata_get(tx_ring->ena_com_io_cq,
+						 &req_id,
+						 &hw_timestamp) != 0)
 			break;
 
 		if (unlikely(validate_tx_req_id(tx_ring, req_id) != 0))
@@ -3938,7 +4051,7 @@ static void ena_rx_queue_intr_set(struct rte_eth_dev *dev,
 	struct ena_ring *rxq = &adapter->rx_ring[queue_id];
 	struct ena_eth_io_intr_reg intr_reg;
 
-	ena_com_update_intr_reg(&intr_reg, 0, 0, unmask, 1);
+	ena_com_update_intr_reg(&intr_reg, 0, 0, unmask, 1, 0);
 	ena_com_unmask_intr(rxq->ena_com_io_cq, &intr_reg);
 }
 
