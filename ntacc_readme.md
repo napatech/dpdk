@@ -5,40 +5,46 @@ The Napatech NTACC PMD enables users to run DPDK on top of the Napatech SmartNic
 The NTACC PMD driver does not need to be bound. This means that the dpdk-devbind-py script cannot be used to bind the interface. The DPDK app will automatically find and use the NTACC PMD driver when starting, provided that the Napatech driver is started and the Napatech SmartNic is not blacklisted.
 
 ## Table of Contents
-1. [Napatech Driver](#driver)
-	1. [SmartNic with Limited filter support](#LimitedFilter)
-2. [Compiling the Napatech NTACC PMD driver](#compiling)
-	1. [Environment variable](#Environment)
-	2. [Configuration setting using meson/ninja](#configurationmeson)
-3. [Napatech Driver Configuration](#driverconfig)
-	1. [Statistics update interval](#statinterval)
-4. [Number of RX queues and TX queues available](#queues)
-5. [Starting NTACC PMD](#starting)
-6. [DPDK Sample applications supported by the Napatech adapter](#sampleapps)
-7. [Priority](#Priority)
-8. [Generic rte_flow filter items](#genericflow)
-9. [Generic rte_flow RSS/Hash functions](#hash)
-10. [Generic rte_flow filter Attributes](#attributes)
-11. [Generic rte_flow filter actions](#actions)
-12. [Generic rte_flow RSS/Hash functions](#hash)
-	1. [Symmetric/Unsymmetric hash](#Symmetric)
-	2. [Default RSS/HASH function](#DefaultRSS)
-13. [Catch All Filter - promiscuous mode](#DefaultFilter)
-	1. [Disabling catch all filter](#DisablingDefaultFilter)
-14. [Examples of generic rte_flow filters](#examples1)
-15. [Limited filter resources](#resources)
-16. [Filter creation example -  5tuple filter](#Filtercreationexample)
-17. [Filter creation example - Multiple 5tuple filter (IPv4 addresses and TCP ports)](#examples2)
-18. [Copy packet offset to mbuf](#copyoffset)
-19. [Use NTPL filters addition (Making an ethernet over MPLS filter)](#ntplfilter)
-20. [Packet decoding offload](#hwdecode)
-	1. [Layer3 and Layer4 packet decoding offload](#hwl3l4)
-	2. [Inner most Layer3 and Layer4 packet decoding offload](#hwil3il4)
-	3. [More packet decoding types](#hwmoredecode) 
-21. [Use External Buffers (Zero copy)](#externalbuffer)
-	1. [Limitation using external buffers](#limitexternalbuffer)
-	2. [Enable external buffers](#enableexternalbuffer)
-	3. [Using/detecting external buffers](#detectexternalbuffer)
+- [Napatech PCI Poll Mode Driver – NTACC PMD.](#napatech-pci-poll-mode-driver--ntacc-pmd)
+  - [Table of Contents](#table-of-contents)
+  - [Napatech Driver ](#napatech-driver-)
+      - [SmartNic with Limited filter support ](#smartnic-with-limited-filter-support-)
+  - [Compiling the Napatech NTACC PMD Driver ](#compiling-the-napatech-ntacc-pmd-driver-)
+        - [Environment variable ](#environment-variable-)
+        - [Configuration setting using meson/ninja ](#configuration-setting-using-mesonninja-)
+  - [Napatech Driver Configuration ](#napatech-driver-configuration-)
+      - [Statistics update interval  ](#statistics-update-interval--)
+  - [Number of RX Queues and TX Queues Available ](#number-of-rx-queues-and-tx-queues-available-)
+  - [Starting NTACC PMD ](#starting-ntacc-pmd-)
+  - [DPDK Sample applications supported by the Napatech adapter](#dpdk-sample-applications-supported-by-the-napatech-adapter)
+      - [Ethtool Sample Application](#ethtool-sample-application)
+  - [Generic rte\_flow Filter Items ](#generic-rte_flow-filter-items-)
+  - [An Example of an Inner (Tunnel) Filter](#an-example-of-an-inner-tunnel-filter)
+  - [Generic rte\_flow Filter Attributes ](#generic-rte_flow-filter-attributes-)
+  - [Priority ](#priority-)
+  - [Generic rte\_flow Filter Actions ](#generic-rte_flow-filter-actions-)
+  - [Generic rte\_flow RSS/Hash Functions ](#generic-rte_flow-rsshash-functions-)
+        - [Inner and Outer Layer Hashing ](#inner-and-outer-layer-hashing-)
+        - [Symmetric/Unsymmetric Hash ](#symmetricunsymmetric-hash-)
+        - [Default RSS/HASH function ](#default-rsshash-function-)
+  - [Catch All Filter - promiscuous mode](#catch-all-filter---promiscuous-mode)
+      - [Disabling catch all filter](#disabling-catch-all-filter)
+  - [Examples of generic rte\_flow filters ](#examples-of-generic-rte_flow-filters-)
+  - [Limited Filter Resources ](#limited-filter-resources-)
+  - [Filter Creation Example ](#filter-creation-example-)
+  - [Filter Creation Example - Multiple 5-tuple Filter (IPv4 Addresses and TCP Ports) ](#filter-creation-example---multiple-5-tuple-filter-ipv4-addresses-and-tcp-ports-)
+  - [Copy Packet Offset to mbuf ](#copy-packet-offset-to-mbuf-)
+  - [Use NTPL Filters Addition (Making an Ethernet over MPLS Filter) ](#use-ntpl-filters-addition-making-an-ethernet-over-mpls-filter-)
+      - [ntpl\_str](#ntpl_str)
+      - [tunnel](#tunnel)
+  - [Packet decoding offload ](#packet-decoding-offload-)
+      - [Layer3 and Layer4 packet decoding offload ](#layer3-and-layer4-packet-decoding-offload-)
+      - [Inner most Layer3 and Layer4 packet decoding offload ](#inner-most-layer3-and-layer4-packet-decoding-offload-)
+      - [More packet decoding types  ](#more-packet-decoding-types--)
+  - [Use External Buffers (Zero copy)](#use-external-buffers-zero-copy)
+      - [Limitation using external buffers](#limitation-using-external-buffers)
+      - [Enable external buffers](#enable-external-buffers)
+      - [Using/detecting external buffers](#usingdetecting-external-buffers)
 
 ## Napatech Driver <a name="driver"></a>
 
@@ -49,14 +55,15 @@ The Napatech driver and SmartNic must be installed and started before the NTACC 
 
 | Supported driver  |
 |-------------------|
-| 3.11.0 or newer   |
+| 3.29.37 or newer   |
 
 <br>
 All Napatech 4Generation SmartNics are supported. Some SmartNics have limited filter support.
 
 |  Supported SmartNics                        |
 |---------------------------------------------|
-|Intel® Programmable Acceleration Card with Intel® Arria® 10 GX FPGA|
+|NT400D13 SmartNICs (4GA)|
+|NT400D11 SmartNICs (4GA)|
 |NT200A02 SmartNICs (4GA)|
 |NT200A01 SmartNICs (4GA)|
 |NT200C01 SmartNICs (4GA)|
@@ -70,7 +77,7 @@ All Napatech 4Generation SmartNics are supported. Some SmartNics have limited fi
 |NT20E3-2-PTP SmartNICs (4GA)|
 
 The complete driver package can be downloaded here:
-[Link™ Capture Software 12.6.4 for Linux](https://supportportal.napatech.com/index.php?/selfhelp/view-article/link--capture-software-1264-for-linux/646)
+[Link-Capture™ Software 12.15.1.1](https://www.napatech.com/download-center/)
 
 #### SmartNic with Limited filter support <a name="LimitedFilter"></a>
 
@@ -199,7 +206,7 @@ An NT40E3-4-PTP-ANL Napatech SmartNic is installed. We want app1 to use only por
 The Napatech SmartNics can also be disabled by using the blacklist command.
 
 ## DPDK Sample applications supported by the Napatech adapter<a name="sampleapps"></a>
-In order to test the Napatech SmartNics a limited number of the DPDK sample tools listed below can be used. 
+In order to test the Napatech SmartNics a limited number of the DPDK sample tools listed below can be used.
 
 | User guide title | Application name | Example directory |
 |------------------|------------------|-------------------|
@@ -325,7 +332,7 @@ If a 4 ported SmartNIC is used. The port number must be 0 to 3.
 
 The following rte_flow filter HASH functions are supported:
 
-| HASH function	| HASH Keys |  | 
+| HASH function	| HASH Keys |  |
 |------|--|------|
 |`ETH_RSS_IPV4`| `2-tuple` | `IPv4: hdr.src_addr`<br>`IPv4: hdr.dst_addr` |
 |`ETH_RSS_NONFRAG_IPV4_TCP`	|`5-tuple`|`IPv4: hdr.src_addr`<br>`IPv4: hdr.dst_addr`<br>`IPv4: hdr.next_proto_id`<br>`TCP: hdr.src_port`<br>`TCP: hdr.dst_port`|
@@ -342,22 +349,22 @@ The following rte_flow filter HASH functions are supported:
 
 Inner and Outer layer hashing is controlled by the rss command `level`.
 
-| RSS level	| Layer | 
+| RSS level	| Layer |
 |------|--|
 | 0 | Outer layer |
 | 1 | Outer layer |
 | 2 | Inner layer |
 
 ##### Symmetric/Unsymmetric Hash <a name="Symmetric"></a>
-The key generation can either be symmetric (sorted) or unsymmetric (unsorted). The key generation is controled the RSS command `func` 
+The key generation can either be symmetric (sorted) or unsymmetric (unsorted). The key generation is controled the RSS command `func`
 
-| RSS func	| Key generation | 
+| RSS func	| Key generation |
 |------|--|
 | `RTE_ETH_HASH_FUNCTION_DEFAULT` | Unsymmetric (unsorted) |
 | `RTE_ETH_HASH_FUNCTION_SIMPLE_XOR` | Symmetric (sorted) |
 | `RTE_ETH_HASH_FUNCTION_TOEPLITZ` | Not supported |
 
-The default key generation is set to Unsymmetric. 
+The default key generation is set to Unsymmetric.
 
 > `sorted` and `unsorted` is Napatech terms for symmetric and unsymmetric.
 
@@ -366,7 +373,7 @@ A default RSS/HASH function can be set up when configuring the ethernet device b
 
 	int rte_eth_dev_configure(uint8_t port_id, uint16_t nb_rx_queue, uint16_t nb_tx_queue, const struct rte_eth_conf *eth_conf);
 
-Using the parameter `eth_conf` of the type `struct rte_eth_conf`, a default RSS/HASH function can be defined.  
+Using the parameter `eth_conf` of the type `struct rte_eth_conf`, a default RSS/HASH function can be defined.
 
 Following two fields of the `struct rte_eth_conf` are supported:
 
@@ -467,7 +474,7 @@ patternCount++;
 struct rte_flow_item_ipv4 ipv4_spec	= {
   .hdr = {
     .src_addr = rte_cpu_to_be_32(IPv4(192,168,20,108)),
-    .dst_addr = rte_cpu_to_be_32(IPv4(159,20,6,6)),		
+    .dst_addr = rte_cpu_to_be_32(IPv4(159,20,6,6)),
   }
 };
 pattern[patternCount].type = RTE_FLOW_ITEM_TYPE_IPV4;
@@ -854,7 +861,7 @@ The mbuf fields set:
 
 > Note: The [Copy Packet Offset to mbuf](#copyoffset) feature must not be enabled. `CONFIG_RTE_LIBRTE_PMD_NTACC_COPY_OFFSET=n`
 
-#### Layer3 and Layer4 packet decoding offload <a name="hwl3l4"></a> 
+#### Layer3 and Layer4 packet decoding offload <a name="hwl3l4"></a>
 The following is an example on how layer3 and layer4 hardware decoding is used.
 
 The filter setup:
@@ -936,8 +943,8 @@ The handling of the packet decoding:
 ```
 // Packet must be an IP packet
 if (mb->packet_type <= 1) {
-  // No valid packet type is found 
-  return 0; 
+  // No valid packet type is found
+  return 0;
 }
 
 switch (mb->packet_type & RTE_PTYPE_L3_MASK)
@@ -945,7 +952,7 @@ switch (mb->packet_type & RTE_PTYPE_L3_MASK)
 case RTE_PTYPE_L3_IPV4:
   {
     struct ipv4_hdr *pIPv4_hdr = rte_pktmbuf_mtod_offset(mb, struct ipv4_hdr *, mb->hash.fdir.lo);
-    pIPv4_hdr->src_addr; // Layer3 IPv4 source address 
+    pIPv4_hdr->src_addr; // Layer3 IPv4 source address
     pIPv4_hdr->dst_addr; // Layer3 IPv4 destination address
     break;
   }
@@ -984,7 +991,7 @@ case RTE_PTYPE_L4_SCTP:
 }
 ```
 
-#### Inner most Layer3 and Layer4 packet decoding offload <a name="hwil3il4"></a> 
+#### Inner most Layer3 and Layer4 packet decoding offload <a name="hwil3il4"></a>
 If the inner most layers are wanted, the following example can be used.
 
 The filter setup:
@@ -992,7 +999,7 @@ The filter setup:
 // The filter for the outer layers
 // Note that priority must be lower (higer number) than the filters
 // for the inner layers
- 
+
 attr.ingress = 1;
 attr.priority = 2;
 for (int tel = 0; tel < 5; tel++) {
@@ -1055,7 +1062,7 @@ for (int tel = 0; tel < 5; tel++) {
 // The filter for the inner layers
 // Note that priority must be higher (lower number) than the filters
 // for the outer layers
- 
+
 attr.ingress = 1;
 attr.priority = 1;
 for (int tel = 0; tel < 5; tel++) {
@@ -1227,12 +1234,12 @@ It is possible to add more packet decoding types if wanted. The following table 
 | RTE_FLOW_ITEM_TYPE_TCP    | RTE_PTYPE_INNER_L4_TCP<br>RTE_PTYPE_L4_TCP               |
 | RTE_FLOW_ITEM_TYPE_UDP    | RTE_PTYPE_INNER_L4_UDP<br>RTE_PTYPE_L4_UDP               |
 | RTE_FLOW_ITEM_TYPE_ICMP   | RTE_PTYPE_INNER_L4_ICMP<br>RTE_PTYPE_L4_ICMP             |
-| RTE_FLOW_ITEM_TYPE_VLAN   | RTE_PTYPE_INNER_L2_ETHER_VLAN<br>RTE_PTYPE_L2_ETHER_VLAN | 
+| RTE_FLOW_ITEM_TYPE_VLAN   | RTE_PTYPE_INNER_L2_ETHER_VLAN<br>RTE_PTYPE_L2_ETHER_VLAN |
 | RTE_FLOW_ITEM_TYPE_GRE    | RTE_PTYPE_TUNNEL_GRE                                     |
-| RTE_FLOW_ITEM_TYPE_GTPU   | RTE_PTYPE_TUNNEL_GTPU                                    | 
+| RTE_FLOW_ITEM_TYPE_GTPU   | RTE_PTYPE_TUNNEL_GTPU                                    |
 | RTE_FLOW_ITEM_TYPE_GTPC   | RTE_PTYPE_TUNNEL_GTPC                                    |
 | RTE_FLOW_ITEM_TYPE_VXLAN  | RTE_PTYPE_TUNNEL_VXLAN                                   |
-| RTE_FLOW_ITEM_TYPE_NVGRE  | RTE_PTYPE_TUNNEL_NVGRE                                   |  
+| RTE_FLOW_ITEM_TYPE_NVGRE  | RTE_PTYPE_TUNNEL_NVGRE                                   |
 | RTE_FLOW_ITEM_TYPE_IPinIP | RTE_PTYPE_TUNNEL_IP                                      |
 
 
@@ -1260,17 +1267,17 @@ To enable *Using external buffers*, run following command when using meson:
 `meson setup --reconfigure -Dntacc_external_buffers=true`
 
 #### Using/detecting external buffers<a name="detectexternalbuffer"></a>
-When receiving a mbuf it is possible to detect whether or not it contains an external buffer. 
+When receiving a mbuf it is possible to detect whether or not it contains an external buffer.
 If the flag `EXT_ATTACHED_MBUF` is set in `mbuf->ol_flags` then the mbuf contains an external buffer.
 The macro `RTE_MBUF_HAS_EXTBUF` can be used.
 
-``` 
+```
 if (RTE_MBUF_HAS_EXTBUF(mbuf))
   // External buffer in mbuf
 else
   // Normal mbuf
-``` 
+```
 
-> Note: **Use External hosbuffers is replacing the Napatech proprietary Contiguous memory batching** 
+> Note: **Use External hosbuffers is replacing the Napatech proprietary Contiguous memory batching**
 
 

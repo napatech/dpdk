@@ -1317,7 +1317,8 @@ static int eth_stats_get(struct rte_eth_dev *dev,
 }
 #else
 static int eth_stats_get(struct rte_eth_dev *dev,
-                         struct rte_eth_stats *igb_stats)
+                         struct rte_eth_stats *igb_stats,
+                         struct eth_queue_stats *qstats)
 {
   struct pmd_internals *internals = dev->data->dev_private;
   uint queue;
@@ -1347,18 +1348,21 @@ static int eth_stats_get(struct rte_eth_dev *dev,
     return -EIO;
   }
   NTACC_UNLOCK(&internals->statlock);
-  igb_stats->ipackets = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.pkts;
-  igb_stats->ibytes = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.octets;
-  igb_stats->opackets = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.pkts;
-  igb_stats->obytes = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.octets;
-  igb_stats->imissed = pStatData->u.query_v2.data.port.aPorts[port].rx.extDrop.pktsOverflow;
-  igb_stats->ierrors = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.crcAlignErrors;
-  igb_stats->oerrors = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.crcAlignErrors;
-
-  for (queue = 0; queue < dev->data->nb_rx_queues && queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
-    igb_stats->q_ipackets[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
-    igb_stats->q_ibytes[queue] =  pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
-    igb_stats->q_errors[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].drop.pkts;
+  if (igb_stats != NULL) {
+    igb_stats->ipackets = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.pkts;
+    igb_stats->ibytes = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.octets;
+    igb_stats->opackets = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.pkts;
+    igb_stats->obytes = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.octets;
+    igb_stats->imissed = pStatData->u.query_v2.data.port.aPorts[port].rx.extDrop.pktsOverflow;
+    igb_stats->ierrors = pStatData->u.query_v2.data.port.aPorts[port].rx.RMON1.crcAlignErrors;
+    igb_stats->oerrors = pStatData->u.query_v2.data.port.aPorts[port].tx.RMON1.crcAlignErrors;
+  }
+  if (qstats != NULL) {
+    for (queue = 0; queue < dev->data->nb_rx_queues && queue < RTE_ETHDEV_QUEUE_STAT_CNTRS; queue++) {
+      qstats->q_ipackets[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.pkts;
+      qstats->q_ibytes[queue] =  pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].forward.octets;
+      qstats->q_errors[queue] = pStatData->u.query_v2.data.stream.streamid[internals->rxq[queue].stream_id].drop.pkts;
+    }
   }
   rte_free(pStatData);
   return 0;
