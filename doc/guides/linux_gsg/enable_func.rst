@@ -104,7 +104,7 @@ Power Management and Power Saving Functionality
 -----------------------------------------------
 
 Enhanced Intel SpeedStep\ |reg| Technology must be enabled in the platform BIOS if the power management feature of DPDK is to be used.
-Otherwise, the sys file folder ``/sys/devices/system/cpu/cpu0/cpufreq`` will not exist, and the CPU frequency- based power management cannot be used.
+Otherwise, the sys file folder ``/sys/devices/system/cpu/cpu0/cpufreq`` will not exist, and the CPU frequency-based power management cannot be used.
 Consult the relevant BIOS documentation to determine how these settings can be accessed.
 
 For example, on some Intel reference platform BIOS variants, the path to Enhanced Intel SpeedStep\ |reg| Technology is::
@@ -134,7 +134,7 @@ to isolate them from the general Linux scheduler tasks.
 .. note::
 
    It is not recommended to use CPU core 0 for DPDK polling applications
-   because it can not be truly isolated from other system and kernel activity.
+   because it cannot be truly isolated from other system and kernel activity.
 
 For example, if a given CPU has 0-7 cores
 and DPDK applications are to run on logical cores 2, 4 and 6,
@@ -173,7 +173,7 @@ To enable HPET support in DPDK:
 
 #. Ensure that HPET is enabled in BIOS settings.
 #. Enable ``HPET_MMAP`` support in kernel configuration.
-   Note that this my involve doing a kernel rebuild,
+   Note that this may involve doing a kernel rebuild,
    as many common linux distributions do *not* have this setting
    enabled by default in their kernel builds.
 #. Enable DPDK support for HPET by using the build-time meson option ``use_hpet``,

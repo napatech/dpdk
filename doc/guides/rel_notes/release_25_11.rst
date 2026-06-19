@@ -489,3 +489,21 @@ Tested Platforms
   * DOCA:
 
     * DOCA 3.2.0-125000 and above
+
+* IBM Power 10 with NVIDIA\ |reg| NIC `[added in March 2026]`
+
+  * CPU:
+
+    * IBM Power 10 CHRP IBM,9105-22A
+
+  * OS:
+
+    * RHEL 10.0 kernel: 6.12.0-55.9.1.el10_0.ppc64le
+
+  * NICs:
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-5 100G MT28800 Family
+
+      * Host interface: PCI Express 3.0 x16
+      * OFED 25.07-0.9.7
+      * Firmware Version: 16.35.2000

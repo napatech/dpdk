@@ -7,7 +7,11 @@
 #include "../r8169_phy.h"
 #include "rtl8125d_mcu.h"
 
-/* For RTL8125D, CFG_METHOD_56,57 */
+/*
+ * For RTL8125D, CFG_METHOD_56,57
+ * For RTL8168KD, CFG_METHOD_59
+ * For RTL8125K, CFG_METHOD_61
+ */
 
 static void
 hw_init_rxcfg_8125d(struct rtl_hw *hw)
@@ -22,6 +26,8 @@ hw_ephy_config_8125d(struct rtl_hw *hw)
 	switch (hw->mcfg) {
 	case CFG_METHOD_56:
 	case CFG_METHOD_57:
+	case CFG_METHOD_59:
+	case CFG_METHOD_61:
 		/* Nothing to do */
 		break;
 	}
@@ -252,6 +258,15 @@ rtl_hw_phy_config_8125d_2(struct rtl_hw *hw)
 	rtl_clear_eth_phy_ocp_bit(hw, 0xA5D4, BIT_5);
 	rtl_clear_eth_phy_ocp_bit(hw, 0xA654, BIT_11);
 
+	rtl_clear_eth_phy_ocp_bit(hw, 0xA448, BIT_10);
+	rtl_clear_eth_phy_ocp_bit(hw, 0xA586, BIT_10);
+
+	rtl_clear_eth_phy_ocp_bit(hw, 0xA4E0, BIT_15);
+	rtl_mdio_direct_write_phy_ocp(hw, 0xA436, 0x8155);
+	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xA438, 0xFF00, 0x0200);
+	rtl_mdio_direct_write_phy_ocp(hw, 0xA436, 0x815C);
+	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xA438, 0xFF00, 0x0200);
+
 	rtl_set_eth_phy_ocp_bit(hw, 0xA430, BIT_12 | BIT_0);
 	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_7);
 }
@@ -264,6 +279,8 @@ hw_phy_config_8125d(struct rtl_hw *hw)
 		rtl_hw_phy_config_8125d_1(hw);
 		break;
 	case CFG_METHOD_57:
+	case CFG_METHOD_59:
+	case CFG_METHOD_61:
 		rtl_hw_phy_config_8125d_2(hw);
 		break;
 	}
@@ -277,9 +294,19 @@ hw_mac_mcu_config_8125d(struct rtl_hw *hw)
 
 	rtl_hw_disable_mac_mcu_bps(hw);
 
+	/* Get H/W mac mcu patch code version */
+	hw->hw_mcu_patch_code_ver = rtl_get_hw_mcu_patch_code_ver(hw);
+
 	switch (hw->mcfg) {
 	case CFG_METHOD_56:
 		rtl_set_mac_mcu_8125d_1(hw);
+		break;
+	case CFG_METHOD_57:
+	case CFG_METHOD_59:
+		rtl_set_mac_mcu_8125d_2(hw);
+		break;
+	default:
+		/* no mac mcu patch code */
 		break;
 	}
 }
@@ -292,6 +319,8 @@ hw_phy_mcu_config_8125d(struct rtl_hw *hw)
 		rtl_set_phy_mcu_8125d_1(hw);
 		break;
 	case CFG_METHOD_57:
+	case CFG_METHOD_59:
+	case CFG_METHOD_61:
 		rtl_set_phy_mcu_8125d_2(hw);
 		break;
 	}

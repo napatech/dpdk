@@ -193,6 +193,8 @@ enum {
 	TESTPMD_OPT_MULTI_RX_MEMPOOL_NUM,
 #define TESTPMD_OPT_TXONLY_MULTI_FLOW "txonly-multi-flow"
 	TESTPMD_OPT_TXONLY_MULTI_FLOW_NUM,
+#define TESTPMD_OPT_TXONLY_FLOWS "txonly-flows"
+	TESTPMD_OPT_TXONLY_FLOWS_NUM,
 #define TESTPMD_OPT_RXQ_SHARE "rxq-share"
 	TESTPMD_OPT_RXQ_SHARE_NUM,
 #define TESTPMD_OPT_ETH_LINK_SPEED "eth-link-speed"
@@ -348,7 +350,8 @@ static const struct option long_options[] = {
 	REQUIRED_ARG(TESTPMD_OPT_TXPKTS),
 	NO_ARG(TESTPMD_OPT_MULTI_RX_MEMPOOL),
 	NO_ARG(TESTPMD_OPT_TXONLY_MULTI_FLOW),
-	OPTIONAL_ARG(TESTPMD_OPT_RXQ_SHARE),
+	REQUIRED_ARG(TESTPMD_OPT_TXONLY_FLOWS),
+	NO_ARG(TESTPMD_OPT_RXQ_SHARE),
 	REQUIRED_ARG(TESTPMD_OPT_ETH_LINK_SPEED),
 	NO_ARG(TESTPMD_OPT_DISABLE_LINK_CHECK),
 	NO_ARG(TESTPMD_OPT_DISABLE_DEVICE_START),
@@ -499,10 +502,12 @@ usage(char* progname)
 		" or total packet length.\n");
 	printf("  --multi-rx-mempool: enable multi-rx-mempool support\n");
 	printf("  --txonly-multi-flow: generate multiple flows in txonly mode\n");
+	printf("  --txonly-nb-flows=N: number of flows per lcore in txonly"
+	       " multi-flow mode (1-64, default 64)\n");
 	printf("  --tx-ip=src,dst: IP addresses in Tx-only mode\n");
 	printf("  --tx-udp=src[,dst]: UDP ports in Tx-only mode\n");
 	printf("  --eth-link-speed: force link speed.\n");
-	printf("  --rxq-share=X: number of ports per shared Rx queue groups, defaults to UINT32_MAX (1 group)\n");
+	printf("  --rxq-share: enable Rx queue sharing per switch and Rx domain\n");
 	printf("  --disable-link-check: disable check on link status when "
 	       "starting/stopping ports.\n");
 	printf("  --disable-device-start: do not automatically start port\n");
@@ -777,42 +782,42 @@ parse_ringnuma_config(const char *q_arg)
 }
 
 static int
-parse_event_printing_config(const char *optarg, int enable)
+parse_event_printing_config(const char *event_arg, int enable)
 {
 	uint32_t mask = 0;
 
-	if (!strcmp(optarg, "unknown"))
+	if (!strcmp(event_arg, "unknown"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_UNKNOWN;
-	else if (!strcmp(optarg, "intr_lsc"))
+	else if (!strcmp(event_arg, "intr_lsc"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_INTR_LSC;
-	else if (!strcmp(optarg, "queue_state"))
+	else if (!strcmp(event_arg, "queue_state"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_QUEUE_STATE;
-	else if (!strcmp(optarg, "intr_reset"))
+	else if (!strcmp(event_arg, "intr_reset"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_INTR_RESET;
-	else if (!strcmp(optarg, "vf_mbox"))
+	else if (!strcmp(event_arg, "vf_mbox"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_VF_MBOX;
-	else if (!strcmp(optarg, "ipsec"))
+	else if (!strcmp(event_arg, "ipsec"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_IPSEC;
-	else if (!strcmp(optarg, "macsec"))
+	else if (!strcmp(event_arg, "macsec"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_MACSEC;
-	else if (!strcmp(optarg, "intr_rmv"))
+	else if (!strcmp(event_arg, "intr_rmv"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_INTR_RMV;
-	else if (!strcmp(optarg, "dev_probed"))
+	else if (!strcmp(event_arg, "dev_probed"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_NEW;
-	else if (!strcmp(optarg, "dev_released"))
+	else if (!strcmp(event_arg, "dev_released"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_DESTROY;
-	else if (!strcmp(optarg, "flow_aged"))
+	else if (!strcmp(event_arg, "flow_aged"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_FLOW_AGED;
-	else if (!strcmp(optarg, "err_recovering"))
+	else if (!strcmp(event_arg, "err_recovering"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_ERR_RECOVERING;
-	else if (!strcmp(optarg, "recovery_success"))
+	else if (!strcmp(event_arg, "recovery_success"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_RECOVERY_SUCCESS;
-	else if (!strcmp(optarg, "recovery_failed"))
+	else if (!strcmp(event_arg, "recovery_failed"))
 		mask = UINT32_C(1) << RTE_ETH_EVENT_RECOVERY_FAILED;
-	else if (!strcmp(optarg, "all"))
+	else if (!strcmp(event_arg, "all"))
 		mask = ~UINT32_C(0);
 	else {
-		fprintf(stderr, "Invalid event: %s\n", optarg);
+		fprintf(stderr, "Invalid event: %s\n", event_arg);
 		return -1;
 	}
 	if (enable)
@@ -987,11 +992,10 @@ launch_args_parse(int argc, char** argv)
 			break;
 		case TESTPMD_OPT_STATS_PERIOD_NUM: {
 			char *end = NULL;
-			unsigned int n;
 
 			n = strtoul(optarg, &end, 10);
 			if ((optarg[0] == '\0') || (end == NULL) ||
-					(*end != '\0'))
+					(*end != '\0') || n <= 0 || n >= UINT16_MAX)
 				rte_exit(EXIT_FAILURE, "Invalid stats-period value\n");
 
 			stats_period = n;
@@ -1339,7 +1343,6 @@ launch_args_parse(int argc, char** argv)
 			break;
 		case TESTPMD_OPT_HAIRPIN_MODE_NUM: {
 			char *end = NULL;
-			unsigned int n;
 
 			errno = 0;
 			n = strtoul(optarg, &end, 0);
@@ -1568,16 +1571,15 @@ launch_args_parse(int argc, char** argv)
 		case TESTPMD_OPT_TXONLY_MULTI_FLOW_NUM:
 			txonly_multi_flow = 1;
 			break;
+		case TESTPMD_OPT_TXONLY_FLOWS_NUM:
+			n = atoi(optarg);
+			if (n >= 1 && n <= 64)
+				txonly_flows = (uint16_t)n;
+			else
+				rte_exit(EXIT_FAILURE, "txonly-flows must be >= 1 and <= 64\n");
+			break;
 		case TESTPMD_OPT_RXQ_SHARE_NUM:
-			if (optarg == NULL) {
-				rxq_share = UINT32_MAX;
-			} else {
-				n = atoi(optarg);
-				if (n >= 0)
-					rxq_share = (uint32_t)n;
-				else
-					rte_exit(EXIT_FAILURE, "rxq-share must be >= 0\n");
-			}
+			rxq_share = 1;
 			break;
 		case TESTPMD_OPT_NO_FLUSH_RX_NUM:
 			no_flush_rx = 1;

@@ -17,7 +17,7 @@ Lcore-related options
 
        <lcores[@cpus]>[<,lcores[@cpus]>...]
 
-    Lcore and CPU lists are grouped by ``(`` and ``)`` Within the group.
+    Lcore and CPU lists are grouped by ``(`` and ``)`` within the group.
     The ``-`` character is used as a range separator and ``,`` is used as a
     single number separator.
     The grouping ``()`` can be omitted for single element group.
@@ -106,14 +106,14 @@ Device-related options
     Skip probing a PCI device to prevent EAL from using it.
     Multiple -b options are allowed.
 
-.. Note::
+.. note::
     Block list cannot be used with the allow list ``-a`` option.
 
 *   ``-a, --allow <[domain:]bus:devid.func>``
 
-    Add a PCI device in to the list of devices to probe.
+    Add a PCI device into the list of devices to probe.
 
-.. Note::
+.. note::
     Allow list cannot be used with the block list ``-b`` option.
 
 *   ``--vdev <device arguments>``
@@ -223,7 +223,7 @@ Debugging options
 
         --trace-dir=/tmp
 
-    By default, trace output will created at ``home`` directory and parameter
+    By default, trace output will be created at the ``home`` directory and parameter
     must be specified once only.
 
 *   ``--trace-bufsz=<val>``
@@ -266,15 +266,15 @@ Other options
 
     Pool ops name for mbuf to use.
 
-*    ``--telemetry``:
+*   ``--telemetry``:
 
     Enable telemetry (enabled by default).
 
-*    ``--no-telemetry``:
+*   ``--no-telemetry``:
 
     Disable telemetry.
 
-*    ``--force-max-simd-bitwidth=<val>``:
+*   ``--force-max-simd-bitwidth=<val>``:
 
     Specify the maximum SIMD bitwidth size to handle. This limits which vector paths,
     if any, are taken, as any paths taken must use a bitwidth below the max bitwidth limit.

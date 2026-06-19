@@ -499,7 +499,7 @@ nix_rq_cn9k_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints,
 		aq->rq.sso_grp = rq->hwgrp;
 		aq->rq.ena_wqwd = 1;
 		aq->rq.wqe_skip = rq->wqe_skip;
-		aq->rq.wqe_caching = 1;
+		aq->rq.wqe_caching = rq->wqe_caching;
 
 		aq->rq.good_utag = rq->tag_mask >> 24;
 		aq->rq.bad_utag = rq->tag_mask >> 24;
@@ -530,7 +530,7 @@ nix_rq_cn9k_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints,
 	aq->rq.lpb_sizem1 = rq->lpb_size / 8;
 	aq->rq.lpb_sizem1 -= 1; /* Expressed in size minus one */
 	aq->rq.ena = ena;
-	aq->rq.pb_caching = 0x2; /* First cache aligned block to LLC */
+	aq->rq.pb_caching = rq->pb_caching;
 	aq->rq.xqe_imm_size = 0; /* No pkt data copy to CQE */
 	aq->rq.rq_int_ena = 0;
 	/* Many to one reduction */
@@ -616,7 +616,7 @@ nix_rq_cn10k_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cf
 		aq->rq.sso_grp = rq->hwgrp;
 		aq->rq.ena_wqwd = 1;
 		aq->rq.wqe_skip = rq->wqe_skip;
-		aq->rq.wqe_caching = 1;
+		aq->rq.wqe_caching = rq->wqe_caching;
 
 		aq->rq.xqe_drop_ena = 0;
 		aq->rq.good_utag = rq->tag_mask >> 24;
@@ -647,7 +647,7 @@ nix_rq_cn10k_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cf
 		aq->rq.ipsecd_drop_en = 1;
 		aq->rq.ena_wqwd = 1;
 		aq->rq.wqe_skip = rq->wqe_skip;
-		aq->rq.wqe_caching = 1;
+		aq->rq.wqe_caching = rq->wqe_caching;
 	}
 
 	aq->rq.lpb_aura = roc_npa_aura_handle_to_aura(rq->aura_handle);
@@ -683,7 +683,7 @@ nix_rq_cn10k_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cf
 		aq->rq.spb_ena = 0;
 	}
 
-	aq->rq.pb_caching = 0x2; /* First cache aligned block to LLC */
+	aq->rq.pb_caching = rq->pb_caching;
 	aq->rq.xqe_imm_size = 0; /* No pkt data copy to CQE */
 	aq->rq.rq_int_ena = 0;
 	/* Many to one reduction */
@@ -797,7 +797,7 @@ nix_rq_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cfg, boo
 		aq->rq.sso_grp = rq->hwgrp;
 		aq->rq.ena_wqwd = 1;
 		aq->rq.wqe_skip = rq->wqe_skip;
-		aq->rq.wqe_caching = 1;
+		aq->rq.wqe_caching = rq->wqe_caching;
 
 		aq->rq.good_utag = rq->tag_mask >> 24;
 		aq->rq.bad_utag = rq->tag_mask >> 24;
@@ -816,7 +816,7 @@ nix_rq_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cfg, boo
 		aq->rq.ipsecd_drop_en = 1;
 		aq->rq.ena_wqwd = 1;
 		aq->rq.wqe_skip = rq->wqe_skip;
-		aq->rq.wqe_caching = 1;
+		aq->rq.wqe_caching = rq->wqe_caching;
 	}
 
 	aq->rq.lpb_aura = roc_npa_aura_handle_to_aura(rq->aura_handle);
@@ -852,7 +852,7 @@ nix_rq_cfg(struct dev *dev, struct roc_nix_rq *rq, uint16_t qints, bool cfg, boo
 		aq->rq.spb_ena = 0;
 	}
 
-	aq->rq.pb_caching = 0x2; /* First cache aligned block to LLC */
+	aq->rq.pb_caching = rq->pb_caching;
 	aq->rq.xqe_imm_size = 0; /* No pkt data copy to CQE */
 	aq->rq.rq_int_ena = 0;
 	/* Many to one reduction */
@@ -1486,8 +1486,6 @@ sqb_pool_populate(struct roc_nix *roc_nix, struct roc_nix_sq *sq)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 	uint16_t sqes_per_sqb, count, nb_sqb_bufs;
-	struct npa_pool_s pool;
-	struct npa_aura_s aura;
 	uint64_t blk_sz;
 	uint64_t iova;
 	int rc;
@@ -1509,20 +1507,38 @@ sqb_pool_populate(struct roc_nix *roc_nix, struct roc_nix_sq *sq)
 	/* Explicitly set nat_align alone as by default pool is with both
 	 * nat_align and buf_offset = 1 which we don't want for SQB.
 	 */
-	memset(&pool, 0, sizeof(struct npa_pool_s));
-	pool.nat_align = 1;
+	if (roc_feature_npa_has_halo() && roc_nix->sqb_halo_ena) {
+		struct npa_cn20k_halo_s halo;
 
-	memset(&aura, 0, sizeof(aura));
-	/* Disable SQ pool FC updates when SQ count updates are used */
-	if (!sq->sq_cnt_ptr)
-		aura.fc_ena = 1;
-	if (roc_model_is_cn9k() || roc_errata_npa_has_no_fc_stype_ststp())
-		aura.fc_stype = 0x0; /* STF */
-	else
-		aura.fc_stype = 0x3; /* STSTP */
-	aura.fc_addr = (uint64_t)sq->fc;
-	aura.fc_hyst_bits = sq->fc_hyst_bits & 0xF;
-	rc = roc_npa_pool_create(&sq->aura_handle, blk_sz, nb_sqb_bufs, &aura, &pool, 0);
+		memset(&halo, 0, sizeof(struct npa_cn20k_halo_s));
+		halo.nat_align = 1;
+		halo.fc_ena = 1;
+		halo.fc_stype = 0x3; /* STSTP */
+		halo.fc_addr = (uint64_t)sq->fc;
+		halo.fc_hyst_bits = 0; /* Store count on all updates */
+		halo.unified_ctx = 1;
+		rc = roc_npa_pool_create(&sq->aura_handle, blk_sz, nb_sqb_bufs, NULL,
+					 (struct npa_pool_s *)&halo, ROC_NPA_HALO_F);
+	} else {
+		struct npa_pool_s pool;
+		struct npa_aura_s aura;
+
+		memset(&pool, 0, sizeof(struct npa_pool_s));
+		pool.nat_align = 1;
+
+		memset(&aura, 0, sizeof(aura));
+		/* Disable SQ pool FC updates when SQ count updates are used */
+		if (!sq->sq_cnt_ptr)
+			aura.fc_ena = 1;
+		if (roc_model_is_cn9k() || roc_errata_npa_has_no_fc_stype_ststp())
+			aura.fc_stype = 0x0; /* STF */
+		else
+			aura.fc_stype = 0x3; /* STSTP */
+		aura.fc_addr = (uint64_t)sq->fc;
+		aura.fc_hyst_bits = sq->fc_hyst_bits & 0xF;
+		rc = roc_npa_pool_create(&sq->aura_handle, blk_sz, nb_sqb_bufs, &aura, &pool, 0);
+	}
+
 	if (rc)
 		goto fail;
 

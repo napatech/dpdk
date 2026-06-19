@@ -10,7 +10,7 @@ It also provides a pointer to where sample applications are stored.
 Compiling a Sample Application
 ------------------------------
 
-Please refer to :ref:`building_app_using_installed_dpdk` for detail on compiling sample apps.
+Please refer to :ref:`building_app_using_installed_dpdk` for details on compiling sample apps.
 
 Running a Sample Application
 ----------------------------
@@ -24,7 +24,7 @@ Running a Sample Application
     - In case needed, ports being used by the application should be
       bound to the corresponding kernel driver.
 
-    refer to :ref:`linux_gsg_linux_drivers` for more details.
+    Refer to :ref:`linux_gsg_linux_drivers` for more details.
 
 The application is linked with the DPDK target environment's Environmental Abstraction Layer (EAL) library,
 which provides some options that are generic to every DPDK application.
@@ -85,7 +85,7 @@ The reason is as follows.
 Suppose the system has 1024 reserved 2 MB pages in socket 0 and 1024 in socket 1.
 If the user requests 128 MB of memory, the 64 pages may not match the constraints:
 
-*   The hugepage memory by be given to the application by the kernel in socket 1 only.
+*   The hugepage memory may be given to the application by the kernel in socket 1 only.
     In this case, if the application attempts to create an object, such as a ring or memory pool in socket 0, it fails.
     To avoid this issue, it is recommended that the ``--numa-mem`` option be used instead of the ``-m`` option.
 
@@ -100,7 +100,7 @@ No memory will be reserved on any CPU socket that is not explicitly referenced, 
 If the DPDK cannot allocate enough memory on each socket, the EAL initialization fails.
 
 Whether hugepages are included in core dump is controlled by ``/proc/<pid>/coredump_filter``.
-It is ``33`` (hexadecimal) by default, which means that hugepages are excluded from core dump.
+The default value is ``0x33``, which means that hugepages are excluded from core dump.
 This setting is per-process and is inherited.
 Refer to ``core(5)`` for details.
 To include mapped hugepages in core dump, set bit 6 (``0x40``) in the parent process

@@ -30,7 +30,8 @@ from framework.utils import StrEnum
 class PortTopology(StrEnum):
     """Enum representing the port topology."""
 
-    #: In paired mode, the forwarding is between pairs of ports, e.g.: (0,1), (2,3), (4,5).
+    #: In paired mode, the forwarding is between pairs of ports, e.g.:
+    #: (0,1), (2,3), (4,5).
     paired = auto()
 
     #: In chained mode, the forwarding is to the next available port in the port mask, e.g.:

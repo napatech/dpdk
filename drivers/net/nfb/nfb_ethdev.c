@@ -4,10 +4,18 @@
  * All rights reserved.
  */
 
+#include <ctype.h>
+#include <sys/queue.h>
+#include <eal_export.h>
+#include <rte_tailq.h>
+
 #include <nfb/nfb.h>
 #include <nfb/ndp.h>
+#include <netcope/eth.h>
 #include <netcope/rxmac.h>
 #include <netcope/txmac.h>
+#include <netcope/mdio.h>
+#include <netcope/ieee802_3.h>
 
 #include <ethdev_pci.h>
 #include <rte_kvargs.h>
@@ -18,6 +26,45 @@
 #include "nfb_rxmode.h"
 #include "nfb.h"
 
+#include "nfb_mdio.h"
+
+static const char * const VALID_KEYS[] = {
+	NFB_ARG_PORT,
+	NULL
+};
+
+struct nfb_ifc_create_params {
+	struct nfb_probe_params *probe_params;
+	struct nc_ifc_map_info map_info;
+	struct nc_ifc_info *ifc_info;
+
+	int basename_len;       /* Cached real length of original probe_params->name */
+	/* Return value of failed nfb_eth_dev_create_for_ifc when rte_kvargs_process is used */
+	int ret;
+};
+
+/* The TAILQ entries are used for cleanup of allocated resources
+ * in situations, where dev_close is not called.
+ */
+TAILQ_HEAD(nfb_pmd_internals_head, pmd_internals);
+static struct nfb_pmd_internals_head nfb_eth_dev_list =
+	TAILQ_HEAD_INITIALIZER(nfb_eth_dev_list);
+
+static int nfb_eth_dev_uninit(struct rte_eth_dev *dev);
+static int nfb_eth_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
+
+static int
+nfb_mdio_read(void *priv, int prtad, int devad, uint16_t addr)
+{
+	return nc_mdio_read((struct nc_mdio *)priv, prtad, devad, addr);
+}
+
+static int
+nfb_mdio_write(void *priv, int prtad, int devad, uint16_t addr, uint16_t val)
+{
+	return nc_mdio_write((struct nc_mdio *)priv, prtad, devad, addr, val);
+}
+
 /**
  * Default MAC addr
  */
@@ -26,81 +73,122 @@ static const struct rte_ether_addr eth_addr = {
 };
 
 /**
- * Open all RX DMA queues
+ * Open Rx and Tx MAC components associated with current ifc
  *
- * @param dev
- *   Pointer to nfb device.
- * @param[out] rxmac
- *   Pointer to output array of nc_rxmac
- * @param[out] max_rxmac
- *   Pointer to output max index of rxmac
+ * @param intl
+ *   Pointer to driver internal structure
+ * @param params
+ *   Pointer to init parameters structure
  */
-static void
-nfb_nc_rxmac_init(struct nfb_device *nfb,
-	struct nc_rxmac *rxmac[RTE_MAX_NC_RXMAC],
-	uint16_t *max_rxmac)
+static int
+nfb_nc_eth_init(struct pmd_internals *intl, struct nfb_ifc_create_params *params)
 {
-	*max_rxmac = 0;
-	while ((rxmac[*max_rxmac] = nc_rxmac_open_index(nfb, *max_rxmac)))
-		++(*max_rxmac);
+	int ret;
+	int i, rxm, txm, eth;
+	struct nc_ifc_info *ifc = params->ifc_info;
+	struct nc_ifc_map_info *mi = &params->map_info;
+
+	int node, node_cp;
+	const int32_t *prop32;
+	int proplen;
+	const void *fdt;
+
+	fdt = nfb_get_fdt(intl->nfb);
+
+	ret = -ENOMEM;
+	if (ifc->eth_cnt == 0)
+		return 0;
+
+	intl->rxmac = calloc(ifc->eth_cnt, sizeof(*intl->rxmac));
+	if (intl->rxmac == NULL)
+		goto err_alloc_rxmac;
+
+	intl->txmac = calloc(ifc->eth_cnt, sizeof(*intl->txmac));
+	if (intl->txmac == NULL)
+		goto err_alloc_txmac;
+
+	intl->eth_node = calloc(ifc->eth_cnt, sizeof(*intl->eth_node));
+	if (intl->eth_node == NULL)
+		goto err_alloc_ethnode;
+
+	/* Some eths may not have assigned MAC nodes, hence use separate var for indexing */
+	rxm = 0;
+	txm = 0;
+	eth = 0;
+	for (i = 0; i < mi->eth_cnt; i++) {
+		if (mi->eth[i].ifc != ifc->id)
+			continue;
+
+		if (rxm >= ifc->eth_cnt || txm >= ifc->eth_cnt || eth >= ifc->eth_cnt) {
+			NFB_LOG(ERR, "MAC mapping inconsistent");
+			ret = -EINVAL;
+			goto err_map_inconsistent;
+		}
+
+		intl->rxmac[rxm] = nc_rxmac_open(intl->nfb, mi->eth[i].node_rxmac);
+		if (intl->rxmac[rxm])
+			rxm++;
+
+		intl->txmac[txm] = nc_txmac_open(intl->nfb, mi->eth[i].node_txmac);
+		if (intl->txmac[txm])
+			txm++;
+
+		node = nc_eth_get_pcspma_control_node(fdt, mi->eth[i].node_eth, &node_cp);
+
+		intl->eth_node[eth].if_info.dev = nc_mdio_open(intl->nfb, node, node_cp);
+		if (intl->eth_node[eth].if_info.dev) {
+			intl->eth_node[eth].if_info.prtad = 0;
+			intl->eth_node[eth].if_info.mdio_read = nfb_mdio_read;
+			intl->eth_node[eth].if_info.mdio_write = nfb_mdio_write;
+
+			prop32 = fdt_getprop(fdt, node_cp, "dev", &proplen);
+			if (proplen == sizeof(*prop32))
+				intl->eth_node[eth].if_info.prtad = fdt32_to_cpu(*prop32);
+
+			eth++;
+		}
+	}
+
+	intl->max_rxmac = rxm;
+	intl->max_txmac = txm;
+	intl->max_eth = eth;
+	return 0;
+
+err_map_inconsistent:
+	for (i = 0; i < eth; i++)
+		nc_mdio_close(intl->eth_node[i].if_info.dev);
+	for (i = 0; i < txm; i++)
+		nc_txmac_close(intl->txmac[i]);
+	for (i = 0; i < rxm; i++)
+		nc_rxmac_close(intl->rxmac[i]);
+	free(intl->eth_node);
+err_alloc_ethnode:
+	free(intl->txmac);
+err_alloc_txmac:
+	free(intl->rxmac);
+err_alloc_rxmac:
+	return ret;
 }
 
 /**
- * Open all TX DMA queues
- *
- * @param dev
- *   Pointer to nfb device.
- * @param[out] txmac
- *   Pointer to output array of nc_txmac
- * @param[out] max_rxmac
- *   Pointer to output max index of txmac
+ * Close all Rx+Tx MAC components
+ * @param intl
+ *   Pointer to internal driver structure
  */
 static void
-nfb_nc_txmac_init(struct nfb_device *nfb,
-	struct nc_txmac *txmac[RTE_MAX_NC_TXMAC],
-	uint16_t *max_txmac)
-{
-	*max_txmac = 0;
-	while ((txmac[*max_txmac] = nc_txmac_open_index(nfb, *max_txmac)))
-		++(*max_txmac);
-}
-
-/**
- * Close all RX DMA queues
- *
- * @param rxmac
- *   Pointer to array of nc_rxmac
- * @param max_rxmac
- *   Maximum index of rxmac
- */
-static void
-nfb_nc_rxmac_deinit(struct nc_rxmac *rxmac[RTE_MAX_NC_RXMAC],
-	uint16_t max_rxmac)
+nfb_nc_eth_deinit(struct pmd_internals *intl)
 {
 	uint16_t i;
-	for (i = 0; i < max_rxmac; i++) {
-		nc_rxmac_close(rxmac[i]);
-		rxmac[i] = NULL;
-	}
-}
+	for (i = 0; i < intl->max_eth; i++)
+		nc_mdio_close(intl->eth_node[i].if_info.dev);
+	for (i = 0; i < intl->max_txmac; i++)
+		nc_txmac_close(intl->txmac[i]);
+	for (i = 0; i < intl->max_rxmac; i++)
+		nc_rxmac_close(intl->rxmac[i]);
 
-/**
- * Close all TX DMA queues
- *
- * @param txmac
- *   Pointer to array of nc_txmac
- * @param max_txmac
- *   Maximum index of txmac
- */
-static void
-nfb_nc_txmac_deinit(struct nc_txmac *txmac[RTE_MAX_NC_TXMAC],
-	uint16_t max_txmac)
-{
-	uint16_t i;
-	for (i = 0; i < max_txmac; i++) {
-		nc_txmac_close(txmac[i]);
-		txmac[i] = NULL;
-	}
+	free(intl->eth_node);
+	free(intl->txmac);
+	free(intl->rxmac);
 }
 
 /**
@@ -137,11 +225,12 @@ nfb_eth_dev_start(struct rte_eth_dev *dev)
 	return 0;
 
 err_tx:
-	for (i = 0; i < nb_tx; i++)
-		nfb_eth_tx_queue_stop(dev, i);
+	for (; i > 0; i--)
+		nfb_eth_tx_queue_stop(dev, i - 1);
+	i = nb_rx;
 err_rx:
-	for (i = 0; i < nb_rx; i++)
-		nfb_eth_rx_queue_stop(dev, i);
+	for (; i > 0; i--)
+		nfb_eth_rx_queue_stop(dev, i - 1);
 	return ret;
 }
 
@@ -159,8 +248,6 @@ nfb_eth_dev_stop(struct rte_eth_dev *dev)
 	uint16_t i;
 	uint16_t nb_rx = dev->data->nb_rx_queues;
 	uint16_t nb_tx = dev->data->nb_tx_queues;
-
-	dev->data->dev_started = 0;
 
 	for (i = 0; i < nb_tx; i++)
 		nfb_eth_tx_queue_stop(dev, i);
@@ -181,11 +268,14 @@ nfb_eth_dev_stop(struct rte_eth_dev *dev)
  *   0 on success, a negative errno value otherwise.
  */
 static int
-nfb_eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
+nfb_eth_dev_configure(struct rte_eth_dev *dev)
 {
 	int ret;
-	struct pmd_internals *internals = dev->data->dev_private;
 	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
+
+	ret = nfb_eth_mtu_set(dev, dev_conf->rxmode.mtu);
+	if (ret)
+		goto err_mtu_set;
 
 	if (dev_conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
 		ret = rte_mbuf_dyn_rx_timestamp_register
@@ -193,12 +283,17 @@ nfb_eth_dev_configure(struct rte_eth_dev *dev __rte_unused)
 				&nfb_timestamp_rx_dynflag);
 		if (ret != 0) {
 			NFB_LOG(ERR, "Cannot register Rx timestamp field/flag %d", ret);
-			nfb_close(internals->nfb);
-			return -rte_errno;
+			ret = -ENOMEM;
+			goto err_ts_register;
 		}
 	}
 
 	return 0;
+
+err_ts_register:
+err_mtu_set:
+	nfb_eth_dev_uninit(dev);
+	return ret;
 }
 
 static uint32_t
@@ -207,7 +302,7 @@ nfb_eth_get_max_mac_address_count(struct rte_eth_dev *dev)
 	uint16_t i;
 	uint32_t c;
 	uint32_t ret = (uint32_t)-1;
-	struct pmd_internals *internals = dev->data->dev_private;
+	struct pmd_internals *internals = dev->process_private;
 
 	/*
 	 * Go through all RX MAC components in firmware and find
@@ -237,14 +332,23 @@ static int
 nfb_eth_dev_info(struct rte_eth_dev *dev,
 	struct rte_eth_dev_info *dev_info)
 {
+	struct pmd_priv *priv = dev->data->dev_private;
+	struct pmd_internals *intl = dev->process_private;
+
 	dev_info->max_mac_addrs = nfb_eth_get_max_mac_address_count(dev);
 
-	dev_info->max_rx_pktlen = (uint32_t)-1;
-	dev_info->max_rx_queues = dev->data->nb_rx_queues;
-	dev_info->max_tx_queues = dev->data->nb_tx_queues;
-	dev_info->speed_capa = RTE_ETH_LINK_SPEED_100G;
+	dev_info->max_rx_pktlen = priv->frame_len_max_cap;
+	dev_info->max_mtu = dev_info->max_rx_pktlen - (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN);
+	dev_info->max_rx_queues = priv->max_rx_queues;
+	dev_info->max_tx_queues = priv->max_tx_queues;
+	dev_info->speed_capa = RTE_ETH_LINK_SPEED_FIXED;
 	dev_info->rx_offload_capa =
 		RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+
+	if (intl->max_eth) {
+		nfb_mdio_cl45_pma_get_speed_capa(&intl->eth_node[0].if_info,
+				&dev_info->speed_capa);
+	}
 
 	return 0;
 }
@@ -260,32 +364,28 @@ nfb_eth_dev_info(struct rte_eth_dev *dev,
 static int
 nfb_eth_dev_close(struct rte_eth_dev *dev)
 {
-	struct pmd_internals *internals = dev->data->dev_private;
 	uint16_t i;
 	uint16_t nb_rx = dev->data->nb_rx_queues;
 	uint16_t nb_tx = dev->data->nb_tx_queues;
-	int ret;
 
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
-
-	ret = nfb_eth_dev_stop(dev);
-
-	nfb_nc_rxmac_deinit(internals->rxmac, internals->max_rxmac);
-	nfb_nc_txmac_deinit(internals->txmac, internals->max_txmac);
-
-	for (i = 0; i < nb_rx; i++) {
-		nfb_eth_rx_queue_release(dev, i);
-		dev->data->rx_queues[i] = NULL;
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		for (i = 0; i < nb_rx; i++) {
+			if (dev->data->rx_queues[i]) {
+				nfb_eth_rx_queue_release(dev, i);
+				dev->data->rx_queues[i] = NULL;
+			}
+		}
+		for (i = 0; i < nb_tx; i++) {
+			if (dev->data->tx_queues[i]) {
+				nfb_eth_tx_queue_release(dev, i);
+				dev->data->tx_queues[i] = NULL;
+			}
+		}
 	}
-	dev->data->nb_rx_queues = 0;
-	for (i = 0; i < nb_tx; i++) {
-		nfb_eth_tx_queue_release(dev, i);
-		dev->data->tx_queues[i] = NULL;
-	}
-	dev->data->nb_tx_queues = 0;
 
-	return ret;
+	nfb_eth_dev_uninit(dev);
+
+	return 0;
 }
 
 /**
@@ -308,7 +408,7 @@ nfb_eth_link_update(struct rte_eth_dev *dev,
 	struct rte_eth_link link;
 	memset(&link, 0, sizeof(link));
 
-	struct pmd_internals *internals = dev->data->dev_private;
+	struct pmd_internals *internals = dev->process_private;
 
 	status.speed = MAC_SPEED_UNKNOWN;
 
@@ -317,24 +417,8 @@ nfb_eth_link_update(struct rte_eth_dev *dev,
 	link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
 	link.link_autoneg = RTE_ETH_LINK_SPEED_FIXED;
 
-	if (internals->rxmac[0] != NULL) {
-		nc_rxmac_read_status(internals->rxmac[0], &status);
-
-		switch (status.speed) {
-		case MAC_SPEED_10G:
-			link.link_speed = RTE_ETH_SPEED_NUM_10G;
-			break;
-		case MAC_SPEED_40G:
-			link.link_speed = RTE_ETH_SPEED_NUM_40G;
-			break;
-		case MAC_SPEED_100G:
-			link.link_speed = RTE_ETH_SPEED_NUM_100G;
-			break;
-		default:
-			link.link_speed = RTE_ETH_SPEED_NUM_NONE;
-			break;
-		}
-	}
+	if (internals->max_eth)
+		link.link_speed = ieee802_3_get_pma_speed_value(&internals->eth_node->if_info);
 
 	for (i = 0; i < internals->max_rxmac; ++i) {
 		nc_rxmac_read_status(internals->rxmac[i], &status);
@@ -350,6 +434,29 @@ nfb_eth_link_update(struct rte_eth_dev *dev,
 	return 0;
 }
 
+static int
+nfb_eth_dev_set_link(struct pmd_internals *intl, bool val)
+{
+	int reg;
+	struct mdio_if_info *if_info;
+
+	if (!intl->max_eth)
+		return 0;
+
+	if_info = &intl->eth_node[0].if_info;
+
+	reg = nfb_mdio_if_read_pma(if_info, NFB_MDIO_PMA_CTRL);
+	if (reg < 0)
+		return reg;
+
+	/* Update PMA Reset flag if necessary (Reset flag set means link down) */
+	if ((reg & NFB_MDIO_PMA_CTRL_RESET) != (val ? 0 : NFB_MDIO_PMA_CTRL_RESET)) {
+		reg ^= NFB_MDIO_PMA_CTRL_RESET;
+		return nfb_mdio_if_write_pma(if_info, NFB_MDIO_PMA_CTRL, reg);
+	}
+	return 0;
+}
+
 /**
  * DPDK callback to bring the link UP.
  *
@@ -362,10 +469,14 @@ nfb_eth_link_update(struct rte_eth_dev *dev,
 static int
 nfb_eth_dev_set_link_up(struct rte_eth_dev *dev)
 {
-	struct pmd_internals *internals = (struct pmd_internals *)
-		dev->data->dev_private;
-
+	int ret;
+	struct pmd_internals *internals = dev->process_private;
 	uint16_t i;
+
+	ret = nfb_eth_dev_set_link(internals, true);
+	if (ret)
+		return ret;
+
 	for (i = 0; i < internals->max_rxmac; ++i)
 		nc_rxmac_enable(internals->rxmac[i]);
 
@@ -387,10 +498,15 @@ nfb_eth_dev_set_link_up(struct rte_eth_dev *dev)
 static int
 nfb_eth_dev_set_link_down(struct rte_eth_dev *dev)
 {
-	struct pmd_internals *internals = (struct pmd_internals *)
-		dev->data->dev_private;
+	int ret;
+	struct pmd_internals *internals = dev->process_private;
 
 	uint16_t i;
+
+	ret = nfb_eth_dev_set_link(internals, false);
+	if (ret)
+		return ret;
+
 	for (i = 0; i < internals->max_rxmac; ++i)
 		nc_rxmac_disable(internals->rxmac[i]);
 
@@ -429,9 +545,8 @@ nfb_eth_mac_addr_set(struct rte_eth_dev *dev,
 {
 	unsigned int i;
 	uint64_t mac;
-	struct rte_eth_dev_data *data = dev->data;
 	struct pmd_internals *internals = (struct pmd_internals *)
-		data->dev_private;
+		dev->process_private;
 
 	mac = nfb_eth_mac_addr_conv(mac_addr);
 	/* Until no real multi-port support, configure all RX MACs the same */
@@ -447,9 +562,8 @@ nfb_eth_mac_addr_add(struct rte_eth_dev *dev,
 {
 	unsigned int i;
 	uint64_t mac;
-	struct rte_eth_dev_data *data = dev->data;
 	struct pmd_internals *internals = (struct pmd_internals *)
-		data->dev_private;
+		dev->process_private;
 
 	mac = nfb_eth_mac_addr_conv(mac_addr);
 	for (i = 0; i < internals->max_rxmac; ++i)
@@ -462,12 +576,134 @@ static void
 nfb_eth_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
 {
 	unsigned int i;
-	struct rte_eth_dev_data *data = dev->data;
 	struct pmd_internals *internals = (struct pmd_internals *)
-		data->dev_private;
+		dev->process_private;
 
 	for (i = 0; i < internals->max_rxmac; ++i)
 		nc_rxmac_set_mac(internals->rxmac[i], index, 0, 0);
+}
+
+static uint16_t
+nfb_mac_read_frame_len_max_cap(struct pmd_internals *intl)
+{
+	unsigned int i;
+	uint16_t ret = UINT16_MAX;
+	struct nc_rxmac_status status;
+
+	for (i = 0; i < intl->max_rxmac; ++i) {
+		status.frame_length_max_capable = 0;
+		nc_rxmac_read_status(intl->rxmac[i], &status);
+		if (status.frame_length_max_capable && ret > status.frame_length_max_capable)
+			ret = status.frame_length_max_capable;
+	}
+	return ret;
+}
+
+static int
+nfb_eth_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
+{
+	unsigned int i;
+	uint32_t frame_len;
+	struct pmd_internals *intl = dev->process_private;
+	struct pmd_priv *priv = dev->data->dev_private;
+
+	frame_len = (uint32_t)mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN;
+	if (frame_len > priv->frame_len_max_cap)
+		return -EINVAL;
+
+	for (i = 0; i < intl->max_rxmac; ++i)
+		nc_rxmac_set_frame_length(intl->rxmac[i], frame_len, RXMAC_FRAME_LENGTH_MAX);
+
+	return 0;
+}
+
+static int
+nfb_eth_fw_version_get(struct rte_eth_dev *dev, char *fw_version,
+		size_t fw_size)
+{
+	int ret;
+	const char *proj_name, *proj_vers;
+	struct pmd_internals *intl = dev->process_private;
+
+	proj_name = nc_info_get_fw_project_name(intl->nfb, NULL);
+	proj_vers = nc_info_get_fw_project_version(intl->nfb, NULL);
+
+	if (proj_name == NULL)
+		proj_name = "";
+	if (proj_vers == NULL)
+		proj_vers = "";
+
+	ret = snprintf(fw_version, fw_size, "%s;%s", proj_name, proj_vers);
+	if (ret < 0)
+		return ret;
+
+	if (ret >= (signed int)fw_size)
+		return strlen(proj_name) + 1 + strlen(proj_vers) + 1;
+
+	return 0;
+}
+
+static int
+nfb_eth_fec_get(struct rte_eth_dev *dev, uint32_t *fec_capa)
+{
+	int reg;
+	struct pmd_internals *intl = dev->process_private;
+	struct mdio_if_info *if_info;
+
+	*fec_capa = 0;
+	if (!intl->max_eth)
+		return 0;
+
+	if_info = &intl->eth_node[0].if_info;
+
+	reg = nfb_mdio_if_read_pma(if_info, NFB_MDIO_PMA_RSFEC_CR);
+	if (reg < 0)
+		return -EIO;
+
+	*fec_capa = (reg & NFB_MDIO_PMA_RSFEC_CR_ENABLE) ?
+			RTE_ETH_FEC_MODE_CAPA_MASK(RS) :
+			RTE_ETH_FEC_MODE_CAPA_MASK(NOFEC);
+
+	return 0;
+}
+
+static int
+nfb_eth_fec_set(struct rte_eth_dev *dev, uint32_t fec_capa)
+{
+	int ret;
+	uint32_t fec_capa2 = 0;
+	int reg;
+
+	struct pmd_internals *intl = dev->process_private;
+	struct mdio_if_info *if_info;
+
+	if (!intl->max_eth)
+		return 0;
+
+	if_info = &intl->eth_node[0].if_info;
+
+	if (fec_capa & RTE_ETH_FEC_MODE_CAPA_MASK(AUTO))
+		return -EINVAL;
+
+	reg = nfb_mdio_if_read_pma(if_info, NFB_MDIO_PMA_RSFEC_CR);
+	if (reg < 0)
+		return -EIO;
+
+	reg = (fec_capa & RTE_ETH_FEC_MODE_CAPA_MASK(RS)) ?
+			(reg | NFB_MDIO_PMA_RSFEC_CR_ENABLE) :
+			(reg & ~NFB_MDIO_PMA_RSFEC_CR_ENABLE);
+	ret = nfb_mdio_if_write_pma(if_info, NFB_MDIO_PMA_RSFEC_CR, reg);
+	if (ret < 0)
+		return -EIO;
+
+	ret = nfb_eth_fec_get(dev, &fec_capa2);
+	if (ret)
+		return ret;
+
+	if (fec_capa != fec_capa2)
+		return -EINVAL;
+
+	return 0;
 }
 
 static const struct eth_dev_ops ops = {
@@ -496,6 +732,10 @@ static const struct eth_dev_ops ops = {
 	.mac_addr_set = nfb_eth_mac_addr_set,
 	.mac_addr_add = nfb_eth_mac_addr_add,
 	.mac_addr_remove = nfb_eth_mac_addr_remove,
+	.mtu_set = nfb_eth_mtu_set,
+	.fw_version_get = nfb_eth_fw_version_get,
+	.fec_get = nfb_eth_fec_get,
+	.fec_set = nfb_eth_fec_set,
 };
 
 /**
@@ -508,48 +748,46 @@ static const struct eth_dev_ops ops = {
  *   0 on success, a negative errno value otherwise.
  */
 static int
-nfb_eth_dev_init(struct rte_eth_dev *dev)
+nfb_eth_dev_init(struct rte_eth_dev *dev, void *init_data)
 {
+	int i;
+	int cnt;
+	int ret;
 	uint32_t mac_count;
 	struct rte_eth_dev_data *data = dev->data;
-	struct pmd_internals *internals = (struct pmd_internals *)
-		data->dev_private;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_pci_addr *pci_addr = &pci_dev->addr;
+	struct pmd_internals *internals;
+	struct nfb_ifc_create_params *params = init_data;
+	struct nc_ifc_info *ifc = params->ifc_info;
+	struct nc_ifc_map_info *mi = &params->map_info;
+	struct pmd_priv *priv = data->dev_private;
 	struct rte_ether_addr eth_addr_init;
-	char nfb_dev[PATH_MAX];
+	uint16_t max_rx_queues, max_tx_queues;
 
-	NFB_LOG(INFO, "Initializing NFB device (" PCI_PRI_FMT ")",
-		pci_addr->domain, pci_addr->bus, pci_addr->devid,
-		pci_addr->function);
-
-	snprintf(nfb_dev, sizeof(nfb_dev),
-		"/dev/nfb/by-pci-slot/" PCI_PRI_FMT,
-		pci_addr->domain, pci_addr->bus, pci_addr->devid,
-		pci_addr->function);
-
-	/*
-	 * Get number of available DMA RX and TX queues, which is maximum
-	 * number of queues that can be created and store it in private device
-	 * data structure.
-	 */
-	internals->nfb = nfb_open(nfb_dev);
-	if (internals->nfb == NULL) {
-		NFB_LOG(ERR, "nfb_open(): failed to open %s", nfb_dev);
-		return -EINVAL;
+	internals = rte_zmalloc_socket("nfb_internals",
+			sizeof(struct pmd_internals), RTE_CACHE_LINE_SIZE,
+			dev->device->numa_node);
+	if (internals == NULL) {
+		ret = -ENOMEM;
+		goto err_alloc_internals;
 	}
-	data->nb_rx_queues = ndp_get_rx_queue_available_count(internals->nfb);
-	data->nb_tx_queues = ndp_get_tx_queue_available_count(internals->nfb);
 
-	NFB_LOG(INFO, "Available NDP queues RX: %u TX: %u",
-		data->nb_rx_queues, data->nb_tx_queues);
+	dev->process_private = internals;
 
-	nfb_nc_rxmac_init(internals->nfb,
-		internals->rxmac,
-		&internals->max_rxmac);
-	nfb_nc_txmac_init(internals->nfb,
-		internals->txmac,
-		&internals->max_txmac);
+	/* Open device handle */
+	internals->nfb = nfb_open(params->probe_params->path);
+	if (internals->nfb == NULL) {
+		NFB_LOG(ERR, "nfb_open(): failed to open %s", params->probe_params->path);
+		ret = -EINVAL;
+		goto err_nfb_open;
+	}
+
+	/* Get number of available DMA RX and TX queues */
+	max_rx_queues = ifc->rxq_cnt;
+	max_tx_queues = ifc->txq_cnt;
+
+	ret = nfb_nc_eth_init(internals, params);
+	if (ret)
+		goto err_nc_eth_init;
 
 	/* Set rx, tx burst functions */
 	dev->rx_pkt_burst = nfb_eth_ndp_rx;
@@ -561,34 +799,93 @@ nfb_eth_dev_init(struct rte_eth_dev *dev)
 	/* Get link state */
 	nfb_eth_link_update(dev, 0);
 
-	/* Allocate space for MAC addresses */
-	mac_count = nfb_eth_get_max_mac_address_count(dev);
-	data->mac_addrs = rte_zmalloc(data->name,
-		sizeof(struct rte_ether_addr) * mac_count, RTE_CACHE_LINE_SIZE);
-	if (data->mac_addrs == NULL) {
-		NFB_LOG(ERR, "Could not alloc space for MAC address");
-		nfb_close(internals->nfb);
-		return -EINVAL;
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		priv->max_rx_queues = max_rx_queues;
+		priv->max_tx_queues = max_tx_queues;
+
+		priv->queue_map_rx = rte_calloc("NFB queue map", max_rx_queues + max_tx_queues,
+				sizeof(*priv->queue_map_rx), 0);
+		if (priv->queue_map_rx == NULL) {
+			ret = -ENOMEM;
+			goto err_alloc_queue_map;
+		}
+		priv->queue_map_tx = priv->queue_map_rx + max_rx_queues;
+
+		/* Use queue mapping provided by libnfb */
+		cnt = 0;
+		for (i = 0; i < mi->rxq_cnt; i++) {
+			if (mi->rxq[i].ifc == ifc->id) {
+				if (cnt >= max_rx_queues) {
+					NFB_LOG(ERR, "RX queue mapping inconsistent");
+					ret = -EINVAL;
+					goto err_queue_map;
+				}
+				priv->queue_map_rx[cnt++] = mi->rxq[i].id;
+			}
+		}
+
+		cnt = 0;
+		for (i = 0; i < mi->txq_cnt; i++) {
+			if (mi->txq[i].ifc == ifc->id) {
+				if (cnt >= max_tx_queues) {
+					NFB_LOG(ERR, "TX queue mapping inconsistent");
+					ret = -EINVAL;
+					goto err_queue_map;
+				}
+				priv->queue_map_tx[cnt++] = mi->txq[i].id;
+			}
+		}
+
+		priv->frame_len_max_cap = nfb_mac_read_frame_len_max_cap(internals);
+
+		/* Allocate space for MAC addresses */
+		mac_count = nfb_eth_get_max_mac_address_count(dev);
+		data->mac_addrs = rte_zmalloc(data->name,
+			sizeof(struct rte_ether_addr) * mac_count, RTE_CACHE_LINE_SIZE);
+		if (data->mac_addrs == NULL) {
+			NFB_LOG(ERR, "Could not alloc space for MAC address");
+			ret = -ENOMEM;
+			goto err_malloc_mac_addrs;
+		}
+
+		ret = nc_ifc_get_default_mac(internals->nfb, ifc->id, eth_addr_init.addr_bytes,
+			sizeof(eth_addr_init.addr_bytes));
+		if (ret != 0) {
+			rte_eth_random_addr(eth_addr_init.addr_bytes);
+			eth_addr_init.addr_bytes[0] = eth_addr.addr_bytes[0];
+			eth_addr_init.addr_bytes[1] = eth_addr.addr_bytes[1];
+			eth_addr_init.addr_bytes[2] = eth_addr.addr_bytes[2];
+		}
+
+		nfb_eth_mac_addr_set(dev, &eth_addr_init);
+		rte_ether_addr_copy(&eth_addr_init, &data->mac_addrs[0]);
+
+		data->promiscuous = nfb_eth_promiscuous_get(dev);
+		data->all_multicast = nfb_eth_allmulticast_get(dev);
+
+		data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
+		priv->ready = true;
+	} else {
+		if (!priv->ready) {
+			ret = -EBADFD;
+			goto err_secondary_not_ready;
+		}
 	}
 
-	rte_eth_random_addr(eth_addr_init.addr_bytes);
-	eth_addr_init.addr_bytes[0] = eth_addr.addr_bytes[0];
-	eth_addr_init.addr_bytes[1] = eth_addr.addr_bytes[1];
-	eth_addr_init.addr_bytes[2] = eth_addr.addr_bytes[2];
-
-	nfb_eth_mac_addr_set(dev, &eth_addr_init);
-	rte_ether_addr_copy(&eth_addr_init, &dev->data->mac_addrs[0]);
-
-	data->promiscuous = nfb_eth_promiscuous_get(dev);
-	data->all_multicast = nfb_eth_allmulticast_get(dev);
-
-	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
-
-	NFB_LOG(INFO, "NFB device (" PCI_PRI_FMT ") successfully initialized",
-		pci_addr->domain, pci_addr->bus, pci_addr->devid,
-		pci_addr->function);
-
 	return 0;
+
+err_malloc_mac_addrs:
+err_queue_map:
+	rte_free(priv->queue_map_rx);
+err_alloc_queue_map:
+err_secondary_not_ready:
+	nfb_nc_eth_deinit(internals);
+err_nc_eth_init:
+	nfb_close(internals->nfb);
+err_nfb_open:
+	rte_free(internals);
+err_alloc_internals:
+	return ret;
 }
 
 /**
@@ -603,24 +900,174 @@ nfb_eth_dev_init(struct rte_eth_dev *dev)
 static int
 nfb_eth_dev_uninit(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_pci_addr *pci_addr = &pci_dev->addr;
+	struct pmd_internals *internals = dev->process_private;
+	struct pmd_priv *priv = dev->data->dev_private;
 
-	nfb_eth_dev_close(dev);
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		rte_free(priv->queue_map_rx);
 
-	NFB_LOG(INFO, "NFB device (" PCI_PRI_FMT ") successfully uninitialized",
-		pci_addr->domain, pci_addr->bus, pci_addr->devid,
-		pci_addr->function);
+	TAILQ_REMOVE(&nfb_eth_dev_list, internals, eth_dev_list);
+
+	nfb_nc_eth_deinit(internals);
+	nfb_close(internals->nfb);
+
+	rte_free(internals);
 
 	return 0;
+}
+
+static int
+nfb_eth_dev_create_for_ifc(struct nfb_ifc_create_params *cp)
+{
+	int ret;
+	struct nc_ifc_info *ifc;
+	struct nfb_probe_params *pp;
+	struct rte_eth_dev *eth_dev;
+	struct pmd_internals *p;
+
+	ifc = cp->ifc_info;
+	pp = cp->probe_params;
+
+	/* Skip interfaces which doesn't belong to the probed PCI device */
+	if ((pp->ep_index != -1 && ifc->ep != pp->ep_index) ||
+			(ifc->flags & NC_IFC_INFO_FLAG_ACTIVE) == 0)
+		return 0;
+
+	ret = snprintf(pp->name + cp->basename_len, sizeof(pp->name) - cp->basename_len,
+			"_eth%d", ifc->id);
+	if (ret < 0 || ret >= (signed int)sizeof(pp->name) - cp->basename_len)
+		return -EINVAL;
+
+	ret = rte_eth_dev_create(pp->device, pp->name,
+			sizeof(struct pmd_priv),
+			pp->specific_init, pp->specific_device,
+			nfb_eth_dev_init, cp);
+	if (ret)
+		goto out;
+
+	eth_dev = rte_eth_dev_get_by_name(pp->name);
+	if (eth_dev == NULL) {
+		NFB_LOG(ERR, "Failed to get created device %s", pp->name);
+		ret = -ENODEV;
+		goto out;
+	}
+	p = eth_dev->process_private;
+	p->eth_dev = eth_dev;
+	TAILQ_INSERT_TAIL(&nfb_eth_dev_list, p, eth_dev_list);
+
+out:
+	/* return to original name (just for clarity) */
+	pp->name[cp->basename_len] = '\0';
+	return ret;
+}
+
+static int nfb_eth_dev_create_for_ifc_by_port(const char *key __rte_unused,
+		const char *value, void *opaque)
+{
+	int ret = -EINVAL;
+	char *end;
+	unsigned long port;
+	struct nfb_ifc_create_params *ifc_params = opaque;
+
+	if (value == NULL || strlen(value) == 0 || !isdigit(*value))
+		goto out;
+
+	errno = 0;
+	port = strtoul(value, &end, 10);
+	if (errno != 0 || *end != '\0')
+		goto out;
+
+	if (port >= LONG_MAX || port >= (unsigned long)ifc_params->map_info.ifc_cnt)
+		goto out;
+
+	ifc_params->ifc_info = &ifc_params->map_info.ifc[port];
+	ret = nfb_eth_dev_create_for_ifc(ifc_params);
+
+out:
+	ifc_params->ret = ret;
+	return ret;
+}
+
+int
+nfb_eth_common_probe(struct nfb_probe_params *params)
+{
+	int i;
+	int ret;
+
+	struct nfb_device *nfb_dev;
+	struct nfb_ifc_create_params ifc_params;
+	struct rte_kvargs *kvlist = NULL;
+
+	/* Open the device handle just for parsing ifc_params.
+	 * A separate handle is used later for each netdev.
+	 */
+	nfb_dev = nfb_open(params->path);
+	if (nfb_dev == NULL) {
+		NFB_LOG(ERR, "nfb_open(): failed to open %s", params->path);
+		return -EINVAL;
+	}
+
+	ret = nc_ifc_map_info_create_ordinary(nfb_dev, &ifc_params.map_info);
+	if (ret)
+		goto err_map_info_create;
+
+	if (params->args != NULL && strlen(params->args) > 0) {
+		kvlist = rte_kvargs_parse(params->args, VALID_KEYS);
+		if (kvlist == NULL) {
+			NFB_LOG(ERR, "Failed to parse device arguments %s", params->args);
+			ret = -EINVAL;
+			goto err_parse_args;
+		}
+	}
+
+	ifc_params.ret = 0;
+	ifc_params.probe_params = params;
+	ifc_params.basename_len = strlen(params->name);
+
+	/* When at least one port argument is specified, create only selected ports */
+	if (kvlist && rte_kvargs_count(kvlist, NFB_ARG_PORT)) {
+		ret = rte_kvargs_process(kvlist, NFB_ARG_PORT,
+				nfb_eth_dev_create_for_ifc_by_port, (void *)&ifc_params);
+		if (ret) {
+			ret = ifc_params.ret;
+			goto err_dev_create;
+		}
+	} else {
+		for (i = 0; i < ifc_params.map_info.ifc_cnt; i++) {
+			ifc_params.ifc_info = &ifc_params.map_info.ifc[i];
+			ret = nfb_eth_dev_create_for_ifc(&ifc_params);
+			if (ret)
+				goto err_dev_create;
+		}
+	}
+
+	rte_kvargs_free(kvlist);
+
+	nc_map_info_destroy(&ifc_params.map_info);
+	nfb_close(nfb_dev);
+
+	return 0;
+
+err_dev_create:
+	nfb_eth_common_remove(params->device);
+	rte_kvargs_free(kvlist);
+err_parse_args:
+	nc_map_info_destroy(&ifc_params.map_info);
+err_map_info_create:
+	nfb_close(nfb_dev);
+	return ret;
 }
 
 static const struct rte_pci_id nfb_pci_id_table[] = {
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_NETCOPE, PCI_DEVICE_ID_NFB_40G2) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_NETCOPE, PCI_DEVICE_ID_NFB_100G2) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_NETCOPE, PCI_DEVICE_ID_NFB_200G2QL) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_NETCOPE, PCI_DEVICE_ID_NFB_200G2QL_E1) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_SILICOM, PCI_DEVICE_ID_FB2CGG3) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_SILICOM, PCI_DEVICE_ID_FB2CGHH) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_SILICOM, PCI_DEVICE_ID_FB2CGG3D) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_CESNET, PCI_DEVICE_ID_COMBO400G1) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_CESNET, PCI_DEVICE_ID_CESNET_NDK_COMMON) },
 	{ .vendor_id = 0, }
 };
 
@@ -641,8 +1088,50 @@ static int
 nfb_eth_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 		struct rte_pci_device *pci_dev)
 {
-	return rte_eth_dev_pci_generic_probe(pci_dev,
-		sizeof(struct pmd_internals), nfb_eth_dev_init);
+	int ret;
+	char path[PATH_MAX];
+
+	struct nc_composed_device_info comp_dev_info;
+	struct nfb_probe_params params = {0};
+
+	rte_pci_device_name(&pci_dev->addr, params.name, sizeof(params.name));
+
+	/*
+	 * NFB device can be composed from multiple PCI devices,
+	 * find the base char device ID for the current PCI device
+	 */
+	ret = nc_get_composed_device_info_by_pci(NULL, params.name, &comp_dev_info);
+	if (ret) {
+		NFB_LOG(ERR, "Could not find NFB device for %s", params.name);
+		return -ENODEV;
+	}
+
+	ret = snprintf(path, sizeof(path), NFB_BASE_DEV_PATH "%d", comp_dev_info.nfb_id);
+	if (ret < 0 || ret >= (signed int)sizeof(path))
+		return -EINVAL;
+
+	params.args = pci_dev->device.devargs ? pci_dev->device.devargs->args : NULL;
+	params.path = path;
+	params.nfb_id = comp_dev_info.nfb_id;
+	params.ep_index = comp_dev_info.ep_index;
+
+	params.device = &pci_dev->device;
+	params.specific_init = eth_dev_pci_specific_init;
+	params.specific_device = pci_dev;
+
+	return nfb_eth_common_probe(&params);
+}
+
+int
+nfb_eth_common_remove(struct rte_device *dev)
+{
+	struct pmd_internals *entry, *temp;
+
+	RTE_TAILQ_FOREACH_SAFE(entry, &nfb_eth_dev_list, eth_dev_list, temp) {
+		if (dev == entry->eth_dev->device)
+			rte_eth_dev_destroy(entry->eth_dev, nfb_eth_dev_uninit);
+	}
+	return 0;
 }
 
 /**
@@ -659,7 +1148,7 @@ nfb_eth_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 static int
 nfb_eth_pci_remove(struct rte_pci_device *pci_dev)
 {
-	return rte_eth_dev_pci_generic_remove(pci_dev, nfb_eth_dev_uninit);
+	return nfb_eth_common_remove(&pci_dev->device);
 }
 
 static struct rte_pci_driver nfb_eth_driver = {
@@ -672,3 +1161,6 @@ RTE_PMD_REGISTER_PCI(RTE_NFB_DRIVER_NAME, nfb_eth_driver);
 RTE_PMD_REGISTER_PCI_TABLE(RTE_NFB_DRIVER_NAME, nfb_pci_id_table);
 RTE_PMD_REGISTER_KMOD_DEP(RTE_NFB_DRIVER_NAME, "* nfb");
 RTE_LOG_REGISTER_DEFAULT(nfb_logtype, NOTICE);
+RTE_PMD_REGISTER_PARAM_STRING(RTE_NFB_DRIVER_NAME,
+		NFB_COMMON_ARGS
+		);

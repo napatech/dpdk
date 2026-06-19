@@ -75,6 +75,7 @@ EAL_REGISTER_TAILQ(rte_hash_tailq)
 struct __rte_hash_rcu_dq_entry {
 	uint32_t key_idx;
 	uint32_t ext_bkt_idx;
+	void *old_data;
 };
 
 RTE_EXPORT_SYMBOL(rte_hash_find_existing)
@@ -170,7 +171,6 @@ rte_hash_create(const struct rte_hash_parameters *params)
 	void *buckets = NULL;
 	void *buckets_ext = NULL;
 	char ring_name[RTE_RING_NAMESIZE];
-	char ext_ring_name[RTE_RING_NAMESIZE];
 	unsigned num_key_slots;
 	unsigned int hw_trans_mem_support = 0, use_local_cache = 0;
 	unsigned int ext_table_support = 0;
@@ -219,6 +219,13 @@ rte_hash_create(const struct rte_hash_parameters *params)
 		rte_errno = EINVAL;
 		HASH_LOG(ERR, "%s() has invalid parameters, name can't be NULL",
 			__func__);
+		return NULL;
+	}
+
+	if (strlen(params->name) >= RTE_HASH_NAMESIZE) {
+		rte_errno = ENAMETOOLONG;
+		HASH_LOG(ERR, "%s() name '%s' exceeds maximum length %d",
+			__func__, params->name, RTE_HASH_NAMESIZE);
 		return NULL;
 	}
 
@@ -272,12 +279,16 @@ rte_hash_create(const struct rte_hash_parameters *params)
 	else
 		num_key_slots = params->entries + 1;
 
-	snprintf(ring_name, sizeof(ring_name), "HT_%s", params->name);
+	/* Ring name may get truncated, conflict detected on ring creation */
+	if (snprintf(ring_name, sizeof(ring_name), "HT_%s", params->name)
+			>= (int)sizeof(ring_name))
+		HASH_LOG(NOTICE, "ring name truncated to '%s'", ring_name);
+
 	/* Create ring (Dummy slot index is not enqueued) */
 	r = rte_ring_create_elem(ring_name, sizeof(uint32_t),
 			rte_align32pow2(num_key_slots), params->socket_id, 0);
 	if (r == NULL) {
-		HASH_LOG(ERR, "memory allocation failed");
+		HASH_LOG(ERR, "ring creation failed: %s", rte_strerror(rte_errno));
 		goto err;
 	}
 
@@ -286,20 +297,25 @@ rte_hash_create(const struct rte_hash_parameters *params)
 
 	/* Create ring for extendable buckets. */
 	if (ext_table_support) {
-		snprintf(ext_ring_name, sizeof(ext_ring_name), "HT_EXT_%s",
-								params->name);
+		char ext_ring_name[RTE_RING_NAMESIZE];
+
+		if (snprintf(ext_ring_name, sizeof(ext_ring_name), "HT_EXT_%s", params->name)
+				>= (int)sizeof(ext_ring_name))
+			HASH_LOG(NOTICE, "external ring name truncated to '%s'", ext_ring_name);
+
 		r_ext = rte_ring_create_elem(ext_ring_name, sizeof(uint32_t),
 				rte_align32pow2(num_buckets + 1),
 				params->socket_id, 0);
-
 		if (r_ext == NULL) {
-			HASH_LOG(ERR, "ext buckets memory allocation "
-								"failed");
+			HASH_LOG(ERR, "ext buckets ring create failed: %s",
+				rte_strerror(rte_errno));
 			goto err;
 		}
 	}
 
-	snprintf(hash_name, sizeof(hash_name), "HT_%s", params->name);
+	if (snprintf(hash_name, sizeof(hash_name), "HT_%s", params->name)
+			>= (int)sizeof(hash_name))
+		HASH_LOG(NOTICE, "%s() hash name truncated to '%s'", __func__, hash_name);
 
 	rte_mcfg_tailq_write_lock();
 
@@ -690,7 +706,7 @@ rte_hash_reset(struct rte_hash *h)
 	}
 
 	memset(h->buckets, 0, h->num_buckets * sizeof(struct rte_hash_bucket));
-	memset(h->key_store, 0, h->key_entry_size * (h->entries + 1));
+	memset(h->key_store, 0, (size_t)h->key_entry_size * (h->entries + 1));
 	*h->tbl_chng_cnt = 0;
 
 	/* reset the free ring */
@@ -746,6 +762,28 @@ enqueue_slot_back(const struct rte_hash *h,
 						sizeof(uint32_t));
 }
 
+/*
+ * When RCU is configured with a free function, auto-free the overwritten
+ * data pointer via RCU.
+ */
+static inline void
+__rte_hash_rcu_auto_free_old_data(const struct rte_hash *h, void *d)
+{
+	struct __rte_hash_rcu_dq_entry rcu_dq_entry = {
+		.key_idx = EMPTY_SLOT, /* sentinel value for __hash_rcu_qsbr_free_resource */
+		.old_data = d,
+	};
+
+	if (d == NULL || h->hash_rcu_cfg == NULL || h->hash_rcu_cfg->free_key_data_func == NULL)
+		return;
+
+	if (h->dq == NULL || rte_rcu_qsbr_dq_enqueue(h->dq, &rcu_dq_entry) != 0) {
+		/* SYNC mode or enqueue failed in DQ mode */
+		rte_rcu_qsbr_synchronize(h->hash_rcu_cfg->v, RTE_QSBR_THRID_INVALID);
+		h->hash_rcu_cfg->free_key_data_func(h->hash_rcu_cfg->key_data_ptr, d);
+	}
+}
+
 /* Search a key from bucket and update its data.
  * Writer holds the lock before calling this.
  */
@@ -755,11 +793,12 @@ search_and_update(const struct rte_hash *h, void *data, const void *key,
 {
 	int i;
 	struct rte_hash_key *k, *keys = h->key_store;
+	void *old_data;
 
 	for (i = 0; i < RTE_HASH_BUCKET_ENTRIES; i++) {
 		if (bkt->sig_current[i] == sig) {
 			k = (struct rte_hash_key *) ((char *)keys +
-					bkt->key_idx[i] * h->key_entry_size);
+					bkt->key_idx[i] * (size_t)h->key_entry_size);
 			if (rte_hash_cmp_eq(key, k->key, h) == 0) {
 				/* The store to application data at *data
 				 * should not leak after the store to pdata
@@ -767,9 +806,12 @@ search_and_update(const struct rte_hash *h, void *data, const void *key,
 				 * variable. Release the application data
 				 * to the readers.
 				 */
-				rte_atomic_store_explicit(&k->pdata,
+				old_data = rte_atomic_exchange_explicit(&k->pdata,
 					data,
 					rte_memory_order_release);
+
+				__rte_hash_rcu_auto_free_old_data(h, old_data);
+
 				/*
 				 * Return index where key is stored,
 				 * subtracting the first dummy index
@@ -1125,7 +1167,7 @@ __rte_hash_add_key_with_hash(const struct rte_hash *h, const void *key,
 			return -ENOSPC;
 	}
 
-	new_k = RTE_PTR_ADD(keys, slot_id * h->key_entry_size);
+	new_k = RTE_PTR_ADD(keys, slot_id * (size_t)h->key_entry_size);
 	/* The store to application data (by the application) at *data should
 	 * not leak after the store of pdata in the key store. i.e. pdata is
 	 * the guard variable. Release the application data to the readers.
@@ -1314,7 +1356,7 @@ search_one_bucket_l(const struct rte_hash *h, const void *key,
 		if (bkt->sig_current[i] == sig &&
 				bkt->key_idx[i] != EMPTY_SLOT) {
 			k = (struct rte_hash_key *) ((char *)keys +
-					bkt->key_idx[i] * h->key_entry_size);
+					bkt->key_idx[i] * (size_t)h->key_entry_size);
 
 			if (rte_hash_cmp_eq(key, k->key, h) == 0) {
 				if (data != NULL)
@@ -1352,7 +1394,7 @@ search_one_bucket_lf(const struct rte_hash *h, const void *key, uint16_t sig,
 					  rte_memory_order_acquire);
 			if (key_idx != EMPTY_SLOT) {
 				k = (struct rte_hash_key *) ((char *)keys +
-						key_idx * h->key_entry_size);
+						key_idx * (size_t)h->key_entry_size);
 
 				if (rte_hash_cmp_eq(key, k->key, h) == 0) {
 					if (data != NULL) {
@@ -1551,10 +1593,19 @@ __hash_rcu_qsbr_free_resource(void *p, void *e, unsigned int n)
 			*((struct __rte_hash_rcu_dq_entry *)e);
 
 	RTE_SET_USED(n);
+
+	if (rcu_dq_entry.key_idx == EMPTY_SLOT) {
+		/* Overwrite case: free old data only, do not recycle slot */
+		RTE_ASSERT(h->hash_rcu_cfg->free_key_data_func != NULL);
+		h->hash_rcu_cfg->free_key_data_func(h->hash_rcu_cfg->key_data_ptr,
+						    rcu_dq_entry.old_data);
+		return;
+	}
+
 	keys = h->key_store;
 
 	k = (struct rte_hash_key *) ((char *)keys +
-				rcu_dq_entry.key_idx * h->key_entry_size);
+				rcu_dq_entry.key_idx * (size_t)h->key_entry_size);
 	key_data = k->pdata;
 	if (h->hash_rcu_cfg->free_key_data_func)
 		h->hash_rcu_cfg->free_key_data_func(h->hash_rcu_cfg->key_data_ptr,
@@ -1606,8 +1657,9 @@ rte_hash_rcu_qsbr_add(struct rte_hash *h, struct rte_hash_rcu_config *cfg)
 		/* No other things to do. */
 	} else if (cfg->mode == RTE_HASH_QSBR_MODE_DQ) {
 		/* Init QSBR defer queue. */
-		snprintf(rcu_dq_name, sizeof(rcu_dq_name),
-					"HASH_RCU_%s", h->name);
+		if (snprintf(rcu_dq_name, sizeof(rcu_dq_name), "HASH_RCU_%s", h->name)
+				>= (int)sizeof(rcu_dq_name))
+			HASH_LOG(NOTICE, "HASH defer queue name truncated to: %s", rcu_dq_name);
 		params.name = rcu_dq_name;
 		params.size = cfg->dq_size;
 		if (params.size == 0)
@@ -1623,7 +1675,8 @@ rte_hash_rcu_qsbr_add(struct rte_hash *h, struct rte_hash_rcu_config *cfg)
 		h->dq = rte_rcu_qsbr_dq_create(&params);
 		if (h->dq == NULL) {
 			rte_free(hash_rcu_cfg);
-			HASH_LOG(ERR, "HASH defer queue creation failed");
+			HASH_LOG(ERR, "HASH defer queue creation failed: %s",
+				rte_strerror(rte_errno));
 			return 1;
 		}
 	} else {
@@ -1740,7 +1793,7 @@ search_and_remove(const struct rte_hash *h, const void *key,
 					  rte_memory_order_acquire);
 		if (bkt->sig_current[i] == sig && key_idx != EMPTY_SLOT) {
 			k = (struct rte_hash_key *) ((char *)keys +
-					key_idx * h->key_entry_size);
+					key_idx * (size_t)h->key_entry_size);
 			if (rte_hash_cmp_eq(key, k->key, h) == 0) {
 				bkt->sig_current[i] = NULL_SIGNATURE;
 				/* Free the key store index if
@@ -1853,18 +1906,15 @@ return_key:
 		/* Key index where key is stored, adding the first dummy index */
 		rcu_dq_entry.key_idx = ret + 1;
 		rcu_dq_entry.ext_bkt_idx = index;
-		if (h->dq == NULL) {
+		if (h->dq == NULL || rte_rcu_qsbr_dq_enqueue(h->dq, &rcu_dq_entry) != 0) {
 			/* Wait for quiescent state change if using
-			 * RTE_HASH_QSBR_MODE_SYNC
+			 * RTE_HASH_QSBR_MODE_SYNC or if RCU enqueue failed.
 			 */
 			rte_rcu_qsbr_synchronize(h->hash_rcu_cfg->v,
 						 RTE_QSBR_THRID_INVALID);
 			__hash_rcu_qsbr_free_resource((void *)((uintptr_t)h),
 						      &rcu_dq_entry, 1);
-		} else if (h->dq)
-			/* Push into QSBR FIFO if using RTE_HASH_QSBR_MODE_DQ */
-			if (rte_rcu_qsbr_dq_enqueue(h->dq, &rcu_dq_entry) != 0)
-				HASH_LOG(ERR, "Failed to push QSBR FIFO");
+		}
 	}
 	__hash_rw_writer_unlock(h);
 	return ret;
@@ -1895,8 +1945,7 @@ rte_hash_get_key_with_position(const struct rte_hash *h, const int32_t position,
 	RETURN_IF_TRUE(((h == NULL) || (key == NULL)), -EINVAL);
 
 	struct rte_hash_key *k, *keys = h->key_store;
-	k = (struct rte_hash_key *) ((char *) keys + (position + 1) *
-				     h->key_entry_size);
+	k = (struct rte_hash_key *) ((char *) keys + (position + 1) * (size_t)h->key_entry_size);
 	*key = k->key;
 
 	if (position !=
@@ -1990,7 +2039,7 @@ __bulk_lookup_l(const struct rte_hash *h, const void **keys,
 			const struct rte_hash_key *key_slot =
 				(const struct rte_hash_key *)(
 				(const char *)h->key_store +
-				key_idx * h->key_entry_size);
+				key_idx * (size_t)h->key_entry_size);
 			rte_prefetch0(key_slot);
 			continue;
 		}
@@ -2004,7 +2053,7 @@ __bulk_lookup_l(const struct rte_hash *h, const void **keys,
 			const struct rte_hash_key *key_slot =
 				(const struct rte_hash_key *)(
 				(const char *)h->key_store +
-				key_idx * h->key_entry_size);
+				key_idx * (size_t)h->key_entry_size);
 			rte_prefetch0(key_slot);
 		}
 	}
@@ -2029,7 +2078,7 @@ __bulk_lookup_l(const struct rte_hash *h, const void **keys,
 			const struct rte_hash_key *key_slot =
 				(const struct rte_hash_key *)(
 				(const char *)h->key_store +
-				key_idx * h->key_entry_size);
+				key_idx * (size_t)h->key_entry_size);
 
 			/*
 			 * If key index is 0, do not compare key,
@@ -2057,7 +2106,7 @@ __bulk_lookup_l(const struct rte_hash *h, const void **keys,
 			const struct rte_hash_key *key_slot =
 				(const struct rte_hash_key *)(
 				(const char *)h->key_store +
-				key_idx * h->key_entry_size);
+				key_idx * (size_t)h->key_entry_size);
 
 			/*
 			 * If key index is 0, do not compare key,
@@ -2176,7 +2225,7 @@ __bulk_lookup_lf(const struct rte_hash *h, const void **keys,
 				const struct rte_hash_key *key_slot =
 					(const struct rte_hash_key *)(
 					(const char *)h->key_store +
-					key_idx * h->key_entry_size);
+					key_idx * (size_t)h->key_entry_size);
 				rte_prefetch0(key_slot);
 				continue;
 			}
@@ -2190,7 +2239,7 @@ __bulk_lookup_lf(const struct rte_hash *h, const void **keys,
 				const struct rte_hash_key *key_slot =
 					(const struct rte_hash_key *)(
 					(const char *)h->key_store +
-					key_idx * h->key_entry_size);
+					key_idx * (size_t)h->key_entry_size);
 				rte_prefetch0(key_slot);
 			}
 		}
@@ -2216,7 +2265,7 @@ __bulk_lookup_lf(const struct rte_hash *h, const void **keys,
 				const struct rte_hash_key *key_slot =
 					(const struct rte_hash_key *)(
 					(const char *)h->key_store +
-					key_idx * h->key_entry_size);
+					key_idx * (size_t)h->key_entry_size);
 
 				/*
 				 * If key index is 0, do not compare key,
@@ -2248,7 +2297,7 @@ __bulk_lookup_lf(const struct rte_hash *h, const void **keys,
 				const struct rte_hash_key *key_slot =
 					(const struct rte_hash_key *)(
 					(const char *)h->key_store +
-					key_idx * h->key_entry_size);
+					key_idx * (size_t)h->key_entry_size);
 
 				/*
 				 * If key index is 0, do not compare key,
@@ -2604,7 +2653,7 @@ rte_hash_iterate(const struct rte_hash *h, const void **key, void **data, uint32
 
 	__hash_rw_reader_lock(h);
 	next_key = (struct rte_hash_key *) ((char *)h->key_store +
-				position * h->key_entry_size);
+				position * (size_t)h->key_entry_size);
 	/* Return key and data */
 	*key = next_key->key;
 	*data = next_key->pdata;
@@ -2635,7 +2684,7 @@ extend_table:
 	}
 	__hash_rw_reader_lock(h);
 	next_key = (struct rte_hash_key *) ((char *)h->key_store +
-				position * h->key_entry_size);
+				position * (size_t)h->key_entry_size);
 	/* Return key and data */
 	*key = next_key->key;
 	*data = next_key->pdata;

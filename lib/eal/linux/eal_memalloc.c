@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -28,6 +29,7 @@
 #include <rte_log.h>
 #include <rte_eal.h>
 #include <rte_memory.h>
+#include <rte_cycles.h>
 
 #include "eal_filesystem.h"
 #include "eal_internal_cfg.h"
@@ -260,6 +262,7 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 {
 	int fd;
 	int *out_fd;
+	const char *huge_path;
 	struct stat st;
 	int ret;
 	const struct internal_config *internal_conf =
@@ -276,12 +279,18 @@ get_seg_fd(char *path, int buflen, struct hugepage_info *hi,
 
 	if (internal_conf->single_file_segments) {
 		out_fd = &fd_list[list_idx].memseg_list_fd;
-		eal_get_hugefile_path(path, buflen, hi->hugedir, list_idx);
+		huge_path = eal_get_hugefile_path(path, buflen, hi->hugedir, list_idx);
 	} else {
 		out_fd = &fd_list[list_idx].fds[seg_idx];
-		eal_get_hugefile_path(path, buflen, hi->hugedir,
+		huge_path = eal_get_hugefile_path(path, buflen, hi->hugedir,
 				list_idx * RTE_MAX_MEMSEG_PER_LIST + seg_idx);
 	}
+	if (huge_path == NULL) {
+		EAL_LOG(DEBUG, "%s(): hugefile path truncated: '%s'",
+			__func__, path);
+		return -1;
+	}
+
 	fd = *out_fd;
 	if (fd >= 0)
 		return fd;
@@ -1380,8 +1389,10 @@ secondary_msl_create_walk(const struct rte_memseg_list *msl,
 {
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
 	struct rte_memseg_list *primary_msl, *local_msl;
-	char name[PATH_MAX];
+	char name[RTE_FBARRAY_NAME_LEN];
 	int msl_idx, ret;
+	uint64_t tsc;
+	pid_t pid;
 
 	if (msl->external)
 		return 0;
@@ -1390,9 +1401,23 @@ secondary_msl_create_walk(const struct rte_memseg_list *msl,
 	primary_msl = &mcfg->memsegs[msl_idx];
 	local_msl = &local_memsegs[msl_idx];
 
-	/* create distinct fbarrays for each secondary */
-	snprintf(name, RTE_FBARRAY_NAME_LEN, "%s_%i",
-		primary_msl->memseg_arr.name, getpid());
+	/*
+	 * Create distinct fbarrays for each secondary using TSC for uniqueness,
+	 * since PID is not unique across containers (different PID namespaces).
+	 * The worst case name length is:
+	 * Base name: "memseg-1048576k-99-99" ~21 chars
+	 * Suffix "_<pid>_<16hex>" +24
+	 * Total = ~45 < RTE_FBARRAY_NAME_LEN 64
+	 */
+	tsc = rte_get_tsc_cycles();
+	pid = getpid();
+	ret = snprintf(name, sizeof(name), "%s_%d_%"PRIx64,
+		primary_msl->memseg_arr.name, pid, tsc);
+	if (ret >= (int)sizeof(name)) {
+		EAL_LOG(ERR, "fbarray name \"%s_%d_%"PRIx64"\" is too long",
+			primary_msl->memseg_arr.name, pid, tsc);
+		return -1;
+	}
 
 	ret = rte_fbarray_init(&local_msl->memseg_arr, name,
 		primary_msl->memseg_arr.len,

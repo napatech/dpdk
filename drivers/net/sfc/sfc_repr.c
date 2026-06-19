@@ -533,7 +533,7 @@ sfc_repr_dev_link_update(struct rte_eth_dev *dev,
 	struct rte_eth_link link;
 
 	if (sr->state != SFC_ETHDEV_STARTED) {
-		sfc_port_link_mode_to_info(EFX_LINK_UNKNOWN, &link);
+		sfc_port_link_mode_to_info(EFX_LINK_UNKNOWN, 0, &link);
 	} else {
 		memset(&link, 0, sizeof(link));
 		link.link_status = RTE_ETH_LINK_UP;
@@ -819,10 +819,6 @@ sfc_repr_dev_close(struct rte_eth_dev *dev)
 	(void)sfc_repr_proxy_del_port(srs->pf_port_id, srs->repr_id);
 
 	sfc_mae_clear_switch_port(srs->switch_domain_id, srs->switch_port_id);
-
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
-	dev->dev_ops = NULL;
 
 	sfc_repr_unlock(sr);
 	sfc_repr_lock_fini(sr);

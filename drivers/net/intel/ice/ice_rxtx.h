@@ -46,8 +46,6 @@
 
 #define ICE_SUPPORT_CHAIN_NUM 5
 
-#define ICE_TD_CMD                      ICE_TX_DESC_CMD_EOP
-
 #define ICE_VPMD_RX_BURST            CI_VPMD_RX_BURST
 #define ICE_VPMD_TX_BURST            32
 #define ICE_VPMD_RXQ_REARM_THRESH    CI_VPMD_RX_REARM_THRESH
@@ -108,6 +106,36 @@
 		RTE_ETH_RX_OFFLOAD_VLAN_FILTER |\
 		RTE_ETH_RX_OFFLOAD_RSS_HASH)
 
+/* basic scalar path */
+#define ICE_TX_SCALAR_OFFLOADS (		\
+	RTE_ETH_TX_OFFLOAD_VLAN_INSERT |	\
+	RTE_ETH_TX_OFFLOAD_TCP_TSO |		\
+	RTE_ETH_TX_OFFLOAD_UDP_TSO |		\
+	RTE_ETH_TX_OFFLOAD_MULTI_SEGS |		\
+	RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE |	\
+	RTE_ETH_TX_OFFLOAD_QINQ_INSERT |	\
+	RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_UDP_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_TCP_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_SCTP_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |	\
+	RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |	\
+	RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |	\
+	RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |	\
+	RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |	\
+	RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |	\
+	RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP)
+/* basic vector path */
+#define ICE_TX_VECTOR_OFFLOADS RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE
+/* vector offload paths */
+#define ICE_TX_VECTOR_OFFLOAD_OFFLOADS (	\
+	ICE_TX_VECTOR_OFFLOADS |		\
+	RTE_ETH_TX_OFFLOAD_VLAN_INSERT |	\
+	RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_UDP_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_TCP_CKSUM |		\
+	RTE_ETH_TX_OFFLOAD_SCTP_CKSUM)
+
 /* Max header size can be 2K - 64 bytes */
 #define ICE_RX_HDR_BUF_SIZE    (2048 - 64)
 
@@ -138,19 +166,6 @@ struct ice_txtime {
 	int ts_offset; /* dynamic mbuf Tx timestamp field offset */
 	uint64_t ts_flag; /* dynamic mbuf Tx timestamp flag */
 	const struct rte_memzone *ts_mz;
-};
-
-/* Offload features */
-union ice_tx_offload {
-	uint64_t data;
-	struct {
-		uint64_t l2_len:7; /* L2 (MAC) Header Length. */
-		uint64_t l3_len:9; /* L3 (IP) Header Length. */
-		uint64_t l4_len:8; /* L4 Header Length. */
-		uint64_t tso_segsz:16; /* TCP TSO segment size */
-		uint64_t outer_l2_len:8; /* outer L2 Header Length */
-		uint64_t outer_l3_len:16; /* outer L3 Header Length */
-	};
 };
 
 /* Rx Flex Descriptor for Comms Package Profile
@@ -249,13 +264,6 @@ void ice_select_rxd_to_pkt_fields_handler(struct ci_rx_queue *rxq,
 int ice_rx_vec_dev_check(struct rte_eth_dev *dev);
 int ice_tx_vec_dev_check(struct rte_eth_dev *dev);
 int ice_rxq_vec_setup(struct ci_rx_queue *rxq);
-int ice_txq_vec_setup(struct ci_tx_queue *txq);
-uint16_t ice_recv_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
-			   uint16_t nb_pkts);
-uint16_t ice_recv_scattered_pkts_vec(void *rx_queue, struct rte_mbuf **rx_pkts,
-				     uint16_t nb_pkts);
-uint16_t ice_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
-			   uint16_t nb_pkts);
 uint16_t ice_recv_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
 				uint16_t nb_pkts);
 uint16_t ice_recv_pkts_vec_avx2_offload(void *rx_queue, struct rte_mbuf **rx_pkts,

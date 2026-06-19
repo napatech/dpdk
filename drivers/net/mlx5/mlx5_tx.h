@@ -154,7 +154,7 @@ struct __rte_cache_aligned mlx5_txq_data {
 	struct mlx5_mr_ctrl mr_ctrl; /* MR control descriptor. */
 	struct mlx5_wqe *wqes; /* Work queue. */
 	struct mlx5_wqe *wqes_end; /* Work queue array limit. */
-#ifdef RTE_LIBRTE_MLX5_DEBUG
+#ifdef RTE_PMD_MLX5_DEBUG
 	uint32_t *fcqs; /* Free completion queue (debug extended). */
 #else
 	uint16_t *fcqs; /* Free completion queue. */
@@ -222,8 +222,8 @@ int mlx5_txq_release(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_releasable(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_txq_verify(struct rte_eth_dev *dev);
 int mlx5_txq_get_sqn(struct mlx5_txq_ctrl *txq);
-void txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl);
-void txq_free_elts(struct mlx5_txq_ctrl *txq_ctrl);
+void mlx5_txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl);
+void mlx5_txq_free_elts(struct mlx5_txq_ctrl *txq_ctrl);
 uint64_t mlx5_get_tx_port_offloads(struct rte_eth_dev *dev);
 void mlx5_txq_dynf_timestamp_set(struct rte_eth_dev *dev);
 int mlx5_count_aggr_ports(struct rte_eth_dev *dev);
@@ -234,8 +234,7 @@ struct mlx5_external_q *mlx5_ext_txq_get(struct rte_eth_dev *dev, uint16_t idx);
 
 /* mlx5_tx.c */
 
-void mlx5_tx_handle_completion(struct mlx5_txq_data *__rte_restrict txq,
-			       unsigned int olx __rte_unused);
+void mlx5_tx_handle_completion(struct mlx5_txq_data *__rte_restrict txq);
 int mlx5_tx_descriptor_status(void *tx_queue, uint16_t offset);
 void mlx5_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 		       struct rte_eth_txq_info *qinfo);
@@ -300,21 +299,6 @@ static __rte_always_inline struct mlx5_uar_data *
 mlx5_tx_bfreg(struct mlx5_txq_data *txq)
 {
 	return &MLX5_PROC_PRIV(txq->port_id)->uar_table[txq->idx];
-}
-
-/**
- * Ring TX queue doorbell and flush the update by write memory barrier.
- *
- * @param txq
- *   Pointer to TX queue structure.
- * @param wqe
- *   Pointer to the last WQE posted in the NIC.
- */
-static __rte_always_inline void
-mlx5_tx_dbrec(struct mlx5_txq_data *txq, volatile struct mlx5_wqe *wqe)
-{
-	mlx5_doorbell_ring(mlx5_tx_bfreg(txq), *(volatile uint64_t *)wqe,
-			   txq->wqe_ci, txq->qp_db, 1);
 }
 
 /**
@@ -526,15 +510,11 @@ txq_ol_cksum_to_cs(struct rte_mbuf *buf)
  *   Pointer to array of packets to be free.
  * @param pkts_n
  *   Number of packets to be freed.
- * @param olx
- *   Configured Tx offloads mask. It is fully defined at
- *   compile time and may be used for optimization.
  */
 static __rte_always_inline void
 mlx5_tx_free_mbuf(struct mlx5_txq_data *__rte_restrict txq,
 		  struct rte_mbuf **__rte_restrict pkts,
-		  unsigned int pkts_n,
-		  unsigned int olx __rte_unused)
+		  unsigned int pkts_n)
 {
 	struct rte_mempool *pool = NULL;
 	struct rte_mbuf **p_free = NULL;
@@ -552,7 +532,7 @@ mlx5_tx_free_mbuf(struct mlx5_txq_data *__rte_restrict txq,
 	 * Free mbufs directly to the pool in bulk
 	 * if fast free offload is engaged
 	 */
-	if (!MLX5_TXOFF_CONFIG(MULTI) && txq->fast_free) {
+	if (txq->fast_free) {
 		mbuf = *pkts;
 		pool = mbuf->pool;
 		rte_mempool_put_bulk(pool, (void *)pkts, pkts_n);
@@ -642,10 +622,9 @@ mlx5_tx_free_mbuf(struct mlx5_txq_data *__rte_restrict txq,
 static __rte_noinline void
 __mlx5_tx_free_mbuf(struct mlx5_txq_data *__rte_restrict txq,
 		    struct rte_mbuf **__rte_restrict pkts,
-		    unsigned int pkts_n,
-		    unsigned int olx __rte_unused)
+		    unsigned int pkts_n)
 {
-	mlx5_tx_free_mbuf(txq, pkts, pkts_n, olx);
+	mlx5_tx_free_mbuf(txq, pkts, pkts_n);
 }
 
 /**
@@ -655,14 +634,10 @@ __mlx5_tx_free_mbuf(struct mlx5_txq_data *__rte_restrict txq,
  *   Pointer to Tx queue structure.
  * @param tail
  *   Index in elts to free up to, becomes new elts tail.
- * @param olx
- *   Configured Tx offloads mask. It is fully defined at
- *   compile time and may be used for optimization.
  */
 static __rte_always_inline void
 mlx5_tx_free_elts(struct mlx5_txq_data *__rte_restrict txq,
-		  uint16_t tail,
-		  unsigned int olx __rte_unused)
+		  uint16_t tail)
 {
 	uint16_t n_elts = tail - txq->elts_tail;
 
@@ -681,7 +656,7 @@ mlx5_tx_free_elts(struct mlx5_txq_data *__rte_restrict txq,
 		MLX5_ASSERT(part <= txq->elts_s);
 		mlx5_tx_free_mbuf(txq,
 				  &txq->elts[txq->elts_tail & txq->elts_m],
-				  part, olx);
+				  part);
 		txq->elts_tail += part;
 		n_elts -= part;
 	} while (n_elts);
@@ -763,7 +738,7 @@ mlx5_tx_request_completion(struct mlx5_txq_data *__rte_restrict txq,
 		last->cseg.flags = RTE_BE32(MLX5_COMP_ALWAYS <<
 					    MLX5_COMP_MODE_OFFSET);
 		/* Save elts_head in dedicated free on completion queue. */
-#ifdef RTE_LIBRTE_MLX5_DEBUG
+#ifdef RTE_PMD_MLX5_DEBUG
 		txq->fcqs[txq->cq_pi++ & txq->cqe_m] = head |
 			  (last->cseg.opcode >> 8) << 16;
 #else
@@ -808,7 +783,7 @@ mlx5_tx_request_completion_trace(struct mlx5_txq_data *__rte_restrict txq,
 			txq->elts_comp = head;
 		}
 		/* Completion request flag was set on cseg constructing. */
-#ifdef RTE_LIBRTE_MLX5_DEBUG
+#ifdef RTE_PMD_MLX5_DEBUG
 		txq->fcqs[txq->cq_pi++ & txq->cqe_m] = head |
 			  (wqe->cseg.opcode >> 8) << 16;
 #else
@@ -3580,7 +3555,7 @@ send_loop:
 	 * - doorbell the NIC about processed CQEs
 	 */
 	rte_prefetch0(*(pkts + loc.pkts_sent));
-	mlx5_tx_handle_completion(txq, olx);
+	mlx5_tx_handle_completion(txq);
 	/*
 	 * Calculate the number of available resources - elts and WQEs.
 	 * There are two possible different scenarios:
@@ -3829,7 +3804,7 @@ burst_exit:
 	txq->stats.opackets += loc.pkts_sent;
 #endif
 	if (MLX5_TXOFF_CONFIG(INLINE) && loc.mbuf_free)
-		__mlx5_tx_free_mbuf(txq, pkts, loc.mbuf_free, olx);
+		__mlx5_tx_free_mbuf(txq, pkts, loc.mbuf_free);
 	/* Trace productive bursts only. */
 	if (__rte_trace_point_fp_is_enabled() && loc.pkts_sent)
 		rte_pmd_mlx5_trace_tx_exit(mlx5_read_pcibar_clock_from_txq(txq),

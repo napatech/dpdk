@@ -8,16 +8,16 @@
 #include <errno.h>  /* errno */
 #include <limits.h> /* PATH_MAX */
 #ifndef RTE_EXEC_ENV_WINDOWS
-#include <libgen.h> /* basename et al */
 #include <sys/wait.h>
 #endif
 #include <stdlib.h> /* NULL */
 #include <string.h> /* strerror */
-#include <unistd.h> /* readlink */
+#include <unistd.h>
 #include <dirent.h>
 
 #include <rte_string_fns.h> /* strlcpy */
 #include <rte_devargs.h>
+#include <rte_eal.h>
 
 #ifdef RTE_EXEC_ENV_FREEBSD
 #define self "curproc"
@@ -36,6 +36,7 @@ extern uint16_t flag_for_send_pkts;
 #endif
 
 #define PREFIX_ALLOW "--allow="
+#define PREFIX_DRIVER_PATH "--driver-path="
 
 static int
 add_parameter_allow(char **argv, int max_capacity)
@@ -63,6 +64,23 @@ add_parameter_allow(char **argv, int max_capacity)
 	return count;
 }
 
+static int
+add_parameter_driver_path(char **argv, int max_capacity)
+{
+	const char *driver_path;
+	int count = 0;
+
+	RTE_EAL_DRIVER_PATH_FOREACH(driver_path, true) {
+		if (asprintf(&argv[count], PREFIX_DRIVER_PATH"%s", driver_path) < 0)
+			break;
+
+		if (++count == max_capacity)
+			break;
+	}
+
+	return count;
+}
+
 /*
  * launches a second copy of the test process using the given argv parameters,
  * which should include argv[0] as the process name. To identify in the
@@ -75,6 +93,7 @@ process_dup(const char *const argv[], int numargs, const char *env_value)
 	int num = 0;
 	char **argv_cpy;
 	int allow_num;
+	int driver_path_num;
 	int argv_num;
 	int i, status;
 	char path[32];
@@ -90,7 +109,8 @@ process_dup(const char *const argv[], int numargs, const char *env_value)
 		return -1;
 	else if (pid == 0) {
 		allow_num = rte_devargs_type_count(RTE_DEVTYPE_ALLOWED);
-		argv_num = numargs + allow_num + 1;
+		driver_path_num = rte_eal_driver_path_count(true);
+		argv_num = numargs + allow_num + driver_path_num + 1;
 		argv_cpy = calloc(argv_num, sizeof(char *));
 		if (!argv_cpy)
 			rte_panic("Memory allocation failed\n");
@@ -104,6 +124,11 @@ process_dup(const char *const argv[], int numargs, const char *env_value)
 		if (allow_num > 0)
 			num = add_parameter_allow(&argv_cpy[i], allow_num);
 		num += numargs;
+
+		if (driver_path_num > 0) {
+			int added = add_parameter_driver_path(&argv_cpy[num], driver_path_num);
+			num += added;
+		}
 
 #ifdef RTE_EXEC_ENV_LINUX
 		{
@@ -199,28 +224,32 @@ process_dup(const char *const argv[], int numargs, const char *env_value)
 	return status;
 }
 
-/* FreeBSD doesn't support file prefixes, so force compile failures for any
- * tests attempting to use this function on FreeBSD.
- */
-#ifdef RTE_EXEC_ENV_LINUX
+/* Only Linux supports file prefixes. */
+#ifndef RTE_EXEC_ENV_LINUX
+static inline const char *
+file_prefix_arg(void)
+{
+	return "";
+}
+#else /* RTE_EXEC_ENV_LINUX */
 static inline char *
 get_current_prefix(char *prefix, int size)
 {
-	char path[PATH_MAX] = {0};
-	char buf[PATH_MAX] = {0};
-
-	/* get file for config (fd is always 3) */
-	snprintf(path, sizeof(path), "/proc/self/fd/%d", 3);
-
-	/* return NULL on error */
-	if (readlink(path, buf, sizeof(buf)) == -1)
-		return NULL;
-
-	/* get the prefix */
-	rte_basename(dirname(buf), prefix, size);
-
+	rte_basename(rte_eal_get_runtime_dir(), prefix, size);
 	return prefix;
 }
-#endif
+
+/* Return a --file-prefix=XXXX argument */
+static inline const char *
+file_prefix_arg(void)
+{
+	static char prefix[NAME_MAX + sizeof("--file-prefix=")];
+	char tmp[NAME_MAX];
+
+	snprintf(prefix, sizeof(prefix), "--file-prefix=%s",
+			get_current_prefix(tmp, sizeof(tmp)));
+	return prefix;
+}
+#endif /* RTE_EXEC_ENV_LINUX */
 
 #endif /* _PROCESS_H_ */

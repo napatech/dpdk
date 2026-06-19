@@ -215,7 +215,7 @@ struct mlx5_rxq_priv {
 
 /* mlx5_rxq.c */
 
-extern uint8_t rss_hash_default_key[];
+extern uint8_t mlx5_rss_hash_default_key[];
 
 unsigned int mlx5_rxq_cqe_num(struct mlx5_rxq_data *rxq_data);
 int mlx5_mprq_free_mp(struct rte_eth_dev *dev);
@@ -258,7 +258,7 @@ struct mlx5_external_q *mlx5_ext_rxq_get(struct rte_eth_dev *dev,
 int mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx);
 int mlx5_rxq_verify(struct rte_eth_dev *dev);
 int mlx5_ext_rxq_verify(struct rte_eth_dev *dev);
-int rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl);
+int mlx5_rxq_alloc_elts(struct mlx5_rxq_ctrl *rxq_ctrl);
 int mlx5_ind_table_obj_verify(struct rte_eth_dev *dev);
 struct mlx5_ind_table_obj *mlx5_ind_table_obj_get(struct rte_eth_dev *dev,
 						  const uint16_t *queues,
@@ -340,7 +340,7 @@ uint16_t mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts,
 			   uint16_t pkts_n);
 uint16_t mlx5_rx_burst_mprq_vec(void *dpdk_rxq, struct rte_mbuf **pkts,
 				uint16_t pkts_n);
-void rxq_sync_cq(struct mlx5_rxq_data *rxq);
+void mlx5_rxq_sync_cq(struct mlx5_rxq_data *rxq);
 
 static int mlx5_rxq_mprq_enabled(struct mlx5_rxq_data *rxq);
 
@@ -603,6 +603,23 @@ mprq_buf_to_pkt(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt, uint32_t len,
 }
 
 /**
+ * Check whether Shared RQ is enabled for the device.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ *
+ * @return
+ *   0 if disabled, otherwise enabled.
+ */
+static __rte_always_inline int
+mlx5_shared_rq_enabled(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	return !LIST_EMPTY(&priv->sh->shared_rxqs);
+}
+
+/**
  * Check whether Multi-Packet RQ can be enabled for the device.
  *
  * @param dev
@@ -616,6 +633,8 @@ mlx5_check_mprq_support(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
+	if (mlx5_shared_rq_enabled(dev))
+		return -ENOTSUP;
 	if (priv->config.mprq.enabled &&
 	    priv->rxqs_n >= priv->config.mprq.min_rxqs_num)
 		return 1;
@@ -669,23 +688,6 @@ mlx5_mprq_enabled(struct rte_eth_dev *dev)
 	/* Multi-Packet RQ can't be partially configured. */
 	MLX5_ASSERT(n == 0 || n == n_ibv);
 	return n == n_ibv;
-}
-
-/**
- * Check whether Shared RQ is enabled for the device.
- *
- * @param dev
- *   Pointer to Ethernet device.
- *
- * @return
- *   0 if disabled, otherwise enabled.
- */
-static __rte_always_inline int
-mlx5_shared_rq_enabled(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-
-	return !LIST_EMPTY(&priv->sh->shared_rxqs);
 }
 
 /**

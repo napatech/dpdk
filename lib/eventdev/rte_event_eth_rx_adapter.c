@@ -1191,7 +1191,6 @@ rxa_intr_thread(void *arg)
 static inline bool
 rxa_intr_ring_dequeue(struct event_eth_rx_adapter *rx_adapter)
 {
-	uint32_t n;
 	uint32_t nb_rx = 0;
 	int rxq_empty;
 	struct eth_event_enqueue_buffer *buf;
@@ -1260,9 +1259,9 @@ rxa_intr_ring_dequeue(struct event_eth_rx_adapter *rx_adapter)
 		if (rxa_shared_intr(dev_info, queue)) {
 			uint16_t i;
 			uint16_t nb_queues;
+			uint32_t n = 0;
 
 			nb_queues = dev_info->dev->data->nb_rx_queues;
-			n = 0;
 			for (i = dev_info->next_q_idx; i < nb_queues; i++) {
 				uint8_t enq_buffer_full;
 
@@ -1289,7 +1288,7 @@ rxa_intr_ring_dequeue(struct event_eth_rx_adapter *rx_adapter)
 						RTE_MAX_RXTX_INTR_VEC_ID - 1 :
 						0;
 		} else {
-			n = rxa_eth_rx(rx_adapter, port, queue, nb_rx,
+			uint32_t n = rxa_eth_rx(rx_adapter, port, queue, nb_rx,
 				rx_adapter->max_nb_rx,
 				&rxq_empty, buf, stats);
 			rx_adapter->qd_valid = !rxq_empty;
@@ -3828,7 +3827,8 @@ handle_rxa_get_queue_conf(const char *cmd __rte_unused,
 {
 	uint8_t rx_adapter_id;
 	uint16_t rx_queue_id;
-	int eth_dev_id, ret = -1;
+	uint16_t eth_dev_id;
+	int ret = -1;
 	char *token, *l_params;
 	struct rte_event_eth_rx_adapter_queue_conf queue_conf;
 
@@ -3900,7 +3900,8 @@ handle_rxa_get_queue_stats(const char *cmd __rte_unused,
 {
 	uint8_t rx_adapter_id;
 	uint16_t rx_queue_id;
-	int eth_dev_id, ret = -1;
+	uint16_t eth_dev_id;
+	int ret = -1;
 	char *token, *l_params;
 	struct rte_event_eth_rx_adapter_queue_stats q_stats;
 
@@ -3971,7 +3972,8 @@ handle_rxa_queue_stats_reset(const char *cmd __rte_unused,
 {
 	uint8_t rx_adapter_id;
 	uint16_t rx_queue_id;
-	int eth_dev_id, ret = -1;
+	uint16_t eth_dev_id;
+	int ret = -1;
 	char *token, *l_params;
 
 	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
@@ -4032,7 +4034,8 @@ handle_rxa_instance_get(const char *cmd __rte_unused,
 {
 	uint8_t instance_id;
 	uint16_t rx_queue_id;
-	int eth_dev_id, ret = -1;
+	uint16_t eth_dev_id;
+	int ret = -1;
 	char *token, *l_params;
 
 	if (params == NULL || strlen(params) == 0 || !isdigit(*params))

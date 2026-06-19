@@ -36,6 +36,10 @@ Supported Chipsets and NICs
 - Intel Ethernet Converged Network Adapter X540-T2
 - Intel Ethernet Converged Network Adapter X550-T1
 - Intel Ethernet Converged Network Adapter X550-T2
+- Intel Ethernet Controller E610
+- Intel Ethernet Converged Network Adapter E610-XT2
+- Intel Ethernet Converged Network Adapter E610-XT4
+- Intel Ethernet Converged Network Adapter E610-IT4
 
 Vector PMD for IXGBE
 --------------------
@@ -49,6 +53,25 @@ They are transparently registered at runtime RX/TX execution if all condition ch
 
 Some constraints apply as pre-conditions for specific optimizations on bulk packet transfers.
 The following sections explain RX and TX constraints in the vPMD.
+
+Kernel driver and Firmware Matching List
+----------------------------------------
+
+It is highly recommended to upgrade the ixgbe kernel driver
+and firmware to avoid the compatibility issues with ixgbe PMD.
+The table below shows a summary of the validated DPDK versions
+with corresponding out-of-tree Linux kernel drivers and firmware.
+The full list of in-tree and out-of-tree Linux kernel drivers
+from kernel.org and Linux distributions that were tested and verified
+are listed in the Tested Platforms section of the Release Notes for each release.
+
+============  =====================  ===============  ===============
+DPDK version  Kernel driver version  E610 FW version  X550 FW version
+============  =====================  ===============  ===============
+   26.03              6.3.4               1.41             3.70
+   25.11              6.2.5               1.30
+============  =====================  ===============  ===============
+
 
 RX Constraints
 ~~~~~~~~~~~~~~

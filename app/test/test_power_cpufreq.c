@@ -661,7 +661,7 @@ test_power_caps(void)
 			"correctly(APCI cpufreq) or operating in another valid "
 			"Power management environment\n", TEST_POWER_LCORE_ID);
 		rte_power_unset_env();
-		return -1;
+		return TEST_SKIPPED;
 	}
 
 	ret = rte_power_get_capabilities(TEST_POWER_LCORE_ID, &caps);
@@ -678,5 +678,5 @@ test_power_caps(void)
 
 #endif
 
-REGISTER_FAST_TEST(power_cpufreq_autotest, false, true, test_power_cpufreq);
-REGISTER_TEST_COMMAND(power_caps_autotest, test_power_caps);
+REGISTER_FAST_TEST(power_cpufreq_autotest, NOHUGE_SKIP, ASAN_OK, test_power_cpufreq);
+REGISTER_FAST_TEST(power_caps_autotest, NOHUGE_OK, ASAN_OK, test_power_caps);

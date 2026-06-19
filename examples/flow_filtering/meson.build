@@ -15,13 +15,22 @@ sources = files(
         'jump_flow.c',
         'snippets/snippet_match_ipv4.c',
         'snippets/snippet_match_gre.c',
+        'snippets/snippet_match_integrity_flags.c',
         'snippets/snippet_match_mpls.c',
         'snippets/snippet_match_nsh.c',
+        'snippets/snippet_match_nvgre.c',
+        'snippets/snippet_match_packet_type.c',
         'snippets/snippet_match_port_affinity.c',
         'snippets/snippet_match_roce_ib_bth.c',
+        'snippets/snippet_match_vxlan_gbp.c',
+        'snippets/snippet_match_vxlan_gpe.c',
+        'snippets/snippet_modify_ecn.c',
+        'snippets/snippet_nat64.c',
+        'snippets/snippet_random_match.c',
         'snippets/snippet_re_route_to_kernel.c',
         'snippets/snippet_switch_granularity.c',
 )
 
 # The code snippets are not utilized.
 cflags += '-Wno-unused-function'
+cflags += no_shadow_cflag

@@ -9,6 +9,7 @@
 #include <sys/queue.h>
 #include <sys/uio.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <net/if.h>
 
 #include <linux/if_tun.h>
@@ -33,34 +34,33 @@ enum rte_tuntap_type {
 	ETH_TUNTAP_TYPE_MAX,
 };
 
-struct pkt_stats {
-	uint64_t opackets;              /* Number of output packets */
-	uint64_t ipackets;              /* Number of input packets */
-	uint64_t obytes;                /* Number of bytes on output */
-	uint64_t ibytes;                /* Number of bytes on input */
-	uint64_t errs;                  /* Number of TX error packets */
-	uint64_t ierrors;               /* Number of RX error packets */
-	uint64_t rx_nombuf;             /* Nb of RX mbuf alloc failures */
+struct queue_stats {
+	uint64_t packets;
+	uint64_t bytes;
+	uint64_t errors;
 };
 
+struct pmd_internals;
+
 struct rx_queue {
+	struct pmd_internals *pmd;      /* back-pointer to driver state */
 	struct rte_mempool *mp;         /* Mempool for RX packets */
 	uint32_t trigger_seen;          /* Last seen Rx trigger value */
 	uint16_t in_port;               /* Port ID */
 	uint16_t queue_id;		/* queue ID*/
-	struct pkt_stats stats;         /* Stats for this RX queue */
-	uint16_t nb_rx_desc;            /* max number of mbufs available */
+	struct queue_stats stats;        /* Stats for this RX queue */
+	uint16_t max_rx_segs;           /* max scatter segments per packet */
 	struct rte_eth_rxmode *rxmode;  /* RX features */
 	struct rte_mbuf *pool;          /* mbufs pool for this queue */
-	struct iovec (*iovecs)[];       /* descriptors for this queue */
 	struct tun_pi pi;               /* packet info for iovecs */
+	struct iovec iovecs[];          /* iov[0] = pi, iov[1..max_rx_segs] = data */
 };
 
 struct tx_queue {
 	int type;                       /* Type field - TUN|TAP */
 	uint16_t *mtu;                  /* Pointer to MTU from dev_data */
 	uint16_t csum:1;                /* Enable checksum offloading */
-	struct pkt_stats stats;         /* Stats for this TX queue */
+	struct queue_stats stats;        /* Stats for this TX queue */
 	struct rte_gso_ctx gso_ctx;     /* GSO context */
 	uint16_t out_port;              /* Port ID */
 	uint16_t queue_id;		/* queue ID*/
@@ -68,17 +68,20 @@ struct tx_queue {
 
 struct pmd_internals {
 	struct rte_eth_dev *dev;          /* Ethernet device. */
-	char remote_iface[RTE_ETH_NAME_MAX_LEN]; /* Remote netdevice name */
-	char name[RTE_ETH_NAME_MAX_LEN];  /* Internal Tap device name */
+	char remote_iface[IFNAMSIZ];	  /* Remote netdevice name */
+	char name[IFNAMSIZ];		  /* Internal Tap device name */
 	int type;                         /* Type field - TUN|TAP */
 	int persist;			  /* 1 if keep link up, else 0 */
 	struct rte_ether_addr eth_addr;   /* Mac address of the device port */
+	struct rte_ether_addr *mc_addrs;  /* multicast address list */
+	uint32_t nb_mc_addrs;             /* multicast address count */
 	unsigned int remote_initial_flags;/* Remote netdevice flags on init */
 	int remote_if_index;              /* remote netdevice IF_INDEX */
 	int if_index;                     /* IF_INDEX for the port */
 	int nlsk_fd;                      /* Netlink socket fd */
 
 #ifdef HAVE_TCA_FLOWER
+	int flow_init;                    /* 1 if qdiscs were created */
 	int flow_isolate;                 /* 1 if flow isolation is enabled */
 
 	struct tap_rss *rss;		  /* BPF program */
@@ -88,8 +91,7 @@ struct pmd_internals {
 	LIST_HEAD(tap_implicit_flows, rte_flow) implicit_flows;
 #endif
 
-	struct rx_queue rxq[RTE_PMD_TAP_MAX_QUEUES]; /* List of RX queues */
-	struct tx_queue txq[RTE_PMD_TAP_MAX_QUEUES]; /* List of TX queues */
+
 	struct rte_intr_handle *intr_handle;         /* LSC interrupt handle. */
 	int ka_fd;                        /* keep-alive file descriptor */
 	struct rte_mempool *gso_ctx_mp;     /* Mempool for GSO packets */

@@ -103,7 +103,6 @@ rte_eal_hugepage_init(void)
 	for (i = 0; i < internal_conf->num_hugepage_sizes; i++) {
 		struct hugepage_info *hpi;
 		rte_iova_t prev_end = 0;
-		int prev_ms_idx = -1;
 		uint64_t page_sz, mem_needed;
 		unsigned int n_pages, max_pages;
 
@@ -144,6 +143,7 @@ rte_eal_hugepage_init(void)
 
 			for (msl_idx = 0; msl_idx < RTE_MAX_MEMSEG_LISTS;
 					msl_idx++) {
+				int start_idx, num_elems;
 				bool empty, need_hole;
 				msl = &mcfg->memsegs[msl_idx];
 				arr = &msl->memseg_arr;
@@ -158,18 +158,34 @@ rte_eal_hugepage_init(void)
 				 * adjacent to current one.
 				 */
 				need_hole = !empty && !is_adjacent;
+				if (need_hole) {
+					start_idx = 0;
+					/* we need 1, plus hole */
+					num_elems = 2;
+				} else {
+					/* begin our search after the last used
+					 * element in the list, skipping over
+					 * any previously placed holes
+					 */
+					start_idx =
+						rte_fbarray_find_prev_n_used(arr, arr->len - 1, 1)
+						+ 1;
+					num_elems = 1;
+				}
 
-				/* we need 1, plus hole if not adjacent */
 				ms_idx = rte_fbarray_find_next_n_free(arr,
-						0, 1 + (need_hole ? 1 : 0));
+						start_idx, num_elems);
 
 				/* memseg list is full? */
 				if (ms_idx < 0)
 					continue;
 
-				if (need_hole && prev_ms_idx == ms_idx - 1)
+				/* ms_idx should never be 0 if we need a hole,
+				 * but include a check for static analysis.
+				 */
+				if (need_hole && ms_idx > 0 &&
+						rte_fbarray_is_used(arr, ms_idx - 1))
 					ms_idx++;
-				prev_ms_idx = ms_idx;
 
 				break;
 			}

@@ -82,7 +82,7 @@ You can use ``lspci`` to check the speed of a PCI slot using something like the 
 
 When inserting NICs into PCI slots always check the caption, such as CPU0 or CPU1 to indicate which socket it is connected to.
 
-Care should be take with NUMA.
+Care should be taken with NUMA.
 If you are using 2 or more ports from different NICs, it is best to ensure that these NICs are on the same CPU socket.
 An example of how to determine this is shown further below.
 
@@ -101,7 +101,7 @@ so the following is mainly for reference:
 
 #. Consider using Turbo Boost to increase the frequency on cores.
 
-#. Disable all virtualization options when you test the physical function of the NIC, and turn on VT-d if you wants to use VFIO.
+#. Disable all virtualization options when you test the physical function of the NIC, and turn on VT-d if you want to use VFIO.
 
 
 Linux boot command line
@@ -119,7 +119,7 @@ The following are some recommendations on GRUB boot settings:
 
       isolcpus=2,3,4,5,6,7,8
 
-#. If it wants to use VFIO, use the following additional grub parameters::
+#. To use VFIO, use the following additional grub parameters::
 
       iommu=pt intel_iommu=on
 
@@ -181,5 +181,5 @@ Configurations before running DPDK
    **Note**: To get the best performance, ensure that the core and NICs are in the same socket.
    In the example above ``85:00.0`` is on socket 1 and should be used by cores on socket 1 for the best performance.
 
-#. Check which kernel drivers needs to be loaded and whether there is a need to unbind the network ports from their kernel drivers.
+#. Check which kernel drivers need to be loaded and whether there is a need to unbind the network ports from their kernel drivers.
    More details about DPDK setup and Linux kernel requirements see :ref:`linux_gsg_compiling_dpdk` and :ref:`linux_gsg_linux_drivers`.

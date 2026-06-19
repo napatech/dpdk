@@ -4,7 +4,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#ifdef RTE_EXEC_ENV_WINDOWS
+#include <winsock2.h>
+#include <io.h>
+#include <fcntl.h>
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <rte_bus_vdev.h>
 #include <rte_ethdev.h>
@@ -23,15 +33,67 @@
 
 #include "test.h"
 
+#ifdef RTE_EXEC_ENV_WINDOWS
+static uint64_t
+current_timestamp(void)
+{
+	FILETIME ft;
+	ULARGE_INTEGER ul;
+
+	GetSystemTimeAsFileTime(&ft);
+	ul.LowPart = ft.dwLowDateTime;
+	ul.HighPart = ft.dwHighDateTime;
+	/* FILETIME is 100ns intervals since 1601-01-01, convert to ns since Unix epoch */
+	return (ul.QuadPart - 116444736000000000ULL) * 100;
+}
+
+/*
+ * Create temporary file with suffix for Windows.
+ * Returns file descriptor or -1 on failure.
+ */
+static int
+mkstemps(char *tmpl, int suffixlen)
+{
+	char temp_dir[MAX_PATH];
+	char temp_file[MAX_PATH];
+	DWORD ret;
+
+	ret = GetTempPathA(sizeof(temp_dir), temp_dir);
+	if (ret == 0 || ret > sizeof(temp_dir))
+		return -1;
+
+	if (GetTempFileNameA(temp_dir, "pcap", 0, temp_file) == 0)
+		return -1;
+
+	/*
+	 * GetTempFileNameA with uUnique=0 creates the file to reserve the name.
+	 * Remove it since we open a different name with the original suffix appended.
+	 */
+	DeleteFileA(temp_file);
+
+	/* Append the original suffix (e.g. ".pcapng") to the temp file */
+	strlcat(temp_file, tmpl + strlen(tmpl) - suffixlen, sizeof(temp_file));
+	strlcpy(tmpl, temp_file, PATH_MAX);
+
+	return _open(tmpl, _O_RDWR | _O_BINARY | _O_CREAT | _O_EXCL, 0666);
+}
+#endif /* RTE_EXEC_ENV_WINDOWS */
+
 #define PCAPNG_TEST_DEBUG 0
 
-#define TOTAL_PACKETS	4096
-#define MAX_BURST	64
-#define MAX_GAP_US	100000
-#define DUMMY_MBUF_NUM	3
+/*
+ * Want to write enough packets to exercise timestamp logic.
+ * On fast CPU's TSC wraps around 32 bits in 4 seconds.
+ */
+#define TOTAL_PACKETS	10000
+#define MAX_BURST	32
+#define NUM_BURSTS	(TOTAL_PACKETS / MAX_BURST)
+#define TEST_TIME_SEC	4
+#define GAP_US		((TEST_TIME_SEC * US_PER_S) / NUM_BURSTS)
+
+#define DUMMY_MBUF_NUM	2
 
 static struct rte_mempool *mp;
-static const uint32_t pkt_len = 200;
 static uint16_t port_id;
 static const char null_dev[] = "net_null0";
 
@@ -41,13 +103,43 @@ struct dummy_mbuf {
 	uint8_t buf[DUMMY_MBUF_NUM][RTE_MBUF_DEFAULT_BUF_SIZE];
 };
 
-static void
-dummy_mbuf_prep(struct rte_mbuf *mb, uint8_t buf[], uint32_t buf_len,
-	uint32_t data_len)
-{
-	uint32_t i;
-	uint8_t *db;
+#define MAX_DATA_SIZE (RTE_MBUF_DEFAULT_BUF_SIZE - RTE_PKTMBUF_HEADROOM)
 
+/* RFC 864 chargen pattern used for comment testing */
+#define FILL_LINE_LENGTH 72
+#define FILL_START	0x21 /* ! */
+#define FILL_END	0x7e /* ~ */
+#define FILL_RANGE	(FILL_END - FILL_START)
+
+static void
+fill_mbuf(struct rte_mbuf *mb)
+{
+	unsigned int len = rte_pktmbuf_tailroom(mb);
+	char *buf = rte_pktmbuf_append(mb, len);
+	unsigned int n = 0;
+	unsigned int line = 0;
+
+	if (len == 0)
+		return;
+
+	while (n < len - 1) {
+		char ch = FILL_START + (line % FILL_RANGE);
+		unsigned int i;
+
+		for (i = 0; i < FILL_LINE_LENGTH && n < len - 1; i++) {
+			buf[n++] = ch;
+			if (++ch > FILL_END)
+				ch = FILL_START;
+		}
+		if (n < len - 1)
+			buf[n++] = '\n';
+		line++;
+	}
+}
+
+static void
+dummy_mbuf_prep(struct rte_mbuf *mb, uint8_t buf[], uint32_t buf_len)
+{
 	mb->buf_addr = buf;
 	rte_mbuf_iova_set(mb, (uintptr_t)buf);
 	mb->buf_len = buf_len;
@@ -57,15 +149,11 @@ dummy_mbuf_prep(struct rte_mbuf *mb, uint8_t buf[], uint32_t buf_len,
 	mb->pool = (void *)buf;
 
 	rte_pktmbuf_reset(mb);
-	db = (uint8_t *)rte_pktmbuf_append(mb, data_len);
-
-	for (i = 0; i != data_len; i++)
-		db[i] = i;
 }
 
 /* Make an IP packet consisting of chain of one packets */
 static void
-mbuf1_prepare(struct dummy_mbuf *dm, uint32_t plen)
+mbuf1_prepare(struct dummy_mbuf *dm)
 {
 	struct {
 		struct rte_ether_hdr eth;
@@ -84,32 +172,47 @@ mbuf1_prepare(struct dummy_mbuf *dm, uint32_t plen)
 			.dst_addr = rte_cpu_to_be_32(RTE_IPV4_BROADCAST),
 		},
 		.udp = {
+			.src_port = rte_cpu_to_be_16(19), /* Chargen port */
 			.dst_port = rte_cpu_to_be_16(9), /* Discard port */
 		},
 	};
 
 	memset(dm, 0, sizeof(*dm));
-	dummy_mbuf_prep(&dm->mb[0], dm->buf[0], sizeof(dm->buf[0]), plen);
+	dummy_mbuf_prep(&dm->mb[0], dm->buf[0], sizeof(dm->buf[0]));
+	dummy_mbuf_prep(&dm->mb[1], dm->buf[1], sizeof(dm->buf[1]));
 
 	rte_eth_random_addr(pkt.eth.src_addr.addr_bytes);
-	plen -= sizeof(struct rte_ether_hdr);
+	memcpy(rte_pktmbuf_append(&dm->mb[0], sizeof(pkt)), &pkt, sizeof(pkt));
 
-	pkt.ip.total_length = rte_cpu_to_be_16(plen);
-	pkt.ip.hdr_checksum = rte_ipv4_cksum(&pkt.ip);
-
-	plen -= sizeof(struct rte_ipv4_hdr);
-	pkt.udp.src_port = rte_rand();
-	pkt.udp.dgram_len = rte_cpu_to_be_16(plen);
-
-	memcpy(rte_pktmbuf_mtod(dm->mb, void *), &pkt, sizeof(pkt));
-
-	/* Idea here is to create mbuf chain big enough that after mbuf deep copy they won't be
-	 * compressed into single mbuf to properly test store of chained mbufs
-	 */
-	dummy_mbuf_prep(&dm->mb[1], dm->buf[1], sizeof(dm->buf[1]), pkt_len);
-	dummy_mbuf_prep(&dm->mb[2], dm->buf[2], sizeof(dm->buf[2]), pkt_len);
+	fill_mbuf(&dm->mb[1]);
 	rte_pktmbuf_chain(&dm->mb[0], &dm->mb[1]);
-	rte_pktmbuf_chain(&dm->mb[0], &dm->mb[2]);
+
+	rte_mbuf_sanity_check(&dm->mb[0], 1);
+	rte_mbuf_sanity_check(&dm->mb[1], 0);
+}
+
+static void
+mbuf1_resize(struct dummy_mbuf *dm, uint16_t len)
+{
+	struct {
+		struct rte_ether_hdr eth;
+		struct rte_ipv4_hdr ip;
+		struct rte_udp_hdr udp;
+	} *pkt = rte_pktmbuf_mtod(&dm->mb[0], void *);
+
+	dm->mb[1].data_len = len;
+	dm->mb[0].pkt_len = dm->mb[0].data_len + dm->mb[1].data_len;
+
+	len += sizeof(struct rte_udp_hdr);
+	pkt->udp.dgram_len = rte_cpu_to_be_16(len);
+
+	len += sizeof(struct rte_ipv4_hdr);
+	pkt->ip.total_length = rte_cpu_to_be_16(len);
+	pkt->ip.hdr_checksum = 0;
+	pkt->ip.hdr_checksum = rte_ipv4_cksum(&pkt->ip);
+
+	rte_mbuf_sanity_check(&dm->mb[0], 1);
+	rte_mbuf_sanity_check(&dm->mb[1], 0);
 }
 
 static int
@@ -119,17 +222,17 @@ test_setup(void)
 
 	/* Make a dummy null device to snoop on */
 	if (rte_vdev_init(null_dev, NULL) != 0) {
-		fprintf(stderr, "Failed to create vdev '%s'\n", null_dev);
+		printf("Failed to create vdev '%s'\n", null_dev);
 		goto fail;
 	}
 
 	/* Make a pool for cloned packets */
 	mp = rte_pktmbuf_pool_create_by_ops("pcapng_test_pool",
 					    MAX_BURST * 32, 0, 0,
-					    rte_pcapng_mbuf_size(pkt_len) + 128,
+					    rte_pcapng_mbuf_size(MAX_DATA_SIZE),
 					    SOCKET_ID_ANY, "ring_mp_sc");
 	if (mp == NULL) {
-		fprintf(stderr, "Cannot create mempool\n");
+		printf("Cannot create mempool\n");
 		goto fail;
 	}
 
@@ -142,31 +245,66 @@ fail:
 }
 
 static int
-fill_pcapng_file(rte_pcapng_t *pcapng, unsigned int num_packets)
+fill_pcapng_file(rte_pcapng_t *pcapng)
 {
 	struct dummy_mbuf mbfs;
 	struct rte_mbuf *orig;
 	unsigned int burst_size;
 	unsigned int count;
+	struct timespec start_time;
 	ssize_t len;
+	/*
+	 * These are some silly comments to test various lengths and alignments sprinkle
+	 * into the file. You can see these comments by using the dumpcap program on the file
+	 */
+	static const char * const examples[] = {
+		"Lockless and fearless - that’s how we roll in userspace.",
+		"Memory pool deep / Mbufs swim in lockless rings / Zero copy dreams,",
+		"Poll mode driver waits / No interrupts disturb its zen / Busy loop finds peace,",
+		"Memory barriers / rte_atomic_thread_fence() / Guards our shared state",
+		"Hugepages so vast / Two megabytes of glory / TLB misses weep",
+		"Packets flow like streams / Through the graph node pipeline / Iterate in place",
 
-	/* make a dummy packet */
-	mbuf1_prepare(&mbfs, pkt_len);
+		/* Long one to make sure we can do > 256 characters */
+		("Dear future maintainer: I am sorry. This packet was captured at 3 AM while "
+		 "debugging a priority flow control issue that turned out to be a loose cable. "
+		 "The rte_eth_tx_burst() call you see here has been cargo-culted through four "
+		 "generations of example code. The magic number 32 is not documented because "
+		 "nobody remembers why. Trust the process."),
+	};
+
+	mbuf1_prepare(&mbfs);
 	orig  = &mbfs.mb[0];
 
-	for (count = 0; count < num_packets; count += burst_size) {
+	clock_gettime(CLOCK_MONOTONIC, &start_time);
+
+	for (count = 0; count < TOTAL_PACKETS; count += burst_size) {
 		struct rte_mbuf *clones[MAX_BURST];
+		struct timespec now;
 		unsigned int i;
+
+		/* break off writing if test is taking too long */
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		if (now.tv_sec >= start_time.tv_sec + TEST_TIME_SEC)
+			break;
 
 		/* put 1 .. MAX_BURST packets in one write call */
 		burst_size = rte_rand_max(MAX_BURST) + 1;
 		for (i = 0; i < burst_size; i++) {
 			struct rte_mbuf *mc;
+			const char *comment = NULL;
+
+			/* Put randomized comment on every 100th packet (1%) */
+			if (count % 100 == 0)
+				comment = examples[rte_rand_max(RTE_DIM(examples))];
+
+			/* Vary the size of the packets, okay to allow 0 sized packet */
+			mbuf1_resize(&mbfs, rte_rand_max(MAX_DATA_SIZE));
 
 			mc = rte_pcapng_copy(port_id, 0, orig, mp, rte_pktmbuf_pkt_len(orig),
-					     RTE_PCAPNG_DIRECTION_IN, NULL);
+					     RTE_PCAPNG_DIRECTION_IN, comment);
 			if (mc == NULL) {
-				fprintf(stderr, "Cannot copy packet\n");
+				printf("Cannot copy packet\n");
 				return -1;
 			}
 			clones[i] = mc;
@@ -177,18 +315,18 @@ fill_pcapng_file(rte_pcapng_t *pcapng, unsigned int num_packets)
 		rte_pktmbuf_free_bulk(clones, burst_size);
 
 		if (len <= 0) {
-			fprintf(stderr, "Write of packets failed: %s\n",
+			printf("Write of packets failed: %s\n",
 				rte_strerror(rte_errno));
 			return -1;
 		}
 
-		/* Leave a small gap between packets to test for time wrap */
-		usleep(rte_rand_max(MAX_GAP_US));
+		rte_delay_us_block(rte_rand_max(2 * GAP_US));
 	}
 
 	return count;
 }
 
+/* Convert time in nanoseconds since 1/1/1970 to UTC time string */
 static char *
 fmt_time(char *buf, size_t size, uint64_t ts_ns)
 {
@@ -196,7 +334,8 @@ fmt_time(char *buf, size_t size, uint64_t ts_ns)
 	size_t len;
 
 	sec = ts_ns / NS_PER_S;
-	len = strftime(buf, size, "%X", localtime(&sec));
+
+	len = strftime(buf, size, "%T", gmtime(&sec));
 	snprintf(buf + len, size - len, ".%09lu",
 		 (unsigned long)(ts_ns % NS_PER_S));
 
@@ -221,6 +360,7 @@ print_packet(uint64_t ts_ns, const struct rte_ether_hdr *eh, size_t len)
 	rte_ether_format_addr(src, sizeof(src), &eh->src_addr);
 	printf("%s: %s -> %s type %x length %zu\n",
 	       tbuf, src, dst, rte_be_to_cpu_16(eh->ether_type), len);
+	fflush(stdout);
 }
 
 /* Callback from pcap_loop used to validate packets in the file */
@@ -231,6 +371,7 @@ parse_pcap_packet(u_char *user, const struct pcap_pkthdr *h,
 	struct pkt_print_ctx *ctx = (struct pkt_print_ctx *)user;
 	const struct rte_ether_hdr *eh;
 	const struct rte_ipv4_hdr *ip;
+	static unsigned int total_errors;
 	uint64_t ns;
 
 	eh = (const struct rte_ether_hdr *)bytes;
@@ -249,18 +390,19 @@ parse_pcap_packet(u_char *user, const struct pcap_pkthdr *h,
 
 		fmt_time(tstart, sizeof(tstart), ctx->start_ns);
 		fmt_time(tend, sizeof(tend), ctx->end_ns);
-		fprintf(stderr, "Timestamp out of range [%s .. %s]\n",
-			tstart, tend);
+
+		printf("Timestamp out of range [%s .. %s]\n",
+		       tstart, tend);
 		goto error;
 	}
 
 	if (!rte_is_broadcast_ether_addr(&eh->dst_addr)) {
-		fprintf(stderr, "Destination is not broadcast\n");
+		printf("Destination is not broadcast\n");
 		goto error;
 	}
 
 	if (rte_ipv4_cksum(ip) != 0) {
-		fprintf(stderr, "Bad IPv4 checksum\n");
+		printf("Bad IPv4 checksum\n");
 		goto error;
 	}
 
@@ -269,10 +411,12 @@ parse_pcap_packet(u_char *user, const struct pcap_pkthdr *h,
 error:
 	print_packet(ns, eh, h->len);
 
-	/* Stop parsing at first error */
-	pcap_breakloop(ctx->pcap);
+	/* Stop parsing at tenth error */
+	if (++total_errors >= 10)
+		pcap_breakloop(ctx->pcap);
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
 static uint64_t
 current_timestamp(void)
 {
@@ -281,6 +425,7 @@ current_timestamp(void)
 	clock_gettime(CLOCK_REALTIME, &ts);
 	return rte_timespec_to_ns(&ts);
 }
+#endif
 
 /*
  * Open the resulting pcapng file with libpcap
@@ -301,14 +446,14 @@ valid_pcapng_file(const char *file_name, uint64_t started, unsigned int expected
 							   PCAP_TSTAMP_PRECISION_NANO,
 							   errbuf);
 	if (ctx.pcap == NULL) {
-		fprintf(stderr, "pcap_open_offline('%s') failed: %s\n",
+		printf("pcap_open_offline('%s') failed: %s\n",
 			file_name, errbuf);
 		return -1;
 	}
 
 	ret = pcap_loop(ctx.pcap, 0, parse_pcap_packet, (u_char *)&ctx);
 	if (ret != 0) {
-		fprintf(stderr, "pcap_dispatch: failed: %s\n",
+		printf("pcap_dispatch: failed: %s\n",
 			pcap_geterr(ctx.pcap));
 	} else if (ctx.count != expected) {
 		printf("Only %u packets, expected %u\n",
@@ -324,7 +469,7 @@ valid_pcapng_file(const char *file_name, uint64_t started, unsigned int expected
 static int
 test_add_interface(void)
 {
-	char file_name[] = "/tmp/pcapng_test_XXXXXX.pcapng";
+	char file_name[PATH_MAX] = "/tmp/pcapng_test_XXXXXX.pcapng";
 	static rte_pcapng_t *pcapng;
 	int ret, tmp_fd;
 	uint64_t now = current_timestamp();
@@ -339,7 +484,7 @@ test_add_interface(void)
 	/* open a test capture file */
 	pcapng = rte_pcapng_fdopen(tmp_fd, NULL, NULL, "pcapng_addif", NULL);
 	if (pcapng == NULL) {
-		fprintf(stderr, "rte_pcapng_fdopen failed\n");
+		printf("rte_pcapng_fdopen failed\n");
 		close(tmp_fd);
 		goto fail;
 	}
@@ -348,7 +493,7 @@ test_add_interface(void)
 	ret = rte_pcapng_add_interface(pcapng, port_id, DLT_EN10MB,
 				       NULL, NULL, NULL);
 	if (ret < 0) {
-		fprintf(stderr, "can not add port %u\n", port_id);
+		printf("can not add port %u\n", port_id);
 		goto fail;
 	}
 
@@ -356,7 +501,7 @@ test_add_interface(void)
 	ret = rte_pcapng_add_interface(pcapng, port_id, DLT_EN10MB,
 				       "myeth", "Some long description", NULL);
 	if (ret < 0) {
-		fprintf(stderr, "can not add port %u with ifname\n", port_id);
+		printf("can not add port %u with ifname\n", port_id);
 		goto fail;
 	}
 
@@ -364,7 +509,7 @@ test_add_interface(void)
 	ret = rte_pcapng_add_interface(pcapng, port_id, DLT_EN10MB,
 				       NULL, NULL, "tcp port 8080");
 	if (ret < 0) {
-		fprintf(stderr, "can not add port %u with filter\n", port_id);
+		printf("can not add port %u with filter\n", port_id);
 		goto fail;
 	}
 
@@ -373,7 +518,7 @@ test_add_interface(void)
 	ret = valid_pcapng_file(file_name, now, 0);
 	/* if test fails want to investigate the file */
 	if (ret == 0)
-		unlink(file_name);
+		remove(file_name);
 
 	return ret;
 
@@ -385,8 +530,8 @@ fail:
 static int
 test_write_packets(void)
 {
-	char file_name[] = "/tmp/pcapng_test_XXXXXX.pcapng";
-	static rte_pcapng_t *pcapng;
+	char file_name[PATH_MAX] = "/tmp/pcapng_test_XXXXXX.pcapng";
+	rte_pcapng_t *pcapng = NULL;
 	int ret, tmp_fd, count;
 	uint64_t now = current_timestamp();
 
@@ -400,7 +545,7 @@ test_write_packets(void)
 	/* open a test capture file */
 	pcapng = rte_pcapng_fdopen(tmp_fd, NULL, NULL, "pcapng_test", NULL);
 	if (pcapng == NULL) {
-		fprintf(stderr, "rte_pcapng_fdopen failed\n");
+		printf("rte_pcapng_fdopen failed\n");
 		close(tmp_fd);
 		goto fail;
 	}
@@ -409,11 +554,18 @@ test_write_packets(void)
 	ret = rte_pcapng_add_interface(pcapng, port_id, DLT_EN10MB,
 				       NULL, NULL, NULL);
 	if (ret < 0) {
-		fprintf(stderr, "can not add port %u\n", port_id);
+		printf("can not add port %u\n", port_id);
 		goto fail;
 	}
 
-	count = fill_pcapng_file(pcapng, TOTAL_PACKETS);
+	/* write a statistics block */
+	ret = rte_pcapng_write_stats(pcapng, port_id, 0, 0, NULL);
+	if (ret <= 0) {
+		printf("Write of statistics failed\n");
+		goto fail;
+	}
+
+	count = fill_pcapng_file(pcapng);
 	if (count < 0)
 		goto fail;
 
@@ -421,7 +573,7 @@ test_write_packets(void)
 	ret = rte_pcapng_write_stats(pcapng, port_id,
 				     count, 0, "end of test");
 	if (ret <= 0) {
-		fprintf(stderr, "Write of statistics failed\n");
+		printf("Write of statistics failed\n");
 		goto fail;
 	}
 
@@ -430,7 +582,88 @@ test_write_packets(void)
 	ret = valid_pcapng_file(file_name, now, count);
 	/* if test fails want to investigate the file */
 	if (ret == 0)
-		unlink(file_name);
+		remove(file_name);
+
+	return ret;
+
+fail:
+	rte_pcapng_close(pcapng);
+	return -1;
+}
+
+static int
+test_write_before_open(void)
+{
+	char file_name[PATH_MAX] = "/tmp/pcapng_test_XXXXXX.pcapng";
+	struct dummy_mbuf mbfs;
+	struct rte_mbuf *clones[MAX_BURST];
+	rte_pcapng_t *pcapng = NULL;
+	int ret, tmp_fd, i;
+	unsigned int count = 8;
+	uint64_t now;
+	ssize_t len;
+
+	mbuf1_prepare(&mbfs);
+	mbuf1_resize(&mbfs, rte_rand_max(MAX_DATA_SIZE));
+
+	/* Copy packets BEFORE opening the pcapng file.
+	 * This exercises the negative TSC delta path in tsc_to_ns_epoch().
+	 */
+	for (i = 0; i < (int)count; i++) {
+		clones[i] = rte_pcapng_copy(port_id, 0, &mbfs.mb[0], mp,
+					    rte_pktmbuf_pkt_len(&mbfs.mb[0]),
+					    RTE_PCAPNG_DIRECTION_IN, NULL);
+		if (clones[i] == NULL) {
+			fprintf(stderr, "Cannot copy packet before open\n");
+			rte_pktmbuf_free_bulk(clones, i);
+			return -1;
+		}
+	}
+
+	/* Small delay so fdopen's tsc_base is measurably after the copies */
+	rte_delay_us_block(100);
+
+	now = current_timestamp();
+
+	tmp_fd = mkstemps(file_name, strlen(".pcapng"));
+	if (tmp_fd == -1) {
+		perror("mkstemps() failure");
+		rte_pktmbuf_free_bulk(clones, count);
+		return -1;
+	}
+
+	pcapng = rte_pcapng_fdopen(tmp_fd, NULL, NULL, "pcapng_preopen", NULL);
+	if (pcapng == NULL) {
+		fprintf(stderr, "rte_pcapng_fdopen failed\n");
+		close(tmp_fd);
+		rte_pktmbuf_free_bulk(clones, count);
+		return -1;
+	}
+
+	ret = rte_pcapng_add_interface(pcapng, port_id, DLT_EN10MB,
+				       NULL, NULL, NULL);
+	if (ret < 0) {
+		fprintf(stderr, "can not add port %u\n", port_id);
+		goto fail;
+	}
+
+	/* Write the pre-captured packets — timestamps precede tsc_base */
+	len = rte_pcapng_write_packets(pcapng, clones, count);
+	rte_pktmbuf_free_bulk(clones, count);
+	if (len <= 0) {
+		fprintf(stderr, "Write of pre-open packets failed: %s\n",
+			rte_strerror(rte_errno));
+		goto fail;
+	}
+
+	rte_pcapng_close(pcapng);
+
+	/* Validate the file is parseable — timestamps should be
+	 * slightly before 'now' but still reasonable.
+	 */
+	ret = valid_pcapng_file(file_name, now - NS_PER_S, count);
+	if (ret == 0)
+		remove(file_name);
 
 	return ret;
 
@@ -454,6 +687,7 @@ unit_test_suite test_pcapng_suite  = {
 	.unit_test_cases = {
 		TEST_CASE(test_add_interface),
 		TEST_CASE(test_write_packets),
+		TEST_CASE(test_write_before_open),
 		TEST_CASES_END()
 	}
 };
@@ -464,4 +698,4 @@ test_pcapng(void)
 	return unit_test_suite_runner(&test_pcapng_suite);
 }
 
-REGISTER_FAST_TEST(pcapng_autotest, true, true, test_pcapng);
+REGISTER_FAST_TEST(pcapng_autotest, NOHUGE_OK, ASAN_OK, test_pcapng);

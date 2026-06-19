@@ -251,8 +251,11 @@ testsuite_setup(void)
 	if (!count) {
 		printf("Testing with net_null device\n");
 		err = rte_vdev_init("net_null", NULL);
-		TEST_ASSERT(err == 0, "Failed to create net_null. err=%d",
-			    err);
+		if (err != 0) {
+			printf("Failed to create net_null, skipping tests. err=%d\n",
+				err);
+			return TEST_SKIPPED;
+		}
 		eth_dev_created = true;
 	}
 
@@ -311,8 +314,11 @@ testsuite_setup_rx_intr(void)
 	if (!count) {
 		printf("Testing with net_null device\n");
 		err = rte_vdev_init("net_null", NULL);
-		TEST_ASSERT(err == 0, "Failed to create net_null. err=%d",
-			    err);
+		if (err != 0) {
+			printf("Failed to create net_null, skipping tests. err=%d\n",
+				err);
+			return TEST_SKIPPED;
+		}
 		eth_dev_created = true;
 	}
 
@@ -1555,7 +1561,7 @@ test_event_eth_rx_intr_adapter_common(void)
 
 #endif /* !RTE_EXEC_ENV_WINDOWS */
 
-REGISTER_TEST_COMMAND(event_eth_rx_adapter_autotest,
+REGISTER_DRIVER_TEST(event_eth_rx_adapter_autotest,
 		test_event_eth_rx_adapter_common);
-REGISTER_TEST_COMMAND(event_eth_rx_intr_adapter_autotest,
+REGISTER_DRIVER_TEST(event_eth_rx_intr_adapter_autotest,
 		test_event_eth_rx_intr_adapter_common);

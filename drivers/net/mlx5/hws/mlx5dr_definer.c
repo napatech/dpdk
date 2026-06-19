@@ -2663,7 +2663,7 @@ mlx5dr_definer_get_ecpri_parser_byte_off_from_ctx(void *dr_ctx, uint32_t *byte_o
 	struct mlx5_ecpri_parser_profile *ecp;
 	uint32_t i;
 
-	ecp = flow_hw_get_ecpri_parser_profile(dr_ctx);
+	ecp = mlx5_flow_hw_get_ecpri_parser_profile(dr_ctx);
 	if (!ecp)
 		return UINT32_MAX;
 	for (i = 0; i < ecp->num; i++)
@@ -3381,6 +3381,7 @@ mlx5dr_definer_conv_items_to_hl(struct mlx5dr_context *ctx,
 			if (cd.last_item == RTE_FLOW_ITEM_TYPE_IPV4 ||
 			    cd.last_item == RTE_FLOW_ITEM_TYPE_IPV6) {
 				cd.tunnel = true;
+				/* [IPv4 | IPv6] / IPv4: IPIP */
 				item_flags |= MLX5_FLOW_LAYER_IPIP;
 			}
 			ret = mlx5dr_definer_conv_item_ipv4(&cd, items, i);
@@ -3391,7 +3392,8 @@ mlx5dr_definer_conv_items_to_hl(struct mlx5dr_context *ctx,
 			if (cd.last_item == RTE_FLOW_ITEM_TYPE_IPV4 ||
 			    cd.last_item == RTE_FLOW_ITEM_TYPE_IPV6) {
 				cd.tunnel = true;
-				item_flags |= MLX5_FLOW_LAYER_IPIP;
+				/* [IPv4 | IPv6] / IPv6: IPV6_ENCAP */
+				item_flags |= MLX5_FLOW_LAYER_IPV6_ENCAP;
 			}
 			ret = mlx5dr_definer_conv_item_ipv6(&cd, items, i);
 			item_flags |= cd.tunnel ? MLX5_FLOW_LAYER_INNER_L3_IPV6 :

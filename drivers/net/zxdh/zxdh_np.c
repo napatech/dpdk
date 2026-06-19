@@ -3698,6 +3698,12 @@ zxdh_np_dtb_queue_unused_item_num_get(uint32_t dev_id,
 	rc = zxdh_np_reg_read(dev_id, ZXDH_DTB_INFO_QUEUE_BUF_SPACE,
 		0, queue_id, p_item_num);
 	ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "dpp_reg_read");
+
+	if ((*p_item_num & ZXDH_DTB_SPACE_LEFT_MASK) == ZXDH_DTB_SPACE_LEFT_MASK) {
+		PMD_DRV_LOG(ERR, "pcie bar abnormal.");
+		return ZXDH_RC_DTB_BAR_ABNORMAL;
+	}
+
 	return rc;
 }
 
@@ -4092,7 +4098,7 @@ zxdh_np_one_hash_soft_uninstall(uint32_t dev_id, uint32_t hash_id)
 	HASH_DDR_CFG *p_temp_rbkey = NULL;
 
 	if (p_func_info->is_used == 0) {
-		PMD_DRV_LOG(ERR, "Error[0x%x], fun_id [%u] is not init!",
+		PMD_DRV_LOG(DEBUG, "Error[0x%x], fun_id [%u] is not init!",
 			ZXDH_SE_RC_FUN_INVALID, hash_id);
 		return ZXDH_OK;
 	}
@@ -4235,10 +4241,6 @@ zxdh_np_online_uninit(uint32_t dev_id,
 	rc = zxdh_np_dtb_queue_release(dev_id, port_name, queue_id);
 	if (rc != 0)
 		PMD_DRV_LOG(ERR, "dtb release port name %s queue id %u", port_name, queue_id);
-
-	rc = zxdh_np_soft_res_uninstall(dev_id);
-	if (rc != 0)
-		PMD_DRV_LOG(ERR, "zxdh_np_soft_res_uninstall failed");
 
 	return 0;
 }
@@ -4849,7 +4851,7 @@ zxdh_np_soft_sdt_tbl_get(uint32_t dev_id, uint32_t sdt_no, void *p_sdt_info)
 	uint32_t rc;
 
 	if (sdt_no > ZXDH_DEV_SDT_ID_MAX - 1) {
-		PMD_DRV_LOG(ERR, "SDT NO [ %u ] is invalid!", sdt_no);
+		PMD_DRV_LOG(DEBUG, "SDT NO [ %u ] is invalid!", sdt_no);
 		return ZXDH_PAR_CHK_INVALID_PARA;
 	}
 
@@ -5374,7 +5376,7 @@ zxdh_np_dtb_tab_down_success_status_check(uint32_t dev_id,
 				element_id, 0, ZXDH_DTB_TAB_ACK_UNUSED_MASK);
 			ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "zxdh_np_dtb_item_ack_wr");
 
-			return ZXDH_ERR;
+			return ZXDH_RC_DTB_OVER_TIME;
 		}
 
 		rd_cnt++;

@@ -195,7 +195,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"show (rxq|txq) info (port_id) (queue_id)\n"
 			"    Display information for configured RX/TX queue.\n\n"
 
-			"show config (rxtx|cores|fwd|rxoffs|rxpkts|rxhdrs|txpkts)\n"
+			"show config (rxtx|cores|fwd|rxoffs|rxpkts|rxhdrs|txpkts|txtimes|dcbfwdtc)\n"
 			"    Display the given configuration.\n\n"
 
 			"read rxd (port_id) (queue_id) (rxd_id)\n"
@@ -383,6 +383,10 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"set txtimes (x, y)\n"
 			"    Set the scheduling on timestamps"
 			" timings for the TXONLY mode\n\n"
+
+			"set txflows (N)\n"
+			"    Set the number of flows per lcore in"
+			" txonly multi-flow mode (1-64)\n\n"
 
 			"set corelist (x[,y]*)\n"
 			"    Set the list of forwarding cores.\n\n"
@@ -4612,6 +4616,50 @@ static cmdline_parse_inst_t cmd_set_txtimes = {
 	},
 };
 
+/* *** SET NUMBER OF FLOWS IN TXONLY MULTI-FLOW MODE *** */
+
+struct cmd_set_txflows_result {
+	cmdline_fixed_string_t cmd_keyword;
+	cmdline_fixed_string_t name;
+	uint16_t value;
+};
+
+static void
+cmd_set_txflows_parsed(void *parsed_result,
+			       __rte_unused struct cmdline *cl,
+			       __rte_unused void *data)
+{
+	struct cmd_set_txflows_result *res = parsed_result;
+
+	if (res->value < 1 || res->value > 64) {
+		fprintf(stderr, "txonly-flows must be >= 1 and <= 64\n");
+		return;
+	}
+	txonly_flows = res->value;
+}
+
+static cmdline_parse_token_string_t cmd_set_txflows_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_txflows_result,
+				 cmd_keyword, "set");
+static cmdline_parse_token_string_t cmd_set_txflows_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_set_txflows_result,
+				 name, "txonly-flows");
+static cmdline_parse_token_num_t cmd_set_txflows_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_set_txflows_result,
+			      value, RTE_UINT16);
+
+static cmdline_parse_inst_t cmd_set_txflows = {
+	.f = cmd_set_txflows_parsed,
+	.data = NULL,
+	.help_str = "set txonly-flows <N>",
+	.tokens = {
+		(void *)&cmd_set_txflows_keyword,
+		(void *)&cmd_set_txflows_name,
+		(void *)&cmd_set_txflows_value,
+		NULL,
+	},
+};
+
 /* *** ADD/REMOVE ALL VLAN IDENTIFIERS TO/FROM A PORT VLAN RX FILTER *** */
 struct cmd_rx_vlan_filter_all_result {
 	cmdline_fixed_string_t rx_vlan;
@@ -6227,6 +6275,18 @@ static void cmd_set_fwd_retry_mode_init(void)
 	token_struct->string_data.str = token;
 }
 
+static void show_dcb_fwd_tc_config(void)
+{
+	int i;
+	printf("DCB forwarding TC list:");
+	for (i = 0; i < RTE_ETH_8_TCS; i++) {
+		if (dcb_fwd_tc_mask & (1u << i))
+			printf(" %d", i);
+	}
+	printf("\n");
+	printf("DCB forwarding cores per-TC: %u\n", dcb_fwd_tc_cores);
+}
+
 /* *** set DCB forward TCs *** */
 struct cmd_set_dcb_fwd_tc_result {
 	cmdline_fixed_string_t set;
@@ -6241,6 +6301,10 @@ static void cmd_set_dcb_fwd_tc_parsed(void *parsed_result,
 {
 	struct cmd_set_dcb_fwd_tc_result *res = parsed_result;
 	int i;
+	if (test_done == 0) {
+		fprintf(stderr, "Please stop forwarding first\n");
+		return;
+	}
 	if (res->tc_mask == 0) {
 		fprintf(stderr, "TC mask should not be zero!\n");
 		return;
@@ -6293,6 +6357,10 @@ static void cmd_set_dcb_fwd_tc_cores_parsed(void *parsed_result,
 					    __rte_unused void *data)
 {
 	struct cmd_set_dcb_fwd_tc_cores_result *res = parsed_result;
+	if (test_done == 0) {
+		fprintf(stderr, "Please stop forwarding first\n");
+		return;
+	}
 	if (res->tc_cores == 0) {
 		fprintf(stderr, "Cores per-TC should not be zero!\n");
 		return;
@@ -7382,6 +7450,8 @@ static void cmd_showcfg_parsed(void *parsed_result,
 		show_tx_pkt_segments();
 	else if (!strcmp(res->what, "txtimes"))
 		show_tx_pkt_times();
+	else if (!strcmp(res->what, "dcbfwdtc"))
+		show_dcb_fwd_tc_config();
 }
 
 static cmdline_parse_token_string_t cmd_showcfg_show =
@@ -7390,12 +7460,12 @@ static cmdline_parse_token_string_t cmd_showcfg_port =
 	TOKEN_STRING_INITIALIZER(struct cmd_showcfg_result, cfg, "config");
 static cmdline_parse_token_string_t cmd_showcfg_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_showcfg_result, what,
-				 "rxtx#cores#fwd#rxoffs#rxpkts#rxhdrs#txpkts#txtimes");
+				 "rxtx#cores#fwd#rxoffs#rxpkts#rxhdrs#txpkts#txtimes#dcbfwdtc");
 
 static cmdline_parse_inst_t cmd_showcfg = {
 	.f = cmd_showcfg_parsed,
 	.data = NULL,
-	.help_str = "show config rxtx|cores|fwd|rxoffs|rxpkts|rxhdrs|txpkts|txtimes",
+	.help_str = "show config rxtx|cores|fwd|rxoffs|rxpkts|rxhdrs|txpkts|txtimes|dcbfwdtc",
 	.tokens = {
 		(void *)&cmd_showcfg_show,
 		(void *)&cmd_showcfg_port,
@@ -9353,7 +9423,7 @@ static void cmd_dump_mbuf_history_parsed(void *parsed_result,
 			cmdline_printf(cl,
 					"Failed to find mempool '%s'\n",
 					res->name);
-			return;
+			goto out_close;
 		}
 		rte_mbuf_history_dump_mempool(out, mp);
 		if (out != stdout)
@@ -9366,7 +9436,7 @@ static void cmd_dump_mbuf_history_parsed(void *parsed_result,
 		if (sscanf(res->obj, "0x%" SCNxPTR, &mbuf_addr) != 1) {
 			cmdline_printf(cl,
 					"Invalid mbuf pointer format. Use 0x<address>\n");
-			return;
+			goto out_close;
 		}
 		mbuf = (struct rte_mbuf *)mbuf_addr;
 		rte_mbuf_history_dump(out, mbuf);
@@ -9376,6 +9446,7 @@ static void cmd_dump_mbuf_history_parsed(void *parsed_result,
 					mbuf, res->file);
 	}
 
+out_close:
 	if (out != stdout)
 		fclose(out);
 }
@@ -14099,6 +14170,7 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_set_rxoffs,
 	&cmd_set_rxpkts,
 	&cmd_set_rxhdrs,
+	&cmd_set_txflows,
 	&cmd_set_txpkts,
 	&cmd_set_txsplit,
 	&cmd_set_txtimes,

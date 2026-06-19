@@ -70,9 +70,25 @@ enum idpf_rx_func_type {
 	IDPF_RX_SINGLEQ,
 	IDPF_RX_SINGLEQ_SCATTERED,
 	IDPF_RX_SINGLEQ_AVX2,
+	IDPF_RX_AVX2,
 	IDPF_RX_AVX512,
 	IDPF_RX_SINGLEQ_AVX512,
 	IDPF_RX_MAX
+};
+
+enum idpf_tx_func_type {
+	IDPF_TX_DEFAULT,
+	IDPF_TX_SINGLEQ,
+	IDPF_TX_SINGLEQ_SIMPLE,
+	IDPF_TX_SINGLEQ_AVX2,
+	IDPF_TX_AVX2,
+	IDPF_TX_AVX512,
+	IDPF_TX_SINGLEQ_AVX512,
+	/* Need a max value defined as array values in are defined
+	 * in a C file in idpf driver, but cpfl driver needs to reuse
+	 * that array and know the size
+	 */
+	IDPF_TX_MAX
 };
 
 struct idpf_adapter {
@@ -90,8 +106,10 @@ struct idpf_adapter {
 
 	/* For timestamp */
 	uint64_t time_hw;
+	struct idpf_ptp *ptp;
 
 	enum idpf_rx_func_type rx_func_type;
+	enum idpf_tx_func_type tx_func_type;
 };
 
 struct idpf_chunks_info {
@@ -154,13 +172,14 @@ struct idpf_vport {
 
 	uint16_t devarg_id;
 
-	bool tx_vec_allowed;
-
 	struct virtchnl2_vport_stats eth_stats_offset;
 
 	/* Event from ipf */
 	bool link_up;
 	uint32_t link_speed;
+
+	/* For PTP */
+	struct idpf_ptp_vport_tx_tstamp_caps *tx_tstamp_caps;
 };
 
 /* Message type read in virtual channel from PF */

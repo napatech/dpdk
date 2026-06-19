@@ -112,7 +112,7 @@ nix_sec_flush_meta(uintptr_t laddr, uint16_t lmt_id, uint8_t loff, uintptr_t aur
 
 	/* Update aura handle */
 	*(uint64_t *)laddr =
-		(((uint64_t)(loff & 0x1) << 32) | roc_npa_aura_handle_to_aura(aura_handle));
+		(((uint64_t)(loff & 0x3) << 32) | roc_npa_aura_handle_to_aura(aura_handle));
 
 	pa |= ((uint64_t)(loff >> 1) << 4);
 	roc_lmt_submit_steorl(lmt_id, pa);
@@ -191,15 +191,45 @@ nix_sec_reass_first_frag_update(struct rte_mbuf *head, const rte_iova_t *iova_li
 	}
 
 	/* Remove the frag header by moving header 8 bytes forward */
-	ipv6_hdr->payload_len = rte_cpu_to_be_16(rlen - 8 - sizeof(struct rte_ipv6_hdr));
+	ipv6_hdr->payload_len = rte_cpu_to_be_16(rlen - sizeof(struct rte_ipv6_hdr));
 
 	/* tot_len is sum of all IP header's length before fragment header */
 	rte_memcpy(rte_pktmbuf_mtod_offset(head, void *, 8), rte_pktmbuf_mtod(head, void *),
 		   lc_off + tot_len);
 
-	head->data_len -= 8;
 	head->data_off += 8;
-	head->pkt_len -= 8;
+}
+
+static __rte_always_inline struct rte_mbuf *
+nix_sec_oop_process(uintptr_t cpth, uint64_t buf_sz)
+{
+	const struct cpt_parse_hdr_s *hdr = (const struct cpt_parse_hdr_s *)cpth;
+	uint32_t offset = hdr->w2.ptr_offset;
+	struct rte_mbuf *inner, *mbuf;
+	union nix_rx_parse_u *rx;
+	rte_iova_t *iova_list;
+	uint64_t addr;
+
+	iova_list = (rte_iova_t *)(cpth + (offset ? (offset << 5) : 256)) + 1;
+	addr = *iova_list;
+	offset = addr % (buf_sz & 0xFFFFFFFF);
+	mbuf = (struct rte_mbuf *)(addr - offset + (buf_sz >> 32));
+
+	rx = (union nix_rx_parse_u *)(((uintptr_t)(mbuf + 1)) + 8);
+	mbuf->pkt_len = rx->pkt_lenm1 + 1;
+	mbuf->data_len = rx->pkt_lenm1 + 1;
+	mbuf->data_off = addr - (uint64_t)mbuf->buf_addr;
+
+	/* Pointers will be alternate encrypted-decrypted in gather list */
+	iova_list++;
+	addr = *iova_list;
+	inner = (struct rte_mbuf *)(addr - offset + (buf_sz >> 32));
+
+	/* Mark original mbuf as get */
+	RTE_MEMPOOL_CHECK_COOKIES(inner->pool, (void **)&mbuf, 1, 1);
+
+	*rte_security_oop_dynfield(inner) = mbuf;
+	return inner;
 }
 
 static __rte_always_inline uint64_t
@@ -228,7 +258,8 @@ nix_sec_meta_to_mbuf_sc(uint64_t cq_w5, uint64_t cpth, const uint64_t sa_base,
 			*rte_security_dynfield(mbuf) = (uint64_t)inb_priv->userdata;
 	} else {
 		/* Update dynamic field with userdata */
-		*rte_security_dynfield(mbuf) = (uint64_t)inb_priv->userdata;
+		if (flags & NIX_RX_REAS_F && inb_priv->userdata)
+			*rte_security_dynfield(mbuf) = (uint64_t)inb_priv->userdata;
 	}
 
 	*len = ((w3 >> 48) & 0xFFFF) + ((cq_w5 >> 16) & 0xFF) - (cq_w5 & 0xFF);
@@ -300,6 +331,7 @@ nix_update_match_id(const uint16_t match_id, uint64_t ol_flags, struct rte_mbuf 
 	return ol_flags;
 }
 
+#if defined(RTE_ARCH_ARM64)
 static __rte_always_inline void
 nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint64_t rearm,
 		    uintptr_t cpth, uintptr_t sa_base, const uint64_t buf_sz, const uint16_t flags)
@@ -314,10 +346,13 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 	uint16_t rlen = hdr->w3.rlen;
 	const rte_iova_t *iova_list;
 	uint8_t sg_cnt = 1, nb_segs;
+	uint16x4_t fsz, sg_swap;
 	uint16_t later_skip = 0;
 	bool reas_fail = false;
 	const rte_iova_t *eol;
 	uint16_t data_off = 0;
+	bool is_oop = false;
+	uint16_t l4_off = 0;
 	uint8_t ts_rx_off;
 	int dyn_off = 0;
 	uint16_t sg_len;
@@ -331,7 +366,7 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 		uint64_t sg_base;
 
 		/* Check if there are no SG's */
-		if (!hdr->w4.gthr_size && ((flags & NIX_RX_REAS_F) || !hdr->w4.sctr_size))
+		if (!hdr->w4.gthr_size)
 			return;
 
 		cq_w5 = *((const uint64_t *)rx + 4);
@@ -341,7 +376,12 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 		finfo = (const struct cpt_frag_info_s *)sg_base;
 		sg_base += num_frags ? (num_frags > 4 ? 32 : 16) : 0;
 		sg = *(uint64_t *)sg_base;
-		nb_segs = (sg >> 48) & 0x3;
+
+		is_oop = (hdr->w4.l4_chksum_type == 0) && (hdr->w4.l4_chksum == 1);
+		nb_segs = (sg >> 14) & 0x3;
+		if (is_oop && nb_segs <= 2)
+			return;
+
 		iova_list = (rte_iova_t *)(sg_base);
 		eol = iova_list + (hdr->w4.gthr_size << 2);
 		iova_list += 2;
@@ -357,11 +397,28 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 			if (hdr->w0.reas_sts ||
 			    (hdr->w0.err_sum && !roc_ie_ow_ucc_is_success(hdr->w3.uc_ccode))) {
 				reas_fail = true;
-				nxt_frag = (sg >> 51) & 0x3;
-				fsz_w1 = finfo->w1.u64 >> 16;
+				nxt_frag = (sg >> 11) & 0x3;
+				nxt_frag = ((nxt_frag << 1) | (nxt_frag >> 1)) & 0x3;
+
+				/* Reverse the order of fragment sizes */
+				fsz = vreinterpret_u16_u64(vdup_n_u64(finfo->w1.u64));
+				fsz = vrev64_u16(fsz);
+				fsz_w1 = vget_lane_u64(vreinterpret_u64_u16(fsz), 0) >> 16;
 				finfo++;
+				l4_off = ((cq_w5 >> 24) & 0xFF) - (cq_w5 & 0xFF);
 			}
 		}
+
+		/* sg byte swap */
+		sg_swap = vreinterpret_u16_u64(vdup_n_u64(sg));
+		sg_swap = vrev64_u16(sg_swap);
+		sg = vget_lane_u64(vreinterpret_u64_u16(sg_swap), 0);
+
+		/* For Non inplace, first SG pointer will be original encrypted,
+		 * whereas input mbuf is decrypted one. So need to update mbuf pointer
+		 * in order to process SG list accordingly.
+		 */
+		mbuf = is_oop ? *rte_security_oop_dynfield(mbuf) : mbuf;
 	} else {
 		sg = *(const uint64_t *)(rx + 1);
 		nb_segs = (sg >> 48) & 0x3;
@@ -376,25 +433,26 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 		iova_list = ((const rte_iova_t *)(rx + 1)) + 2;
 	}
 
-	/* Update data len as per the segment size */
 	sg_len = sg & 0xFFFF;
+	sg = sg >> 16;
+
+	/* Update data len as per the segment size */
 	mbuf->data_len = sg_len;
 	mbuf->nb_segs = nb_segs;
 	head = mbuf;
 
 	/* Update IP header */
-	if ((flags & NIX_RX_REAS_F) && num_frags && !reas_fail)
+	if ((flags & NIX_RX_REAS_F) && num_frags && !reas_fail && !is_oop)
 		nix_sec_reass_first_frag_update(mbuf, iova_list - 1, cpth, cq_w1, cq_w5, rlen);
 
-	len -= sg_len;
-	sg = sg >> 16;
+	len -= is_oop ? 0 : sg_len;
 	nb_segs--;
 
 	later_skip = (uintptr_t)mbuf->buf_addr - (uintptr_t)mbuf;
 
 	while (nb_segs) {
 		last_mbuf = mbuf;
-		if ((flags & NIX_RX_REAS_F) && num_frags) {
+		if ((flags & NIX_RX_REAS_F) && (num_frags || is_oop)) {
 			offset = (*iova_list) % (buf_sz & 0xFFFFFFFF);
 			mbuf->next = (struct rte_mbuf *)((*iova_list) - offset + (buf_sz >> 32));
 		} else {
@@ -403,6 +461,9 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 		mbuf = mbuf->next;
 
 		RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
+
+		sg_len = sg & 0xFFFF;
+		sg = sg >> 16;
 
 		/* Process reassembly failure case */
 		if ((flags & NIX_RX_REAS_F) && unlikely(reas_fail && (nxt_frag & 1))) {
@@ -419,23 +480,30 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 			last_mbuf->next = NULL;
 			head = mbuf;
 			len = fsz_w1 & 0xFFFF;
-			head->pkt_len = len - ts_rx_off;
+			head->pkt_len = l4_off + len - ts_rx_off;
 			head->nb_segs = sg_cnt;
+			/* later frag size update*/
+			sg_len += l4_off;
 			data_off = rearm & 0xFFFF;
 			sg_cnt = 0;
 			nxt_frag = nxt_frag >> 1;
 			fsz_w1 = fsz_w1 >> 16;
-			if (--num_frags == 4)
-				fsz_w1 = finfo->w1.u64;
+			if (--num_frags == 4) {
+				/* Reverse the order of fragment sizes */
+				fsz = vreinterpret_u16_u64(vdup_n_u64(finfo->w1.u64));
+				fsz = vrev64_u16(fsz);
+				fsz_w1 = vget_lane_u64(vreinterpret_u64_u16(fsz), 0);
+			}
 		}
 
-		if ((flags & NIX_RX_REAS_F) && num_frags && !reas_fail)
+		if ((flags & NIX_RX_REAS_F) && ((num_frags && !reas_fail) || is_oop))
 			data_off = *iova_list - (uint64_t)mbuf->buf_addr;
 
-		sg_len = sg & 0xFFFF;
-		if ((flags & NIX_RX_OFFLOAD_SECURITY_F) && !(flags & NIX_RX_REAS_F)) {
+		if (((flags & NIX_RX_OFFLOAD_SECURITY_F) && !(flags & NIX_RX_REAS_F)) ||
+		    (is_oop && (sg_cnt % 2))) {
 			/* Adjust last mbuf data length with negative offset for
 			 * security pkts if needed.
+			 * For OOP, will correct mbuf length of decrypted pkt.
 			 */
 			len -= sg_len;
 			sg_len = (len > 0) ? sg_len : (sg_len + len);
@@ -443,7 +511,6 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 		}
 
 		mbuf->data_len = sg_len;
-		sg = sg >> 16;
 		p = (uintptr_t)&mbuf->rearm_data;
 		*(uint64_t *)p = (rearm & ~0xFFFF) | data_off;
 
@@ -454,12 +521,49 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 
 		if (!nb_segs && (iova_list + 1 < eol)) {
 			sg = *(const uint64_t *)(iova_list);
-			nb_segs = (sg >> 48) & 0x3;
+
+			if ((flags & NIX_RX_SEC_REASSEMBLY_F) && (cq_w1 & BIT(11))) {
+				nb_segs = (sg >> 14) & 0x3;
+
+				if (unlikely(reas_fail)) {
+					nxt_frag = (sg >> 11) & 7;
+					nxt_frag = ((nxt_frag << 2) | (nxt_frag & 2) |
+						    (nxt_frag >> 2)) & 0x7;
+				}
+
+				sg_swap = vreinterpret_u16_u64(vdup_n_u64(sg));
+				sg_swap = vrev64_u16(sg_swap);
+				sg = vget_lane_u64(vreinterpret_u64_u16(sg_swap), 0);
+			} else {
+				nb_segs = (sg >> 48) & 0x3;
+			}
+
 			iova_list++;
 			head->nb_segs += nb_segs;
-			if ((flags & NIX_RX_REAS_F) && reas_fail)
-				nxt_frag = (sg >> 50) & 0x7;
 		}
+	}
+
+	if (unlikely(is_oop)) {
+		struct rte_mbuf *o_mbuf;
+
+		/* mbuf chain will have all pointers of encrypted + decrypted
+		 * alternatively. So will need to sort it.
+		 */
+		mbuf = head;
+		o_mbuf = head->next;
+		nb_segs = head->nb_segs;
+		mbuf->nb_segs = nb_segs / 2;
+		o_mbuf->nb_segs = nb_segs / 2;
+		nb_segs -= 2;
+		while (unlikely(nb_segs && (nb_segs % 2 == 0))) {
+			mbuf->next = o_mbuf->next;
+			o_mbuf->next = o_mbuf->next->next;
+			mbuf = mbuf->next;
+			o_mbuf = o_mbuf->next;
+			nb_segs -= 2;
+		}
+		mbuf->next = NULL;
+		o_mbuf->next = NULL;
 	}
 
 	/* Update for last failure fragment */
@@ -468,6 +572,20 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint6
 		cnxk_ip_reassembly_dynfield(head, dyn_off)->nb_frags = 0;
 	}
 }
+#else
+static __rte_always_inline void
+nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf, uint64_t rearm,
+		    uintptr_t cpth, uintptr_t sa_base, const uint64_t buf_sz, const uint16_t flags)
+{
+	RTE_SET_USED(rx);
+	RTE_SET_USED(mbuf);
+	RTE_SET_USED(rearm);
+	RTE_SET_USED(cpth);
+	RTE_SET_USED(sa_base);
+	RTE_SET_USED(buf_sz);
+	RTE_SET_USED(flags);
+}
+#endif
 
 static __rte_always_inline void
 cn20k_nix_cqe_to_mbuf(const struct nix_cqe_hdr_s *cq, const uint32_t tag, struct rte_mbuf *mbuf,
@@ -600,6 +718,8 @@ cn20k_nix_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t pkts, co
 	uintptr_t cpth = 0;
 	uint16_t lmt_id;
 	uint64_t laddr;
+	uint64_t w4;
+	bool is_oop;
 
 	nb_pkts = nix_rx_nb_pkts(rxq, wdata, pkts, qmask);
 
@@ -637,7 +757,12 @@ cn20k_nix_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t pkts, co
 				 */
 				*(uint64_t *)(laddr + (loff << 3)) = (uint64_t)mbuf;
 				loff = loff + 1;
-				mbuf = (struct rte_mbuf *)(*(uint64_t *)(cpth + 8) - m_sz);
+				w4 = *(uint64_t *)(cpth + 32);
+				is_oop = !((w4 >> 32) & 0x3) && ((w4 & 0xffffffff) == 1);
+				if ((flags & NIX_RX_REAS_F) && is_oop)
+					mbuf = nix_sec_oop_process(cpth, buf_sz);
+				else
+					mbuf = (struct rte_mbuf *)(*(uint64_t *)(cpth + 8) - m_sz);
 
 				/* Mark inner mbuf as get */
 				RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
@@ -765,13 +890,186 @@ cn20k_nix_flush_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t pk
 
 #if defined(RTE_ARCH_ARM64)
 
+static __rte_always_inline uint16_t
+cn20k_nix_rx_inj_prepare_mseg(struct rte_mbuf *m, uint64_t *cmd)
+{
+	union nix_send_sg_s *sg, l_sg;
+	struct rte_mbuf *m_next;
+	uint16_t segdw, nb_segs;
+	uint64_t len, dlen;
+	uint64_t *slist;
+
+	sg = (union nix_send_sg_s *)cmd;
+	l_sg.u = sg->u;
+	l_sg.u &= 0xC00000000000000; /* LD_TYPE */
+	l_sg.subdc = NIX_SUBDC_SG;
+	nb_segs = m->nb_segs;
+	len = m->pkt_len;
+	slist = &cmd[1];
+
+	/* Fill mbuf segments */
+	do {
+		*slist = rte_pktmbuf_iova(m);
+		dlen = m->data_len;
+		len -= dlen;
+
+		/* Set the segment length */
+		l_sg.u |= ((uint64_t)dlen << (l_sg.segs << 4));
+		l_sg.segs += 1;
+		slist++;
+		nb_segs--;
+		if (l_sg.segs > 2 && nb_segs) {
+			sg->u = l_sg.u;
+			/* Next SG subdesc */
+			sg = (union nix_send_sg_s *)slist;
+			l_sg.u = sg->u;
+			l_sg.u &= 0xC00000000000000; /* LD_TYPE */
+			l_sg.subdc = NIX_SUBDC_SG;
+			slist++;
+		}
+		m_next = m->next;
+		m = m_next;
+	} while (nb_segs);
+
+	/* Add remaining bytes of data to last seg */
+	if (len) {
+		uint8_t shft = (l_sg.subdc == NIX_SUBDC_SG) ? ((l_sg.segs - 1) << 4) : 0;
+		dlen = ((l_sg.u >> shft) & 0xFFFFULL) + len;
+		l_sg.u = l_sg.u & ~(0xFFFFULL << shft);
+		l_sg.u |= dlen << shft;
+	}
+	/* Write the last subdc out */
+	sg->u = l_sg.u;
+
+	segdw = (uint64_t *)slist - cmd;
+	/* Roundup extra dwords to multiple of 2 */
+	segdw = (segdw >> 1) + (segdw & 0x1);
+	return segdw;
+}
+
+static __rte_always_inline uint16_t
+cn20k_nix_inj_pkts(struct rte_security_session **sess, struct cnxk_ethdev_inj_cfg *inj_cfg,
+		   struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
+{
+	uintptr_t c_lbase = inj_cfg->lmt_base;
+	struct cn20k_sec_sess_priv sess_priv;
+	uint64_t sa_base = inj_cfg->sa_base;
+	uint16_t c_lmt_id, burst, left, i;
+	uintptr_t cptres, rxphdr, dptr;
+	struct rte_mbuf *m, *last;
+	uint64_t sa, w0, gthr_sz;
+	uint8_t lnum, shft, loff;
+	uint64x2_t cmd01, cmd23;
+	uint64_t ucode_cmd[4];
+	rte_iova_t c_io_addr;
+	uint16_t segdw, segs;
+	uint64_t *laddr;
+
+	/* Get LMT base address and LMT ID as lcore id */
+	ROC_LMT_CPT_BASE_ID_GET(c_lbase, c_lmt_id);
+	c_io_addr = inj_cfg->io_addr;
+
+	sa_base &= ~0xFFFFUL;
+	left = nb_pkts;
+again:
+	burst = left > 32 ? 32 : left;
+
+	lnum = 0;
+	loff = 0;
+	shft = 16;
+
+	for (i = 0; i < burst; i++) {
+		m = tx_pkts[i];
+		sess_priv.u64 = sess[i]->fast_mdata;
+		last = rte_pktmbuf_lastseg(m);
+
+		cptres = rte_pktmbuf_mtod_offset(last, uintptr_t, last->data_len);
+		cptres += BIT_ULL(7);
+		cptres = (cptres - 1) & ~(BIT_ULL(7) - 1);
+		segs = m->nb_segs;
+
+		if (segs > 1) {
+			/* Pointer to WQE header */
+			/* Reserve 8 Dwords of WQE Hdr + Rx Parse Hdr */
+			rxphdr = cptres + 8;
+			dptr = rxphdr + 7 * 8;
+			/* Prepare Multiseg SG list */
+			segdw = cn20k_nix_rx_inj_prepare_mseg(m, (uint64_t *)(dptr));
+			*(uint64_t *)rxphdr = (uint64_t)(segdw - 1) << 12;
+			cptres += 64 + segdw * 16;
+			gthr_sz = (segs % 3) == 0 ? (segs / 3) : (segs / 3 + 1);
+			ucode_cmd[1] = dptr | (gthr_sz << 60);
+		} else {
+			dptr = (uint64_t)rte_pktmbuf_iova(m);
+			ucode_cmd[1] = dptr;
+		}
+
+		/* Prepare CPT instruction */
+		/* CPT word 0 and 1 */
+		cmd01 = vdupq_n_u64(0);
+		w0 = inj_cfg->cmd_w0 | ((uint64_t)m->l2_len - 2) << 24 | (uint64_t)m->l2_len << 16;
+		cmd01 = vsetq_lane_u64(w0, cmd01, 0);
+		cmd01 = vsetq_lane_u64(cptres, cmd01, 1);
+
+		/* CPT word 2 and 3 */
+		cmd23 = vdupq_n_u64(0);
+		/* Set PF func */
+		w0 &= 0xFFFF000000000000UL;
+		cmd23 = vsetq_lane_u64(w0, cmd23, 0);
+		cmd23 = vsetq_lane_u64(((uint64_t)m + sizeof(struct rte_mbuf)) | 1, cmd23, 1);
+
+		sa = (uintptr_t)roc_nix_inl_ow_ipsec_inb_sa(sa_base, sess_priv.sa_idx);
+		ucode_cmd[0] = (ROC_IE_OW_MAJOR_OP_PROCESS_INBOUND_IPSEC << 48 | 1UL << 54 |
+				((uint64_t)sess_priv.chksum) << 32 | (1ULL << 34) | m->pkt_len);
+
+		ucode_cmd[2] = 0;
+		ucode_cmd[3] = (ROC_CPT_DFLT_ENG_GRP_SE << 61 | 1UL << 60 | sa);
+
+		/* Move to our line */
+		laddr = LMT_OFF(c_lbase, lnum, loff ? 64 : 0);
+
+		/* Write CPT instruction to lmt line */
+		vst1q_u64(laddr, cmd01);
+		vst1q_u64((laddr + 2), cmd23);
+
+		*(__uint128_t *)(laddr + 4) = *(__uint128_t *)ucode_cmd;
+		*(__uint128_t *)(laddr + 6) = *(__uint128_t *)(ucode_cmd + 2);
+
+		loff = !loff;
+		lnum = lnum + (loff ? 0 : 1);
+		shft = shft + (loff ? 0 : 3);
+	}
+
+	left -= burst;
+	tx_pkts += burst;
+	sess += burst;
+
+	cn20k_nix_sec_steorl(c_io_addr, c_lmt_id, lnum, loff, shft);
+
+	rte_io_wmb();
+	if (left)
+		goto again;
+
+	return nb_pkts;
+}
+
 static __rte_always_inline void
 nix_sec_meta_to_mbuf(uintptr_t inb_sa, uintptr_t cpth, struct rte_mbuf **inner, uint64_t *ol_flags,
-		     const uint16_t flags, uint64x2_t *rearm)
+		     const uint16_t flags, uint64x2_t *rearm, uint64_t buf_sz)
 {
 	const struct cpt_parse_hdr_s *hdr = (const struct cpt_parse_hdr_s *)cpth;
-	struct rte_mbuf *inner_m = inner[0];
 	struct cn20k_inb_priv_data *inb_priv;
+	struct rte_mbuf *inner_m;
+	uint64_t w4;
+	bool is_oop;
+
+	w4 = *(uint64_t *)(cpth + 32);
+	is_oop = !((w4 >> 32) & 0x3) && ((w4 & 0xffffffff) == 1);
+
+	if ((flags & NIX_RX_REAS_F) && is_oop)
+		inner[0] = nix_sec_oop_process(cpth, buf_sz);
+
+	inner_m = inner[0];
 
 	/* Clear checksum flags */
 	*ol_flags &= ~(RTE_MBUF_F_RX_L4_CKSUM_MASK | RTE_MBUF_F_RX_IP_CKSUM_MASK);
@@ -783,7 +1081,8 @@ nix_sec_meta_to_mbuf(uintptr_t inb_sa, uintptr_t cpth, struct rte_mbuf **inner, 
 		/* Get SPI from CPT_PARSE_S's cookie(already swapped) */
 		inb_priv = roc_nix_inl_ot_ipsec_inb_sa_sw_rsvd((void *)inb_sa);
 		/* Update dynamic field with userdata */
-		*rte_security_dynfield(inner_m) = (uint64_t)inb_priv->userdata;
+		if (flags & NIX_RX_REAS_F && inb_priv->userdata)
+			*rte_security_dynfield(inner_m) = (uint64_t)inb_priv->userdata;
 	}
 
 	/* Clear and update original lower 16 bit of data offset */
@@ -1280,7 +1579,8 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 				f0 = vsetq_lane_u16(len, f0, 2);
 				f0 = vsetq_lane_u16(len, f0, 4);
 
-				nix_sec_meta_to_mbuf(sa, cpth0, &mbuf0, &ol_flags0, flags, &rearm0);
+				nix_sec_meta_to_mbuf(sa, cpth0, &mbuf0, &ol_flags0, flags, &rearm0,
+						     buf_sz);
 				mbuf01 = vsetq_lane_u64((uintptr_t)mbuf0, mbuf01, 0);
 				code = vget_lane_u8(ucc, 1);
 				ol_flags0 |= code ? (code > 1 ? ((uint64_t)code) << 1 : 0) :
@@ -1296,7 +1596,6 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 
 				cpth1 = (uintptr_t)mbuf1 + d_off;
 
-				/* Free meta to aura */
 				NIX_PUSH_META_TO_FREE(mbuf1, laddr, &loff);
 				mbuf1 = (struct rte_mbuf *)wqe;
 
@@ -1304,7 +1603,8 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 				f1 = vsetq_lane_u16(len, f1, 2);
 				f1 = vsetq_lane_u16(len, f1, 4);
 
-				nix_sec_meta_to_mbuf(sa, cpth1, &mbuf1, &ol_flags1, flags, &rearm1);
+				nix_sec_meta_to_mbuf(sa, cpth1, &mbuf1, &ol_flags1, flags, &rearm1,
+						     buf_sz);
 				mbuf01 = vsetq_lane_u64((uintptr_t)mbuf1, mbuf01, 1);
 				code = vget_lane_u8(ucc, 3);
 				ol_flags1 |= code ? (code > 1 ? ((uint64_t)code) << 1 : 0) :
@@ -1327,7 +1627,8 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 				f2 = vsetq_lane_u16(len, f2, 2);
 				f2 = vsetq_lane_u16(len, f2, 4);
 
-				nix_sec_meta_to_mbuf(sa, cpth2, &mbuf2, &ol_flags2, flags, &rearm2);
+				nix_sec_meta_to_mbuf(sa, cpth2, &mbuf2, &ol_flags2, flags, &rearm2,
+						     buf_sz);
 				mbuf23 = vsetq_lane_u64((uintptr_t)mbuf2, mbuf23, 0);
 				code = vget_lane_u8(ucc, 5);
 				ol_flags2 |= code ? (code > 1 ? ((uint64_t)code) << 1 : 0) :
@@ -1350,7 +1651,8 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 				f3 = vsetq_lane_u16(len, f3, 2);
 				f3 = vsetq_lane_u16(len, f3, 4);
 
-				nix_sec_meta_to_mbuf(sa, cpth3, &mbuf3, &ol_flags3, flags, &rearm3);
+				nix_sec_meta_to_mbuf(sa, cpth3, &mbuf3, &ol_flags3, flags, &rearm3,
+						     buf_sz);
 				mbuf23 = vsetq_lane_u64((uintptr_t)mbuf3, mbuf23, 1);
 				code = vget_lane_u8(ucc, 7);
 				ol_flags3 |= code ? (code > 1 ? ((uint64_t)code) << 1 : 0) :
@@ -1513,7 +1815,7 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 			/* Check if lmtline border is crossed and adjust lnum */
 			if (loff > 15) {
 				/* Update aura handle */
-				*(uint64_t *)(laddr - 8) = (((uint64_t)(15 & 0x1) << 32) |
+				*(uint64_t *)(laddr - 8) = (((uint64_t)(15 & 0x3) << 32) |
 							    roc_npa_aura_handle_to_aura(meta_aura));
 				loff = loff - 15;
 				shft += 3;
@@ -1534,7 +1836,7 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 				uint64_t data = BIT_ULL(48) - 1;
 
 				/* Update aura handle */
-				*(uint64_t *)(laddr - 8) = (((uint64_t)(loff & 0x1) << 32) |
+				*(uint64_t *)(laddr - 8) = (((uint64_t)(loff & 0x3) << 32) |
 							    roc_npa_aura_handle_to_aura(meta_aura));
 
 				data = (data & ~(0x7UL << shft)) | (((uint64_t)loff >> 1) << shft);
@@ -1557,7 +1859,7 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 
 		/* Update aura handle */
 		*(uint64_t *)(laddr - 8) =
-			(((uint64_t)(loff & 0x1) << 32) | roc_npa_aura_handle_to_aura(meta_aura));
+			(((uint64_t)(loff & 0x3) << 32) | roc_npa_aura_handle_to_aura(meta_aura));
 
 		data = (data & ~(0x7UL << shft)) | (((uint64_t)loff >> 1) << shft);
 
@@ -1599,6 +1901,17 @@ cn20k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts, c
 	RTE_SET_USED(lmt_base);
 	RTE_SET_USED(meta_aura);
 
+	return 0;
+}
+
+static __rte_always_inline uint16_t
+cn20k_nix_inj_pkts(struct rte_security_session **sess, struct cnxk_ethdev_inj_cfg *inj_cfg,
+		   struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
+{
+	RTE_SET_USED(sess);
+	RTE_SET_USED(inj_cfg);
+	RTE_SET_USED(tx_pkts);
+	RTE_SET_USED(nb_pkts);
 	return 0;
 }
 

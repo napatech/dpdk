@@ -1304,6 +1304,18 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 		rx_reg |= ((0xff & reg_c_8_15) << 8);
 		attr->set_reg_c &= (rx_reg & tx_reg);
 
+		attr->rx_sw_owner_v2 = MLX5_GET(flow_table_nic_cap, hcattr,
+						flow_table_properties_nic_receive.sw_owner_v2);
+		if (!attr->rx_sw_owner_v2)
+			attr->rx_sw_owner = MLX5_GET(flow_table_nic_cap, hcattr,
+						flow_table_properties_nic_receive.sw_owner);
+
+		attr->tx_sw_owner_v2 = MLX5_GET(flow_table_nic_cap, hcattr,
+						flow_table_properties_nic_transmit.sw_owner_v2);
+		if (!attr->tx_sw_owner_v2)
+			attr->tx_sw_owner = MLX5_GET(flow_table_nic_cap, hcattr,
+						flow_table_properties_nic_transmit.sw_owner);
+
 #undef GET_RX_REG_X_BITS
 #undef GET_TX_REG_X_BITS
 	}
@@ -1456,6 +1468,12 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 		reg_c_8_15 = MLX5_GET(flow_table_esw_cap, hcattr,
 				      ft_field_support_2_esw_fdb.metadata_reg_c_8_15);
 		attr->set_reg_c &= ((0xff & reg_c_8_15) << 8) | esw_reg;
+
+		attr->esw_sw_owner_v2 = MLX5_GET(flow_table_esw_cap, hcattr,
+						 flow_table_properties_nic_esw_fdb.sw_owner_v2);
+		if (!attr->esw_sw_owner_v2)
+			attr->esw_sw_owner = MLX5_GET(flow_table_esw_cap, hcattr,
+						 flow_table_properties_nic_esw_fdb.sw_owner);
 	}
 	return 0;
 error:
@@ -1654,13 +1672,11 @@ mlx5_devx_cmd_modify_rq(struct mlx5_devx_obj *rq,
 	}
 	ret = mlx5_glue->devx_obj_modify(rq->obj, in, sizeof(in),
 					 out, sizeof(out));
-
-	if (ret) {
-		DRV_LOG(ERR, "Failed to modify RQ using DevX");
-		rte_errno = errno;
-		return -errno;
+	if (ret || MLX5_FW_STATUS(out)) {
+		DEVX_DRV_LOG(ERR, out, "RQ modify", "rq_id", rq->id);
+		return MLX5_DEVX_ERR_RC(ret);
 	}
-	return ret;
+	return 0;
 }
 
 /*
@@ -2098,12 +2114,11 @@ mlx5_devx_cmd_modify_sq(struct mlx5_devx_obj *sq,
 	MLX5_SET(sqc, sq_ctx, hairpin_peer_vhca, sq_attr->hairpin_peer_vhca);
 	ret = mlx5_glue->devx_obj_modify(sq->obj, in, sizeof(in),
 					 out, sizeof(out));
-	if (ret) {
-		DRV_LOG(ERR, "Failed to modify SQ using DevX");
-		rte_errno = errno;
-		return -rte_errno;
+	if (ret || MLX5_FW_STATUS(out)) {
+		DEVX_DRV_LOG(ERR, out, "SQ modify", "sq_id", sq->id);
+		return MLX5_DEVX_ERR_RC(ret);
 	}
-	return ret;
+	return 0;
 }
 
 /*

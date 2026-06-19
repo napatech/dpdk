@@ -7,6 +7,7 @@
 #define _GVE_ADMINQ_H
 
 #include "gve_osdep.h"
+#include "../gve_flow_rule.h"
 
 /* Admin queue opcodes */
 enum gve_adminq_opcodes {
@@ -25,6 +26,17 @@ enum gve_adminq_opcodes {
 	GVE_ADMINQ_REPORT_LINK_SPEED		= 0xD,
 	GVE_ADMINQ_GET_PTYPE_MAP		= 0xE,
 	GVE_ADMINQ_VERIFY_DRIVER_COMPATIBILITY	= 0xF,
+	/* For commands that are larger than 56 bytes */
+	GVE_ADMINQ_EXTENDED_COMMAND		= 0xFF,
+};
+
+/* The normal adminq command is restricted to be 56 bytes at maximum. For the
+ * longer adminq command, it is wrapped by GVE_ADMINQ_EXTENDED_COMMAND with
+ * inner opcode of gve_adminq_extended_cmd_opcodes specified. The inner command
+ * is written in the dma memory allocated by GVE_ADMINQ_EXTENDED_COMMAND.
+ */
+enum gve_adminq_extended_cmd_opcodes {
+	GVE_ADMINQ_CONFIGURE_FLOW_RULE	= 0x101,
 };
 
 /* Admin queue status codes */
@@ -117,6 +129,14 @@ struct gve_ring_size_bound {
 
 GVE_CHECK_STRUCT_LEN(4, gve_ring_size_bound);
 
+struct gve_device_option_flow_steering {
+	__be32 supported_features_mask;
+	__be32 reserved;
+	__be32 max_flow_rules;
+};
+
+GVE_CHECK_STRUCT_LEN(12, gve_device_option_flow_steering);
+
 struct gve_device_option_modify_ring {
 	__be32 supported_features_mask;
 	struct gve_ring_size_bound max_ring_size;
@@ -148,6 +168,7 @@ enum gve_dev_opt_id {
 	GVE_DEV_OPT_ID_DQO_RDA = 0x4,
 	GVE_DEV_OPT_ID_MODIFY_RING = 0x6,
 	GVE_DEV_OPT_ID_JUMBO_FRAMES = 0x8,
+	GVE_DEV_OPT_ID_FLOW_STEERING = 0xb,
 };
 
 enum gve_dev_opt_req_feat_mask {
@@ -155,6 +176,7 @@ enum gve_dev_opt_req_feat_mask {
 	GVE_DEV_OPT_REQ_FEAT_MASK_GQI_RDA = 0x0,
 	GVE_DEV_OPT_REQ_FEAT_MASK_GQI_QPL = 0x0,
 	GVE_DEV_OPT_REQ_FEAT_MASK_DQO_RDA = 0x0,
+	GVE_DEV_OPT_REQ_FEAT_MASK_FLOW_STEERING = 0x0,
 	GVE_DEV_OPT_REQ_FEAT_MASK_MODIFY_RING = 0x0,
 	GVE_DEV_OPT_REQ_FEAT_MASK_JUMBO_FRAMES = 0x0,
 };
@@ -162,6 +184,7 @@ enum gve_dev_opt_req_feat_mask {
 enum gve_sup_feature_mask {
 	GVE_SUP_MODIFY_RING_MASK = 1 << 0,
 	GVE_SUP_JUMBO_FRAMES_MASK = 1 << 2,
+	GVE_SUP_FLOW_STEERING_MASK = 1 << 5,
 };
 
 #define GVE_DEV_OPT_LEN_GQI_RAW_ADDRESSING 0x0
@@ -182,6 +205,14 @@ enum gve_driver_capbility {
 #define GVE_DRIVER_CAPABILITY_FLAGS2 0x0
 #define GVE_DRIVER_CAPABILITY_FLAGS3 0x0
 #define GVE_DRIVER_CAPABILITY_FLAGS4 0x0
+
+struct gve_adminq_extended_command {
+	__be32 inner_opcode;
+	__be32 inner_length;
+	__be64 inner_command_addr;
+};
+
+GVE_CHECK_STRUCT_LEN(16, gve_adminq_extended_command);
 
 struct gve_driver_info {
 	u8 os_type;	/* 0x05 = DPDK */
@@ -408,6 +439,26 @@ struct gve_adminq_configure_rss {
 	__be64 indir_addr;
 };
 
+/* Flow rule definition for the admin queue using network byte order (big
+ * endian). This struct represents the hardware wire format and should not be
+ * used outside of admin queue contexts.
+ */
+struct gve_adminq_flow_rule {
+	__be16 flow_type;
+	__be16 action; /* RX queue id */
+	struct gve_flow_spec key;
+	struct gve_flow_spec mask;
+};
+
+struct gve_adminq_configure_flow_rule {
+	__be16 opcode;
+	u8 padding[2];
+	struct gve_adminq_flow_rule rule;
+	__be32 location;
+};
+
+GVE_CHECK_STRUCT_LEN(92, gve_adminq_configure_flow_rule);
+
 union gve_adminq_command {
 	struct {
 		__be32 opcode;
@@ -429,6 +480,7 @@ union gve_adminq_command {
 			struct gve_adminq_get_ptype_map get_ptype_map;
 			struct gve_adminq_verify_driver_compatibility
 				verify_driver_compatibility;
+			struct gve_adminq_extended_command extended_command;
 		};
 	};
 	u8 reserved[64];
@@ -471,5 +523,10 @@ int gve_adminq_verify_driver_compatibility(struct gve_priv *priv,
 
 int gve_adminq_configure_rss(struct gve_priv *priv,
 			     struct gve_rss_config *rss_config);
+
+int gve_adminq_add_flow_rule(struct gve_priv *priv,
+			     struct gve_flow_rule_params *rule, u32 loc);
+int gve_adminq_del_flow_rule(struct gve_priv *priv, u32 loc);
+int gve_adminq_reset_flow_rules(struct gve_priv *priv);
 
 #endif /* _GVE_ADMINQ_H */

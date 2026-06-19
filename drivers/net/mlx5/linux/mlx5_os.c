@@ -510,11 +510,11 @@ mlx5_alloc_shared_dr(struct rte_eth_dev *eth_dev)
 			sh->mreg_cp_tbl = mlx5_hlist_create(MLX5_FLOW_MREG_HNAME,
 							    MLX5_FLOW_MREG_HTABLE_SZ,
 							    false, true, eth_dev,
-							    flow_nta_mreg_create_cb,
-							    flow_dv_mreg_match_cb,
-							    flow_nta_mreg_remove_cb,
-							    flow_dv_mreg_clone_cb,
-							    flow_dv_mreg_clone_free_cb);
+							    mlx5_flow_nta_mreg_create_cb,
+							    mlx5_flow_dv_mreg_match_cb,
+							    mlx5_flow_nta_mreg_remove_cb,
+							    mlx5_flow_dv_mreg_clone_cb,
+							    mlx5_flow_dv_mreg_clone_free_cb);
 			if (!sh->mreg_cp_tbl) {
 				err = ENOMEM;
 				goto error;
@@ -525,41 +525,41 @@ mlx5_alloc_shared_dr(struct rte_eth_dev *eth_dev)
 	/* Init port id action list. */
 	snprintf(s, sizeof(s), "%s_port_id_action_list", sh->ibdev_name);
 	sh->port_id_action_list = mlx5_list_create(s, sh, true,
-						   flow_dv_port_id_create_cb,
-						   flow_dv_port_id_match_cb,
-						   flow_dv_port_id_remove_cb,
-						   flow_dv_port_id_clone_cb,
-						 flow_dv_port_id_clone_free_cb);
+						   mlx5_flow_dv_port_id_create_cb,
+						   mlx5_flow_dv_port_id_match_cb,
+						   mlx5_flow_dv_port_id_remove_cb,
+						   mlx5_flow_dv_port_id_clone_cb,
+						   mlx5_flow_dv_port_id_clone_free_cb);
 	if (!sh->port_id_action_list)
 		goto error;
 	/* Init push vlan action list. */
 	snprintf(s, sizeof(s), "%s_push_vlan_action_list", sh->ibdev_name);
 	sh->push_vlan_action_list = mlx5_list_create(s, sh, true,
-						    flow_dv_push_vlan_create_cb,
-						    flow_dv_push_vlan_match_cb,
-						    flow_dv_push_vlan_remove_cb,
-						    flow_dv_push_vlan_clone_cb,
-					       flow_dv_push_vlan_clone_free_cb);
+						    mlx5_flow_dv_push_vlan_create_cb,
+						    mlx5_flow_dv_push_vlan_match_cb,
+						    mlx5_flow_dv_push_vlan_remove_cb,
+						    mlx5_flow_dv_push_vlan_clone_cb,
+						    mlx5_flow_dv_push_vlan_clone_free_cb);
 	if (!sh->push_vlan_action_list)
 		goto error;
 	/* Init sample action list. */
 	snprintf(s, sizeof(s), "%s_sample_action_list", sh->ibdev_name);
 	sh->sample_action_list = mlx5_list_create(s, sh, true,
-						  flow_dv_sample_create_cb,
-						  flow_dv_sample_match_cb,
-						  flow_dv_sample_remove_cb,
-						  flow_dv_sample_clone_cb,
-						  flow_dv_sample_clone_free_cb);
+						  mlx5_flow_dv_sample_create_cb,
+						  mlx5_flow_dv_sample_match_cb,
+						  mlx5_flow_dv_sample_remove_cb,
+						  mlx5_flow_dv_sample_clone_cb,
+						  mlx5_flow_dv_sample_clone_free_cb);
 	if (!sh->sample_action_list)
 		goto error;
 	/* Init dest array action list. */
 	snprintf(s, sizeof(s), "%s_dest_array_list", sh->ibdev_name);
 	sh->dest_array_list = mlx5_list_create(s, sh, true,
-					       flow_dv_dest_array_create_cb,
-					       flow_dv_dest_array_match_cb,
-					       flow_dv_dest_array_remove_cb,
-					       flow_dv_dest_array_clone_cb,
-					      flow_dv_dest_array_clone_free_cb);
+					       mlx5_flow_dv_dest_array_create_cb,
+					       mlx5_flow_dv_dest_array_match_cb,
+					       mlx5_flow_dv_dest_array_remove_cb,
+					       mlx5_flow_dv_dest_array_clone_cb,
+					       mlx5_flow_dv_dest_array_clone_free_cb);
 	if (!sh->dest_array_list)
 		goto error;
 #else
@@ -635,11 +635,11 @@ mlx5_alloc_shared_dr(struct rte_eth_dev *eth_dev)
 			sh->mreg_cp_tbl = mlx5_hlist_create(MLX5_FLOW_MREG_HNAME,
 							    MLX5_FLOW_MREG_HTABLE_SZ,
 							    false, true, eth_dev,
-							    flow_dv_mreg_create_cb,
-							    flow_dv_mreg_match_cb,
-							    flow_dv_mreg_remove_cb,
-							    flow_dv_mreg_clone_cb,
-							    flow_dv_mreg_clone_free_cb);
+							    mlx5_flow_dv_mreg_create_cb,
+							    mlx5_flow_dv_mreg_match_cb,
+							    mlx5_flow_dv_mreg_remove_cb,
+							    mlx5_flow_dv_mreg_clone_cb,
+							    mlx5_flow_dv_mreg_clone_free_cb);
 			if (!sh->mreg_cp_tbl) {
 				err = ENOMEM;
 				goto error;
@@ -754,7 +754,7 @@ mlx5_destroy_send_to_kernel_action(struct mlx5_dev_ctx_shared *sh)
 			struct mlx5_flow_tbl_resource *tbl =
 					sh->send_to_kernel_action[i].tbl;
 
-			flow_dv_tbl_resource_release(sh, tbl);
+			mlx5_flow_dv_tbl_resource_release(sh, tbl);
 			sh->send_to_kernel_action[i].tbl = NULL;
 		}
 	}
@@ -809,6 +809,21 @@ mlx5_os_free_shared_dr(struct mlx5_priv *priv)
 	if (sh->pop_vlan_action) {
 		mlx5_glue->destroy_flow_action(sh->pop_vlan_action);
 		sh->pop_vlan_action = NULL;
+	}
+	for (i = 0; i < MLX5DR_TABLE_TYPE_MAX; i++) {
+		if (sh->send_to_kernel_action[i].action) {
+			void *action = sh->send_to_kernel_action[i].action;
+
+			mlx5_glue->destroy_flow_action(action);
+			sh->send_to_kernel_action[i].action = NULL;
+		}
+		if (sh->send_to_kernel_action[i].tbl) {
+			struct mlx5_flow_tbl_resource *tbl =
+					sh->send_to_kernel_action[i].tbl;
+
+			mlx5_flow_dv_tbl_resource_release(sh, tbl);
+			sh->send_to_kernel_action[i].tbl = NULL;
+		}
 	}
 #endif /* HAVE_MLX5DV_DR */
 	if (sh->default_miss_action)
@@ -1032,6 +1047,175 @@ mlx5_queue_counter_id_prepare(struct rte_eth_dev *dev)
 			"available.", dev->data->port_id);
 }
 
+static inline bool
+mlx5_ignore_pf_representor(const struct rte_eth_devargs *eth_da)
+{
+	return (eth_da->flags & RTE_ETH_DEVARG_REPRESENTOR_IGNORE_PF) != 0;
+}
+
+static bool
+is_standard_eswitch(const struct mlx5_dev_spawn_data *spawn)
+{
+	bool is_bond = spawn->pf_bond >= 0;
+
+	return !is_bond && spawn->nb_uplinks <= 1 && spawn->nb_hpfs <= 1;
+}
+
+static bool
+is_hpf(const struct mlx5_dev_spawn_data *spawn)
+{
+	return spawn->info.port_name == -1 &&
+	       spawn->info.name_type == MLX5_PHYS_PORT_NAME_TYPE_PFHPF;
+}
+
+static int
+build_port_name(struct rte_device *dpdk_dev,
+		struct mlx5_dev_spawn_data *spawn,
+		char *name,
+		size_t name_sz)
+{
+	bool is_bond = spawn->pf_bond >= 0;
+	int written = 0;
+	int ret;
+
+	ret = snprintf(name, name_sz, "%s", dpdk_dev->name);
+	if (ret < 0)
+		return ret;
+	written += ret;
+	if (written >= (int)name_sz)
+		return written;
+
+	/*
+	 * Whenever bond device is detected, include IB device name.
+	 * This is kept to keep port naming backward compatible.
+	 */
+	if (is_bond) {
+		ret = snprintf(name + written, name_sz - written, "_%s", spawn->phys_dev_name);
+		if (ret < 0)
+			return ret;
+		written += ret;
+		if (written >= (int)name_sz)
+			return written;
+	}
+
+	if (spawn->info.name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK) {
+		/* Add port to name if and only if there is more than one uplink. */
+		if (spawn->nb_uplinks <= 1)
+			goto end;
+
+		ret = snprintf(name + written, name_sz - written, "_p%u", spawn->info.port_name);
+		if (ret < 0)
+			return ret;
+		written += ret;
+		if (written >= (int)name_sz)
+			return written;
+	} else if (spawn->info.representor) {
+		/*
+		 * If port is a representor, then switchdev has been enabled.
+		 * In that case add controller, PF and VF/SF indexes to port name
+		 * if at least one of these conditions are met:
+		 * 1. Device is a bond (VF-LAG).
+		 * 2. There are multiple uplinks (MPESW).
+		 * 3. There are multiple host PFs (BlueField socket direct).
+		 *
+		 * If none of these conditions apply, then it is assumed that
+		 * this device manages a single non-shared E-Switch with single controller,
+		 * where there is only one uplink/PF and one host PF (on BlueField).
+		 */
+		if (!is_standard_eswitch(spawn))
+			ret = snprintf(name + written, name_sz - written,
+				       "_representor_c%dpf%d%s%u",
+				       spawn->info.ctrl_num,
+				       spawn->info.pf_num,
+				       spawn->info.name_type ==
+				       MLX5_PHYS_PORT_NAME_TYPE_PFSF ? "sf" : "vf",
+				       spawn->info.port_name);
+		else
+			ret = snprintf(name + written, name_sz - written, "_representor_%s%u",
+				       spawn->info.name_type ==
+				       MLX5_PHYS_PORT_NAME_TYPE_PFSF ? "sf" : "vf",
+				       spawn->info.port_name);
+		if (ret < 0)
+			return ret;
+		written += ret;
+		if (written >= (int)name_sz)
+			return written;
+	}
+
+end:
+	return written;
+}
+
+static bool
+representor_match_uplink(const struct mlx5_dev_spawn_data *spawn,
+			 uint16_t port_name,
+			 const struct rte_eth_devargs *eth_da,
+			 uint16_t eth_da_pf_num)
+{
+	if (spawn->info.name_type != MLX5_PHYS_PORT_NAME_TYPE_UPLINK)
+		return false;
+	/* One of the uplinks will be a transfer proxy. Must be probed always. */
+	if (spawn->info.master)
+		return true;
+	if (mlx5_ignore_pf_representor(eth_da))
+		return false;
+
+	return port_name == eth_da_pf_num;
+}
+
+static bool
+representor_match_port(const struct mlx5_dev_spawn_data *spawn,
+		       const struct rte_eth_devargs *eth_da)
+{
+	for (uint16_t p = 0; p < eth_da->nb_ports; ++p) {
+		uint16_t pf_num = eth_da->ports[p];
+
+		/* PF representor in devargs is interpreted as probing uplink port. */
+		if (eth_da->type == RTE_ETH_REPRESENTOR_PF) {
+			if (representor_match_uplink(spawn, spawn->info.port_name, eth_da, pf_num))
+				return true;
+
+			continue;
+		}
+
+		/* Allow probing related uplink when VF/SF representor is requested. */
+		if ((eth_da->type == RTE_ETH_REPRESENTOR_VF ||
+		     eth_da->type == RTE_ETH_REPRESENTOR_SF) &&
+		    representor_match_uplink(spawn, spawn->info.pf_num, eth_da, pf_num))
+			return true;
+
+		/* Uplink ports should not be matched against representor_ports. */
+		if (spawn->info.name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK)
+			return false;
+
+		for (uint16_t f = 0; f < eth_da->nb_representor_ports; ++f) {
+			uint16_t port_num = eth_da->representor_ports[f];
+			bool pf_num_match;
+			bool rep_num_match;
+
+			/*
+			 * In standard E-Switch case, allow probing VFs even if wrong PF index
+			 * was provided.
+			 */
+			if (is_standard_eswitch(spawn))
+				pf_num_match = true;
+			else
+				pf_num_match = spawn->info.pf_num == pf_num;
+
+			/* Host PF is indicated through VF/SF representor index == -1. */
+			if (is_hpf(spawn))
+				rep_num_match = port_num == UINT16_MAX;
+			else
+				rep_num_match = port_num == spawn->info.port_name;
+
+			if (pf_num_match && rep_num_match)
+				return true;
+		}
+	}
+
+	return false;
+}
+
 /**
  * Check if representor spawn info match devargs.
  *
@@ -1048,50 +1232,29 @@ mlx5_representor_match(struct mlx5_dev_spawn_data *spawn,
 		       struct rte_eth_devargs *eth_da)
 {
 	struct mlx5_switch_info *switch_info = &spawn->info;
-	unsigned int p, f;
-	uint16_t id;
-	uint16_t repr_id = mlx5_representor_id_encode(switch_info,
-						      eth_da->type);
+	unsigned int c;
+	bool ignore_ctrl_num = eth_da->nb_mh_controllers == 0 ||
+			       switch_info->name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK;
 
-	/*
-	 * Assuming Multiport E-Switch device was detected,
-	 * if spawned port is an uplink, check if the port
-	 * was requested through representor devarg.
-	 */
-	if (mlx5_is_probed_port_on_mpesw_device(spawn) &&
-	    switch_info->name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK) {
-		for (p = 0; p < eth_da->nb_ports; ++p)
-			if (switch_info->port_name == eth_da->ports[p])
-				return true;
-		rte_errno = EBUSY;
-		return false;
-	}
 	switch (eth_da->type) {
 	case RTE_ETH_REPRESENTOR_PF:
-		/*
-		 * PF representors provided in devargs translate to uplink ports, but
-		 * if and only if the device is a part of MPESW device.
-		 */
-		if (!mlx5_is_probed_port_on_mpesw_device(spawn)) {
+		if (switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_UPLINK) {
 			rte_errno = EBUSY;
 			return false;
 		}
 		break;
 	case RTE_ETH_REPRESENTOR_SF:
-		if (!(spawn->info.port_name == -1 &&
-		      switch_info->name_type ==
-				MLX5_PHYS_PORT_NAME_TYPE_PFHPF) &&
-		    switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_PFSF) {
+		if (!is_hpf(spawn) &&
+		    switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_PFSF &&
+		    switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_UPLINK) {
 			rte_errno = EBUSY;
 			return false;
 		}
 		break;
 	case RTE_ETH_REPRESENTOR_VF:
-		/* Allows HPF representor index -1 as exception. */
-		if (!(spawn->info.port_name == -1 &&
-		      switch_info->name_type ==
-				MLX5_PHYS_PORT_NAME_TYPE_PFHPF) &&
-		    switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_PFVF) {
+		if (!is_hpf(spawn) &&
+		    switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_PFVF &&
+		    switch_info->name_type != MLX5_PHYS_PORT_NAME_TYPE_UPLINK) {
 			rte_errno = EBUSY;
 			return false;
 		}
@@ -1104,21 +1267,17 @@ mlx5_representor_match(struct mlx5_dev_spawn_data *spawn,
 		DRV_LOG(ERR, "unsupported representor type");
 		return false;
 	}
-	/* Check representor ID: */
-	for (p = 0; p < eth_da->nb_ports; ++p) {
-		if (!mlx5_is_probed_port_on_mpesw_device(spawn) && spawn->pf_bond < 0) {
-			/* For non-LAG mode, allow and ignore pf. */
-			switch_info->pf_num = eth_da->ports[p];
-			repr_id = mlx5_representor_id_encode(switch_info,
-							     eth_da->type);
-		}
-		for (f = 0; f < eth_da->nb_representor_ports; ++f) {
-			id = MLX5_REPRESENTOR_ID
-				(eth_da->ports[p], eth_da->type,
-				 eth_da->representor_ports[f]);
-			if (repr_id == id)
+	if (!ignore_ctrl_num) {
+		for (c = 0; c < eth_da->nb_mh_controllers; ++c) {
+			uint16_t ctrl_num = eth_da->mh_controllers[c];
+
+			if (spawn->info.ctrl_num == ctrl_num &&
+			    representor_match_port(spawn, eth_da))
 				return true;
 		}
+	} else {
+		if (representor_match_port(spawn, eth_da))
+			return true;
 	}
 	rte_errno = EBUSY;
 	return false;
@@ -1170,44 +1329,12 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	    !mlx5_representor_match(spawn, eth_da))
 		return NULL;
 	/* Build device name. */
-	if (spawn->pf_bond >= 0) {
-		/* Bonding device. */
-		if (!switch_info->representor) {
-			err = snprintf(name, sizeof(name), "%s_%s",
-				       dpdk_dev->name, spawn->phys_dev_name);
-		} else {
-			err = snprintf(name, sizeof(name), "%s_%s_representor_c%dpf%d%s%u",
-				dpdk_dev->name, spawn->phys_dev_name,
-				switch_info->ctrl_num,
-				switch_info->pf_num,
-				switch_info->name_type ==
-				MLX5_PHYS_PORT_NAME_TYPE_PFSF ? "sf" : "vf",
-				switch_info->port_name);
-		}
-	} else if (mlx5_is_probed_port_on_mpesw_device(spawn)) {
-		/* MPESW device. */
-		if (switch_info->name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK) {
-			err = snprintf(name, sizeof(name), "%s_p%d",
-				       dpdk_dev->name, spawn->mpesw_port);
-		} else {
-			err = snprintf(name, sizeof(name), "%s_representor_c%dpf%d%s%u",
-				dpdk_dev->name,
-				switch_info->ctrl_num,
-				switch_info->pf_num,
-				switch_info->name_type ==
-				MLX5_PHYS_PORT_NAME_TYPE_PFSF ? "sf" : "vf",
-				switch_info->port_name);
-		}
-	} else {
-		/* Single device. */
-		if (!switch_info->representor)
-			strlcpy(name, dpdk_dev->name, sizeof(name));
-		else
-			err = snprintf(name, sizeof(name), "%s_representor_%s%u",
-				 dpdk_dev->name,
-				 switch_info->name_type ==
-				 MLX5_PHYS_PORT_NAME_TYPE_PFSF ? "sf" : "vf",
-				 switch_info->port_name);
+	err = build_port_name(dpdk_dev, spawn, name, sizeof(name));
+	if (err < 0) {
+		DRV_LOG(ERR, "Failed to build port name for IB device %s/%u",
+			spawn->phys_dev_name, spawn->phys_port);
+		rte_errno = EINVAL;
+		return NULL;
 	}
 	if (err >= (int)sizeof(name))
 		DRV_LOG(WARNING, "device name overflow %s", name);
@@ -1334,7 +1461,6 @@ err_secondary:
 	priv->sh = sh;
 	priv->dev_port = spawn->phys_port;
 	priv->pci_dev = spawn->pci_dev;
-	priv->mtu = RTE_ETHER_MTU;
 	/* Some internal functions rely on Netlink sockets, open them now. */
 	priv->nl_socket_rdma = nl_rdma;
 	priv->nl_socket_route =	mlx5_nl_init(NETLINK_ROUTE, 0);
@@ -1593,7 +1719,7 @@ err_secondary:
 	DRV_LOG(INFO,
 		"port %u MAC address is " RTE_ETHER_ADDR_PRT_FMT,
 		eth_dev->data->port_id, RTE_ETHER_ADDR_BYTES(&mac));
-#ifdef RTE_LIBRTE_MLX5_DEBUG
+#ifdef RTE_PMD_MLX5_DEBUG
 	{
 		char ifname[MLX5_NAMESIZE];
 
@@ -1606,14 +1732,13 @@ err_secondary:
 	}
 #endif
 	/* Get actual MTU if possible. */
-	err = mlx5_get_mtu(eth_dev, &priv->mtu);
+	err = mlx5_get_mtu(eth_dev, &eth_dev->data->mtu);
 	if (err) {
 		err = rte_errno;
 		goto error;
 	}
-	eth_dev->data->mtu = priv->mtu;
 	DRV_LOG(DEBUG, "port %u MTU is %u", eth_dev->data->port_id,
-		priv->mtu);
+		eth_dev->data->mtu);
 	/* Initialize burst functions to prevent crashes before link-up. */
 	eth_dev->rx_pkt_burst = rte_eth_pkt_burst_dummy;
 	eth_dev->tx_pkt_burst = rte_eth_pkt_burst_dummy;
@@ -1662,7 +1787,7 @@ err_secondary:
 	/* Create context for virtual machine VLAN workaround. */
 	priv->vmwa_context = mlx5_vlan_vmwa_init(eth_dev, spawn->ifindex);
 	if (mlx5_devx_obj_ops_en(sh)) {
-		priv->obj_ops = devx_obj_ops;
+		priv->obj_ops = mlx5_devx_obj_ops;
 		mlx5_queue_counter_id_prepare(eth_dev);
 		priv->obj_ops.lb_dummy_queue_create =
 					mlx5_rxq_ibv_obj_dummy_lb_create;
@@ -1674,7 +1799,7 @@ err_secondary:
 		err = ENOTSUP;
 		goto error;
 	} else {
-		priv->obj_ops = ibv_obj_ops;
+		priv->obj_ops = mlx5_ibv_obj_ops;
 	}
 	if (sh->config.tx_pp &&
 	    priv->obj_ops.txq_obj_new != mlx5_txq_devx_obj_new) {
@@ -1771,7 +1896,7 @@ err_secondary:
 			}
 		}
 		if (priv->vport_meta_mask)
-			flow_hw_set_port_info(eth_dev);
+			mlx5_flow_hw_set_port_info(eth_dev);
 		if (priv->sh->config.dv_esw_en &&
 		    priv->sh->config.dv_xmeta_en != MLX5_XMETA_MODE_LEGACY &&
 		    priv->sh->config.dv_xmeta_en != MLX5_XMETA_MODE_META32_HWS) {
@@ -1782,7 +1907,7 @@ err_secondary:
 				goto error;
 		}
 		if (priv->sh->config.dv_esw_en &&
-		    flow_hw_create_vport_action(eth_dev)) {
+		    mlx5_flow_hw_create_vport_action(eth_dev)) {
 			DRV_LOG(ERR, "port %u failed to create vport action",
 				eth_dev->data->port_id);
 			err = EINVAL;
@@ -1823,7 +1948,7 @@ error:
 		    priv->sh &&
 		    priv->sh->config.dv_flow_en == 2 &&
 		    priv->sh->config.dv_esw_en)
-			flow_hw_destroy_vport_action(eth_dev);
+			mlx5_flow_hw_destroy_vport_action(eth_dev);
 #endif
 		if (priv->sh)
 			mlx5_os_free_shared_dr(priv);
@@ -1831,6 +1956,11 @@ error:
 			close(priv->nl_socket_route);
 		if (priv->vmwa_context)
 			mlx5_vlan_vmwa_exit(priv->vmwa_context);
+		for (i = 0; i < MLX5_FLOW_TYPE_MAXI; i++) {
+			if (!priv->flows[i])
+				continue;
+			mlx5_ipool_destroy(priv->flows[i]);
+		}
 		if (eth_dev && priv->drop_queue.hrxq)
 			mlx5_drop_action_destroy(eth_dev);
 		if (priv->mtr_profile_tbl)
@@ -1910,8 +2040,8 @@ mlx5_dev_spawn_data_cmp(const void *a, const void *b)
 /**
  * Match PCI information for possible slaves of bonding device.
  *
- * @param[in] ibdev_name
- *   Name of Infiniband device.
+ * @param[in] ibdev
+ *   Pointer to IB device.
  * @param[in] pci_dev
  *   Pointer to primary PCI address structure to match.
  * @param[in] nl_rdma
@@ -1928,7 +2058,7 @@ mlx5_dev_spawn_data_cmp(const void *a, const void *b)
  *   positive index of slave PF in bonding.
  */
 static int
-mlx5_device_bond_pci_match(const char *ibdev_name,
+mlx5_device_bond_pci_match(const struct ibv_device *ibdev,
 			   const struct rte_pci_addr *pci_dev,
 			   int nl_rdma, uint16_t owner,
 			   struct mlx5_dev_info *dev_info,
@@ -1950,9 +2080,9 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 	memset(bond_info, 0, sizeof(*bond_info));
 	if (nl_rdma < 0)
 		return -1;
-	if (!strstr(ibdev_name, "bond"))
+	if (!mlx5_os_is_device_bond(ibdev))
 		return -1;
-	np = mlx5_nl_portnum(nl_rdma, ibdev_name, dev_info);
+	np = mlx5_nl_portnum(nl_rdma, ibdev->name, dev_info);
 	if (!np)
 		return -1;
 	if (mlx5_get_device_guid(pci_dev, cur_guid, sizeof(cur_guid)) < 0)
@@ -1964,7 +2094,7 @@ mlx5_device_bond_pci_match(const char *ibdev_name,
 	 */
 	for (i = 1; i <= np; ++i) {
 		/* Check whether Infiniband port is populated. */
-		ifindex = mlx5_nl_ifindex(nl_rdma, ibdev_name, i, dev_info);
+		ifindex = mlx5_nl_ifindex(nl_rdma, ibdev->name, i, dev_info);
 		if (!ifindex)
 			continue;
 		if (!if_indextoname(ifindex, ifname))
@@ -2279,10 +2409,45 @@ mlx5_device_mpesw_pci_match(struct ibv_device *ibv,
 	return -1;
 }
 
-static inline bool
-mlx5_ignore_pf_representor(const struct rte_eth_devargs *eth_da)
+static void
+calc_nb_uplinks_hpfs(struct ibv_device **ibv_match,
+		     unsigned int nd,
+		     struct mlx5_dev_spawn_data *list,
+		     unsigned int ns)
 {
-	return (eth_da->flags & RTE_ETH_DEVARG_REPRESENTOR_IGNORE_PF) != 0;
+	for (unsigned int i = 0; i != nd; i++) {
+		uint32_t nb_uplinks = 0;
+		uint32_t nb_hpfs = 0;
+		uint32_t j;
+
+		for (unsigned int j = 0; j != ns; j++) {
+			if (strcmp(ibv_match[i]->name, list[j].phys_dev_name) != 0)
+				continue;
+
+			if (list[j].info.name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK)
+				nb_uplinks++;
+			else if (list[j].info.name_type == MLX5_PHYS_PORT_NAME_TYPE_PFHPF)
+				nb_hpfs++;
+		}
+
+		if (nb_uplinks > 0 || nb_hpfs > 0) {
+			for (j = 0; j != ns; j++) {
+				if (strcmp(ibv_match[i]->name, list[j].phys_dev_name) != 0)
+					continue;
+
+				list[j].nb_uplinks = nb_uplinks;
+				list[j].nb_hpfs = nb_hpfs;
+			}
+
+			DRV_LOG(DEBUG, "IB device %s has %u uplinks, %u host PFs",
+				ibv_match[i]->name,
+				nb_uplinks,
+				nb_hpfs);
+		} else {
+			DRV_LOG(DEBUG, "IB device %s unable to recognize uplinks/host PFs",
+				ibv_match[i]->name);
+		}
+	}
 }
 
 /**
@@ -2378,7 +2543,7 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 			info = &tmp_info[ret];
 		}
 		DRV_LOG(DEBUG, "Checking device \"%s\"", ibv_list[ret]->name);
-		bd = mlx5_device_bond_pci_match(ibv_list[ret]->name, &owner_pci,
+		bd = mlx5_device_bond_pci_match(ibv_list[ret], &owner_pci,
 						nl_rdma, owner_id,
 						info,
 						&bond_info);
@@ -2593,8 +2758,6 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 					if (list[ns].info.port_name == mpesw) {
 						list[ns].info.master = 1;
 						list[ns].info.representor = 0;
-					} else if (mlx5_ignore_pf_representor(&eth_da)) {
-						continue;
 					} else {
 						list[ns].info.master = 0;
 						list[ns].info.representor = 1;
@@ -2611,17 +2774,14 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 				case MLX5_PHYS_PORT_NAME_TYPE_PFHPF:
 				case MLX5_PHYS_PORT_NAME_TYPE_PFVF:
 				case MLX5_PHYS_PORT_NAME_TYPE_PFSF:
-					/* Only spawn representors related to the probed PF. */
-					if (list[ns].info.pf_num == owner_id) {
-						/*
-						 * Ports of this type have PF index encoded in name,
-						 * which translate to the related uplink port index.
-						 */
-						list[ns].mpesw_port = list[ns].info.pf_num;
-						/* MPESW owner is also saved but not used now. */
-						list[ns].info.mpesw_owner = mpesw;
-						ns++;
-					}
+					/*
+					 * Ports of this type have PF index encoded in name,
+					 * which translate to the related uplink port index.
+					 */
+					list[ns].mpesw_port = list[ns].info.pf_num;
+					/* MPESW owner is also saved but not used now. */
+					list[ns].info.mpesw_owner = mpesw;
+					ns++;
 					break;
 				default:
 					break;
@@ -2755,6 +2915,8 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 		}
 	}
 	MLX5_ASSERT(ns);
+	/* Calculate number of uplinks and host PFs for each matched IB device. */
+	calc_nb_uplinks_hpfs(ibv_match, nd, list, ns);
 	/*
 	 * Sort list to probe devices in natural order for users convenience
 	 * (i.e. master first, then representors from lowest to highest ID).
@@ -2762,16 +2924,12 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 	qsort(list, ns, sizeof(*list), mlx5_dev_spawn_data_cmp);
 	if (eth_da.type != RTE_ETH_REPRESENTOR_NONE) {
 		/* Set devargs default values. */
-		if (eth_da.nb_mh_controllers == 0) {
-			eth_da.nb_mh_controllers = 1;
-			eth_da.mh_controllers[0] = 0;
-		}
 		if (eth_da.nb_ports == 0 && ns > 0) {
 			if (list[0].pf_bond >= 0 && list[0].info.representor)
 				DRV_LOG(WARNING, "Representor on Bonding device should use pf#vf# syntax: %s",
 					pci_dev->device.devargs->args);
 			eth_da.nb_ports = 1;
-			eth_da.ports[0] = list[0].info.pf_num;
+			eth_da.ports[0] = list[0].info.port_name;
 		}
 		if (eth_da.nb_representor_ports == 0) {
 			eth_da.nb_representor_ports = 1;
@@ -3352,4 +3510,102 @@ mlx5_os_mac_addr_flush(struct rte_eth_dev *dev)
 	mlx5_nl_mac_addr_flush(priv->nl_socket_route, mlx5_ifindex(dev),
 			       dev->data->mac_addrs,
 			       MLX5_MAX_MAC_ADDRESSES, priv->mac_own, vf);
+}
+
+static bool
+mlx5_hws_is_supported(struct mlx5_dev_ctx_shared *sh)
+{
+	return (sh->cdev->config.devx &&
+	       sh->cdev->config.hca_attr.wqe_based_flow_table_sup);
+}
+
+static bool
+mlx5_sws_is_any_supported(struct mlx5_dev_ctx_shared *sh)
+{
+	struct mlx5_common_device *cdev = sh->cdev;
+	struct mlx5_hca_attr *hca_attr = &cdev->config.hca_attr;
+
+	if (hca_attr->rx_sw_owner_v2 || hca_attr->rx_sw_owner)
+		return true;
+
+	if (hca_attr->tx_sw_owner_v2 || hca_attr->tx_sw_owner)
+		return true;
+
+	if (hca_attr->eswitch_manager && (hca_attr->esw_sw_owner_v2 || hca_attr->esw_sw_owner))
+		return true;
+
+	return false;
+}
+
+/**
+ * Initialize default shared configuration for arguments related to flow engine.
+ *
+ * @param[in] sh
+ *   Pointer to shared configuration.
+ * @param[in] sh
+ *   Pointer to shared device context.
+ */
+void
+mlx5_os_default_flow_config(struct mlx5_sh_config *config, struct mlx5_dev_ctx_shared *sh)
+{
+	bool hws_is_supported = mlx5_hws_is_supported(sh);
+	bool sws_is_supported = mlx5_sws_is_any_supported(sh);
+
+	if (!sws_is_supported && hws_is_supported)
+		config->dv_flow_en = 2;
+	else
+		config->dv_flow_en = 1;
+
+	if (config->dv_flow_en == 2)
+		config->allow_duplicate_pattern = 0;
+	else
+		config->allow_duplicate_pattern = 1;
+}
+
+static bool
+mlx5_kvargs_is_used(struct mlx5_kvargs_ctrl *mkvlist, const char *key)
+{
+	const struct rte_kvargs_pair *pair;
+	uint32_t i;
+
+	for (i = 0; i < mkvlist->kvlist->count; ++i) {
+		pair = &mkvlist->kvlist->pairs[i];
+		if (strcmp(pair->key, key) == 0 && mkvlist->is_used[i])
+			return true;
+	}
+	return false;
+}
+
+void mlx5_os_fixup_flow_en(struct mlx5_sh_config *config,
+			   struct mlx5_dev_ctx_shared *sh)
+{
+	bool hws_is_supported = mlx5_hws_is_supported(sh);
+	bool sws_is_supported = mlx5_sws_is_any_supported(sh);
+
+	/* Inform user if DV flow is not supported. */
+	if (config->dv_flow_en == 1 && !sws_is_supported && hws_is_supported) {
+		DRV_LOG(WARNING, "DV flow is not supported. Changing to HWS mode.");
+		config->dv_flow_en = 2;
+	}
+}
+
+void
+mlx5_os_fixup_duplicate_pattern(struct mlx5_sh_config *config,
+				struct mlx5_kvargs_ctrl *mkvlist,
+				const char *key)
+{
+	/* Handle allow_duplicate_pattern based on final dv_flow_en mode.
+	 * HWS mode (dv_flow_en=2) doesn't support duplicate patterns.
+	 * Warn only if user explicitly requested an incompatible setting.
+	 */
+	bool allow_dup_pattern_set = mkvlist != NULL &&
+		mlx5_kvargs_is_used(mkvlist, key);
+	if (config->dv_flow_en == 2) {
+		if (config->allow_duplicate_pattern == 1 && allow_dup_pattern_set)
+			DRV_LOG(WARNING, "Duplicate pattern is not supported with HWS. Disabling it.");
+		config->allow_duplicate_pattern = 0;
+	} else if (!allow_dup_pattern_set) {
+		/* Non-HWS mode: set default to 1 only if not explicitly set by user */
+		config->allow_duplicate_pattern = 1;
+	}
 }

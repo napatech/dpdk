@@ -99,70 +99,17 @@ The full list of in-tree and out-of-tree Linux kernel drivers from kernel.org
 and Linux distributions that were tested and verified
 are listed in the Tested Platforms section of the Release Notes for each release.
 
-For X710/XL710/XXV710,
+============  =====================  ================  ===============
+DPDK version  Kernel driver version  X710* FW version  X722 FW version
+============  =====================  ================  ===============
+   26.03             2.28.16               9.56             6.51
+   25.11             2.28.13               9.55             6.51
+   24.11             2.26.8                9.52             6.50
+   23.11             2.23.17               9.30             6.20
+   22.11             2.20.12               9.01             6.00
+============  =====================  ================  ===============
 
-   +--------------+-----------------------+------------------+
-   | DPDK version | Kernel driver version | Firmware version |
-   +==============+=======================+==================+
-   |    25.11     |         2.28.13       |       9.55       |
-   +--------------+-----------------------+------------------+
-   |    25.07     |         2.28.7        |       9.54       |
-   +--------------+-----------------------+------------------+
-   |    25.03     |         2.27.8        |       9.53       |
-   +--------------+-----------------------+------------------+
-   |    24.11     |         2.26.8        |       9.52       |
-   +--------------+-----------------------+------------------+
-   |    24.07     |         2.25.9        |       9.50       |
-   +--------------+-----------------------+------------------+
-   |    24.03     |         2.24.6        |       9.40       |
-   +--------------+-----------------------+------------------+
-   |    23.11     |         2.23.17       |       9.30       |
-   +--------------+-----------------------+------------------+
-   |    23.07     |         2.22.20       |       9.20       |
-   +--------------+-----------------------+------------------+
-   |    23.03     |         2.22.18       |       9.20       |
-   +--------------+-----------------------+------------------+
-   |    22.11     |         2.20.12       |       9.01       |
-   +--------------+-----------------------+------------------+
-   |    22.07     |         2.19.3        |       8.70       |
-   +--------------+-----------------------+------------------+
-   |    22.03     |         2.17.15       |       8.30       |
-   +--------------+-----------------------+------------------+
-   |    21.11     |         2.17.4        |       8.30       |
-   +--------------+-----------------------+------------------+
-
-
-For X722,
-
-   +--------------+-----------------------+------------------+
-   | DPDK version | Kernel driver version | Firmware version |
-   +==============+=======================+==================+
-   |    25.11     |         2.28.13       |       6.51       |
-   +--------------+-----------------------+------------------+
-   |    25.07     |         2.28.7        |       6.50       |
-   +--------------+-----------------------+------------------+
-   |    25.03     |         2.27.8        |       6.50       |
-   +--------------+-----------------------+------------------+
-   |    24.11     |         2.26.8        |       6.50       |
-   +--------------+-----------------------+------------------+
-   |    24.07     |         2.25.9        |       6.50       |
-   +--------------+-----------------------+------------------+
-   |    24.03     |         2.24.6        |       6.20       |
-   +--------------+-----------------------+------------------+
-   |    23.11     |         2.23.17       |       6.20       |
-   +--------------+-----------------------+------------------+
-   |    23.07     |         2.22.20       |       6.20       |
-   +--------------+-----------------------+------------------+
-   |    23.03     |         2.22.18       |       6.20       |
-   +--------------+-----------------------+------------------+
-   |    22.11     |         2.20.12       |       6.00       |
-   +--------------+-----------------------+------------------+
-   |    22.07     |         2.19.3        |       5.60       |
-   +--------------+-----------------------+------------------+
-   |    22.03     |         2.17.15       |       5.50       |
-   +--------------+-----------------------+------------------+
-   |    21.11     |         2.17.4        |       5.30       |
-   +--------------+-----------------------+------------------+
+   * The X710 FW version is also applicable for XL710 and XXV710.
 
 
 Configuration
@@ -244,6 +191,25 @@ Runtime Configuration
   * ``size``: Check min/max packet length according to HW spec.
   * ``segment``: Check number of mbuf segments not exceed hw limitation.
   * ``offload``: Check any unsupported offload flag.
+
+QinQ Configuration
+~~~~~~~~~~~~~~~~~~
+
+When using QinQ Tx offload (``RTE_ETH_TX_OFFLOAD_QINQ_INSERT``),
+you must also enable ``RTE_ETH_RX_OFFLOAD_VLAN_EXTEND``
+to configure the hardware for double VLAN mode.
+Without this, only the inner VLAN tag will be inserted.
+
+Example::
+
+  struct rte_eth_conf port_conf = {
+      .rxmode = {
+          .offloads = RTE_ETH_RX_OFFLOAD_VLAN_EXTEND,
+      },
+      .txmode = {
+          .offloads = RTE_ETH_TX_OFFLOAD_QINQ_INSERT,
+      },
+  };
 
 Vector RX Pre-conditions
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -357,7 +323,40 @@ To start ``testpmd``, and add vlan 10 to port 0:
     ...
 
     testpmd> set promisc 0 off
+    testpmd> vlan set filter on 0
     testpmd> rx_vlan add 10 0
+
+
+QinQ strip
+~~~~~~~~~~
+
+QinQ TPID is set as 0x8100 IEEE 802.1Q by default.
+For QinQ strip with TPID 0x88A8 IEEE 802.1ad,
+extend VLAN is enabled and VLAN outer TPID is set to 0x88A8.
+VLAN filter steps can be added before or after.
+
+To start ``testpmd``, and enable QinQ strip for TPID 0x88A8 on port 0:
+
+.. code-block:: console
+
+   ./<build_dir>/app/dpdk-testpmd -l 0-15 -- -i --forward-mode=mac
+   ...
+
+   testpmd> vlan set extend on 0
+   testpmd> vlan set outer tpid 0x88A8 0
+   testpmd> vlan set qinq_strip on 0
+
+For QinQ strip with TPID 0x8100, extend VLAN is enabled only.
+
+To start ``testpmd``, and enable QinQ strip for default TPID on port 0:
+
+.. code-block:: console
+
+   ./<build_dir>/app/dpdk-testpmd -l 0-15 -- -i --forward-mode=mac
+   ...
+
+   testpmd> vlan set extend on 0
+   testpmd> vlan set qinq_strip on 0
 
 
 Flow Director
@@ -384,12 +383,12 @@ The default input set of each flow type is::
 
 The flex payload is selected from offset 0 to 15 of packet's payload by default, while it is masked out from matching.
 
-Start ``testpmd`` with ``--disable-rss`` and ``--pkt-filter-mode=perfect``:
+Start ``testpmd`` with ``--disable-rss``:
 
 .. code-block:: console
 
    ./<build_dir>/app/dpdk-testpmd -l 0-15 -- -i --disable-rss \
-                 --pkt-filter-mode=perfect --rxq=8 --txq=8 --nb-cores=8 \
+                 --rxq=8 --txq=8 --nb-cores=8 \
                  --nb-ports=1
 
 Add a rule to direct ``ipv4-udp`` packet whose ``dst_ip=2.2.2.5, src_ip=2.2.2.3, src_port=32, dst_port=32`` to queue 1:
@@ -919,10 +918,7 @@ Vlan related Features miss when FW >= 8.4
 
 If FW version >= 8.4, there'll be some Vlan related issues:
 
-#. TCI input set for QinQ  is invalid.
-#. Fail to configure TPID for QinQ.
-#. Need to enable QinQ before enabling Vlan filter.
-#. Fail to strip outer Vlan.
+#. TCI input set for QinQ is invalid.
 
 Example of getting best performance with l3fwd example
 ------------------------------------------------------

@@ -277,7 +277,7 @@ F: lib/eal/include/rte_bitmap.h
 F: app/test/test_bitmap.c
 
 MCSlock
-M: Honnappa Nagarahalli <honnappa.nagarahalli@arm.com>
+M: Wathsala Vithanage <wathsala.vithanage@arm.com>
 F: lib/eal/include/rte_mcslock.h
 F: app/test/test_mcslock.c
 
@@ -412,8 +412,8 @@ F: app/test/test_mempool*
 F: app/test/test_func_reentrancy.c
 
 Ring queue
-M: Honnappa Nagarahalli <honnappa.nagarahalli@arm.com>
 M: Konstantin Ananyev <konstantin.v.ananyev@yandex.ru>
+M: Wathsala Vithanage <wathsala.vithanage@arm.com>
 F: lib/ring/
 F: doc/guides/prog_guide/ring_lib.rst
 F: app/test/test_ring*
@@ -721,8 +721,8 @@ F: doc/guides/nics/ark.rst
 F: doc/guides/nics/features/ark.ini
 
 Broadcom bnxt
+M: Kishore Padmanabha <kishore.padmanabha@broadcom.com>
 M: Ajit Khaparde <ajit.khaparde@broadcom.com>
-M: Somnath Kotur <somnath.kotur@broadcom.com>
 T: git://dpdk.org/next/dpdk-next-net-brcm
 F: drivers/net/bnxt/
 F: doc/guides/nics/bnxt.rst
@@ -773,7 +773,6 @@ F: doc/guides/nics/hns3.rst
 F: doc/guides/nics/features/hns3.ini
 
 Huawei hinic
-M: Ziyang Xuan <xuanziyang2@huawei.com>
 M: Xiaoyun Wang <cloud.wangxiaoyun@huawei.com>
 F: drivers/net/hinic/
 F: doc/guides/nics/hinic.rst
@@ -1020,7 +1019,6 @@ F: doc/guides/nics/features/rnp.ini
 
 Nebulamatrix nbl
 M: Dimon Zhao <dimon.zhao@nebula-matrix.com>
-M: Kyo Liu <kyo.liu@nebula-matrix.com>
 M: Leon Yu <leon.yu@nebula-matrix.com>
 M: Sam Chen <sam.chen@nebula-matrix.com>
 F: drivers/net/nbl/
@@ -1052,7 +1050,6 @@ F: doc/guides/nics/features/ngbe.ini
 
 Wangxun txgbe
 M: Jiawen Wu <jiawenwu@trustnetic.com>
-M: Jian Wang <jianwang@trustnetic.com>
 M: Zaiyu Wang <zaiyuwang@trustnetic.com>
 F: drivers/net/txgbe/
 F: doc/guides/nics/txgbe.rst
@@ -1120,7 +1117,7 @@ F: doc/guides/nics/features/zxdh.ini
 
 PCAP PMD
 F: drivers/net/pcap/
-F: doc/guides/nics/pcap_ring.rst
+F: doc/guides/nics/pcap.rst
 F: doc/guides/nics/features/pcap.ini
 
 Tap PMD
@@ -1128,11 +1125,12 @@ M: Stephen Hemminger <stephen@networkplumber.org>
 F: drivers/net/tap/
 F: doc/guides/nics/tap.rst
 F: doc/guides/nics/features/tap.ini
+F: app/test/test_pmd_tap.c
 
 Ring PMD
 M: Bruce Richardson <bruce.richardson@intel.com>
 F: drivers/net/ring/
-F: doc/guides/nics/pcap_ring.rst
+F: doc/guides/nics/ring.rst
 F: app/test/test_pmd_ring.c
 F: app/test/test_pmd_ring_perf.c
 
@@ -1331,7 +1329,6 @@ F: drivers/compress/qat/
 F: drivers/common/qat/
 
 ISA-L
-M: Lee Daly <lee.daly@intel.com>
 M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 F: drivers/compress/isal/
 F: doc/guides/compressdevs/isal.rst
@@ -1677,7 +1674,6 @@ F: doc/guides/prog_guide/pdcp_lib.rst
 F: app/test/test_pdcp*
 
 Distributor
-M: David Hunt <david.hunt@intel.com>
 F: lib/distributor/
 F: doc/guides/prog_guide/packet_distrib_lib.rst
 F: app/test/test_distributor*
@@ -1743,7 +1739,6 @@ F: app/test-acl/
 F: app/test/test_acl.*
 
 EFD
-M: Byron Marohn <byron.marohn@intel.com>
 M: Yipeng Wang <yipeng1.wang@intel.com>
 F: lib/efd/
 F: doc/guides/prog_guide/efd_lib.rst
@@ -1844,7 +1839,6 @@ F: doc/guides/prog_guide/ptr_compress_lib.rst
 
 Power management
 M: Anatoly Burakov <anatoly.burakov@intel.com>
-M: David Hunt <david.hunt@intel.com>
 M: Sivaprasad Tummala <sivaprasad.tummala@amd.com>
 F: lib/power/
 F: doc/guides/prog_guide/power_man.rst
@@ -1904,6 +1898,7 @@ F: doc/guides/howto/telemetry.rst
 
 BPF
 M: Konstantin Ananyev <konstantin.v.ananyev@yandex.ru>
+M: Marat Khalili <marat.khalili@huawei.com>
 F: lib/bpf/
 F: examples/bpf/
 F: app/test/test_bpf.c
@@ -2011,6 +2006,7 @@ T: git://dpdk.org/next/dpdk-next-dts
 F: dts/
 F: buildtools/check-dts-requirements.py
 F: devtools/dts-check-format.sh
+F: devtools/dts-check-docstrings.py
 F: doc/guides/tools/dts.rst
 
 

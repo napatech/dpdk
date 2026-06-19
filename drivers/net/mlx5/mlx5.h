@@ -37,10 +37,9 @@
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 #ifndef RTE_EXEC_ENV_WINDOWS
 #define HAVE_MLX5_HWS_SUPPORT 1
-#else
-#define __be64 uint64_t
 #endif
 #include "hws/mlx5dr.h"
+#include "mlx5_hws_global_actions.h"
 #endif
 
 #define MLX5_SH(dev) (((struct mlx5_priv *)(dev)->data->dev_private)->sh)
@@ -215,6 +214,8 @@ struct mlx5_dev_cap {
 struct mlx5_dev_spawn_data {
 	uint32_t ifindex; /**< Network interface index. */
 	uint32_t max_port; /**< Device maximal port index. */
+	uint32_t nb_uplinks; /**< Number of uplinks associated with IB device. */
+	uint32_t nb_hpfs; /**< Number of host PFs associated with IB device. */
 	uint32_t phys_port; /**< Device physical port index. */
 	int pf_bond; /**< bonding device PF index. < 0 - no bonding */
 	int mpesw_port; /**< MPESW uplink index. Valid if mpesw_owner_port >= 0. */
@@ -1472,7 +1473,8 @@ struct mlx5_flex_item {
 };
 
 /*
- * Sample an IPv6 address and the first dword of SRv6 header.
+ * Sample IPv6 address in the first segment list
+ * and the first dword of SRv6 header.
  * Then it is 16 + 4 = 20 bytes which is 5 dwords.
  */
 #define MLX5_SRV6_SAMPLE_NUM 5
@@ -1983,7 +1985,6 @@ struct mlx5_priv {
 	uint16_t vlan_filter[MLX5_MAX_VLAN_IDS]; /* VLAN filters table. */
 	unsigned int vlan_filter_n; /* Number of configured VLAN filters. */
 	/* Device properties. */
-	uint16_t mtu; /* Configured MTU. */
 	uint16_t min_mtu; /* Minimum MTU allowed on the NIC. */
 	uint16_t max_mtu; /* Maximum MTU allowed on the NIC. */
 	unsigned int isolated:1; /* Whether isolated mode is enabled. */
@@ -2111,17 +2112,9 @@ struct mlx5_priv {
 	LIST_HEAD(flow_hw_tbl, rte_flow_template_table) flow_hw_tbl;
 	/* HW steering rte flow group list header */
 	LIST_HEAD(flow_hw_grp, mlx5_flow_group) flow_hw_grp;
-	struct mlx5dr_action *hw_push_vlan[MLX5DR_TABLE_TYPE_MAX];
-	struct mlx5dr_action *hw_pop_vlan[MLX5DR_TABLE_TYPE_MAX];
 	struct mlx5dr_action **hw_vport;
-	/* HW steering global drop action. */
-	struct mlx5dr_action *hw_drop[2];
-	/* HW steering global tag action. */
-	struct mlx5dr_action *hw_tag[2];
-	/* HW steering global default miss action. */
-	struct mlx5dr_action *hw_def_miss;
-	/* HW steering global send to kernel action. */
-	struct mlx5dr_action *hw_send_to_kernel[MLX5DR_TABLE_TYPE_MAX];
+	/* HWS global actions. */
+	struct mlx5_hws_global_actions hw_global_actions;
 	/* HW steering create ongoing rte flow table list header. */
 	LIST_HEAD(flow_hw_tbl_ongo, rte_flow_template_table) flow_hw_tbl_ongo;
 	struct mlx5_indexed_pool *acts_ipool; /* Action data indexed pool. */
@@ -2134,12 +2127,6 @@ struct mlx5_priv {
 
 	struct rte_flow_actions_template *action_template_drop[MLX5DR_TABLE_TYPE_MAX];
 
-	/*
-	 * The NAT64 action can be shared among matchers per domain.
-	 * [0]: RTE_FLOW_NAT64_6TO4, [1]: RTE_FLOW_NAT64_4TO6
-	 * Todo: consider to add *_MAX macro.
-	 */
-	struct mlx5dr_action *action_nat64[MLX5DR_TABLE_TYPE_MAX][2];
 	struct mlx5_indexed_pool *ptype_rss_groups;
 	struct mlx5_nta_sample_ctx *nta_sample_ctx;
 #endif
@@ -2311,6 +2298,9 @@ struct mlx5_physical_device *
 mlx5_get_locked_physical_device(struct mlx5_priv *priv);
 void mlx5_unlock_physical_device(void);
 int mlx5_read_queue_counter(struct mlx5_devx_obj *q_counter, const char *ctr_name, uint64_t *stat);
+void mlx5_fixup_flow_config(struct mlx5_sh_config *config,
+			    struct mlx5_dev_ctx_shared *sh,
+			    struct mlx5_kvargs_ctrl *mkvlist);
 
 /* mlx5_ethdev.c */
 
@@ -2526,8 +2516,8 @@ int mlx5_counter_query(struct rte_eth_dev *dev, uint32_t cnt,
 		    bool clear, uint64_t *pkts, uint64_t *bytes, void **action);
 int mlx5_flow_dev_dump(struct rte_eth_dev *dev, struct rte_flow *flow,
 			FILE *file, struct rte_flow_error *error);
-int save_dump_file(const unsigned char *data, uint32_t size,
-		uint32_t type, uint64_t id, void *arg, FILE *file);
+int mlx5_save_dump_file(const unsigned char *data, uint32_t size,
+			uint32_t type, uint64_t id, void *arg, FILE *file);
 int mlx5_flow_query_counter(struct rte_eth_dev *dev, struct rte_flow *flow,
 	struct rte_flow_query_count *count, struct rte_flow_error *error);
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
@@ -2575,7 +2565,7 @@ int mlx5_flow_meter_ops_get(struct rte_eth_dev *dev, void *arg);
 struct mlx5_flow_meter_info *mlx5_flow_meter_find(struct mlx5_priv *priv,
 		uint32_t meter_id, uint32_t *mtr_idx);
 struct mlx5_flow_meter_info *
-flow_dv_meter_find_by_idx(struct mlx5_priv *priv, uint32_t idx);
+mlx5_flow_dv_meter_find_by_idx(struct mlx5_priv *priv, uint32_t idx);
 int mlx5_flow_meter_attach(struct mlx5_priv *priv,
 			   struct mlx5_flow_meter_info *fm,
 			   const struct rte_flow_attr *attr,
@@ -2618,6 +2608,12 @@ int mlx5_os_set_allmulti(struct rte_eth_dev *dev, int enable);
 int mlx5_os_set_nonblock_channel_fd(int fd);
 void mlx5_os_mac_addr_flush(struct rte_eth_dev *dev);
 void mlx5_os_net_cleanup(void);
+void mlx5_os_default_flow_config(struct mlx5_sh_config *config, struct mlx5_dev_ctx_shared *sh);
+void mlx5_os_fixup_flow_en(struct mlx5_sh_config *config,
+			   struct mlx5_dev_ctx_shared *sh);
+void mlx5_os_fixup_duplicate_pattern(struct mlx5_sh_config *config,
+				     struct mlx5_kvargs_ctrl *mkvlist,
+				     const char *key);
 
 /* mlx5_txpp.c */
 
@@ -2708,12 +2704,12 @@ mlx5_aso_cqe_err_handle(struct mlx5_aso_sq *sq);
 /* mlx5_flow_flex.c */
 
 struct rte_flow_item_flex_handle *
-flow_dv_item_create(struct rte_eth_dev *dev,
-		    const struct rte_flow_item_flex_conf *conf,
-		    struct rte_flow_error *error);
-int flow_dv_item_release(struct rte_eth_dev *dev,
-		    const struct rte_flow_item_flex_handle *flex_handle,
-		    struct rte_flow_error *error);
+mlx5_flow_dv_item_create(struct rte_eth_dev *dev,
+			 const struct rte_flow_item_flex_conf *conf,
+			 struct rte_flow_error *error);
+int mlx5_flow_dv_item_release(struct rte_eth_dev *dev,
+			      const struct rte_flow_item_flex_handle *flex_handle,
+			      struct rte_flow_error *error);
 int mlx5_flex_item_port_init(struct rte_eth_dev *dev);
 void mlx5_flex_item_port_cleanup(struct rte_eth_dev *dev);
 void mlx5_flex_flow_translate_item(struct rte_eth_dev *dev, void *matcher,

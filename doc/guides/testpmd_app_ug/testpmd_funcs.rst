@@ -297,7 +297,7 @@ show config
 Displays the configuration of the application.
 The configuration comes from the command-line, the runtime or the application defaults::
 
-   testpmd> show config (rxtx|cores|fwd|rxoffs|rxpkts|rxhdrs|txpkts|txtimes)
+   testpmd> show config (rxtx|cores|fwd|rxoffs|rxpkts|rxhdrs|txpkts|txtimes|dcbfwdtc)
 
 The available information categories are:
 
@@ -316,6 +316,8 @@ The available information categories are:
 * ``txpkts``: Packets to TX configuration.
 
 * ``txtimes``: Burst time pattern for Tx only mode.
+
+* ``dcbfwdtc``: DCB forwarding TC-related configuration.
 
 For example:
 
@@ -923,6 +925,24 @@ Where:
   (see above).
 
 * ``rand`` same as 'on', but number of segments per each packet is a random value between 1 and total number of segments.
+
+set txonly-flows
+~~~~~~~~~~~~~~~~
+
+Set the number of unique flows per lcore in txonly multi-flow mode::
+
+   testpmd> set txonly-flows <N>
+
+Where ``N`` is the number of unique UDP source port values
+each lcore will cycle through, in the range 1 to 64. Default is 64.
+The UDP port value is in ephemeral range 49152-65535 (RFC 6335).
+The least significant byte of the port is the core ID,
+and the most significant byte cycles through the range of ``N``.
+
+Each lcore generates unique flows
+by combining the flow index with its lcore ID,
+so the total number of unique flows across the system is
+``txonly-flows * active_lcores``.
 
 set corelist
 ~~~~~~~~~~~~

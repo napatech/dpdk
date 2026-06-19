@@ -79,6 +79,11 @@ Runtime Configuration
   Then the PMD will configure Tx queue with single queue mode.
   Otherwise, split queue mode is chosen by default.
 
+  .. note::
+
+     In split queue mode, sharing a completion queue among multiple Tx queues
+     that are serviced by different CPU cores is not supported.
+
 
 Driver compilation and testing
 ------------------------------
@@ -109,3 +114,18 @@ The paths are chosen based on 2 conditions:
   A value "P" means the offload feature is not supported by vector path.
   If any not supported features are used, idpf vector PMD is disabled
   and the scalar paths are chosen.
+
+Time Synchronization
+~~~~~~~~~~~~~~~~~~~~
+
+The system operator can run a PTP (Precision Time Protocol) client application
+to synchronize the time on the network card in ACC
+(and optionally the time on the system) to the PTP primary.
+
+IDPF PMD supports PTP client applications that use the DPDK IEEE 1588 API
+to communicate with the PTP primary clock.
+Note that PTP client application needs to run on PF in ACC.
+
+.. code-block:: console
+
+   examples/dpdk-ptpclient -l 0-3 -n 3 -a 0000:ec:00.1 -- -T 1 -p 0x1

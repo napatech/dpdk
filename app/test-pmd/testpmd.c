@@ -287,6 +287,9 @@ enum tx_pkt_split tx_pkt_split = TX_PKT_SPLIT_OFF;
 uint8_t txonly_multi_flow;
 /**< Whether multiple flows are generated in TXONLY mode. */
 
+uint16_t txonly_flows = 64;
+/**< Number of unique flows per lcore in TXONLY multi-flow mode. */
+
 uint32_t tx_pkt_times_inter;
 /**< Timings for send scheduling in TXONLY mode, time between bursts. */
 
@@ -542,9 +545,17 @@ uint8_t record_core_cycles;
 uint8_t record_burst_stats;
 
 /*
- * Number of ports per shared Rx queue group, 0 disable.
+ * Enable Rx queue sharing between ports in the same switch and Rx domain.
  */
-uint32_t rxq_share;
+uint8_t rxq_share;
+
+struct share_group_slot {
+	uint16_t domain_id;
+	uint16_t rx_domain;
+	uint16_t share_group;
+};
+
+static struct share_group_slot share_group_slots[RTE_MAX_ETHPORTS];
 
 unsigned int num_sockets = 0;
 unsigned int socket_ids[RTE_MAX_NUMA_NODES];
@@ -582,6 +593,64 @@ int proc_id;
  * configure the queues to be polled.
  */
 unsigned int num_procs = 1;
+
+static int
+assign_share_group(struct rte_eth_dev_info *dev_info, uint16_t *share_group)
+{
+	unsigned int first_free = RTE_DIM(share_group_slots);
+	unsigned int i;
+
+	for (i = 0; i < RTE_DIM(share_group_slots); i++) {
+		if (share_group_slots[i].share_group > 0) {
+			if (dev_info->switch_info.domain_id == share_group_slots[i].domain_id &&
+			    dev_info->switch_info.rx_domain == share_group_slots[i].rx_domain) {
+				*share_group = share_group_slots[i].share_group;
+				return 0;
+			}
+		} else if (first_free == RTE_DIM(share_group_slots)) {
+			first_free = i;
+		}
+	}
+
+	if (first_free == RTE_DIM(share_group_slots))
+		return -ENOSPC;
+
+	share_group_slots[first_free].domain_id = dev_info->switch_info.domain_id;
+	share_group_slots[first_free].rx_domain = dev_info->switch_info.rx_domain;
+	share_group_slots[first_free].share_group = first_free + 1;
+	*share_group = share_group_slots[first_free].share_group;
+
+	return 0;
+}
+
+static void
+try_release_share_group(struct share_group_slot *slot)
+{
+	uint16_t pi;
+
+	/* Check if any port still uses this share group. */
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (ports[pi].dev_info.switch_info.domain_id == slot->domain_id &&
+		    ports[pi].dev_info.switch_info.rx_domain == slot->rx_domain) {
+			return;
+		}
+	}
+
+	slot->share_group = 0;
+	slot->domain_id = 0;
+	slot->rx_domain = 0;
+}
+
+static void
+try_release_share_groups(void)
+{
+	unsigned int i;
+
+	/* Try release each used share group. */
+	for (i = 0; i < RTE_DIM(share_group_slots); i++)
+		if (share_group_slots[i].share_group > 0)
+			try_release_share_group(&share_group_slots[i]);
+}
 
 static void
 eth_rx_metadata_negotiate_mp(uint16_t port_id)
@@ -2675,7 +2744,6 @@ rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 	uint32_t prev_hdrs = 0;
 	int ret;
 
-
 	if ((rx_pkt_nb_segs > 1) &&
 	    (rx_conf->offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT)) {
 		/* multi-segment configuration */
@@ -3273,6 +3341,14 @@ remove_invalid_ports(void)
 	remove_invalid_ports_in(ports_ids, &nb_ports);
 	remove_invalid_ports_in(fwd_ports_ids, &nb_fwd_ports);
 	nb_cfg_ports = nb_fwd_ports;
+	try_release_share_groups();
+}
+
+static void
+port_free_job_list(portid_t pi)
+{
+	struct rte_port *port = &ports[pi];
+	free(port->job_list);
 }
 
 static void
@@ -3285,6 +3361,7 @@ flush_port_owned_resources(portid_t pi)
 	port_flow_actions_template_flush(pi);
 	port_flex_item_flush(pi);
 	port_action_handle_flush(pi);
+	port_free_job_list(pi);
 }
 
 static void
@@ -3433,23 +3510,28 @@ convert_pci_address_format(const char *identifier, char *pci_buffer, size_t buf_
 	struct rte_devargs da;
 	struct rte_pci_addr pci_addr;
 	size_t pci_len;
+	char *result = NULL;
 
 	if (rte_devargs_parse(&da, identifier) != 0)
 		return NULL;
 
 	if (da.bus == NULL)
-		return NULL;
+		goto cleanup;
 
 	if (strcmp(rte_bus_name(da.bus), "pci") != 0)
-		return NULL;
+		goto cleanup;
 
 	if (rte_pci_addr_parse(da.name, &pci_addr) != 0)
-		return NULL;
+		goto cleanup;
 
 	rte_pci_device_name(&pci_addr, pci_buffer, buf_size);
 	pci_len = strlen(pci_buffer);
 	snprintf(pci_buffer + pci_len, buf_size - pci_len, ",%s", da.args);
-	return pci_buffer;
+	result = pci_buffer;
+
+cleanup:
+	rte_devargs_reset(&da);
+	return result;
 }
 
 void
@@ -4042,8 +4124,14 @@ rxtx_port_config(portid_t pid)
 		if (rxq_share > 0 &&
 		    (port->dev_info.dev_capa & RTE_ETH_DEV_CAPA_RXQ_SHARE)) {
 			/* Non-zero share group to enable RxQ share. */
-			port->rxq[qid].conf.share_group = pid / rxq_share + 1;
-			port->rxq[qid].conf.share_qid = qid; /* Equal mapping. */
+			uint16_t share_group;
+
+			if (assign_share_group(&port->dev_info, &share_group) == 0) {
+				port->rxq[qid].conf.share_group = share_group;
+				port->rxq[qid].conf.share_qid = qid; /* Equal mapping. */
+			} else {
+				TESTPMD_LOG(INFO, "port %u: failed assigning share group\n", pid);
+			}
 		}
 
 		if (offloads != 0)
@@ -4660,7 +4748,7 @@ main(int argc, char** argv)
 
 #ifdef RTE_LIB_LATENCYSTATS
 	if (latencystats_enabled != 0) {
-		int ret = rte_latencystats_init(1, NULL);
+		ret = rte_latencystats_init(1, NULL);
 		if (ret)
 			fprintf(stderr,
 				"Warning: latencystats init() returned error %d\n",

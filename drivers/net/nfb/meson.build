@@ -16,10 +16,12 @@ ext_deps += dep
 
 sources = files(
         'nfb_ethdev.c',
+        'nfb_vdev.c',
         'nfb_rx.c',
         'nfb_rxmode.c',
         'nfb_stats.c',
         'nfb_tx.c',
+        'nfb_mdio.c',
 )
 
 cflags += no_wvla_cflag

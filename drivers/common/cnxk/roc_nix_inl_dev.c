@@ -212,6 +212,7 @@ nix_inl_inb_queue_setup(struct nix_inl_dev *inl_dev, uint8_t slot_id)
 	cpt_req->slot = slot_id;
 	cpt_req->rx_queue_id = qid;
 	cpt_req->eng_grpmsk = inl_dev->eng_grpmask;
+	cpt_req->pdb_ena = 1;
 	rc = mbox_process(mbox);
 	if (rc) {
 		plt_err("Failed to configure CPT LF for inline processing, rc=%d", rc);
@@ -381,6 +382,7 @@ nix_inl_nix_ipsec_cfg(struct nix_inl_dev *inl_dev, bool ena)
 		struct nix_rx_inl_lf_cfg_req *lf_cfg;
 		uint64_t res_addr_offset;
 		uint64_t def_cptq;
+		uint64_t cpt_cq_ena;
 
 		lf_cfg = mbox_alloc_msg_nix_rx_inl_lf_cfg(mbox);
 		if (lf_cfg == NULL) {
@@ -400,7 +402,9 @@ nix_inl_nix_ipsec_cfg(struct nix_inl_dev *inl_dev, bool ena)
 		lf_cfg->profile_id = inl_dev->ipsec_prof_id;
 		if (ena) {
 			lf_cfg->enable = 1;
-			lf_cfg->rx_inline_sa_base = (uintptr_t)inl_dev->inb_sa_base[profile_id];
+			cpt_cq_ena = (uint64_t)inl_dev->cpt_cq_ena << 63;
+			lf_cfg->rx_inline_sa_base =
+				(uintptr_t)inl_dev->inb_sa_base[profile_id] | (cpt_cq_ena);
 			lf_cfg->rx_inline_cfg0 =
 				((def_cptq << 57) | res_addr_offset |
 				 ((uint64_t)SSO_TT_ORDERED << 44) | (sa_pow2_sz << 16) | lenm1_max);
@@ -481,11 +485,31 @@ nix_inl_cpt_setup(struct nix_inl_dev *inl_dev, bool inl_dev_sso)
 lf_fini:
 	for (i = 0; i < inl_dev->nb_cptlf; i++) {
 		struct roc_cpt_lf *lf = &inl_dev->cpt_lf[i];
-		cpt_lf_fini(lf, lf->cpt_cq_ena);
+		cpt_lf_fini(lf, false);
 	}
 lf_free:
 	rc |= cpt_lfs_free(dev);
 	return rc;
+}
+
+static int
+nix_inl_cpt_cq_inb_release(struct nix_inl_dev *inl_dev)
+{
+	int i;
+
+	if (!inl_dev || !inl_dev->cpt_cq_ena)
+		return 0;
+	for (i = 0; i < inl_dev->nb_inb_cptlfs; i++) {
+		uint8_t slot_id = inl_dev->inb_cpt_lf_id + i;
+		struct roc_cpt_lf *lf = &inl_dev->cpt_lf[slot_id];
+
+		if (lf->cpt_cq_ena) {
+			cpt_lf_cq_fini(lf);
+			cpt_lf_unregister_irqs(lf, cpt_lf_misc_irq, nix_inl_cpt_done_irq);
+		}
+	}
+
+	return 0;
 }
 
 static int
@@ -624,6 +648,7 @@ nix_inl_nix_profile_config(struct nix_inl_dev *inl_dev, uint8_t profile_id)
 	uint64_t max_sa, sa_w, sa_pow2_sz, lenm1_max;
 	struct nix_rx_inl_lf_cfg_req *lf_cfg;
 	uint64_t res_addr_offset;
+	uint64_t cpt_cq_ena;
 	uint64_t def_cptq;
 	size_t inb_sa_sz;
 	void *sa;
@@ -664,7 +689,8 @@ nix_inl_nix_profile_config(struct nix_inl_dev *inl_dev, uint8_t profile_id)
 
 	lf_cfg->enable = 1;
 	lf_cfg->profile_id = profile_id;
-	lf_cfg->rx_inline_sa_base = (uintptr_t)inl_dev->inb_sa_base[profile_id];
+	cpt_cq_ena = (uint64_t)inl_dev->cpt_cq_ena << 63;
+	lf_cfg->rx_inline_sa_base = (uintptr_t)inl_dev->inb_sa_base[profile_id] | cpt_cq_ena;
 	lf_cfg->rx_inline_cfg0 =
 		((def_cptq << 57) | res_addr_offset | ((uint64_t)SSO_TT_ORDERED << 44) |
 		 (sa_pow2_sz << 16) | lenm1_max);
@@ -713,6 +739,42 @@ nix_inl_nix_profile_release(struct nix_inl_dev *inl_dev, uint8_t profile_id)
 exit:
 	mbox_put(mbox);
 	return rc;
+}
+
+static int
+nix_inl_cpt_cq_inb_setup(struct nix_inl_dev *inl_dev)
+{
+	int i, rc;
+
+	if (!inl_dev->cpt_cq_ena)
+		return 0;
+
+	for (i = 0; i < inl_dev->nb_inb_cptlfs; i++) {
+		uint8_t slot_id = inl_dev->inb_cpt_lf_id + i;
+		struct roc_cpt_lf *lf = &inl_dev->cpt_lf[slot_id];
+
+		lf->dq_ack_ena = true;
+		lf->cpt_cq_ena = true;
+		lf->cq_entry_size = 0;
+		lf->cq_all = 0;
+		lf->cq_size = lf->nb_desc;
+		lf->dev = &inl_dev->dev;
+		lf->cq_head = 1;
+
+		rc = cpt_lf_cq_init(lf);
+		if (rc)
+			return rc;
+
+		rc = cpt_lf_register_irqs(lf, cpt_lf_misc_irq, nix_inl_cpt_done_irq);
+		if (rc) {
+			cpt_lf_cq_fini(lf);
+			return rc;
+		}
+
+		roc_cpt_cq_enable(lf);
+	}
+
+	return 0;
 }
 
 static int
@@ -836,12 +898,8 @@ nix_inl_nix_setup(struct nix_inl_dev *inl_dev)
 	/* CN9K SA is different */
 	if (inl_dev->custom_inb_sa)
 		inb_sa_sz = ROC_NIX_INL_INB_CUSTOM_SA_SZ;
-	else if (roc_model_is_cn9k())
-		inb_sa_sz = ROC_NIX_INL_ON_IPSEC_INB_SA_SZ;
-	else if (roc_model_is_cn10k())
-		inb_sa_sz = ROC_NIX_INL_OT_IPSEC_INB_SA_SZ;
 	else
-		inb_sa_sz = ROC_NIX_INL_OW_IPSEC_INB_SA_SZ;
+		inb_sa_sz = ROC_NIX_INL_OT_IPSEC_INB_SA_SZ;
 
 	/* Alloc contiguous memory for Inbound SA's */
 	inl_dev->inb_sa_sz[profile_id] = inb_sa_sz;
@@ -1169,12 +1227,10 @@ inl_outb_soft_exp_poll(struct nix_inl_dev *inl_dev, uint32_t ring_idx)
 						     (entry.s.data0 << 7));
 
 		if (sa != NULL) {
-			uint64_t tmp = ~(uint32_t)0x0;
-			inl_dev->work_cb(&tmp, sa, NIX_INL_SOFT_EXPIRY_THRD, NULL, port_id);
-			__atomic_store_n(ring_base + tail_l + 1, 0ULL,
-					 __ATOMIC_RELAXED);
-			__atomic_fetch_add((uint32_t *)ring_base, 1,
-					   __ATOMIC_ACQ_REL);
+			uint64_t tmp[2];
+			inl_dev->work_cb(tmp, sa, NIX_INL_SOFT_EXPIRY_THRD, NULL, port_id);
+			__atomic_store_n(ring_base + tail_l + 1, 0ULL, __ATOMIC_RELAXED);
+			__atomic_fetch_add((uint32_t *)ring_base, 1, __ATOMIC_ACQ_REL);
 		} else
 			plt_err("Invalid SA");
 
@@ -1456,11 +1512,17 @@ roc_nix_inl_dev_init(struct roc_nix_inl_dev *roc_inl_dev)
 	if (rc)
 		goto sso_release;
 
+	if (roc_feature_nix_has_cpt_cq_support()) {
+		rc = nix_inl_cpt_cq_inb_setup(inl_dev);
+		if (rc)
+			goto cpt_release;
+	}
+
 	/* Setup device specific inb SA table */
 	rc = nix_inl_nix_ipsec_cfg(inl_dev, true);
 	if (rc) {
 		plt_err("Failed to setup NIX Inbound SA conf, rc=%d", rc);
-		goto cpt_release;
+		goto cpt_cq_inb_release;
 	}
 
 	/* Setup Reassembly */
@@ -1469,20 +1531,20 @@ roc_nix_inl_dev_init(struct roc_nix_inl_dev *roc_inl_dev)
 
 		rc = nix_inl_nix_reass_setup(inl_dev);
 		if (rc)
-			goto cpt_release;
+			goto cpt_cq_inb_release;
 	}
 
 	if (inl_dev->set_soft_exp_poll) {
 		rc = nix_inl_outb_poll_thread_setup(inl_dev);
 		if (rc)
-			goto cpt_release;
+			goto cpt_cq_inb_release;
 	}
 
 	/* Perform selftest if asked for */
 	if (inl_dev->selftest) {
 		rc = nix_inl_selftest();
 		if (rc)
-			goto cpt_release;
+			goto cpt_cq_inb_release;
 	}
 	inl_dev->max_ipsec_rules = roc_inl_dev->max_ipsec_rules;
 
@@ -1491,14 +1553,14 @@ roc_nix_inl_dev_init(struct roc_nix_inl_dev *roc_inl_dev)
 			plt_zmalloc(sizeof(int) * inl_dev->max_ipsec_rules, PLT_CACHE_LINE_SIZE);
 		if (inl_dev->ipsec_index == NULL) {
 			rc = NPC_ERR_NO_MEM;
-			goto cpt_release;
+			goto cpt_cq_inb_release;
 		}
 		rc = npc_mcam_alloc_entries(inl_dev->dev.mbox, inl_dev->max_ipsec_rules,
 					    inl_dev->ipsec_index, inl_dev->max_ipsec_rules,
 					    NPC_MCAM_HIGHER_PRIO, &resp_count, 1);
 		if (rc) {
 			plt_free(inl_dev->ipsec_index);
-			goto cpt_release;
+			goto cpt_cq_inb_release;
 		}
 
 		start_index = inl_dev->ipsec_index[0];
@@ -1512,6 +1574,8 @@ roc_nix_inl_dev_init(struct roc_nix_inl_dev *roc_inl_dev)
 	idev->nix_inl_dev = inl_dev;
 
 	return 0;
+cpt_cq_inb_release:
+	rc |= nix_inl_cpt_cq_inb_release(inl_dev);
 cpt_release:
 	rc |= nix_inl_cpt_release(inl_dev);
 sso_release:
@@ -1563,8 +1627,9 @@ roc_nix_inl_dev_fini(struct roc_nix_inl_dev *roc_inl_dev)
 	/* Flush Inbound CTX cache entries */
 	nix_inl_cpt_ctx_cache_sync(inl_dev);
 
+	rc = nix_inl_cpt_cq_inb_release(inl_dev);
 	/* Release CPT */
-	rc = nix_inl_cpt_release(inl_dev);
+	rc |= nix_inl_cpt_release(inl_dev);
 
 	/* Release SSO */
 	rc |= nix_inl_sso_release(inl_dev);

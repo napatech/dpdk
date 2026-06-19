@@ -73,6 +73,8 @@ Device Libraries
     :maxdepth: 1
     :numbered:
 
+    devargs
+    device_hotplug
     ethdev/index
     link_bonding_poll_mode_drv_lib
     vhost_lib

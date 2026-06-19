@@ -8,6 +8,109 @@
 #include <stdint.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
+#include <rte_vect.h>
+
+/* Common TX Descriptor QW1 Field Definitions */
+#define CI_TXD_QW1_DTYPE_S      0
+#define CI_TXD_QW1_DTYPE_M      (0xFUL << CI_TXD_QW1_DTYPE_S)
+#define CI_TXD_QW1_CMD_S        4
+#define CI_TXD_QW1_CMD_M        (0xFFFUL << CI_TXD_QW1_CMD_S)
+#define CI_TXD_QW1_OFFSET_S     16
+#define CI_TXD_QW1_OFFSET_M     (0x3FFFFULL << CI_TXD_QW1_OFFSET_S)
+#define CI_TXD_QW1_TX_BUF_SZ_S  34
+#define CI_TXD_QW1_TX_BUF_SZ_M  (0x3FFFULL << CI_TXD_QW1_TX_BUF_SZ_S)
+#define CI_TXD_QW1_L2TAG1_S     48
+#define CI_TXD_QW1_L2TAG1_M     (0xFFFFULL << CI_TXD_QW1_L2TAG1_S)
+
+/* Common Descriptor Types */
+#define CI_TX_DESC_DTYPE_DATA           0x0
+#define CI_TX_DESC_DTYPE_CTX            0x1
+#define CI_TX_DESC_DTYPE_DESC_DONE      0xF
+
+/* Common TX Descriptor Command Flags */
+#define CI_TX_DESC_CMD_EOP              0x0001
+#define CI_TX_DESC_CMD_RS               0x0002
+#define CI_TX_DESC_CMD_ICRC             0x0004
+#define CI_TX_DESC_CMD_IL2TAG1          0x0008
+#define CI_TX_DESC_CMD_DUMMY            0x0010
+#define CI_TX_DESC_CMD_IIPT_IPV6        0x0020
+#define CI_TX_DESC_CMD_IIPT_IPV4        0x0040
+#define CI_TX_DESC_CMD_IIPT_IPV4_CSUM   0x0060
+#define CI_TX_DESC_CMD_L4T_EOFT_TCP     0x0100
+#define CI_TX_DESC_CMD_L4T_EOFT_SCTP    0x0200
+#define CI_TX_DESC_CMD_L4T_EOFT_UDP     0x0300
+
+/* Common TX Context Descriptor Commands */
+#define CI_TX_CTX_DESC_TSO              0x01
+#define CI_TX_CTX_DESC_TSYN             0x02
+#define CI_TX_CTX_DESC_IL2TAG2          0x04
+
+/**
+ * L2TAG1 Field Source Selection
+ * Specifies which mbuf VLAN field to use for the L2TAG1 field in data descriptors.
+ * Context descriptor VLAN handling (L2TAG2) is managed by driver-specific callbacks.
+ */
+enum ci_tx_l2tag1_field {
+	/** For VLAN (not QinQ), use L2Tag1 field in data desc */
+	CI_VLAN_IN_L2TAG1,
+
+	/** For VLAN (not QinQ), use L2Tag2 field in ctx desc.
+	 * NOTE: When set, drivers must set the VLAN tag in the context
+	 * descriptor callback function, rather than relying on the
+	 * common Tx code to insert it.
+	 */
+	CI_VLAN_IN_L2TAG2,
+};
+
+/* Common TX Descriptor Length Field Shifts */
+#define CI_TX_DESC_LEN_MACLEN_S         0  /* 7 BITS */
+#define CI_TX_DESC_LEN_IPLEN_S          7  /* 7 BITS */
+#define CI_TX_DESC_LEN_L4_LEN_S         14 /* 4 BITS */
+
+/* Common maximum data per TX descriptor */
+#define CI_MAX_DATA_PER_TXD     (CI_TXD_QW1_TX_BUF_SZ_M >> CI_TXD_QW1_TX_BUF_SZ_S)
+
+/* Common TX maximum burst size for chunked transmission in simple paths */
+#define CI_TX_MAX_BURST 32
+
+/* Common TX maximum free buffer size for batched bulk freeing */
+#define CI_TX_MAX_FREE_BUF_SZ 64
+
+/* Common TX descriptor command flags for simple transmit */
+#define CI_TX_DESC_CMD_DEFAULT (CI_TX_DESC_CMD_ICRC | CI_TX_DESC_CMD_EOP)
+
+/* Checksum offload mask to identify packets requesting offload */
+#define CI_TX_CKSUM_OFFLOAD_MASK (RTE_MBUF_F_TX_IP_CKSUM |		 \
+				   RTE_MBUF_F_TX_L4_MASK |		 \
+				   RTE_MBUF_F_TX_TCP_SEG |		 \
+				   RTE_MBUF_F_TX_UDP_SEG |		 \
+				   RTE_MBUF_F_TX_OUTER_IP_CKSUM |	 \
+				   RTE_MBUF_F_TX_OUTER_UDP_CKSUM)
+
+/**
+ * Common TX offload union for Intel drivers.
+ * Supports both basic offloads (l2_len, l3_len, l4_len, tso_segsz) and
+ * extended offloads (outer_l2_len, outer_l3_len) for tunneling support.
+ */
+union ci_tx_offload {
+	uint64_t data;
+	struct {
+		uint64_t l2_len:7;        /**< L2 (MAC) Header Length. */
+		uint64_t l3_len:9;        /**< L3 (IP) Header Length. */
+		uint64_t l4_len:8;        /**< L4 Header Length. */
+		uint64_t tso_segsz:16;    /**< TCP TSO segment size */
+		uint64_t outer_l2_len:8;  /**< outer L2 Header Length */
+		uint64_t outer_l3_len:16; /**< outer L3 Header Length */
+	};
+};
+
+/*
+ * Structure of a 16-byte Tx descriptor common across i40e, ice, iavf and idpf drivers
+ */
+struct ci_tx_desc {
+	uint64_t buffer_addr; /* Address of descriptor's data buf */
+	uint64_t cmd_type_offset_bsz;
+};
 
 /* forward declaration of the common intel (ci) queue structure */
 struct ci_tx_queue;
@@ -18,7 +121,6 @@ struct ci_tx_queue;
 struct ci_tx_entry {
 	struct rte_mbuf *mbuf; /* mbuf associated with TX desc, if any. */
 	uint16_t next_id; /* Index of next descriptor in ring. */
-	uint16_t last_id; /* Index of last scattered descriptor. */
 };
 
 /**
@@ -32,10 +134,7 @@ typedef void (*ice_tx_release_mbufs_t)(struct ci_tx_queue *txq);
 
 struct ci_tx_queue {
 	union { /* TX ring virtual address */
-		volatile struct i40e_tx_desc *i40e_tx_ring;
-		volatile struct iavf_tx_desc *iavf_tx_ring;
-		volatile struct ice_tx_desc *ice_tx_ring;
-		volatile struct idpf_base_tx_desc *idpf_tx_ring;
+		volatile struct ci_tx_desc *ci_tx_ring;
 		volatile union ixgbe_adv_tx_desc *ixgbe_tx_ring;
 	};
 	volatile uint8_t *qtx_tail;               /* register address of tail */
@@ -43,9 +142,10 @@ struct ci_tx_queue {
 		struct ci_tx_entry *sw_ring; /* virtual address of SW ring */
 		struct ci_tx_entry_vec *sw_ring_vec;
 	};
+	/* Scalar TX path: Array tracking last_id at each RS threshold boundary */
+	uint16_t *rs_last_id;
 	uint16_t nb_tx_desc;           /* number of TX descriptors */
 	uint16_t tx_tail; /* current value of tail register */
-	uint16_t nb_tx_used; /* number of TX desc used since RS bit set */
 	/* index to last TX descriptor to have been cleaned */
 	uint16_t last_desc_cleaned;
 	/* Total number of TX descriptors ready to be allocated. */
@@ -56,17 +156,24 @@ struct ci_tx_queue {
 	uint16_t tx_free_thresh;
 	/* Number of TX descriptors to use before RS bit is set. */
 	uint16_t tx_rs_thresh;
+	/* Scalar TX path: log2 of tx_rs_thresh for efficient bit operations */
+	uint8_t log2_rs_thresh;
 	uint16_t port_id;  /* Device port identifier. */
 	uint16_t queue_id; /* TX queue index. */
 	uint16_t reg_idx;
 	uint16_t tx_next_dd;
 	uint16_t tx_next_rs;
+	/* Mempool pointer for fast release of mbufs.
+	 * NULL if disabled, UINTPTR_MAX if enabled and not yet known.
+	 * Set at first use (if enabled and not yet known).
+	 */
+	struct rte_mempool *fast_free_mp;
 	uint64_t offloads;
 	uint64_t mbuf_errors;
 	rte_iova_t tx_ring_dma;        /* TX ring DMA address */
 	bool tx_deferred_start; /* don't start this queue in dev start */
 	bool q_set;             /* indicate if tx queue has been configured */
-	bool vector_tx;         /* port is using vector TX */
+	bool use_vec_entry;     /* use sw_ring_vec (true for vector and simple paths) */
 	union {                  /* the VSI this queue belongs to */
 		struct i40e_vsi *i40e_vsi;
 		struct iavf_vsi *iavf_vsi;
@@ -109,12 +216,29 @@ struct ci_tx_queue {
 				struct ci_tx_queue *complq;
 				void **txqs;   /*only valid for split queue mode*/
 				uint32_t tx_start_qid;
+				uint32_t latch_idx; /* Tx timestamp latch index */
 				uint16_t sw_nb_desc;
 				uint16_t sw_tail;
 				uint16_t rs_compl_count;
 				uint8_t expected_gen_id;
 		};
 	};
+};
+
+struct ci_tx_path_features {
+	uint32_t tx_offloads;
+	enum rte_vect_max_simd simd_width;
+	bool simple_tx;
+	bool ctx_desc;
+	bool disabled;
+	bool single_queue;
+};
+
+struct ci_tx_path_info {
+	eth_tx_burst_t pkt_burst;
+	const char *info;
+	struct ci_tx_path_features features;
+	eth_tx_prep_t pkt_prep;
 };
 
 static __rte_always_inline void
@@ -154,8 +278,13 @@ ci_tx_free_bufs_vec(struct ci_tx_queue *txq, ci_desc_done_fn desc_done, bool ctx
 	struct ci_tx_entry_vec *txep = txq->sw_ring_vec;
 	txep += (txq->tx_next_dd >> ctx_descs) - (n - 1);
 
-	if (txq->offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE && (n & 31) == 0) {
-		struct rte_mempool *mp = txep[0].mbuf->pool;
+	/* is fast-free enabled? */
+	struct rte_mempool *mp =
+			likely(txq->fast_free_mp != (void *)UINTPTR_MAX) ?
+			txq->fast_free_mp :
+			(txq->fast_free_mp = txep[0].mbuf->pool);
+
+	if (mp != NULL && (n & 31) == 0) {
 		void **cache_objs;
 		struct rte_mempool_cache *cache = rte_mempool_default_cache(mp, rte_lcore_id());
 
@@ -233,7 +362,8 @@ ci_txq_release_all_mbufs(struct ci_tx_queue *txq, bool use_ctx)
 	if (unlikely(!txq || !txq->sw_ring))
 		return;
 
-	if (!txq->vector_tx) {
+	if (!txq->use_vec_entry) {
+		/* Regular scalar path uses sw_ring with ci_tx_entry */
 		for (uint16_t i = 0; i < txq->nb_tx_desc; i++) {
 			if (txq->sw_ring[i].mbuf != NULL) {
 				rte_pktmbuf_free_seg(txq->sw_ring[i].mbuf);
@@ -244,6 +374,7 @@ ci_txq_release_all_mbufs(struct ci_tx_queue *txq, bool use_ctx)
 	}
 
 	/**
+	 *  Vector and simple paths use sw_ring_vec (ci_tx_entry_vec).
 	 *  vPMD tx will not set sw_ring's mbuf to NULL after free,
 	 *  so determining buffers to free is a little more complex.
 	 */
@@ -261,5 +392,93 @@ ci_txq_release_all_mbufs(struct ci_tx_queue *txq, bool use_ctx)
 		rte_pktmbuf_free_seg(txq->sw_ring_vec[i].mbuf);
 	memset(txq->sw_ring_vec, 0, sizeof(txq->sw_ring_vec[0]) * nb_desc);
 }
+
+/**
+ * Select the best matching Tx path based on features
+ *
+ * @param req_features
+ *   The requested features for the Tx path
+ * @param infos
+ *   Array of information about the available Tx paths
+ * @param num_paths
+ *   Number of available paths in the infos array
+ * @param default_path
+ *   Index of the default path to use if no suitable path is found
+ *
+ * @return
+ *   The packet burst function index that best matches the requested features,
+ *   or default_path if no suitable path is found
+ */
+static inline int
+ci_tx_path_select(const struct ci_tx_path_features *req_features,
+			const struct ci_tx_path_info *infos,
+			size_t num_paths,
+			int default_path)
+{
+	int idx = default_path;
+	const struct ci_tx_path_features *chosen_path_features = NULL;
+
+	for (unsigned int i = 0; i < num_paths; i++) {
+		const struct ci_tx_path_features *path_features = &infos[i].features;
+
+		/* Do not select a path with a NULL pkt_burst function. */
+		if (infos[i].pkt_burst == NULL)
+			continue;
+
+		/* Do not select a disabled tx path. */
+		if (path_features->disabled)
+			continue;
+
+		/* Do not use a simple tx path if not requested. */
+		if (path_features->simple_tx && !req_features->simple_tx)
+			continue;
+
+		/* If a context descriptor is requested, ensure the path supports it. */
+		if (!path_features->ctx_desc && req_features->ctx_desc)
+			continue;
+
+		/* If requested, ensure the path supports single queue TX. */
+		if (path_features->single_queue != req_features->single_queue)
+			continue;
+
+		/* Ensure the path supports the requested TX offloads. */
+		if ((path_features->tx_offloads & req_features->tx_offloads) !=
+				req_features->tx_offloads)
+			continue;
+
+		/* Ensure the path's SIMD width is compatible with the requested width. */
+		if (path_features->simd_width > req_features->simd_width)
+			continue;
+
+		/* Do not select the path if it is less suitable than the chosen path. */
+		if (chosen_path_features != NULL) {
+			/* Do not select paths with lower SIMD width than the chosen path. */
+			if (path_features->simd_width < chosen_path_features->simd_width)
+				continue;
+			/* Do not select paths with more offloads enabled than the chosen path if
+			 * the SIMD widths are the same.
+			 */
+			if (path_features->simd_width == chosen_path_features->simd_width &&
+					rte_popcount32(path_features->tx_offloads) >
+					rte_popcount32(chosen_path_features->tx_offloads))
+				continue;
+
+			/* Don't use a context descriptor unless necessary */
+			if (path_features->ctx_desc && !chosen_path_features->ctx_desc)
+				continue;
+		}
+
+		/* Finally, select the path since it has met all the requirements. */
+		idx = i;
+		chosen_path_features = &infos[idx].features;
+	}
+
+	return idx;
+}
+
+/* include the scalar functions at the end, so they can use the common definitions.
+ * This is done so drivers can use all functions just by including tx.h
+ */
+#include "tx_scalar.h"
 
 #endif /* _COMMON_INTEL_TX_H_ */

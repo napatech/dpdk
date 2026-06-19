@@ -68,7 +68,7 @@ Compilation of the DPDK
 
 *   Intel\ |reg| oneAPI DPC++/C++ Compiler.
 
-*   IBM\ |reg| Advance ToolChain for Powerlinux. This is a set of open source development tools and runtime libraries
+*   IBM\ |reg| Advance Toolchain for Powerlinux. This is a set of open source development tools and runtime libraries
     which allows users to take leading edge advantage of IBM's latest POWER hardware features on Linux. To install
     it, see the IBM official installation document.
 
@@ -93,7 +93,7 @@ e.g. :doc:`../nics/index`
 Running DPDK Applications
 -------------------------
 
-To run a DPDK application, some customization may be required on the target machine.
+To run a DPDK application, customization may be required on the target machine.
 
 System Software
 ~~~~~~~~~~~~~~~
@@ -127,9 +127,9 @@ System Software
 
     *   HUGETLBFS
 
-    *   PROC_PAGE_MONITOR  support
+    *   PROC_PAGE_MONITOR support
 
-    *   HPET and HPET_MMAP configuration options should also be enabled if HPET  support is required.
+    *   HPET and HPET_MMAP configuration options should also be enabled if HPET support is required.
         See the section on :ref:`High Precision Event Timer (HPET) Functionality <High_Precision_Event_Timer>` for more details.
 
 .. _linux_gsg_hugepages:
@@ -138,7 +138,7 @@ Use of Hugepages in the Linux Environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Hugepage support is required for the large memory pool allocation used for packet buffers
-(the HUGETLBFS option must be enabled in the running kernel as indicated the previous section).
+(the HUGETLBFS option must be enabled in the running kernel as indicated in the previous section).
 By using hugepage allocations, performance is increased since fewer pages are needed,
 and therefore less Translation Lookaside Buffers (TLBs, high speed translation caches),
 which reduce the time it takes to translate a virtual page address to a physical page address.
@@ -225,10 +225,10 @@ However, in order to use hugepage sizes other than the default, it is necessary
 to manually create mount points for those hugepage sizes (e.g. 1GB pages).
 
 To make the hugepages of size 1GB available for DPDK use,
-following steps must be performed::
+the following steps must be performed::
 
     mkdir /mnt/huge
-    mount -t hugetlbfs pagesize=1GB /mnt/huge
+    mount -t hugetlbfs -o pagesize=1GB none /mnt/huge
 
 The mount point can be made permanent across reboots, by adding the following line to the ``/etc/fstab`` file::
 

@@ -142,6 +142,7 @@ struct bnxt_rx_ring_info {
 
 	uint32_t ol_flags_table[BNXT_OL_FLAGS_TBL_DIM];
 	uint32_t ol_flags_err_table[BNXT_OL_FLAGS_ERR_TBL_DIM];
+	uint8_t			dpi;  /* Doorbell page index for multi-doorbell support */
 };
 
 uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
@@ -179,6 +180,13 @@ bnxt_cfa_code_dynfield(struct rte_mbuf *mbuf)
 {
 	return RTE_MBUF_DYNFIELD(mbuf,
 		bnxt_cfa_code_dynfield_offset, bnxt_cfa_code_dynfield_t *);
+}
+
+static __rte_always_inline void
+bnxt_timestamp_dynfield_set(struct rte_mbuf *mbuf, int offset,
+			    rte_mbuf_timestamp_t ts)
+{
+	*RTE_MBUF_DYNFIELD(mbuf, offset, rte_mbuf_timestamp_t *) = ts;
 }
 
 #define BNXT_RX_META_CFA_CODE_SHIFT		19
@@ -474,11 +482,14 @@ bnxt_parse_pkt_type_v2(struct rte_mbuf *mbuf,
 
 static inline void bnxt_rx_vlan_v3(struct rte_mbuf *mbuf,
 	struct rx_pkt_cmpl *rxcmp,
-	struct rx_pkt_cmpl_hi *rxcmp1)
+	struct rx_pkt_cmpl_hi *rxcmp1,
+	bool stripped)
 {
 	if (RX_CMP_V3_VLAN_VALID(rxcmp)) {
 		mbuf->vlan_tci = RX_CMP_V3_METADATA0_VID(rxcmp1);
-		mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
+		mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN;
+		if (stripped)
+			mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN_STRIPPED;
 	}
 }
 
@@ -535,6 +546,6 @@ bnxt_parse_csum_v3(struct rte_mbuf *mbuf, struct rx_pkt_cmpl_hi *rxcmp1)
 	uint16_t error_v2 = rte_le_to_cpu_16(v3_cmp->errors_v2);
 	uint32_t flags2 = rte_le_to_cpu_32(v3_cmp->flags2);
 
-	mbuf->ol_flags = bnxt_parse_csum_fields_v3(flags2, error_v2);
+	mbuf->ol_flags |= bnxt_parse_csum_fields_v3(flags2, error_v2);
 }
 #endif /*  _BNXT_RXR_H_ */

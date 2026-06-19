@@ -100,7 +100,7 @@ to a regular "debug" build, you can either:
 * run ``meson configure -Dbuildtype=debug`` inside the build folder after the initial meson run.
 
 Other options are specific to the DPDK project but can be adjusted similarly.
-The "platform" option specifies a set a configuration parameters that will be used.
+The "platform" option specifies a set of configuration parameters that will be used.
 The valid values are:
 
 * ``-Dplatform=native`` will tailor the configuration to the build machine.
@@ -327,7 +327,7 @@ and the sources for that build are stored in ``$(SRCS-y)``.
    location in the user's home directory. The install location can be set
    using the `--prefix` meson option (default: `/usr/local`).
 
-an equivalent build recipe for a simple DPDK application using meson as a
+An equivalent build recipe for a simple DPDK application using meson as a
 build system is shown below:
 
 .. code-block:: python

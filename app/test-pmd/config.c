@@ -69,6 +69,8 @@
 
 #define NS_PER_SEC 1E9
 
+#define FLOW_QUEUE_FLUSH_MAX_ITERS (10)
+
 static const struct {
 	enum tx_pkt_split split;
 	const char *name;
@@ -1834,6 +1836,15 @@ port_flow_configure(portid_t port_id,
 	port->queue_sz = queue_attr->size;
 	for (std_queue = 0; std_queue < nb_queue; std_queue++)
 		attr_list[std_queue] = queue_attr;
+	free(port->job_list);
+	port->job_list = calloc(nb_queue, sizeof(*port->job_list));
+	if (port->job_list == NULL) {
+		TESTPMD_LOG(ERR, "Failed to allocate memory for operations tracking on port %u\n",
+			    port_id);
+		return -ENOMEM;
+	}
+	for (unsigned int i = 0; i < nb_queue; i++)
+		LIST_INIT(&port->job_list[i]);
 	/* Poisoning to make sure PMDs update it in case of error. */
 	memset(&error, 0x66, sizeof(error));
 	if (rte_flow_configure(port_id, port_attr, nb_queue, attr_list, &error))
@@ -2938,6 +2949,7 @@ port_queue_flow_create(portid_t port_id, queueid_t queue_id,
 	pf->flow = flow;
 	job->pf = pf;
 	port->flow_list = pf;
+	LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 	printf("Flow rule #%"PRIu64" creation enqueued\n", pf->id);
 	return 0;
 }
@@ -2975,6 +2987,7 @@ port_queue_flow_update_resized(portid_t port_id, queueid_t queue_id,
 		free(job);
 		return port_flow_complain(&error);
 	}
+	LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 	return 0;
 }
 
@@ -3028,6 +3041,7 @@ port_queue_flow_destroy(portid_t port_id, queueid_t queue_id,
 				ret = port_flow_complain(&error);
 				continue;
 			}
+			LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 			printf("Flow rule #%"PRIu64" destruction enqueued\n",
 			       pf->id);
 			*tmp = pf->next;
@@ -3161,6 +3175,7 @@ port_queue_flow_update(portid_t port_id, queueid_t queue_id,
 	uf->flow = pf->flow;
 	*tmp = uf;
 	job->pf = pf;
+	LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 
 	printf("Flow rule #%"PRIu64" update enqueued\n", pf->id);
 	return 0;
@@ -3215,6 +3230,7 @@ port_queue_action_handle_create(portid_t port_id, uint32_t queue_id,
 		free(job);
 		return port_flow_complain(&error);
 	}
+	LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 	printf("Indirect action #%u creation queued\n", pia->id);
 	return 0;
 }
@@ -3276,6 +3292,7 @@ port_queue_action_handle_destroy(portid_t port_id,
 				ret = port_flow_complain(&error);
 				continue;
 			}
+			LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 			*tmp = pia->next;
 			printf("Indirect action #%u destruction queued\n",
 			       pia->id);
@@ -3350,6 +3367,7 @@ port_queue_action_handle_update(portid_t port_id,
 		free(job);
 		return port_flow_complain(&error);
 	}
+	LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 	printf("Indirect action #%u update queued\n", id);
 	return 0;
 }
@@ -3365,7 +3383,10 @@ port_queue_action_handle_query_update(portid_t port_id,
 	struct rte_flow_error error;
 	struct port_indirect_action *pia = action_get_by_id(port_id, id);
 	const struct rte_flow_op_attr attr = { .postpone = postpone};
+	struct rte_port *port;
 	struct queue_job *job;
+
+	port = &ports[port_id];
 
 	if (!pia || !pia->handle)
 		return;
@@ -3385,6 +3406,7 @@ port_queue_action_handle_query_update(portid_t port_id,
 		port_flow_complain(&error);
 		free(job);
 	} else {
+		LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 		printf("port-%u: indirect action #%u update-and-query queued\n",
 		       port_id, id);
 	}
@@ -3426,6 +3448,7 @@ port_queue_action_handle_query(portid_t port_id,
 		free(job);
 		return port_flow_complain(&error);
 	}
+	LIST_INSERT_HEAD(&port->job_list[queue_id], job, chain);
 	printf("Indirect action #%u update queued\n", id);
 	return 0;
 }
@@ -3541,6 +3564,19 @@ port_flow_hash_calc_encap(portid_t port_id,
 	return 0;
 }
 
+static void
+port_free_queue_job(struct queue_job *job)
+{
+	if (job->type == QUEUE_JOB_TYPE_FLOW_DESTROY ||
+	    job->type == QUEUE_JOB_TYPE_FLOW_UPDATE)
+		free(job->pf);
+	else if (job->type == QUEUE_JOB_TYPE_ACTION_DESTROY)
+		free(job->pia);
+
+	LIST_REMOVE(job, chain);
+	free(job);
+}
+
 /** Pull queue operation results from the queue. */
 static int
 port_queue_aged_flow_destroy(portid_t port_id, queueid_t queue_id,
@@ -3578,6 +3614,8 @@ port_queue_aged_flow_destroy(portid_t port_id, queueid_t queue_id,
 			return ret;
 		}
 		while (success < nb_flows) {
+			struct queue_job *job;
+
 			ret = rte_flow_pull(port_id, queue_id, res,
 					    port->queue_sz, &error);
 			if (ret < 0) {
@@ -3590,6 +3628,13 @@ port_queue_aged_flow_destroy(portid_t port_id, queueid_t queue_id,
 			for (i = 0; i < ret; i++) {
 				if (res[i].status == RTE_FLOW_OP_SUCCESS)
 					success++;
+				job = res[i].user_data;
+				/*
+				 * It is assumed that each enqueued async flow operation
+				 * has a queue_job entry.
+				 */
+				RTE_ASSERT(job != NULL);
+				port_free_queue_job(job);
 			}
 		}
 		rule += n;
@@ -3738,15 +3783,10 @@ port_queue_flow_pull(portid_t port_id, queueid_t queue_id)
 		if (res[i].status == RTE_FLOW_OP_SUCCESS)
 			success++;
 		job = (struct queue_job *)res[i].user_data;
-		if (job->type == QUEUE_JOB_TYPE_FLOW_DESTROY ||
-		    job->type == QUEUE_JOB_TYPE_FLOW_UPDATE)
-			free(job->pf);
-		else if (job->type == QUEUE_JOB_TYPE_ACTION_DESTROY)
-			free(job->pia);
-		else if (job->type == QUEUE_JOB_TYPE_ACTION_QUERY)
+		if (job->type == QUEUE_JOB_TYPE_ACTION_QUERY)
 			port_action_handle_query_dump(port_id, job->pia,
 						      &job->query);
-		free(job);
+		port_free_queue_job(job);
 	}
 	printf("Queue #%u pulled %u operations (%u failed, %u succeeded)\n",
 	       queue_id, ret, ret - success, success);
@@ -3960,6 +4000,128 @@ port_flow_update(portid_t port_id, uint32_t rule_id,
 	return -EINVAL;
 }
 
+static int
+port_flow_queue_job_flush(portid_t port_id, queueid_t queue_id)
+{
+	struct rte_flow_op_result *res;
+	struct rte_flow_error error;
+	unsigned int expected_ops;
+	struct rte_port *port;
+	struct queue_job *job;
+	unsigned int success;
+	unsigned int polled;
+	int iterations;
+	int ret;
+
+	port = &ports[port_id];
+
+	printf("Flushing flow queue %u on port %u\n", queue_id, port_id);
+
+	/* Poisoning to make sure PMDs update it in case of error. */
+	memset(&error, 0x44, sizeof(error));
+	if (rte_flow_push(port_id, queue_id, &error))
+		return port_flow_complain(&error);
+
+	/* Count expected operations. */
+	expected_ops = 0;
+	LIST_FOREACH(job, &port->job_list[queue_id], chain)
+		expected_ops++;
+
+	res = calloc(expected_ops, sizeof(*res));
+	if (res == NULL)
+		return -ENOMEM;
+
+	polled = 0;
+	success = 0;
+	iterations = FLOW_QUEUE_FLUSH_MAX_ITERS;
+	while (iterations > 0 && expected_ops > 0) {
+		/* Poisoning to make sure PMDs update it in case of error. */
+		memset(&error, 0x55, sizeof(error));
+		ret = rte_flow_pull(port_id, queue_id, res, expected_ops, &error);
+		if (ret < 0) {
+			port_flow_complain(&error);
+			free(res);
+			return ret;
+		}
+		if (ret == 0) {
+			/* Prevent infinite loop when driver does not return any completion. */
+			iterations--;
+			continue;
+		}
+
+		expected_ops -= ret;
+		polled += ret;
+		for (int i = 0; i < ret; i++) {
+			if (res[i].status == RTE_FLOW_OP_SUCCESS)
+				success++;
+
+			job = res[i].user_data;
+			/*
+			 * It is assumed that each enqueued async flow operation
+			 * has a queue_job entry.
+			 */
+			RTE_ASSERT(job != NULL);
+			port_free_queue_job(job);
+		}
+	}
+	free(res);
+
+	printf("Flushed flow queue %u on port %u (%u failed, %u succeeded).\n",
+	       queue_id, port_id, polled - success, success);
+
+	if (iterations == 0 && expected_ops > 0) {
+		/*
+		 * Driver was not able to return all completions for flow operations in time.
+		 * Log the error and free the queue_job entries to prevent leak.
+		 */
+
+		TESTPMD_LOG(ERR, "Unable to fully flush flow queue %u on port %u (left ops %u)\n",
+			    queue_id, port_id, expected_ops);
+
+		while (!LIST_EMPTY(&port->job_list[queue_id])) {
+			job = LIST_FIRST(&port->job_list[queue_id]);
+			port_free_queue_job(job);
+		}
+
+		return 0;
+	}
+
+	/*
+	 * It is assumed that each enqueued async flow operation
+	 * has a queue_job entry, so if expected_ops reached zero,
+	 * then the queue_job list should be empty.
+	 */
+	RTE_ASSERT(LIST_EMPTY(&port->job_list[queue_id]));
+
+	return 0;
+}
+
+static int
+port_flow_queues_job_flush(portid_t port_id)
+{
+	struct rte_port *port;
+	int ret;
+
+	port = &ports[port_id];
+
+	if (port->queue_nb == 0)
+		return 0;
+
+	for (queueid_t queue_id = 0; queue_id < port->queue_nb; ++queue_id) {
+		if (LIST_EMPTY(&port->job_list[queue_id]))
+			continue;
+
+		ret = port_flow_queue_job_flush(port_id, queue_id);
+		if (ret < 0) {
+			TESTPMD_LOG(ERR, "Flushing flows queue %u failed on port %u (ret %d)\n",
+				    queue_id, port_id, ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 /** Remove all flow rules. */
 int
 port_flow_flush(portid_t port_id)
@@ -3973,6 +4135,11 @@ port_flow_flush(portid_t port_id)
 		return -EINVAL;
 
 	port = &ports[port_id];
+
+	ret = port_flow_queues_job_flush(port_id);
+	if (ret < 0)
+		TESTPMD_LOG(ERR, "Flushing flows queues failed on port %u (ret %d)\n",
+			    port_id, ret);
 
 	if (port->flow_list == NULL)
 		return ret;
@@ -4490,15 +4657,9 @@ ring_rxd_display_dword(union igb_ring_dword dword)
 
 static void
 ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
-#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 			   portid_t port_id,
-#else
-			   __rte_unused portid_t port_id,
-#endif
 			   uint16_t desc_id)
 {
-	struct igb_ring_desc_16_bytes *ring =
-		(struct igb_ring_desc_16_bytes *)ring_mz->addr;
 #ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 	int ret;
 	struct rte_eth_dev_info dev_info;
@@ -4528,12 +4689,15 @@ ring_rx_descriptor_display(const struct rte_memzone *ring_mz,
 	}
 #endif
 	/* 16 bytes RX descriptor */
+	struct igb_ring_desc_16_bytes *ring =
+		(struct igb_ring_desc_16_bytes *)ring_mz->addr;
 	ring[desc_id].lo_dword.dword =
 		rte_le_to_cpu_64(ring[desc_id].lo_dword.dword);
 	ring_rxd_display_dword(ring[desc_id].lo_dword);
 	ring[desc_id].hi_dword.dword =
 		rte_le_to_cpu_64(ring[desc_id].hi_dword.dword);
 	ring_rxd_display_dword(ring[desc_id].hi_dword);
+	RTE_SET_USED(port_id);
 }
 
 static void
@@ -4742,7 +4906,6 @@ port_rss_hash_conf_show(portid_t port_id, int show_rss_key, int show_rss_algo)
 {
 	struct rte_eth_rss_conf rss_conf = {0};
 	uint8_t rss_key[RSS_HASH_KEY_LENGTH];
-	uint64_t rss_hf;
 	uint8_t i;
 	int diag;
 	struct rte_eth_dev_info dev_info;
@@ -4783,8 +4946,7 @@ port_rss_hash_conf_show(portid_t port_id, int show_rss_key, int show_rss_algo)
 		}
 		return;
 	}
-	rss_hf = rss_conf.rss_hf;
-	if (rss_hf == 0) {
+	if (rss_conf.rss_hf == 0) {
 		printf("RSS disabled\n");
 		return;
 	}
@@ -4796,7 +4958,7 @@ port_rss_hash_conf_show(portid_t port_id, int show_rss_key, int show_rss_algo)
 	}
 
 	printf("RSS functions:\n");
-	rss_types_display(rss_hf, TESTPMD_RSS_TYPES_CHAR_NUM_PER_LINE);
+	rss_types_display(rss_conf.rss_hf, TESTPMD_RSS_TYPES_CHAR_NUM_PER_LINE);
 
 	if (!show_rss_key)
 		return;
@@ -5216,6 +5378,7 @@ dcb_fwd_config_setup(void)
 	uint16_t nb_rx_queue, nb_tx_queue;
 	uint16_t i, j, k, sm_id = 0;
 	uint16_t sub_core_idx = 0;
+	uint8_t effective_nb_tcs;
 	uint16_t total_tc_num;
 	struct rte_port *port;
 	uint8_t tc = 0;
@@ -5281,6 +5444,7 @@ dcb_fwd_config_setup(void)
 	dcb_fwd_tc_update_dcb_info(&rxp_dcb_info);
 	(void)rte_eth_dev_get_dcb_info(fwd_ports_ids[txp], &txp_dcb_info);
 	dcb_fwd_tc_update_dcb_info(&txp_dcb_info);
+	effective_nb_tcs = RTE_MIN(rxp_dcb_info.nb_tcs, txp_dcb_info.nb_tcs);
 
 	for (lc_id = 0; lc_id < cur_fwd_config.nb_fwd_lcores; lc_id++) {
 		fwd_lcores[lc_id]->stream_nb = 0;
@@ -5289,7 +5453,8 @@ dcb_fwd_config_setup(void)
 			/* if the nb_queue is zero, means this tc is
 			 * not enabled on the POOL
 			 */
-			if (rxp_dcb_info.tc_queue.tc_rxq[i][tc].nb_queue == 0)
+			if (rxp_dcb_info.tc_queue.tc_rxq[i][tc].nb_queue == 0 ||
+			    txp_dcb_info.tc_queue.tc_txq[i][tc].nb_queue == 0)
 				break;
 			k = fwd_lcores[lc_id]->stream_nb +
 				fwd_lcores[lc_id]->stream_idx;
@@ -5319,7 +5484,7 @@ dcb_fwd_config_setup(void)
 
 		sub_core_idx = 0;
 		tc++;
-		if (tc < rxp_dcb_info.nb_tcs)
+		if (tc < effective_nb_tcs)
 			continue;
 		/* Restart from TC 0 on next RX port */
 		tc = 0;
@@ -5336,6 +5501,8 @@ dcb_fwd_config_setup(void)
 		dcb_fwd_tc_update_dcb_info(&rxp_dcb_info);
 		rte_eth_dev_get_dcb_info(fwd_ports_ids[txp], &txp_dcb_info);
 		dcb_fwd_tc_update_dcb_info(&txp_dcb_info);
+
+		effective_nb_tcs = RTE_MIN(rxp_dcb_info.nb_tcs, txp_dcb_info.nb_tcs);
 	}
 }
 
@@ -6502,8 +6669,8 @@ vlan_extend_set(portid_t port_id, int on)
 	diag = rte_eth_dev_set_vlan_offload(port_id, vlan_offload);
 	if (diag < 0) {
 		fprintf(stderr,
-			"rx_vlan_extend_set(port_pi=%d, on=%d) failed diag=%d\n",
-			port_id, on, diag);
+			"%s(port_pi=%d, on=%d) failed diag=%d\n",
+			__func__, port_id, on, diag);
 		return;
 	}
 	ports[port_id].dev_conf.rxmode.offloads = port_rx_offloads;
@@ -6729,8 +6896,8 @@ vlan_tpid_set(portid_t port_id, enum rte_vlan_type vlan_type, uint16_t tp_id)
 		return;
 
 	fprintf(stderr,
-		"tx_vlan_tpid_set(port_pi=%d, vlan_type=%d, tpid=%d) failed diag=%d\n",
-		port_id, vlan_type, tp_id, diag);
+		"%s(port_pi=%d, vlan_type=%d, tpid=%d) failed diag=%d\n",
+		__func__, port_id, vlan_type, tp_id, diag);
 }
 
 void

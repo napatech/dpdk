@@ -1040,19 +1040,15 @@ rte_mempool_free(struct rte_mempool *mp);
  * @param name
  *   The name of the mempool.
  * @param n
- *   The number of elements in the mempool. The optimum size (in terms of
- *   memory usage) for a mempool is when n is a power of two minus one:
- *   n = (2^q - 1).
+ *   The number of elements in the mempool.
  * @param elt_size
  *   The size of each element.
  * @param cache_size
  *   If cache_size is non-zero, the rte_mempool library will try to
  *   limit the accesses to the common lockless pool, by maintaining a
  *   per-lcore object cache. This argument must be lower or equal to
- *   RTE_MEMPOOL_CACHE_MAX_SIZE and n / 1.5. It is advised to choose
- *   cache_size to have "n modulo cache_size == 0": if this is
- *   not the case, some elements will always stay in the pool and will
- *   never be used. The access to the per-lcore table is of course
+ *   RTE_MEMPOOL_CACHE_MAX_SIZE and n / 1.5.
+ *   The access to the per-lcore table is of course
  *   faster than the multi-producer/consumer pool. The cache can be
  *   disabled if the cache_size argument is set to 0; it can be useful to
  *   avoid losing objects in cache.
@@ -1130,8 +1126,6 @@ rte_mempool_create(const char *name, unsigned n, unsigned elt_size,
  *   The name of the mempool.
  * @param n
  *   The maximum number of elements that can be added in the mempool.
- *   The optimum size (in terms of memory usage) for a mempool is when n
- *   is a power of two minus one: n = (2^q - 1).
  * @param elt_size
  *   The size of each element.
  * @param cache_size
@@ -1531,46 +1525,28 @@ rte_mempool_do_generic_get(struct rte_mempool *mp, void **obj_table,
 	cache_objs = &cache->objs[cache->len];
 
 	__rte_assume(cache->len <= RTE_MEMPOOL_CACHE_MAX_SIZE * 2);
-	if (__rte_constant(n) && n <= cache->len) {
+	if (likely(n <= cache->len)) {
+		/* The entire request can be satisfied from the cache. */
+		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
+		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
+
 		/*
-		 * The request size is known at build time, and
-		 * the entire request can be satisfied from the cache,
-		 * so let the compiler unroll the fixed length copy loop.
+		 * If the request size is known at build time,
+		 * the compiler unrolls the fixed length copy loop.
 		 */
 		cache->len -= n;
 		for (index = 0; index < n; index++)
 			*obj_table++ = *--cache_objs;
 
-		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
-		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
-
 		return 0;
 	}
 
-	/*
-	 * Use the cache as much as we have to return hot objects first.
-	 * If the request size 'n' is known at build time, the above comparison
-	 * ensures that n > cache->len here, so omit RTE_MIN().
-	 */
-	len = __rte_constant(n) ? cache->len : RTE_MIN(n, cache->len);
-	cache->len -= len;
+	/* Use the cache as much as we have to return hot objects first. */
+	len = cache->len;
 	remaining = n - len;
+	cache->len = 0;
 	for (index = 0; index < len; index++)
 		*obj_table++ = *--cache_objs;
-
-	/*
-	 * If the request size 'n' is known at build time, the case
-	 * where the entire request can be satisfied from the cache
-	 * has already been handled above, so omit handling it here.
-	 */
-	if (!__rte_constant(n) && likely(remaining == 0)) {
-		/* The entire request is satisfied from the cache. */
-
-		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
-		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
-
-		return 0;
-	}
 
 	/* Dequeue below would overflow mem allocated for cache? */
 	if (unlikely(remaining > RTE_MEMPOOL_CACHE_MAX_SIZE))
@@ -1589,16 +1565,15 @@ rte_mempool_do_generic_get(struct rte_mempool *mp, void **obj_table,
 	}
 
 	/* Satisfy the remaining part of the request from the filled cache. */
+	RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
+	RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
+
 	__rte_assume(cache->size <= RTE_MEMPOOL_CACHE_MAX_SIZE);
 	__rte_assume(remaining <= RTE_MEMPOOL_CACHE_MAX_SIZE);
 	cache_objs = &cache->objs[cache->size + remaining];
+	cache->len = cache->size;
 	for (index = 0; index < remaining; index++)
 		*obj_table++ = *--cache_objs;
-
-	cache->len = cache->size;
-
-	RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
-	RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
 
 	return 0;
 
@@ -1908,7 +1883,6 @@ struct rte_mempool *rte_mempool_lookup(const char *name);
  * @param flags
  *   The flags used for the mempool creation.
  *   Consult rte_mempool_create() for more information about possible values.
- *   The size of each element.
  * @param sz
  *   The calculated detailed size the mempool object. May be NULL.
  * @return
@@ -1955,7 +1929,7 @@ struct rte_mempool_mem_range_info {
  *   and whether these addresses are contiguous.
  * @return
  *   0 on success, -EINVAL if mempool is not valid or mem_range is NULL.
- **/
+ */
 __rte_experimental
 int
 rte_mempool_get_mem_range(const struct rte_mempool *mp,
@@ -1971,8 +1945,7 @@ rte_mempool_get_mem_range(const struct rte_mempool *mp,
  *   Pointer to a mempool.
  * @return
  *   Object alignment if mp is valid. 0 if mp is NULL.
- *
- **/
+ */
 __rte_experimental
 size_t
 rte_mempool_get_obj_alignment(const struct rte_mempool *mp);

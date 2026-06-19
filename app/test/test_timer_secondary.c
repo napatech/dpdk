@@ -12,7 +12,9 @@
 #include <rte_timer.h>
 #include <rte_cycles.h>
 #include <rte_mempool.h>
+#include <rte_pause.h>
 #include <rte_random.h>
+#include <rte_stdatomic.h>
 
 #include "test.h"
 
@@ -27,7 +29,8 @@ test_timer_secondary(void)
 
 #include "process.h"
 
-#define NUM_TIMERS		(1 << 20) /* ~1M timers */
+#define NUM_TIMERS_MAX		(1 << 20) /* ~1M timers */
+#define NUM_TIMERS_MIN		(1 << 14) /* 16K minimum */
 #define NUM_LCORES_NEEDED	3
 #define TEST_INFO_MZ_NAME	"test_timer_info_mz"
 #define MSECPERSEC		1E3
@@ -38,37 +41,34 @@ struct test_info {
 	unsigned int main_lcore;
 	unsigned int mgr_lcore;
 	unsigned int sec_lcore;
+	unsigned int num_timers;
 	uint32_t timer_data_id;
-	volatile int expected_count;
-	volatile int expired_count;
+	RTE_ATOMIC(unsigned int) expected_count;
+	RTE_ATOMIC(unsigned int) expired_count;
 	struct rte_mempool *tim_mempool;
-	struct rte_timer *expired_timers[NUM_TIMERS];
+	struct rte_timer *expired_timers[NUM_TIMERS_MAX];
 	int expired_timers_idx;
-	volatile int exit_flag;
+	RTE_ATOMIC(int) exit_flag;
 };
 
 static int
 timer_secondary_spawn_wait(unsigned int lcore)
 {
-	char coremask[10];
-#ifdef RTE_EXEC_ENV_LINUXAPP
-	char tmp[PATH_MAX] = {0};
-	char prefix[PATH_MAX] = {0};
+	char core_str[10];
+	const char *prefix;
 
-	get_current_prefix(tmp, sizeof(tmp));
+	prefix = file_prefix_arg();
+	if (prefix == NULL)
+		return -1;
 
-	snprintf(prefix, sizeof(prefix), "--file-prefix=%s", tmp);
-#else
-	const char *prefix = "";
-#endif
 	char const *argv[] = {
 		prgname,
-		"-c", coremask,
+		"-l", core_str,
 		"--proc-type=secondary",
 		prefix
 	};
 
-	snprintf(coremask, sizeof(coremask), "%x", (1 << lcore));
+	snprintf(core_str, sizeof(core_str), "%u", lcore);
 
 	return launch_proc(argv);
 }
@@ -78,7 +78,8 @@ handle_expired_timer(struct rte_timer *tim)
 {
 	struct test_info *test_info = tim->arg;
 
-	test_info->expired_count++;
+	rte_atomic_fetch_add_explicit(&test_info->expired_count, 1,
+				      rte_memory_order_relaxed);
 	test_info->expired_timers[test_info->expired_timers_idx++] = tim;
 }
 
@@ -90,7 +91,8 @@ timer_manage_loop(void *arg)
 	uint64_t prev_tsc = 0, cur_tsc, diff_tsc;
 	struct test_info *test_info = arg;
 
-	while (!test_info->exit_flag) {
+	while (!rte_atomic_load_explicit(&test_info->exit_flag,
+				       rte_memory_order_acquire)) {
 		cur_tsc = rte_rdtsc();
 		diff_tsc = cur_tsc - prev_tsc;
 
@@ -138,8 +140,10 @@ test_timer_secondary(void)
 				     "test data");
 		test_info = mz->addr;
 
+		test_info->num_timers = test_scale_iterations(NUM_TIMERS_MAX, NUM_TIMERS_MIN);
+
 		test_info->tim_mempool = rte_mempool_create("test_timer_mp",
-				NUM_TIMERS, sizeof(struct rte_timer), 0, 0,
+				test_info->num_timers, sizeof(struct rte_timer), 0, 0,
 				NULL, NULL, NULL, NULL, rte_socket_id(), 0);
 
 		ret = rte_timer_data_alloc(&test_info->timer_data_id);
@@ -160,37 +164,43 @@ test_timer_secondary(void)
 		TEST_ASSERT_SUCCESS(ret, "Failed to launch timer manage loop");
 
 		ret = timer_secondary_spawn_wait(*sec_lcorep);
+		/* must set exit flag even on error case, so check ret later */
+
+		rte_delay_ms(500);
+		rte_atomic_store_explicit(&test_info->exit_flag, 1,
+					  rte_memory_order_release);
+
 		TEST_ASSERT_SUCCESS(ret, "Secondary process execution failed");
-
-		rte_delay_ms(2000);
-
-		test_info->exit_flag = 1;
 		rte_eal_wait_lcore(*mgr_lcorep);
 
 #ifdef RTE_LIBRTE_TIMER_DEBUG
 		rte_timer_alt_dump_stats(test_info->timer_data_id, stdout);
 #endif
 
-		return test_info->expected_count == test_info->expired_count ?
+		return rte_atomic_load_explicit(&test_info->expected_count,
+					       rte_memory_order_relaxed) ==
+		       rte_atomic_load_explicit(&test_info->expired_count,
+					       rte_memory_order_relaxed) ?
 			TEST_SUCCESS : TEST_FAILED;
 
 	} else if (proc_type == RTE_PROC_SECONDARY) {
 		uint64_t ticks, timeout_ms;
 		struct rte_timer *tim;
-		int i;
+		unsigned int i;
 
 		mz = rte_memzone_lookup(TEST_INFO_MZ_NAME);
 		TEST_ASSERT_NOT_NULL(mz, "Couldn't lookup memzone for "
 				     "test info");
 		test_info = mz->addr;
 
-		for (i = 0; i < NUM_TIMERS; i++) {
-			rte_mempool_get(test_info->tim_mempool, (void **)&tim);
+		for (i = 0; i < test_info->num_timers; i++) {
+			ret = rte_mempool_get(test_info->tim_mempool, (void **)&tim);
+			TEST_ASSERT_SUCCESS(ret, "Couldn't get timer from mempool");
 
 			rte_timer_init(tim);
 
-			/* generate timeouts between 10 and 160 ms */
-			timeout_ms = ((rte_rand() & 0xF) + 1) * 10;
+			/* generate timeouts between 10 and 80 ms */
+			timeout_ms = ((rte_rand() & 0x7) + 1) * 10;
 			ticks = timeout_ms * rte_get_timer_hz() / MSECPERSEC;
 
 			ret = rte_timer_alt_reset(test_info->timer_data_id,
@@ -200,7 +210,8 @@ test_timer_secondary(void)
 			if (ret < 0)
 				return TEST_FAILED;
 
-			test_info->expected_count++;
+			rte_atomic_fetch_add_explicit(&test_info->expected_count,
+						     1, rte_memory_order_relaxed);
 
 			/* randomly leave timer running or stop it */
 			if (rte_rand() & 1)
@@ -209,7 +220,8 @@ test_timer_secondary(void)
 			ret = rte_timer_alt_stop(test_info->timer_data_id,
 						 tim);
 			if (ret == 0) {
-				test_info->expected_count--;
+				rte_atomic_fetch_sub_explicit(&test_info->expected_count,
+							     1, rte_memory_order_relaxed);
 				rte_mempool_put(test_info->tim_mempool,
 						(void *)tim);
 			}
@@ -224,4 +236,4 @@ test_timer_secondary(void)
 
 #endif /* !RTE_EXEC_ENV_WINDOWS */
 
-REGISTER_TEST_COMMAND(timer_secondary_autotest, test_timer_secondary);
+REGISTER_FAST_TEST(timer_secondary_autotest, NOHUGE_SKIP, ASAN_SKIP, test_timer_secondary);

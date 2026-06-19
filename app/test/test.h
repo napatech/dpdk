@@ -12,6 +12,7 @@
 
 #include <rte_hexdump.h>
 #include <rte_common.h>
+#include <rte_lcore.h>
 #include <rte_os_shim.h>
 
 #define TEST_SUCCESS EXIT_SUCCESS
@@ -207,9 +208,38 @@ void add_test_command(struct test_command *t);
 /* Register a test function as a particular type.
  * These can be used to build up test suites automatically
  */
-#define REGISTER_FAST_TEST(cmd, no_huge, ASan, func)  REGISTER_TEST_COMMAND(cmd, func)
 #define REGISTER_PERF_TEST REGISTER_TEST_COMMAND
 #define REGISTER_DRIVER_TEST REGISTER_TEST_COMMAND
 #define REGISTER_STRESS_TEST REGISTER_TEST_COMMAND
+
+/* fast tests are a bit special. They can be specified as supporting running without
+ * hugepages and/or under ASan.
+ * - The "no_huge" options should be passed as either "NOHUGE_OK" or "NOHUGE_SKIP"
+ * - The "ASan" options should be passed as either "ASAN_OK" or "ASAN_SKIP"
+ */
+#define REGISTER_FAST_TEST(cmd, no_huge, ASan, func)  REGISTER_TEST_COMMAND(cmd, func)
+
+/* For unstable or experimental tests cases which need work or which may be removed
+ * in the future.
+ */
+#define REGISTER_ATTIC_TEST REGISTER_TEST_COMMAND
+
+/**
+ * Scale test iterations inversely with core count.
+ *
+ * On high core count systems, tests with per-core work can exceed
+ * timeout limits due to increased lock contention and scheduling
+ * overhead. This helper scales iterations to keep total test time
+ * roughly constant regardless of core count.
+ *
+ * @param base  Base iteration count (used on single-core systems)
+ * @param min   Minimum iterations (floor to ensure meaningful testing)
+ * @return      Scaled iteration count
+ */
+static inline unsigned int
+test_scale_iterations(unsigned int base, unsigned int min)
+{
+	return RTE_MAX(base / rte_lcore_count(), min);
+}
 
 #endif

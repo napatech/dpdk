@@ -5,6 +5,7 @@
 #ifndef MLX5DR_H_
 #define MLX5DR_H_
 
+#include <rte_byteorder.h>
 #include <rte_flow.h>
 
 struct mlx5dr_context;
@@ -248,7 +249,7 @@ struct mlx5dr_action_mh_pattern {
 	/* Byte size of modify actions provided by "data" */
 	size_t sz;
 	/* PRM format modify actions pattern */
-	__be64 *data;
+	rte_be64_t *data;
 };
 
 /* In actions that take offset, the offset is unique, pointing to a single
@@ -367,6 +368,22 @@ mlx5dr_context_open(struct ibv_context *ibv_ctx,
  * @return zero on success non zero otherwise.
  */
 int mlx5dr_context_close(struct mlx5dr_context *ctx);
+
+/**
+ * Convert given table type to corresponding action type.
+ *
+ * @param[in] table_type
+ *	Table type.
+ * @param[in] is_root
+ *	Whether table should be considered root or not.
+ * @param[out] action_flags
+ *	Corresponding action flags will be written here.
+ * @return
+ *	0 on success. Negative errno and rte_errno is set otherwise.
+ */
+int mlx5dr_table_type_to_action_flags(const enum mlx5dr_table_type table_type,
+				      const bool is_root,
+				      enum mlx5dr_action_flags *action_flags);
 
 /* Create a new direct rule table. Each table can contain multiple matchers.
  *

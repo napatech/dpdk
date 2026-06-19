@@ -329,6 +329,7 @@ global_cflags = [
         '-Wnested-externs',
         '-Wold-style-definition',
         '-Wpointer-arith',
+        '-Wshadow',
         '-Wsign-compare',
         '-Wstrict-prototypes',
         '-Wundef',
@@ -359,6 +360,17 @@ if cc.has_argument('-Wvla')
     if not is_windows
         no_wvla_cflag = '-Wno-vla'
     endif
+endif
+
+no_shadow_cflag = []
+if cc.has_argument('-Wno-shadow')
+    no_shadow_cflag = '-Wno-shadow'
+endif
+
+# per-driver option to disable -Wcomma if supported by the compiler
+no_comma_cflag = []
+if cc.has_argument('-Wno-comma')
+    no_comma_cflag = '-Wno-comma'
 endif
 
 foreach arg: global_cflags

@@ -174,6 +174,16 @@ ice_sched_add_node(struct ice_port_info *pi, u8 layer,
 		return ICE_ERR_PARAM;
 	}
 
+	/* After NVM update FW will(in some cases) not return proper
+	 * topology, bail out early in such cases
+	 * (as there is a need of platform reboot anyway).
+	 */
+	if (!parent->children) {
+		ice_debug(hw, ICE_DBG_SCHED, "Parent (teid = 0x%x) hasn't prepared to have children, aborting\n",
+			LE32_TO_CPU(info->parent_teid));
+		return ICE_ERR_PARAM;
+	}
+
 	/* query the current node information from FW before adding it
 	 * to the SW DB
 	 */
@@ -1247,7 +1257,8 @@ int ice_sched_init_port(struct ice_port_info *pi)
 	u8 num_branches;
 	u16 num_elems;
 	int status;
-	u8 i, j;
+	u8 i;
+	u16 j;
 
 	if (!pi)
 		return ICE_ERR_PARAM;

@@ -945,16 +945,14 @@ ice_res_pool_destroy(struct ice_res_pool_info *pool)
 	if (!pool)
 		return;
 
-	for (entry = LIST_FIRST(&pool->alloc_list);
-	     entry && (next_entry = LIST_NEXT(entry, next), 1);
-	     entry = next_entry) {
+	for (entry = LIST_FIRST(&pool->alloc_list); entry; entry = next_entry) {
+		next_entry = LIST_NEXT(entry, next);
 		LIST_REMOVE(entry, next);
 		rte_free(entry);
 	}
 
-	for (entry = LIST_FIRST(&pool->free_list);
-	     entry && (next_entry = LIST_NEXT(entry, next), 1);
-	     entry = next_entry) {
+	for (entry = LIST_FIRST(&pool->free_list); entry; entry = next_entry) {
+		next_entry = LIST_NEXT(entry, next);
 		LIST_REMOVE(entry, next);
 		rte_free(entry);
 	}
@@ -999,9 +997,9 @@ ice_vsi_config_tc_queue_mapping(struct ice_hw *hw, struct ice_vsi *vsi,
 	if (vsi->adapter->hw.func_caps.common_cap.num_msix_vectors < 2) {
 		vsi->nb_qps = 0;
 	} else {
-		vsi->nb_qps = RTE_MIN
-			((uint16_t)vsi->adapter->hw.func_caps.common_cap.num_msix_vectors - 2,
-			RTE_MIN(vsi->nb_qps, ICE_MAX_Q_PER_TC));
+		vsi->nb_qps = RTE_MIN(vsi->nb_qps, ICE_MAX_Q_PER_TC);
+		vsi->nb_qps = RTE_MIN(vsi->nb_qps,
+			(uint16_t)vsi->adapter->hw.func_caps.common_cap.num_msix_vectors - 2);
 
 		/* cap max QPs to what the HW reports as num-children for each layer.
 		 * Multiply num_children for each layer from the entry_point layer to
@@ -1399,7 +1397,9 @@ ice_pf_enable_irq0(struct ice_hw *hw)
 	ICE_WRITE_REG(hw, PFINT_OICR_ENA, 0);
 	ICE_READ_REG(hw, PFINT_OICR);
 
-#ifdef ICE_LSE_SPT
+	/* Enable all OICR causes except link-state-change: LSC is delivered
+	 * as an unsolicited AdminQ get-link-status notification.
+	 */
 	ICE_WRITE_REG(hw, PFINT_OICR_ENA,
 		      (uint32_t)(PFINT_OICR_ENA_INT_ENA_M &
 				 (~PFINT_OICR_LINK_STAT_CHANGE_M)));
@@ -1415,9 +1415,6 @@ ice_pf_enable_irq0(struct ice_hw *hw)
 		      ((0 << PFINT_FW_CTL_ITR_INDX_S) &
 		       PFINT_FW_CTL_ITR_INDX_M) |
 		      PFINT_FW_CTL_CAUSE_ENA_M);
-#else
-	ICE_WRITE_REG(hw, PFINT_OICR_ENA, PFINT_OICR_ENA_INT_ENA_M);
-#endif
 
 	ICE_WRITE_REG(hw, GLINT_DYN_CTL(0),
 		      GLINT_DYN_CTL_INTENA_M |
@@ -1436,32 +1433,27 @@ ice_pf_disable_irq0(struct ice_hw *hw)
 	ice_flush(hw);
 }
 
-#ifdef ICE_LSE_SPT
 static void
 ice_handle_aq_msg(struct rte_eth_dev *dev)
 {
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ice_ctl_q_info *cq = &hw->adminq;
-	struct ice_rq_event_info event;
+	unsigned char buf[ICE_AQ_MAX_BUF_LEN] = {0};
+	struct ice_rq_event_info event = {
+		.msg_buf = buf,
+		.buf_len = sizeof(buf),
+	};
 	uint16_t pending, opcode;
 	int ret;
-
-	event.buf_len = ICE_AQ_MAX_BUF_LEN;
-	event.msg_buf = rte_zmalloc(NULL, event.buf_len, 0);
-	if (!event.msg_buf) {
-		PMD_DRV_LOG(ERR, "Failed to allocate mem");
-		return;
-	}
 
 	pending = 1;
 	while (pending) {
 		ret = ice_clean_rq_elem(hw, cq, &event, &pending);
 
 		if (ret != ICE_SUCCESS) {
-			PMD_DRV_LOG(INFO,
-				    "Failed to read msg from AdminQ, "
-				    "adminq_err: %u",
-				    hw->adminq.sq_last_status);
+			if (hw->adminq.sq_last_status != 0)
+				PMD_DRV_LOG(INFO, "Failed to read msg from AdminQ, adminq_err: %u",
+						hw->adminq.sq_last_status);
 			break;
 		}
 		opcode = rte_le_to_cpu_16(event.desc.opcode);
@@ -1479,9 +1471,7 @@ ice_handle_aq_msg(struct rte_eth_dev *dev)
 			break;
 		}
 	}
-	rte_free(event.msg_buf);
 }
-#endif
 
 /**
  * Interrupt handler triggered by NIC for handling
@@ -1500,24 +1490,18 @@ ice_interrupt_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_pci_device *pci_dev = ICE_DEV_TO_PCI(dev);
 	uint32_t oicr;
 	uint32_t reg;
 	uint8_t pf_num;
 	uint8_t event;
 	uint16_t queue;
-	int ret;
-#ifdef ICE_LSE_SPT
-	uint32_t int_fw_ctl;
-#endif
 
 	/* Disable interrupt */
 	ice_pf_disable_irq0(hw);
 
 	/* read out interrupt causes */
 	oicr = ICE_READ_REG(hw, PFINT_OICR);
-#ifdef ICE_LSE_SPT
-	int_fw_ctl = ICE_READ_REG(hw, PFINT_FW_CTL);
-#endif
 
 	/* No interrupt event indicated */
 	if (!(oicr & PFINT_OICR_INTEVENT_M)) {
@@ -1525,20 +1509,8 @@ ice_interrupt_handler(void *param)
 		goto done;
 	}
 
-#ifdef ICE_LSE_SPT
-	if (int_fw_ctl & PFINT_FW_CTL_INTEVENT_M) {
-		PMD_DRV_LOG(INFO, "FW_CTL: link state change event");
-		ice_handle_aq_msg(dev);
-	}
-#else
-	if (oicr & PFINT_OICR_LINK_STAT_CHANGE_M) {
-		PMD_DRV_LOG(INFO, "OICR: link state change event");
-		ret = ice_link_update(dev, 0);
-		if (!ret)
-			rte_eth_dev_callback_process
-				(dev, RTE_ETH_EVENT_INTR_LSC, NULL);
-	}
-#endif
+	/* Always drain the AdminQ on any misc interrupt. */
+	ice_handle_aq_msg(dev);
 
 	if (oicr & PFINT_OICR_MAL_DETECT_M) {
 		PMD_DRV_LOG(WARNING, "OICR: MDD event");
@@ -1587,7 +1559,10 @@ ice_interrupt_handler(void *param)
 done:
 	/* Enable interrupt */
 	ice_pf_enable_irq0(hw);
-	rte_intr_ack(dev->intr_handle);
+	rte_intr_ack(pci_dev->intr_handle);
+
+	/* Re-drain AdminQ to catch events that arrived during the CLEARPBA window */
+	ice_handle_aq_msg(dev);
 }
 
 static void
@@ -3900,6 +3875,7 @@ ice_dev_configure(struct rte_eth_dev *dev)
 	ad->tx_simple_allowed = true;
 
 	ad->rx_func_type = ICE_RX_DEFAULT;
+	ad->tx_func_type = ICE_TX_DEFAULT;
 
 	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
 		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
@@ -4398,6 +4374,7 @@ ice_dev_start(struct rte_eth_dev *dev)
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	struct ice_vsi *vsi = pf->main_vsi;
+	struct rte_pci_device *pci_dev = ICE_DEV_TO_PCI(dev);
 	struct ice_adapter *ad =
 			ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	uint16_t nb_rxq = 0;
@@ -4447,6 +4424,8 @@ ice_dev_start(struct rte_eth_dev *dev)
 	/* enable Rx interrupt and mapping Rx queue to interrupt vector */
 	if (ice_rxq_intr_setup(dev))
 		return -EIO;
+
+	rte_intr_enable(pci_dev->intr_handle);
 
 	/* Enable receiving broadcast packets and transmitting packets */
 	ice_set_bit(ICE_PROMISC_BCAST_RX, pmask);
@@ -5500,9 +5479,10 @@ ice_get_rss_lut(struct ice_vsi *vsi, uint8_t *lut, uint16_t lut_size)
 	if (pf->flags & ICE_FLAG_RSS_AQ_CAPABLE) {
 		lut_params.vsi_handle = vsi->idx;
 		lut_params.lut_size = lut_size;
-		lut_params.lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
+		lut_params.lut_type = (vsi->global_lut_allocated) ?
+			ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_GLOBAL : ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
 		lut_params.lut = lut;
-		lut_params.global_lut_id = 0;
+		lut_params.global_lut_id = (vsi->global_lut_allocated) ? vsi->global_lut_id : 0;
 		ret = ice_aq_get_rss_lut(hw, &lut_params);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to get RSS lookup table");
@@ -5536,9 +5516,10 @@ ice_set_rss_lut(struct ice_vsi *vsi, uint8_t *lut, uint16_t lut_size)
 	if (pf->flags & ICE_FLAG_RSS_AQ_CAPABLE) {
 		lut_params.vsi_handle = vsi->idx;
 		lut_params.lut_size = lut_size;
-		lut_params.lut_type = ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
+		lut_params.lut_type = (vsi->global_lut_allocated) ?
+			ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_GLOBAL : ICE_AQC_GSET_RSS_LUT_TABLE_TYPE_PF;
 		lut_params.lut = lut;
-		lut_params.global_lut_id = 0;
+		lut_params.global_lut_id = (vsi->global_lut_allocated) ? vsi->global_lut_id : 0;
 		ret = ice_aq_set_rss_lut(hw, &lut_params);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to set RSS lookup table");
@@ -5565,7 +5546,7 @@ ice_rss_reta_update(struct rte_eth_dev *dev,
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	uint16_t i, lut_size = pf->hash_lut_size;
 	uint16_t idx, shift;
-	uint8_t *lut;
+	uint8_t lut[ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_2K] = {0};
 	int ret;
 
 	if (reta_size != ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_128 &&
@@ -5582,14 +5563,9 @@ ice_rss_reta_update(struct rte_eth_dev *dev,
 	/* It MUST use the current LUT size to get the RSS lookup table,
 	 * otherwise if will fail with -100 error code.
 	 */
-	lut = rte_zmalloc(NULL,  RTE_MAX(reta_size, lut_size), 0);
-	if (!lut) {
-		PMD_DRV_LOG(ERR, "No memory can be allocated");
-		return -ENOMEM;
-	}
 	ret = ice_get_rss_lut(pf->main_vsi, lut, lut_size);
 	if (ret)
-		goto out;
+		return ret;
 
 	for (i = 0; i < reta_size; i++) {
 		idx = i / RTE_ETH_RETA_GROUP_SIZE;
@@ -5605,10 +5581,7 @@ ice_rss_reta_update(struct rte_eth_dev *dev,
 		pf->hash_lut_size = reta_size;
 	}
 
-out:
-	rte_free(lut);
-
-	return ret;
+	return 0;
 }
 
 static int
@@ -5619,7 +5592,7 @@ ice_rss_reta_query(struct rte_eth_dev *dev,
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	uint16_t i, lut_size = pf->hash_lut_size;
 	uint16_t idx, shift;
-	uint8_t *lut;
+	uint8_t lut[ICE_AQC_GSET_RSS_LUT_TABLE_SIZE_2K] = {0};
 	int ret;
 
 	if (reta_size != lut_size) {
@@ -5631,15 +5604,9 @@ ice_rss_reta_query(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	lut = rte_zmalloc(NULL, reta_size, 0);
-	if (!lut) {
-		PMD_DRV_LOG(ERR, "No memory can be allocated");
-		return -ENOMEM;
-	}
-
 	ret = ice_get_rss_lut(pf->main_vsi, lut, reta_size);
 	if (ret)
-		goto out;
+		return ret;
 
 	for (i = 0; i < reta_size; i++) {
 		idx = i / RTE_ETH_RETA_GROUP_SIZE;
@@ -5648,10 +5615,7 @@ ice_rss_reta_query(struct rte_eth_dev *dev,
 			reta_conf[idx].reta[shift] = lut[i];
 	}
 
-out:
-	rte_free(lut);
-
-	return ret;
+	return 0;
 }
 
 static int

@@ -40,6 +40,8 @@
 
 static RTE_DEFINE_PER_LCORE(int, _epfd) = -1; /**< epoll fd per thread */
 
+static uint32_t active_events; /**< events for active interrupt */
+
 /**
  * union for pipe fds.
  */
@@ -886,6 +888,44 @@ out:
 	return rc;
 }
 
+static uint32_t
+epoll_to_intr_events(uint32_t epoll_events)
+{
+	uint32_t ev = 0;
+
+	if (epoll_events & EPOLLIN)
+		ev |= RTE_INTR_EVENT_IN;
+	if (epoll_events & EPOLLERR)
+		ev |= RTE_INTR_EVENT_ERR;
+	if (epoll_events & EPOLLHUP)
+		ev |= RTE_INTR_EVENT_HUP;
+	if (epoll_events & EPOLLRDHUP)
+		ev |= RTE_INTR_EVENT_RDHUP;
+	return ev;
+}
+
+static void
+eal_intr_source_remove_and_free(struct rte_intr_source *src)
+{
+	struct rte_intr_callback *cb, *next;
+
+	/* Remove the interrupt source */
+	rte_spinlock_lock(&intr_lock);
+	TAILQ_REMOVE(&intr_sources, src, next);
+	rte_spinlock_unlock(&intr_lock);
+
+	/* Free callbacks */
+	for (cb = TAILQ_FIRST(&src->callbacks); cb; cb = next) {
+		next = TAILQ_NEXT(cb, next);
+		TAILQ_REMOVE(&src->callbacks, cb, next);
+		free(cb);
+	}
+
+	/* Free the interrupt source */
+	rte_intr_instance_free(src->intr_handle);
+	free(src);
+}
+
 static int
 eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 {
@@ -951,49 +991,47 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 		}
 
 		if (bytes_read > 0) {
-			/**
+			/*
+			 * Check for epoll error or disconnect events for
+			 * interrupts that are read directly in eal.
+			 */
+			if (events[n].events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+				EAL_LOG(ERR, "Disconnect condition on fd %d "
+					"(events=0x%x), removing from epoll",
+					events[n].data.fd, events[n].events);
+				eal_intr_source_remove_and_free(src);
+				return -1;
+			}
+
+			/*
 			 * read out to clear the ready-to-be-read flag
 			 * for epoll_wait.
 			 */
 			bytes_read = read(events[n].data.fd, &buf, bytes_read);
-			if (bytes_read < 0) {
+			if (bytes_read > 0) {
+				call = true;
+			} else if (bytes_read < 0) {
 				if (errno == EINTR || errno == EWOULDBLOCK)
 					continue;
 
-				EAL_LOG(ERR, "Error reading from file "
-					"descriptor %d: %s",
+				EAL_LOG(ERR, "Error reading from file descriptor %d: %s",
 					events[n].data.fd,
 					strerror(errno));
-				/*
-				 * The device is unplugged or buggy, remove
-				 * it as an interrupt source and return to
-				 * force the wait list to be rebuilt.
-				 */
-				rte_spinlock_lock(&intr_lock);
-				TAILQ_REMOVE(&intr_sources, src, next);
-				rte_spinlock_unlock(&intr_lock);
-
-				for (cb = TAILQ_FIRST(&src->callbacks); cb;
-							cb = next) {
-					next = TAILQ_NEXT(cb, next);
-					TAILQ_REMOVE(&src->callbacks, cb, next);
-					free(cb);
-				}
-				rte_intr_instance_free(src->intr_handle);
-				free(src);
+			} else {
+				EAL_LOG(ERR, "Read nothing from file descriptor %d",
+					events[n].data.fd);
+			}
+			if (bytes_read <= 0) {
+				eal_intr_source_remove_and_free(src);
 				return -1;
-			} else if (bytes_read == 0)
-				EAL_LOG(ERR, "Read nothing from file "
-					"descriptor %d", events[n].data.fd);
-			else
-				call = true;
+			}
 		}
 
 		/* grab a lock, again to call callbacks and update status. */
 		rte_spinlock_lock(&intr_lock);
 
 		if (call) {
-
+			active_events = epoll_to_intr_events(events[n].events);
 			/* Finally, call all callbacks. */
 			TAILQ_FOREACH(cb, &src->callbacks, next) {
 
@@ -1007,6 +1045,7 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 				/*get the lock back. */
 				rte_spinlock_lock(&intr_lock);
 			}
+			active_events = 0;
 		}
 		/* we done with that interrupt source, release it. */
 		src->active = 0;
@@ -1620,4 +1659,14 @@ RTE_EXPORT_SYMBOL(rte_thread_is_intr)
 int rte_thread_is_intr(void)
 {
 	return rte_thread_equal(intr_thread, rte_thread_self());
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_active_events_flags)
+uint32_t
+rte_intr_active_events_flags(void)
+{
+	if (rte_thread_is_intr())
+		return active_events;
+
+	return 0;
 }

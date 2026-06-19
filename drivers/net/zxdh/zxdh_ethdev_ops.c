@@ -307,7 +307,6 @@ zxdh_link_info_get(struct rte_eth_dev *dev, struct rte_eth_link *link)
 		}
 
 		link->link_speed = ZXDH_GET(link_info_msg, link_msg_addr, speed);
-		link->link_autoneg = ZXDH_GET(link_info_msg, link_msg_addr, autoneg);
 		hw->speed_mode = ZXDH_GET(link_info_msg, link_msg_addr, speed_modes);
 		if ((ZXDH_GET(link_info_msg, link_msg_addr, duplex) & RTE_ETH_LINK_FULL_DUPLEX) ==
 				RTE_ETH_LINK_FULL_DUPLEX)
@@ -322,6 +321,7 @@ zxdh_link_info_get(struct rte_eth_dev *dev, struct rte_eth_link *link)
 		link->link_autoneg = RTE_ETH_LINK_AUTONEG;
 		link->link_status = RTE_ETH_LINK_UP;
 	}
+	link->link_autoneg = hw->autoneg;
 	hw->speed = link->link_speed;
 
 	return 0;
@@ -368,6 +368,110 @@ int zxdh_dev_set_link_up(struct rte_eth_dev *dev)
 	return ret;
 }
 
+static int32_t zxdh_speed_mode_to_spm(uint32_t link_speed_modes)
+{
+	switch (link_speed_modes) {
+	case RTE_ETH_LINK_SPEED_1G:   return ZXDH_SPM_SPEED_1X_1G;
+	case RTE_ETH_LINK_SPEED_10G:  return ZXDH_SPM_SPEED_1X_10G;
+	case RTE_ETH_LINK_SPEED_25G:  return ZXDH_SPM_SPEED_1X_25G;
+	case RTE_ETH_LINK_SPEED_50G:  return ZXDH_SPM_SPEED_1X_50G;
+	case RTE_ETH_LINK_SPEED_100G: return ZXDH_SPM_SPEED_4X_100G;
+	case RTE_ETH_LINK_SPEED_200G: return ZXDH_SPM_SPEED_4X_200G;
+	default:
+		PMD_DRV_LOG(ERR, "unsupported speed!");
+		return -1;
+	}
+}
+
+int32_t zxdh_link_speed_set(struct rte_eth_dev *dev)
+{
+	struct zxdh_hw *hw = dev->data->dev_private;
+	struct zxdh_msg_info msg;
+	uint8_t zxdh_msg_reply_info[ZXDH_ST_SZ_BYTES(msg_reply_info)];
+	void *reply_body_addr = ZXDH_ADDR_OF(msg_reply_info, zxdh_msg_reply_info, reply_body);
+	int32_t spm_speed_modes;
+	int32_t ret;
+
+	spm_speed_modes =
+		zxdh_speed_mode_to_spm(dev->data->dev_conf.link_speeds & ~RTE_ETH_LINK_SPEED_FIXED);
+	if (spm_speed_modes == -1 || spm_speed_modes == hw->speed_mode) {
+		PMD_DRV_LOG(DEBUG, "not need update speed");
+		return 0;
+	}
+	if ((spm_speed_modes & hw->support_speed_modes) == 0)  {
+		PMD_DRV_LOG(ERR, "not support configure this speed");
+		return 0;
+	}
+
+	zxdh_agent_msg_build(hw, ZXDH_MAC_SPEED_SET, &msg);
+	msg.data.link_msg.autoneg = 0;
+	msg.data.link_msg.speed_modes = spm_speed_modes & hw->support_speed_modes;
+
+	ret = zxdh_send_msg_to_riscv(dev, &msg, sizeof(struct zxdh_msg_info),
+				zxdh_msg_reply_info, ZXDH_ST_SZ_BYTES(msg_reply_info),
+				ZXDH_BAR_MODULE_MAC);
+	uint8_t flag = ZXDH_GET(msg_reply_body, reply_body_addr, flag);
+	if (flag != ZXDH_REPS_SUCC || ret) {
+		PMD_DRV_LOG(ERR, "failed to set link speed!");
+		return -1;
+	}
+
+	return 0;
+}
+
+void
+zxdh_speed_modes_get(struct rte_eth_dev *dev)
+{
+	struct zxdh_hw *hw = dev->data->dev_private;
+	struct zxdh_msg_info msg;
+	uint8_t zxdh_msg_reply_info[ZXDH_ST_SZ_BYTES(msg_reply_info)];
+	int32_t ret;
+
+	if (!hw->is_pf)
+		return;
+
+	msg.agent_msg_head.msg_type = ZXDH_MAC_PHYPORT_INIT;
+	msg.agent_msg_head.init = 1;
+
+	ret = zxdh_send_msg_to_riscv(dev, &msg, sizeof(struct zxdh_msg_info),
+				zxdh_msg_reply_info, ZXDH_ST_SZ_BYTES(msg_reply_info),
+				ZXDH_BAR_MODULE_MAC);
+	if (ret)
+		PMD_DRV_LOG(ERR, "Failed to get speed mode info");
+
+	void *reply_body_addr = ZXDH_ADDR_OF(msg_reply_info, zxdh_msg_reply_info, reply_body);
+	void *link_msg_addr = ZXDH_ADDR_OF(msg_reply_body, reply_body_addr, link_msg);
+	uint32_t speed_modes = ZXDH_GET(link_info_msg, link_msg_addr, speed_modes);
+
+	hw->support_speed_modes = speed_modes;
+}
+
+int32_t zxdh_autoneg_stats_get(struct rte_eth_dev *dev)
+{
+	struct zxdh_hw *hw = dev->data->dev_private;
+	struct zxdh_msg_info msg;
+	uint8_t zxdh_msg_reply_info[ZXDH_ST_SZ_BYTES(msg_reply_info)];
+	int32_t ret;
+
+	zxdh_agent_msg_build(hw, ZXDH_MAC_AUTONEG_GET, &msg);
+
+	ret = zxdh_send_msg_to_riscv(dev, &msg, sizeof(struct zxdh_msg_info),
+				zxdh_msg_reply_info, ZXDH_ST_SZ_BYTES(msg_reply_info),
+				ZXDH_BAR_MODULE_MAC);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "Failed to get link autoneg stats!");
+		return -1;
+	}
+	void *reply_body_addr = ZXDH_ADDR_OF(msg_reply_info, zxdh_msg_reply_info, reply_body);
+	void *link_addr = ZXDH_ADDR_OF(msg_reply_body, reply_body_addr, link_msg);
+	void *link_autoeng_addr = ZXDH_ADDR_OF(link_info_msg, link_addr, autoneg);
+
+	hw->autoneg = *(uint8_t *)link_autoeng_addr;
+	PMD_DRV_LOG(DEBUG, "autoneg stats is: %d", hw->autoneg);
+
+	return 0;
+}
+
 int32_t zxdh_dev_link_update(struct rte_eth_dev *dev, int32_t wait_to_complete __rte_unused)
 {
 	struct rte_eth_link link;
@@ -384,17 +488,7 @@ int32_t zxdh_dev_link_update(struct rte_eth_dev *dev, int32_t wait_to_complete _
 		PMD_DRV_LOG(ERR, "Failed to get link status from hw");
 		return ret;
 	}
-	link.link_status &= hw->admin_status;
-	if (link.link_status == RTE_ETH_LINK_DOWN) {
-		PMD_DRV_LOG(DEBUG, "dev link status is down.");
-		goto link_down;
-	}
-	goto out;
 
-link_down:
-	link.link_status = RTE_ETH_LINK_DOWN;
-	link.link_speed  = RTE_ETH_SPEED_NUM_UNKNOWN;
-out:
 	if (link.link_status != dev->data->dev_link.link_status) {
 		ret = zxdh_config_port_status(dev, link.link_status);
 		if (ret != 0) {
@@ -1708,22 +1802,26 @@ zxdh_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
 	struct zxdh_hw_mac_bytes mac_bytes = {0};
 	uint32_t i = 0;
 
-	zxdh_hw_vqm_stats_get(dev, ZXDH_VQM_DEV_STATS_GET,  &vqm_stats);
-	if (hw->is_pf)
-		zxdh_hw_mac_stats_get(dev, &mac_stats, &mac_bytes);
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		zxdh_hw_vqm_stats_get(dev, ZXDH_VQM_DEV_STATS_GET,  &vqm_stats);
+		if (hw->is_pf)
+			zxdh_hw_mac_stats_get(dev, &mac_stats, &mac_bytes);
 
-	zxdh_hw_np_stats_get(dev, &np_stats);
+		zxdh_hw_np_stats_get(dev, &np_stats);
 
-	stats->ipackets = vqm_stats.rx_total;
-	stats->opackets = vqm_stats.tx_total;
-	stats->ibytes = vqm_stats.rx_bytes;
-	stats->obytes = vqm_stats.tx_bytes;
-	stats->imissed = vqm_stats.rx_drop + mac_stats.rx_drop;
-	stats->ierrors = vqm_stats.rx_error + mac_stats.rx_error + np_stats.rx_mtu_drop_pkts;
-	stats->oerrors = vqm_stats.tx_error + mac_stats.tx_error + np_stats.tx_mtu_drop_pkts;
+		stats->ipackets = vqm_stats.rx_total;
+		stats->opackets = vqm_stats.tx_total;
+		stats->ibytes = vqm_stats.rx_bytes;
+		stats->obytes = vqm_stats.tx_bytes;
+		stats->imissed = vqm_stats.rx_drop + mac_stats.rx_drop;
+		stats->ierrors = vqm_stats.rx_error +
+			mac_stats.rx_error + np_stats.rx_mtu_drop_pkts;
+		stats->oerrors = vqm_stats.tx_error +
+			mac_stats.tx_error + np_stats.tx_mtu_drop_pkts;
 
-	if (hw->i_mtr_en || hw->e_mtr_en)
-		stats->imissed  += np_stats.rx_mtr_drop_pkts;
+		if (hw->i_mtr_en || hw->e_mtr_en)
+			stats->imissed  += np_stats.rx_mtr_drop_pkts;
+	}
 
 	stats->rx_nombuf = dev->data->rx_mbuf_alloc_failed;
 	for (i = 0; (i < dev->data->nb_rx_queues) && (i < RTE_ETHDEV_QUEUE_STAT_CNTRS); i++) {
@@ -1999,14 +2097,20 @@ zxdh_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats, uint3
 	uint32_t count = 0;
 	uint32_t t = 0;
 
-	if (hw->is_pf) {
+	if (hw->is_pf)
 		nstats += ZXDH_MAC_XSTATS + ZXDH_MAC_BYTES;
-		zxdh_hw_mac_stats_get(dev, &mac_stats, &mac_bytes);
-	}
+
 	if (n < nstats)
 		return nstats;
-	zxdh_hw_vqm_stats_get(dev, ZXDH_VQM_DEV_STATS_GET,  &vqm_stats);
-	zxdh_hw_np_stats_get(dev, &np_stats);
+
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+		if (hw->is_pf)
+			zxdh_hw_mac_stats_get(dev, &mac_stats, &mac_bytes);
+
+		zxdh_hw_vqm_stats_get(dev, ZXDH_VQM_DEV_STATS_GET,  &vqm_stats);
+		zxdh_hw_np_stats_get(dev, &np_stats);
+	}
+
 	for (i = 0; i < ZXDH_NP_XSTATS; i++) {
 		xstats[count].value = *(uint64_t *)(((char *)&np_stats)
 						 + zxdh_np_stat_strings[i].offset);
@@ -2140,6 +2244,9 @@ zxdh_dev_fw_version_get(struct rte_eth_dev *dev,
 	void *flash_msg_addr = ZXDH_ADDR_OF(msg_reply_body, reply_body_addr, flash_msg);
 	char fw_ver[ZXDH_FWVERS_LEN] = {0};
 	uint32_t ret = 0;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -EPERM;
 
 	zxdh_agent_msg_build(hw, ZXDH_FLASH_FIR_VERSION_GET, &msg_info);
 

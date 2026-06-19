@@ -24,7 +24,7 @@
 #define I40E_AQ_LEN               32
 #define I40E_AQ_BUF_SZ            4096
 /* Number of queues per TC should be one of 1, 2, 4, 8, 16, 32, 64 */
-#define I40E_MAX_Q_PER_TC         64
+#define I40E_MAX_Q_PER_TC         UINT16_C(64)
 #define I40E_NUM_DESC_DEFAULT     512
 #define I40E_NUM_DESC_ALIGN       32
 #define I40E_BUF_SIZE_MIN         1024
@@ -92,11 +92,11 @@
 #define I40E_WRITE_GLB_REG(hw, reg, value)				\
 	do {								\
 		uint32_t ori_val;					\
-		struct rte_eth_dev *dev;				\
-		struct rte_eth_dev_data *dev_data;			\
+		struct rte_eth_dev *_dev;				\
+		struct rte_eth_dev_data *_dev_data;			\
 		ori_val = I40E_READ_REG((hw), (reg));			\
-		dev_data = ((struct i40e_adapter *)hw->back)->pf.dev_data; \
-		dev = &rte_eth_devices[dev_data->port_id];		\
+		_dev_data = ((struct i40e_adapter *)hw->back)->pf.dev_data; \
+		_dev = &rte_eth_devices[_dev_data->port_id];		\
 		I40E_PCI_REG_WRITE(I40E_PCI_REG_ADDR((hw),		\
 						     (reg)), (value));	\
 		if (ori_val != value)					\
@@ -104,7 +104,7 @@
 				    "i40e device %s changed global "	\
 				    "register [0x%08x]. original: 0x%08x, " \
 				    "new: 0x%08x ",			\
-				    (dev->device->name), (reg),		\
+				    (_dev->device->name), (reg),		\
 				    (ori_val), (value));		\
 	} while (0)
 
@@ -631,7 +631,7 @@ struct i40e_fdir_flex_pit {
 /* A structure used to contain extend input of flow */
 struct i40e_fdir_flow_ext {
 	uint16_t vlan_tci;
-	uint8_t flexbytes[RTE_ETH_FDIR_MAX_FLEXLEN];
+	uint8_t flexbytes[I40E_FDIR_MAX_FLEX_LEN];
 	/* It is filled by the flexible payload to match. */
 	uint8_t flex_mask[I40E_FDIR_MAX_FLEX_LEN];
 	uint8_t raw_id;
@@ -1231,8 +1231,6 @@ enum i40e_rx_func_type {
 	I40E_RX_DEFAULT,
 	I40E_RX_SCATTERED,
 	I40E_RX_BULK_ALLOC,
-	I40E_RX_SSE,
-	I40E_RX_SSE_SCATTERED,
 	I40E_RX_AVX2,
 	I40E_RX_AVX2_SCATTERED,
 	I40E_RX_AVX512,
@@ -1241,6 +1239,15 @@ enum i40e_rx_func_type {
 	I40E_RX_NEON_SCATTERED,
 	I40E_RX_ALTIVEC,
 	I40E_RX_ALTIVEC_SCATTERED,
+};
+
+enum i40e_tx_func_type {
+	I40E_TX_DEFAULT,
+	I40E_TX_SCALAR_SIMPLE,
+	I40E_TX_AVX2,
+	I40E_TX_AVX512,
+	I40E_TX_NEON,
+	I40E_TX_ALTIVEC,
 };
 
 /*
@@ -1260,10 +1267,10 @@ struct i40e_adapter {
 	bool tx_vec_allowed;
 
 	enum i40e_rx_func_type rx_func_type;
+	enum i40e_tx_func_type tx_func_type;
 
 	uint64_t mbuf_check; /* mbuf check flags. */
 	uint16_t max_pkt_len; /* Maximum packet length */
-	eth_tx_burst_t tx_pkt_burst;
 
 	/* For PTP */
 	struct rte_timecounter systime_tc;
@@ -1279,8 +1286,6 @@ struct i40e_adapter {
 
 	/* For RSS reta table update */
 	uint8_t rss_reta_updated;
-
-	enum rte_vect_max_simd tx_simd_width;
 };
 
 /**
@@ -1299,12 +1304,14 @@ struct i40e_vf_representor {
 
 extern const struct rte_flow_ops i40e_flow_ops;
 
-union i40e_filter_t {
-	struct rte_eth_ethertype_filter ethertype_filter;
-	struct i40e_fdir_filter_conf fdir_filter;
-	struct rte_eth_tunnel_filter_conf tunnel_filter;
-	struct i40e_tunnel_filter_conf consistent_tunnel_filter;
-	struct i40e_rte_flow_rss_conf rss_conf;
+struct i40e_filter_ctx {
+	union {
+		struct rte_eth_ethertype_filter ethertype_filter;
+		struct i40e_fdir_filter_conf fdir_filter;
+		struct i40e_tunnel_filter_conf consistent_tunnel_filter;
+		struct i40e_rte_flow_rss_conf rss_conf;
+	};
+	enum rte_filter_type type;
 };
 
 typedef int (*parse_filter_t)(struct rte_eth_dev *dev,
@@ -1312,7 +1319,7 @@ typedef int (*parse_filter_t)(struct rte_eth_dev *dev,
 			      const struct rte_flow_item pattern[],
 			      const struct rte_flow_action actions[],
 			      struct rte_flow_error *error,
-			      union i40e_filter_t *filter);
+			      struct i40e_filter_ctx *filter);
 struct i40e_valid_pattern {
 	enum rte_flow_item_type *items;
 	parse_filter_t parse_filter;
@@ -1449,7 +1456,7 @@ int i40e_flush_queue_region_all_conf(struct rte_eth_dev *dev,
 void i40e_init_queue_region_conf(struct rte_eth_dev *dev);
 void i40e_flex_payload_reg_set_default(struct i40e_hw *hw);
 void i40e_pf_disable_rss(struct i40e_pf *pf);
-int i40e_pf_calc_configured_queues_num(struct i40e_pf *pf);
+uint16_t i40e_pf_calc_configured_queues_num(struct i40e_pf *pf);
 int i40e_pf_reset_rss_reta(struct i40e_pf *pf);
 int i40e_pf_reset_rss_key(struct i40e_pf *pf);
 int i40e_pf_config_rss(struct i40e_pf *pf);
@@ -1510,8 +1517,8 @@ i40e_init_adminq_parameter(struct i40e_hw *hw)
 	hw->aq.asq_buf_size = I40E_AQ_BUF_SZ;
 }
 
-static inline int
-i40e_align_floor(int n)
+static inline uint32_t
+i40e_align_floor(uint32_t n)
 {
 	if (n == 0)
 		return 0;

@@ -44,19 +44,43 @@ static void nbl_res_txrx_stop_tx_ring(void *priv, u16 queue_idx)
 {
 	struct nbl_resource_mgt *res_mgt = (struct nbl_resource_mgt *)priv;
 	struct nbl_res_tx_ring *tx_ring = NBL_RES_MGT_TO_TX_RING(res_mgt, queue_idx);
-	int i;
+	struct nbl_tx_entry *tx_entry;
+	u16 i, free_cnt, free_mbuf_cnt;
 
 	if (!tx_ring)
 		return;
 
-	for (i = 0; i < tx_ring->nb_desc; i++) {
-		if (tx_ring->tx_entry[i].mbuf != NULL) {
-			rte_pktmbuf_free_seg(tx_ring->tx_entry[i].mbuf);
-			memset(&tx_ring->tx_entry[i], 0, sizeof(*tx_ring->tx_entry));
+	i = tx_ring->next_to_clean + 1 - NBL_TX_RS_THRESH;
+	free_cnt = tx_ring->vq_free_cnt;
+	tx_entry = &tx_ring->tx_entry[i];
+	free_mbuf_cnt = 0;
+
+	while (free_cnt < tx_ring->nb_desc) {
+		if (tx_entry->mbuf) {
+			free_mbuf_cnt++;
+			rte_pktmbuf_free_seg(tx_entry->mbuf);
 		}
+
+		i++;
+		tx_entry++;
+		free_cnt++;
+		if (i == tx_ring->nb_desc) {
+			i = 0;
+			tx_entry = &tx_ring->tx_entry[i];
+		}
+	}
+
+	NBL_LOG(DEBUG, "stop tx ring ntc %u, ntu %u, vq_free_cnt %u, mbuf free_cnt %u",
+		tx_ring->next_to_clean, tx_ring->next_to_use, tx_ring->vq_free_cnt, free_mbuf_cnt);
+
+	for (i = 0; i < tx_ring->nb_desc; i++) {
+		tx_ring->desc[i].addr = 0;
+		tx_ring->desc[i].len = 0;
+		tx_ring->desc[i].id = 0;
 		tx_ring->desc[i].flags = 0;
 	}
 
+	memset(tx_ring->tx_entry, 0, sizeof(*tx_entry) * tx_ring->nb_desc);
 	tx_ring->avail_used_flags = NBL_PACKED_DESC_F_AVAIL_BIT;
 	tx_ring->used_wrap_counter = 1;
 	tx_ring->next_to_clean = NBL_TX_RS_THRESH - 1;
@@ -69,9 +93,13 @@ static void nbl_res_txrx_release_tx_ring(void *priv, u16 queue_idx)
 	struct nbl_resource_mgt *res_mgt = (struct nbl_resource_mgt *)priv;
 	struct nbl_txrx_mgt *txrx_mgt = NBL_RES_MGT_TO_TXRX_MGT(res_mgt);
 	struct nbl_res_tx_ring *tx_ring = NBL_RES_MGT_TO_TX_RING(res_mgt, queue_idx);
+
 	if (!tx_ring)
 		return;
+
 	rte_free(tx_ring->tx_entry);
+	rte_memzone_free(tx_ring->net_hdr_mz);
+	rte_memzone_free(tx_ring->desc_mz);
 	rte_free(tx_ring);
 	txrx_mgt->tx_rings[queue_idx] = NULL;
 }
@@ -104,7 +132,7 @@ static int nbl_res_txrx_start_tx_ring(void *priv,
 
 	if (eth_dev->data->tx_queues[param->queue_idx] != NULL) {
 		NBL_LOG(WARNING, "re-setup an already allocated tx queue");
-		nbl_res_txrx_stop_tx_ring(priv, param->queue_idx);
+		nbl_res_txrx_release_tx_ring(priv, param->queue_idx);
 		eth_dev->data->tx_queues[param->queue_idx] = NULL;
 	}
 
@@ -173,6 +201,7 @@ static int nbl_res_txrx_start_tx_ring(void *priv,
 	tx_ring->next_to_use = 0;
 	tx_ring->desc = (struct nbl_packed_desc *)memzone->addr;
 	tx_ring->net_hdr_mz = net_hdr_mz;
+	tx_ring->desc_mz = memzone;
 	tx_ring->eth_dev = eth_dev;
 	tx_ring->dma_set_msb = common->dma_set_msb;
 	tx_ring->dma_limit_msb = common->dma_limit_msb;
@@ -183,7 +212,6 @@ static int nbl_res_txrx_start_tx_ring(void *priv,
 	eth_dev->data->tx_queues[param->queue_idx] = tx_ring;
 
 	txrx_mgt->tx_rings[param->queue_idx] = tx_ring;
-	txrx_mgt->tx_ring_num++;
 
 	*dma_addr = tx_ring->ring_phys_addr;
 
@@ -203,27 +231,63 @@ alloc_tx_entry_failed:
 static void nbl_res_txrx_stop_rx_ring(void *priv, u16 queue_idx)
 {
 	struct nbl_resource_mgt *res_mgt = (struct nbl_resource_mgt *)priv;
-	struct nbl_res_rx_ring *rx_ring =
-			NBL_RES_MGT_TO_RX_RING(res_mgt, queue_idx);
-	u16 i;
+	struct nbl_res_rx_ring *rx_ring = NBL_RES_MGT_TO_RX_RING(res_mgt, queue_idx);
+	struct nbl_rx_entry *rx_buf;
+	u16 i, free_cnt, free_mbuf_cnt;
 
 	if (!rx_ring)
 		return;
+
+	i = rx_ring->next_to_clean;
+	free_cnt = rx_ring->vq_free_cnt;
+	free_mbuf_cnt = 0;
+
 	if (rx_ring->rx_entry != NULL) {
-		for (i = 0; i < rx_ring->nb_desc; i++) {
-			if (rx_ring->rx_entry[i].mbuf != NULL) {
-				rte_pktmbuf_free_seg(rx_ring->rx_entry[i].mbuf);
-				rx_ring->rx_entry[i].mbuf = NULL;
+		rx_buf = &rx_ring->rx_entry[i];
+		while (free_cnt < rx_ring->nb_desc) {
+			if (rx_buf->mbuf) {
+				free_mbuf_cnt++;
+				rte_pktmbuf_free_seg(rx_buf->mbuf);
 			}
-			rx_ring->desc[i].flags = 0;
+
+			i++;
+			rx_buf++;
+			free_cnt++;
+			if (i == rx_ring->nb_desc) {
+				i = 0;
+				rx_buf = &rx_ring->rx_entry[i];
+			}
 		}
 
-		for (i = rx_ring->nb_desc; i < rx_ring->nb_desc + NBL_DESC_PER_LOOP_VEC_MAX; i++)
+		memset(rx_ring->rx_entry, 0, sizeof(struct nbl_rx_entry) * rx_ring->nb_desc);
+
+		for (i = 0; i < rx_ring->nb_desc + NBL_DESC_PER_LOOP_VEC_MAX; i++) {
+			rx_ring->desc[i].addr = 0;
+			rx_ring->desc[i].len = 0;
+			rx_ring->desc[i].id = 0;
 			rx_ring->desc[i].flags = 0;
+		}
 	}
 
+	NBL_LOG(DEBUG, "stop rx ring ntc %u, ntu %u, vq_free_cnt %u, free_mbuf_cnt %u",
+		rx_ring->next_to_clean, rx_ring->next_to_use, rx_ring->vq_free_cnt, free_mbuf_cnt);
 	rx_ring->next_to_clean = 0;
 	rx_ring->next_to_use = 0;
+}
+
+static void nbl_res_txrx_release_rx_ring(void *priv, u16 queue_idx)
+{
+	struct nbl_resource_mgt *res_mgt = (struct nbl_resource_mgt *)priv;
+	struct nbl_txrx_mgt *txrx_mgt = NBL_RES_MGT_TO_TXRX_MGT(res_mgt);
+	struct nbl_res_rx_ring *rx_ring = NBL_RES_MGT_TO_RX_RING(res_mgt, queue_idx);
+
+	if (!rx_ring)
+		return;
+
+	rte_free(rx_ring->rx_entry);
+	rte_memzone_free(rx_ring->desc_mz);
+	rte_free(rx_ring);
+	txrx_mgt->rx_rings[queue_idx] = NULL;
 }
 
 static int nbl_res_txrx_start_rx_ring(void *priv,
@@ -244,7 +308,7 @@ static int nbl_res_txrx_start_rx_ring(void *priv,
 
 	if (eth_dev->data->rx_queues[param->queue_idx] != NULL) {
 		NBL_LOG(WARNING, "re-setup an already allocated rx queue");
-		nbl_res_txrx_stop_rx_ring(priv, param->queue_idx);
+		nbl_res_txrx_release_rx_ring(priv, param->queue_idx);
 		eth_dev->data->rx_queues[param->queue_idx] = NULL;
 	}
 
@@ -275,6 +339,7 @@ static int nbl_res_txrx_start_rx_ring(void *priv,
 
 	rx_ring->product = param->product;
 	rx_ring->mempool = param->mempool;
+	rx_ring->desc_mz = memzone;
 	rx_ring->nb_desc = param->nb_desc;
 	rx_ring->queue_id = param->queue_idx;
 	rx_ring->notify_qid =
@@ -300,7 +365,6 @@ static int nbl_res_txrx_start_rx_ring(void *priv,
 	eth_dev->data->rx_queues[param->queue_idx] = rx_ring;
 
 	txrx_mgt->rx_rings[param->queue_idx] = rx_ring;
-	txrx_mgt->rx_ring_num++;
 
 	*dma_addr = rx_ring->ring_phys_addr;
 
@@ -374,20 +438,6 @@ static int nbl_res_alloc_rx_bufs(void *priv, u16 queue_idx)
 	rxq->buf_length = rxq->buf_length - RTE_PKTMBUF_HEADROOM;
 
 	return 0;
-}
-
-static void nbl_res_txrx_release_rx_ring(void *priv, u16 queue_idx)
-{
-	struct nbl_resource_mgt *res_mgt = (struct nbl_resource_mgt *)priv;
-	struct nbl_txrx_mgt *txrx_mgt = NBL_RES_MGT_TO_TXRX_MGT(res_mgt);
-	struct nbl_res_rx_ring *rx_ring =
-			NBL_RES_MGT_TO_RX_RING(res_mgt, queue_idx);
-	if (!rx_ring)
-		return;
-
-	rte_free(rx_ring->rx_entry);
-	rte_free(rx_ring);
-	txrx_mgt->rx_rings[queue_idx] = NULL;
 }
 
 static void nbl_res_txrx_update_rx_ring(void *priv, u16 index)
@@ -504,7 +554,10 @@ nbl_res_txrx_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, u16 nb_pkts, u
 			tx_extend_len = required_headroom + sizeof(struct rte_ether_hdr);
 		}
 
-		if (rte_pktmbuf_headroom(tx_pkt) >= required_headroom) {
+		if (rte_mbuf_refcnt_read(tx_pkt) == 1 &&
+		    RTE_MBUF_DIRECT(tx_pkt) &&
+		    tx_pkt->nb_segs == 1 &&
+		    rte_pktmbuf_headroom(tx_pkt) >= required_headroom) {
 			can_push = 1;
 			u = rte_pktmbuf_mtod_offset(tx_pkt, union nbl_tx_extend_head *,
 						    -required_headroom);
@@ -824,7 +877,7 @@ static int nbl_res_txrx_get_xstats(void *priv, struct rte_eth_xstat *xstats,
 				   u16 need_xstats_cnt, u16 *xstats_cnt)
 {
 	struct nbl_resource_mgt *res_mgt = (struct nbl_resource_mgt *)priv;
-	struct nbl_txrx_mgt *txrx_mgt = NBL_RES_MGT_TO_TXRX_MGT(res_mgt);
+	struct rte_eth_dev *eth_dev = res_mgt->eth_dev;
 	struct nbl_res_rx_ring *rxq;
 	uint64_t rx_multi_descs = 0, rx_drop_noport = 0, rx_drop_proto = 0;
 	u64 txrx_xstats[3];
@@ -832,7 +885,7 @@ static int nbl_res_txrx_get_xstats(void *priv, struct rte_eth_xstat *xstats,
 	u16 count = *xstats_cnt;
 
 	/* todo: get eth stats from emp */
-	for (i = 0; i < txrx_mgt->rx_ring_num; i++) {
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++) {
 		rxq = NBL_RES_MGT_TO_RX_RING(res_mgt, i);
 
 		if (unlikely(rxq == NULL))

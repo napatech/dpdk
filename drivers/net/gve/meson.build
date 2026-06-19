@@ -16,7 +16,9 @@ sources = files(
         'gve_ethdev.c',
         'gve_version.c',
         'gve_rss.c',
+        'gve_flow_rule.c',
 )
 includes += include_directories('base')
 
 cflags += no_wvla_cflag
+cflags += no_comma_cflag

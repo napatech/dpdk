@@ -34,7 +34,7 @@ to find the original base code.
 GVE has 3 queue formats:
 
 - GQI_QPL - GQI with queue page list
-- GQI_RDA - GQI with raw DMA addressing
+- GQI_RDA - GQI with raw DMA addressing (deprecated)
 - DQO_RDA - DQO with raw DMA addressing
 
 GQI_QPL queue format is queue page list mode.
@@ -102,3 +102,42 @@ Because the initial RSS hash creates a default redirection table,
 the redirection table will be available for querying upon initial hash configuration.
 When performing redirection table updates,
 it is possible to update individual table entries.
+
+Flow Steering
+^^^^^^^^^^^^^
+
+The driver supports receive flow steering (RFS) via the standard flow API.
+This allows applications to steer traffic to specific queues
+based on 5-tuple matching.
+3-tuple matching may be supported in future releases.
+
+**Supported Patterns**
+
+L3 Protocols
+  IPv4/IPv6 source and destination addresses.
+L4 Protocols
+  TCP/UDP/SCTP source and destination ports.
+Security Protocols
+  ESP/AH SPI.
+
+**Supported Actions**
+
+``RTE_FLOW_ACTION_TYPE_QUEUE``
+  Steer packets to a specific Rx queue.
+
+**Limitations**
+
+- Flow steering operations are only supported in the primary process.
+- Only ingress flow rules are allowed.
+- Flow priorities are not supported (must be 0).
+- Masking is limited to full matches i.e. ``0x00...0`` or ``0xFF...F``.
+
+Application-Initiated Reset
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The driver allows an application to reset the gVNIC device.
+This function will tear down and reinitialize the device's resources,
+including queues and administrative queues.
+
+It is the application's responsibility to reinitialize
+and restart the device after resetting it.

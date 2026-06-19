@@ -67,35 +67,52 @@ foreach suite:test_suites
         # special fast-test handling here
         foreach t: suite_tests
             params = t.split(':')
+            # check for valid options for asan and nohuge
+            if params[1] != 'NOHUGE_OK' and params[1] != 'NOHUGE_SKIP'
+                error('Invalid parameter "@0@" for test "@1@". Must be NOHUGE_OK or NOHUGE_SKIP.'
+                    .format(params[1], params[0]))
+            endif
+            if params[2] != 'ASAN_OK' and params[2] != 'ASAN_SKIP'
+                error('Invalid parameter "@0@" for test "@1@". Must be ASAN_OK or ASAN_SKIP.'
+                    .format(params[2], params[0]))
+            endif
+
             test_name = params[0]
-            nohuge = params[1] == 'true'
-            asan = params[2] == 'true'
+            nohuge = params[1] == 'NOHUGE_OK'
+            asan = params[2] == 'ASAN_OK'
 
             test_args = []
             if nohuge
                 test_args += test_no_huge_args
             elif not has_hugepage
-                continue  #skip this tests
+                continue  # skip this test
             endif
             if not asan and get_option('b_sanitize').contains('address')
                 continue  # skip this test
             endif
-
             if get_option('default_library') == 'shared'
                 test_args += ['-d', dpdk_drivers_build_dir]
             endif
 
+            # use unique file-prefix to allow parallel runs
+            file_prefix = []
+            trace_prefix = []
+            if is_linux
+                file_prefix = ['--file-prefix=' + test_name.underscorify()]
+                trace_prefix = [file_prefix[0] + '_with_traces']
+            endif
+
             test(test_name, dpdk_test,
-                args : test_args,
+                args : test_args + file_prefix,
                 env: ['DPDK_TEST=' + test_name],
                 timeout : timeout_seconds_fast,
                 is_parallel : false,
                 suite : 'fast-tests')
             if not is_windows and test_name == 'trace_autotest'
-                test_args += ['--trace=.*']
-                test_args += ['--trace-dir=@0@'.format(meson.current_build_dir())]
+                trace_extra = ['--trace=.*',
+                               '--trace-dir=@0@'.format(meson.current_build_dir())]
                 test(test_name + '_with_traces', dpdk_test,
-                    args : test_args,
+                    args : test_args + trace_extra + trace_prefix,
                     env: ['DPDK_TEST=' + test_name],
                     timeout : timeout_seconds_fast,
                     is_parallel : false,

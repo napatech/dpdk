@@ -399,22 +399,20 @@ reset_tx_queue(struct ci_tx_queue *txq)
 	}
 
 	txe = txq->sw_ring;
-	size = sizeof(struct ice_tx_desc) * txq->nb_tx_desc;
+	size = sizeof(struct ci_tx_desc) * txq->nb_tx_desc;
 	for (i = 0; i < size; i++)
-		((volatile char *)txq->ice_tx_ring)[i] = 0;
+		((volatile char *)txq->ci_tx_ring)[i] = 0;
 
 	prev = (uint16_t)(txq->nb_tx_desc - 1);
 	for (i = 0; i < txq->nb_tx_desc; i++) {
-		txq->ice_tx_ring[i].cmd_type_offset_bsz =
-			rte_cpu_to_le_64(IAVF_TX_DESC_DTYPE_DESC_DONE);
+		txq->ci_tx_ring[i].cmd_type_offset_bsz =
+			rte_cpu_to_le_64(CI_TX_DESC_DTYPE_DESC_DONE);
 		txe[i].mbuf =  NULL;
-		txe[i].last_id = i;
 		txe[prev].next_id = i;
 		prev = i;
 	}
 
 	txq->tx_tail = 0;
-	txq->nb_tx_used = 0;
 
 	txq->last_desc_cleaned = txq->nb_tx_desc - 1;
 	txq->nb_tx_free = txq->nb_tx_desc - 1;
@@ -928,19 +926,14 @@ dcf_add_del_mc_addr_list(struct ice_dcf_hw *hw,
 			 struct rte_ether_addr *mc_addrs,
 			 uint32_t mc_addrs_num, bool add)
 {
-	struct virtchnl_ether_addr_list *list;
-	struct dcf_virtchnl_cmd args;
+	struct {
+		struct virtchnl_ether_addr_list list;
+		struct virtchnl_ether_addr addr[DCF_NUM_MACADDR_MAX];
+	} list_req = {0};
+	struct virtchnl_ether_addr_list *list = &list_req.list;
+	struct dcf_virtchnl_cmd args = {0};
 	uint32_t i;
-	int len, err = 0;
-
-	len = sizeof(struct virtchnl_ether_addr_list);
-	len += sizeof(struct virtchnl_ether_addr) * mc_addrs_num;
-
-	list = rte_zmalloc(NULL, len, 0);
-	if (!list) {
-		PMD_DRV_LOG(ERR, "fail to allocate memory");
-		return -ENOMEM;
-	}
+	int err = 0;
 
 	for (i = 0; i < mc_addrs_num; i++) {
 		memcpy(list->list[i].addr, mc_addrs[i].addr_bytes,
@@ -955,13 +948,12 @@ dcf_add_del_mc_addr_list(struct ice_dcf_hw *hw,
 	args.v_op = add ? VIRTCHNL_OP_ADD_ETH_ADDR :
 			VIRTCHNL_OP_DEL_ETH_ADDR;
 	args.req_msg = (uint8_t *)list;
-	args.req_msglen  = len;
+	args.req_msglen  = sizeof(list_req);
 	err = ice_dcf_execute_virtchnl_cmd(hw, &args);
 	if (err)
 		PMD_DRV_LOG(ERR, "fail to execute command %s",
 			    add ? "OP_ADD_ETHER_ADDRESS" :
 			    "OP_DEL_ETHER_ADDRESS");
-	rte_free(list);
 	return err;
 }
 
@@ -1338,7 +1330,7 @@ ice_dcf_dev_rss_reta_update(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	lut = rte_zmalloc("rss_lut", reta_size, 0);
+	lut = calloc(1, reta_size);
 	if (!lut) {
 		PMD_DRV_LOG(ERR, "No memory can be allocated");
 		return -ENOMEM;
@@ -1358,7 +1350,7 @@ ice_dcf_dev_rss_reta_update(struct rte_eth_dev *dev,
 	ret = ice_dcf_configure_rss_lut(hw);
 	if (ret) /* revert back */
 		rte_memcpy(hw->rss_lut, lut, reta_size);
-	rte_free(lut);
+	free(lut);
 
 	return ret;
 }

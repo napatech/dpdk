@@ -698,8 +698,11 @@ for an additional list of options shared with other mlx5 drivers.
   Value 2 enables the WQE based hardware steering.
   In this mode, only queue-based flow management is supported.
 
-  It is configured by default to 1 (DV flow steering) if supported.
-  Otherwise, the value is 0 which indicates legacy Verbs flow offloading.
+  By default, the PMD will set this value according to capability.
+  If DV flow steering is supported, it will be set to 1.
+  If DV flow steering is not supported and HW steering is supported,
+  then it will be set to 2.
+  Otherwise, it will be set to 0.
 
 - ``dv_esw_en`` parameter [int]
 
@@ -835,7 +838,10 @@ for an additional list of options shared with other mlx5 drivers.
     In this case, all rules are inserted but only the first rule takes effect,
     the next rule takes effect only if the previous rules are deleted.
 
-  By default, the PMD will set this value to 1.
+  This option is not supported in :ref:`HWS mode <mlx5_hws>`.
+  If this option is set to 1 in HWS mode, it will be reset to 0.
+
+  By default, the PMD will set this value according to capability.
 
 
 .. _mlx5_net_stats:
@@ -950,27 +956,32 @@ The Rx function is selected based on multiple parameters:
 - :ref:`multi-packet Rx queues (MPRQ) <mlx5_mprq_params>`
 - :ref:`vectorized Rx datapath <mlx5_rx_vec_param>`
 
-This parameter may also have an impact on the behavior:
+These configurations may also have an impact on the behavior:
 
 - :ref:`packet descriptor (CQE) compression <mlx5_cqe_comp_param>`
+- :ref:`shared Rx queue <mlx5_shared_rx>`
 
 .. table:: Rx burst functions
 
-   +-------------------+------------------------+---------+-----------------+------+-------+
-   || Function Name    || Parameters to Enable  || Scatter|| Error Recovery || CQE || Large|
-   |                   |                        |         |                 || comp|| MTU  |
-   +===================+========================+=========+=================+======+=======+
-   | rx_burst          | rx_vec_en=0            |   Yes   | Yes             |  Yes |  Yes  |
-   +-------------------+------------------------+---------+-----------------+------+-------+
-   | rx_burst_vec      | rx_vec_en=1 (default)  |   No    | if CQE comp off |  Yes |  No   |
-   +-------------------+------------------------+---------+-----------------+------+-------+
-   | rx_burst_mprq     || mprq_en=1             |   No    | Yes             |  Yes |  Yes  |
-   |                   || RxQs >= rxqs_min_mprq |         |                 |      |       |
-   +-------------------+------------------------+---------+-----------------+------+-------+
-   | rx_burst_mprq_vec || rx_vec_en=1 (default) |   No    | if CQE comp off |  Yes |  Yes  |
-   |                   || mprq_en=1             |         |                 |      |       |
-   |                   || RxQs >= rxqs_min_mprq |         |                 |      |       |
-   +-------------------+------------------------+---------+-----------------+------+-------+
+   +-------------------+------------------------+---------+-----------------+------+-------+---------+
+   || Function Name    || Parameters to Enable  || Scatter|| Error Recovery || CQE || Large|| Shared |
+   |                   |                        |         |                 || comp|| MTU  |  RxQ    |
+   +===================+========================+=========+=================+======+=======+=========+
+   | rx_burst          | rx_vec_en=0            |   Yes   | Yes             |  Yes |  Yes  | No      |
+   +-------------------+------------------------+---------+-----------------+------+-------+---------+
+   | rx_burst_vec      | rx_vec_en=1 (default)  |   No    | if CQE comp off |  Yes |  No   | No      |
+   +-------------------+------------------------+---------+-----------------+------+-------+---------+
+   | rx_burst_mprq     || mprq_en=1             |   No    | Yes             |  Yes |  Yes  | No      |
+   |                   || RxQs >= rxqs_min_mprq |         |                 |      |       |         |
+   +-------------------+------------------------+---------+-----------------+------+-------+---------+
+   | rx_burst_mprq_vec || rx_vec_en=1 (default) |   No    | if CQE comp off |  Yes |  Yes  | No      |
+   |                   || mprq_en=1             |         |                 |      |       |         |
+   |                   || RxQs >= rxqs_min_mprq |         |                 |      |       |         |
+   +-------------------+------------------------+---------+-----------------+------+-------+---------+
+   | rx_burst          | at least one Rx queue  |   Yes   | Yes             |  Yes |  Yes  | Yes     |
+   |  (out of order)   | on the device          |         |                 |      |       |         |
+   |                   | is shared              |         |                 |      |       |         |
+   +-------------------+------------------------+---------+-----------------+------+-------+---------+
 
 
 Rx/Tx Tuning
@@ -1823,9 +1834,20 @@ Shared Rx Queue
 Limitations
 ^^^^^^^^^^^
 
+#. Shared Rx queue is not compatible with both vectorized Rx datapath and multi-packet Rx queues.
+   Any configuration related to these features passed through device arguments
+   will be ignored.
+
 #. Counters of received packets and bytes of devices in the same share group are same.
 
 #. Counters of received packets and bytes of queues in the same group and queue ID are same.
+
+#. Each Rx queue in share group must have the same queue configuration.
+
+#. Ports in share group must have equal MTU at port start time.
+
+#. Reconfiguring a shared queue
+   while it is in use (started or referenced by flow rules) is not allowed.
 
 
 .. _mlx5_rx_threshold:
@@ -3063,6 +3085,15 @@ Flex Item
 A flow can be matched on a set of fields at specific offsets
 with ``RTE_FLOW_ITEM_TYPE_FLEX``.
 
+Requirements
+^^^^^^^^^^^^
+
+=========  ==========
+Minimum    Version
+=========  ==========
+firmware   XX.31.1002
+=========  ==========
+
 Firmware configuration
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -3082,11 +3113,37 @@ Limitations
 
 #. The header length mask width can go up to 6 bits.
 
-#. The Firmware supports 8 global sample fields.
+#. Following number of global sample fields is available based on FW version.
    Each flex item allocates non-shared sample fields from that pool.
 
-#. The flex item can have 1 input link - ``eth`` or ``udp``
-   and up to 3 output links - ``ipv4`` or ``ipv6``.
+   =============  ==========
+   Sample fields  FW version
+   =============  ==========
+   3              XX.31.1002
+   8              XX.33.1048
+   =============  ==========
+
+#. The flex item can have 1 input link and up to 3 output links.
+
+#. Following types of input links are supported:
+
+   ====  ==========
+   Type  FW version
+   ====  ==========
+   ETH   XX.31.1002
+   UDP   XX.31.1002
+   ====  ==========
+
+#. Following types of output links are supported:
+
+   ====  ==========
+   Type  FW version
+   ====  ==========
+   IPV4  XX.31.1002
+   IPV6  XX.31.1002
+   TCP   XX.36.1010
+   UDP   XX.36.1010
+   ====  ==========
 
 #. In flex item configuration, ``next_header.field_base`` value
    must be byte aligned (multiple of 8).
@@ -4419,7 +4476,7 @@ Steps to enable Tx datapath tracing:
    .. code-block:: console
 
       meson configure --buildtype=debug -Denable_trace_fp=true
-         -Dc_args='-DRTE_LIBRTE_MLX5_DEBUG -DRTE_ENABLE_ASSERT -DALLOW_EXPERIMENTAL_API' build
+         -Dc_args='-DRTE_PMD_MLX5_DEBUG -DRTE_ENABLE_ASSERT -DALLOW_EXPERIMENTAL_API' build
 
 #. Configure the NIC
 

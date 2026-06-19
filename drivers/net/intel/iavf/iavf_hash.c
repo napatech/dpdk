@@ -77,7 +77,7 @@ static int
 iavf_hash_destroy(struct iavf_adapter *ad, struct rte_flow *flow,
 		  struct rte_flow_error *error);
 static void
-iavf_hash_uninit(struct iavf_adapter *ad);
+iavf_hash_uninit_parser(struct iavf_adapter *ad);
 static void
 iavf_hash_free(struct rte_flow *flow);
 static int
@@ -680,7 +680,7 @@ static struct iavf_flow_engine iavf_hash_engine = {
 	.init = iavf_hash_init,
 	.create = iavf_hash_create,
 	.destroy = iavf_hash_destroy,
-	.uninit = iavf_hash_uninit,
+	.uninit = iavf_hash_uninit_parser,
 	.free = iavf_hash_free,
 	.type = IAVF_FLOW_ENGINE_HASH,
 };
@@ -691,7 +691,6 @@ static struct iavf_flow_parser iavf_hash_parser = {
 	.array = iavf_hash_pattern_list,
 	.array_len = RTE_DIM(iavf_hash_pattern_list),
 	.parse_pattern_action = iavf_hash_parse_pattern_action,
-	.stage = IAVF_FLOW_STAGE_RSS,
 };
 
 int
@@ -883,6 +882,7 @@ iavf_hash_parse_pattern(const struct rte_flow_item pattern[], uint64_t *phint,
 
 static int
 iavf_hash_parse_raw_pattern(const struct rte_flow_item *item,
+			struct rte_flow_error *error,
 			struct iavf_rss_meta *meta)
 {
 	const struct rte_flow_item_raw *raw_spec, *raw_mask;
@@ -894,6 +894,14 @@ iavf_hash_parse_raw_pattern(const struct rte_flow_item *item,
 
 	raw_spec = item->spec;
 	raw_mask = item->mask;
+
+	if (!raw_spec || !raw_mask) {
+		PMD_DRV_LOG(ERR, "NULL RAW spec/mask");
+		rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ITEM,
+				item, "NULL RAW spec/mask");
+		return -rte_errno;
+	}
 
 	spec_len = strlen((char *)(uintptr_t)raw_spec->pattern);
 	if (strlen((char *)(uintptr_t)raw_mask->pattern) !=
@@ -1390,6 +1398,7 @@ iavf_any_invalid_rss_type(enum rte_eth_hash_function rss_func,
 
 		if (!(rss_type &
 		   (RTE_ETH_RSS_IPV4 | RTE_ETH_RSS_IPV6 |
+		    RTE_ETH_RSS_FRAG_IPV4 | RTE_ETH_RSS_FRAG_IPV6 |
 		    RTE_ETH_RSS_NONFRAG_IPV4_UDP | RTE_ETH_RSS_NONFRAG_IPV6_UDP |
 		    RTE_ETH_RSS_NONFRAG_IPV4_TCP | RTE_ETH_RSS_NONFRAG_IPV6_TCP |
 		    RTE_ETH_RSS_NONFRAG_IPV4_SCTP | RTE_ETH_RSS_NONFRAG_IPV6_SCTP)))
@@ -1545,7 +1554,7 @@ iavf_hash_parse_pattern_action(__rte_unused struct iavf_adapter *ad,
 
 	if (phint == IAVF_PHINT_RAW) {
 		rss_meta_ptr->raw_ena = true;
-		ret = iavf_hash_parse_raw_pattern(pattern, rss_meta_ptr);
+		ret = iavf_hash_parse_raw_pattern(pattern, error, rss_meta_ptr);
 		if (ret) {
 			rte_flow_error_set(error, EINVAL,
 					   RTE_FLOW_ERROR_TYPE_ITEM, NULL,
@@ -1632,6 +1641,12 @@ iavf_hash_destroy(__rte_unused struct iavf_adapter *ad,
 }
 
 static void
+iavf_hash_uninit_parser(struct iavf_adapter *ad)
+{
+	iavf_unregister_parser(&iavf_hash_parser, ad);
+}
+
+void
 iavf_hash_uninit(struct iavf_adapter *ad)
 {
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(ad);
@@ -1649,8 +1664,6 @@ iavf_hash_uninit(struct iavf_adapter *ad)
 	rss_conf = &ad->dev_data->dev_conf.rx_adv_conf.rss_conf;
 	if (iavf_rss_hash_set(ad, rss_conf->rss_hf, false))
 		PMD_DRV_LOG(ERR, "fail to delete default RSS");
-
-	iavf_unregister_parser(&iavf_hash_parser, ad);
 }
 
 static void

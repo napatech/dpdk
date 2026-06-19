@@ -15,6 +15,7 @@
 #include <iavf_type.h>
 
 #include "iavf_log.h"
+#include "rte_pmd_iavf.h"
 
 #define IAVF_AQ_LEN               32
 #define IAVF_AQ_BUF_SZ            4096
@@ -257,6 +258,10 @@ struct iavf_info {
 
 	struct iavf_vsi vsi;
 	bool vf_reset;	/* true for VF reset pending, false for no VF reset */
+	iavf_pre_reset_cb_t pre_reset_cb; /* Pre reset callback function ptr */
+	iavf_post_reset_cb_t post_reset_cb; /* Post reset callback function ptr */
+	void *pre_reset_cb_arg; /* Pre reset callback argument */
+	void *post_reset_cb_arg; /* Post reset callback argument */
 	uint64_t flags;
 
 	uint8_t *rss_lut;
@@ -328,10 +333,7 @@ enum iavf_rx_func_type {
 	IAVF_RX_SCATTERED_FLEX_RXD,
 	IAVF_RX_BULK_ALLOC,
 	IAVF_RX_BULK_ALLOC_FLEX_RXD,
-	IAVF_RX_SSE,
-	IAVF_RX_SSE_SCATTERED,
-	IAVF_RX_SSE_FLEX_RXD,
-	IAVF_RX_SSE_SCATTERED_FLEX_RXD,
+	IAVF_RX_NEON,
 	IAVF_RX_AVX2,
 	IAVF_RX_AVX2_SCATTERED,
 	IAVF_RX_AVX2_OFFLOAD,
@@ -353,7 +355,6 @@ enum iavf_rx_func_type {
 enum iavf_tx_func_type {
 	IAVF_TX_DISABLED,
 	IAVF_TX_DEFAULT,
-	IAVF_TX_SSE,
 	IAVF_TX_AVX2,
 	IAVF_TX_AVX2_OFFLOAD,
 	IAVF_TX_AVX512,
@@ -375,8 +376,6 @@ struct iavf_adapter {
 	struct iavf_security_ctx *security_ctx;
 
 	bool rx_bulk_alloc_allowed;
-	/* For vector PMD */
-	bool tx_vec_allowed;
 	alignas(RTE_CACHE_LINE_MIN_SIZE) uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE];
 	bool stopped;
 	bool closed;
@@ -385,6 +384,7 @@ struct iavf_adapter {
 	enum iavf_tx_func_type tx_func_type;
 	uint16_t fdir_ref_cnt;
 	struct iavf_devargs devargs;
+	bool mac_primary_set;
 };
 
 /* IAVF_DEV_PRIVATE_TO */
@@ -504,8 +504,7 @@ int iavf_disable_queues(struct iavf_adapter *adapter);
 int iavf_disable_queues_lv(struct iavf_adapter *adapter);
 int iavf_configure_rss_lut(struct iavf_adapter *adapter);
 int iavf_configure_rss_key(struct iavf_adapter *adapter);
-int iavf_configure_queues(struct iavf_adapter *adapter,
-			uint16_t num_queue_pairs, uint16_t index);
+int iavf_configure_queues(struct iavf_adapter *adapter, uint16_t num_queue_pairs);
 int iavf_get_supported_rxdid(struct iavf_adapter *adapter);
 int iavf_config_vlan_strip_v2(struct iavf_adapter *adapter, bool enable);
 int iavf_config_vlan_insert_v2(struct iavf_adapter *adapter, bool enable);
@@ -513,8 +512,7 @@ int iavf_add_del_vlan_v2(struct iavf_adapter *adapter, uint16_t vlanid,
 			 bool add);
 int iavf_get_vlan_offload_caps_v2(struct iavf_adapter *adapter);
 int iavf_config_irq_map(struct iavf_adapter *adapter);
-int iavf_config_irq_map_lv(struct iavf_adapter *adapter, uint16_t num,
-			uint16_t index);
+int iavf_config_irq_map_lv(struct iavf_adapter *adapter, uint16_t num);
 void iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add);
 int iavf_dev_link_update(struct rte_eth_dev *dev,
 			__rte_unused int wait_to_complete);
@@ -567,4 +565,5 @@ void iavf_dev_watchdog_disable(struct iavf_adapter *adapter);
 void iavf_handle_hw_reset(struct rte_eth_dev *dev, bool vf_initiated_reset);
 void iavf_set_no_poll(struct iavf_adapter *adapter, bool link_change);
 bool is_iavf_supported(struct rte_eth_dev *dev);
+void iavf_hash_uninit(struct iavf_adapter *ad);
 #endif /* _IAVF_ETHDEV_H_ */

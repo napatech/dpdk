@@ -34,6 +34,260 @@ test_bpf(void)
 #include <rte_ip.h>
 
 
+/* Tests of most simple BPF programs (no instructions, one instruction etc.) */
+
+/*
+ * Try to load a simple bpf program from the instructions array.
+ *
+ * When `expected_errno` is zero, expect it to load successfully.
+ * When `expected_errno` is non-zero, expect it to fail with this `rte_errno`.
+ *
+ * @param nb_ins
+ *   Number of instructions in the `ins` array.
+ * @param ins
+ *   BPF instructions array.
+ * @param expected_errno
+ *   Expected result.
+ * @return
+ *   TEST_SUCCESS on success, error code on failure.
+ */
+static int
+bpf_load_test(uint32_t nb_ins, const struct ebpf_insn *ins, int expected_errno)
+{
+	const struct rte_bpf_prm prm = {
+		.ins = ins,
+		.nb_ins = nb_ins,
+		.prog_arg = {
+			.type = RTE_BPF_ARG_RAW,
+			.size = sizeof(uint64_t),
+		},
+	};
+
+	struct rte_bpf *const bpf = rte_bpf_load(&prm);
+	const int actual_errno = rte_errno;
+	rte_bpf_destroy(bpf);
+
+	if (expected_errno != 0) {
+		RTE_TEST_ASSERT_EQUAL(bpf, NULL,
+			"expect rte_bpf_load() == NULL");
+		RTE_TEST_ASSERT_EQUAL(actual_errno, expected_errno,
+			"expect rte_errno == %d, found %d",
+			expected_errno, actual_errno);
+	} else
+		RTE_TEST_ASSERT_NOT_EQUAL(bpf, NULL,
+			"expect rte_bpf_load() != NULL");
+
+	return TEST_SUCCESS;
+}
+
+/*
+ * Try and load completely empty BPF program.
+ * Should fail because there is no EXIT (and also return value is undefined).
+ */
+static int
+test_no_instructions(void)
+{
+	static const struct ebpf_insn ins[] = {};
+	return bpf_load_test(RTE_DIM(ins), ins, EINVAL);
+}
+
+REGISTER_FAST_TEST(bpf_no_instructions_autotest, NOHUGE_OK, ASAN_OK, test_no_instructions);
+
+/*
+ * Try and load a BPF program comprising single EXIT instruction.
+ * Should fail because the return value is undefined.
+ */
+static int
+test_exit_only(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, EINVAL);
+}
+
+REGISTER_FAST_TEST(bpf_exit_only_autotest, NOHUGE_OK, ASAN_OK, test_exit_only);
+
+/*
+ * Try and load a BPF program with no EXIT instruction.
+ * Should fail because of this.
+ */
+static int
+test_no_exit(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set return value to the program argument. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, EINVAL);
+}
+
+REGISTER_FAST_TEST(bpf_no_exit_autotest, NOHUGE_OK, ASAN_OK, test_no_exit);
+
+/*
+ * Try and load smallest possible valid BPF program.
+ */
+static int
+test_minimal_working(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set return value to the program argument. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, 0);
+}
+
+REGISTER_FAST_TEST(bpf_minimal_working_autotest, NOHUGE_OK, ASAN_OK, test_minimal_working);
+
+/*
+ * Try and load valid BPF program adding one to the argument.
+ */
+static int
+test_add_one(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set return value to one. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_K),
+			.dst_reg = EBPF_REG_0,
+			.imm = 1,
+		},
+		{
+			/* Add program argument to the return value. */
+			.code = (EBPF_ALU64 | BPF_ADD | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, 0);
+}
+
+REGISTER_FAST_TEST(bpf_add_one_autotest, NOHUGE_OK, ASAN_OK, test_add_one);
+
+/*
+ * Try and load valid BPF program subtracting one from the argument.
+ */
+static int
+test_subtract_one(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Subtract one from the program argument. */
+			.code = (EBPF_ALU64 | BPF_SUB | BPF_K),
+			.dst_reg = EBPF_REG_1,
+			.imm = 1,
+		},
+		{
+			/* Set return value to the result. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, 0);
+}
+
+REGISTER_FAST_TEST(bpf_subtract_one_autotest, NOHUGE_OK, ASAN_OK, test_subtract_one);
+
+/*
+ * Conditionally jump over invalid operation as first instruction.
+ */
+static int
+test_jump_over_invalid_first(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Jump over the next instruction for some r1. */
+			.code = (BPF_JMP | BPF_JEQ | BPF_K),
+			.dst_reg = EBPF_REG_1,
+			.imm = 42,
+			.off = 1,
+		},
+		{
+			/* Write 0xDEADBEEF to [r1 + INT16_MIN]. */
+			.code = (BPF_ST | BPF_MEM | EBPF_DW),
+			.dst_reg = EBPF_REG_1,
+			.off = INT16_MIN,
+			.imm = 0xDEADBEEF,
+		},
+		{
+			/* Set return value to the program argument. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, EINVAL);
+}
+
+REGISTER_FAST_TEST(bpf_jump_over_invalid_first_autotest, NOHUGE_OK, ASAN_OK,
+	test_jump_over_invalid_first);
+
+/*
+ * Conditionally jump over invalid operation as non-first instruction.
+ */
+static int
+test_jump_over_invalid_non_first(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set return value to the program argument. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			/* Jump over the next instruction for some r1. */
+			.code = (BPF_JMP | BPF_JEQ | BPF_K),
+			.dst_reg = EBPF_REG_1,
+			.imm = 42,
+			.off = 1,
+		},
+		{
+			/* Write 0xDEADBEEF to [r1 + INT16_MIN]. */
+			.code = (BPF_ST | BPF_MEM | EBPF_DW),
+			.dst_reg = EBPF_REG_1,
+			.off = INT16_MIN,
+			.imm = 0xDEADBEEF,
+		},
+		{
+			/* Set return value to the program argument. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_1,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	return bpf_load_test(RTE_DIM(ins), ins, EINVAL);
+}
+
+REGISTER_FAST_TEST(bpf_jump_over_invalid_non_first_autotest, NOHUGE_OK, ASAN_OK,
+	test_jump_over_invalid_non_first);
+
 /*
  * Basic functional tests for librte_bpf.
  * The main procedure - load eBPF program, execute it and
@@ -3278,9 +3532,406 @@ test_bpf(void)
 
 #endif /* !RTE_LIB_BPF */
 
-REGISTER_FAST_TEST(bpf_autotest, true, true, test_bpf);
+REGISTER_FAST_TEST(bpf_autotest, NOHUGE_OK, ASAN_OK, test_bpf);
 
-#ifdef TEST_BPF_ELF_LOAD
+/* Tests of BPF JIT stack alignment when calling external functions (xfuncs). */
+
+/* Function called from the BPF program in a test. */
+typedef uint64_t (*text_xfunc_t)(uint64_t argument);
+
+/* Call function from BPF program, verify that it incremented its argument. */
+static int
+call_from_bpf_test(text_xfunc_t xfunc)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			.code = (BPF_JMP | EBPF_CALL),
+			.imm = 0,  /* xsym #0 */
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	const struct rte_bpf_xsym xsym[] = {
+		{
+			.name = "xfunc",
+			.type = RTE_BPF_XTYPE_FUNC,
+			.func = {
+				.val = (void *)xfunc,
+				.nb_args = 1,
+				.args = {
+					{
+						.type = RTE_BPF_ARG_RAW,
+						.size = sizeof(uint64_t),
+					},
+				},
+				.ret = {
+					.type = RTE_BPF_ARG_RAW,
+					.size = sizeof(uint64_t),
+				},
+			},
+		},
+	};
+	const struct rte_bpf_prm prm = {
+		.ins = ins,
+		.nb_ins = RTE_DIM(ins),
+		.xsym = xsym,
+		.nb_xsym = RTE_DIM(xsym),
+		.prog_arg = {
+			.type = RTE_BPF_ARG_RAW,
+			.size = sizeof(uint64_t),
+		},
+	};
+
+	struct rte_bpf_jit jit;
+
+	struct rte_bpf *const bpf = rte_bpf_load(&prm);
+	RTE_TEST_ASSERT_NOT_EQUAL(bpf, NULL,
+		"expect rte_bpf_load() != NULL");
+
+	RTE_TEST_ASSERT_SUCCESS(rte_bpf_get_jit(bpf, &jit),
+		"expect rte_bpf_get_jit() to succeed");
+
+	const text_xfunc_t jit_function = (void *)jit.func;
+	if (jit_function == NULL) {
+		rte_bpf_destroy(bpf);
+		return TEST_SKIPPED;
+	}
+
+	const uint64_t argument = 42;
+	const uint64_t result = jit_function(argument);
+	rte_bpf_destroy(bpf);
+
+	RTE_TEST_ASSERT_EQUAL(result, argument + 1,
+		"expect result == %ju, found %ju",
+		(uintmax_t)(argument + 1), (uintmax_t)result);
+
+	return TEST_SUCCESS;
+}
+
+/*
+ * Test alignment of a local variable.
+ *
+ * NOTE: May produce false negatives with sanitizers if they replace the stack.
+ */
+
+/* Copy of the pointer to max_align stack variable, volatile to thwart optimization. */
+static volatile uintptr_t stack_alignment_test_pointer;
+
+static uint64_t
+stack_alignment_xfunc(uint64_t argument)
+{
+	max_align_t max_align;
+	stack_alignment_test_pointer = (uintptr_t)&max_align;
+	return argument + 1;
+}
+
+static int
+test_stack_alignment(void)
+{
+	const int test_rc = call_from_bpf_test(stack_alignment_xfunc);
+	if (test_rc == TEST_SKIPPED)
+		return TEST_SKIPPED;
+
+	RTE_TEST_ASSERT_SUCCESS(test_rc,
+		"expect call_from_bpf_test(stack_alignment_xfunc) to succeed");
+
+	const uintptr_t test_offset = stack_alignment_test_pointer;
+	RTE_TEST_ASSERT_NOT_EQUAL(test_offset, 0, "expect test_pointer != 0");
+
+	const size_t test_alignment = test_offset % alignof(max_align_t);
+	RTE_TEST_ASSERT_EQUAL(test_alignment, 0,
+		"expect test_alignment == 0, found %zu", test_alignment);
+
+	return TEST_SUCCESS;
+}
+
+REGISTER_FAST_TEST(bpf_stack_alignment_autotest, NOHUGE_OK, ASAN_OK, test_stack_alignment);
+
+/*
+ * Test copying `__uint128_t`.
+ *
+ * This operation is used by some variations of `rte_memcpy`;
+ * it can also be produced by vectorizer in the compiler.
+ */
+
+#if defined(__SIZEOF_INT128__)
+
+static uint64_t
+stack_copy_uint128_xfunc(uint64_t argument)
+{
+	/* Pass addresses through volatiles to prevent compiler from optimizing it all out. */
+	char alignas(16) src_buffer[16];
+	char alignas(16) dst_buffer[16];
+	void *const src = (char *volatile)src_buffer;
+	void *const dst = (char *volatile)dst_buffer;
+	const size_t size = 16;
+
+	memset(src, 0x2a, size);
+	memset(dst, 0x55, size);
+	const int initial_memcmp_rc = memcmp(dst, src, size);
+
+	const __uint128_t *const src128 = (const __uint128_t *)src;
+	__uint128_t *const dst128 = (__uint128_t *)dst;
+	*dst128 = *src128;
+	const int memcmp_rc = memcmp(dst, src, size);
+
+	return argument + 1 + !initial_memcmp_rc + memcmp_rc;
+}
+
+static int
+test_stack_copy_uint128(void)
+{
+	const int test_rc = call_from_bpf_test(stack_copy_uint128_xfunc);
+	if (test_rc == TEST_SKIPPED)
+		return TEST_SKIPPED;
+
+	RTE_TEST_ASSERT_SUCCESS(test_rc,
+		"expect call_from_bpf_test(stack_copy_uint128_xfunc) to succeed");
+
+	return TEST_SUCCESS;
+}
+
+#else
+
+static int
+test_stack_copy_uint128(void)
+{
+	return TEST_SKIPPED;
+}
+
+#endif
+
+REGISTER_FAST_TEST(bpf_stack_copy_uint128_autotest, NOHUGE_OK, ASAN_OK, test_stack_copy_uint128);
+
+/*
+ * Test SSE2 load and store intrinsics.
+ *
+ * These intrinsics are used by e.g. lib/hash.
+ *
+ * Test both aligned and unaligned versions. Unaligned intrinsics may still fail
+ * when the stack is misaligned, since they only treat memory address as
+ * unaligned, not stack.
+ */
+
+#if defined(__SSE2__)
+
+static uint64_t
+stack_sse2_aligned_xfunc(uint64_t argument)
+{
+	/* Pass addresses through volatiles to prevent compiler from optimizing it all out. */
+	char alignas(16) src_buffer[16];
+	char alignas(16) dst_buffer[16];
+	void *const src = (char *volatile)src_buffer;
+	void *const dst = (char *volatile)dst_buffer;
+	const size_t size = 16;
+
+	memset(src, 0x2a, size);
+	memset(dst, 0x55, size);
+	const int initial_memcmp_rc = memcmp(dst, src, size);
+
+	const __m128i tmp = _mm_load_si128((const __m128i *)src);
+	_mm_store_si128((__m128i *)dst, tmp);
+	const int memcmp_rc = memcmp(dst, src, size);
+
+	return argument + 1 + !initial_memcmp_rc + memcmp_rc;
+}
+
+static uint64_t
+stack_sse2_unaligned_xfunc(uint64_t argument)
+{
+	/* Pass addresses through volatiles to prevent compiler from optimizing it all out. */
+	char alignas(16) src_buffer[17];
+	char alignas(16) dst_buffer[17];
+	void *const src = (char *volatile)src_buffer + 1;
+	void *const dst = (char *volatile)dst_buffer + 1;
+	const size_t size = 16;
+
+	memset(src, 0x2a, size);
+	memset(dst, 0x55, size);
+	const int initial_memcmp_rc = memcmp(dst, src, size);
+
+	const __m128i tmp = _mm_loadu_si128((const __m128i *)src);
+	_mm_storeu_si128((__m128i *)dst, tmp);
+	const int memcmp_rc = memcmp(dst, src, size);
+
+	return argument + 1 + !initial_memcmp_rc + memcmp_rc;
+}
+
+static int
+test_stack_sse2(void)
+{
+	int test_rc;
+
+	test_rc = call_from_bpf_test(stack_sse2_aligned_xfunc);
+	if (test_rc == TEST_SKIPPED)
+		return test_rc;
+	RTE_TEST_ASSERT_SUCCESS(test_rc,
+		"expect call_from_bpf_test(stack_sse2_aligned_xfunc) to succeed");
+
+	test_rc = call_from_bpf_test(stack_sse2_unaligned_xfunc);
+	if (test_rc == TEST_SKIPPED)
+		return test_rc;
+	RTE_TEST_ASSERT_SUCCESS(test_rc,
+		"expect call_from_bpf_test(stack_sse2_unaligned_xfunc) to succeed");
+
+	return TEST_SUCCESS;
+}
+
+#else
+
+static int
+test_stack_sse2(void)
+{
+	return TEST_SKIPPED;
+}
+
+#endif
+
+REGISTER_FAST_TEST(bpf_stack_sse2_autotest, NOHUGE_OK, ASAN_OK, test_stack_sse2);
+
+/*
+ * Run memcpy and rte_memcpy with various data sizes and offsets (unaligned and aligned).
+ *
+ * May produce false negatives even if BPF breaks stack alignment since
+ * compilers may realign the stack in the beginning of the function to use
+ * vector instructions with width larger than the default stack alignment.
+ * However, represents very important use case that was broken in practice.
+ *
+ * For the reason specified above test 16-byte fixed-width memcpy explicitly.
+ */
+
+static void *volatile stack_memcpy_dst;
+static const void *volatile stack_memcpy_src;
+static size_t volatile stack_memcpy_size;
+
+static uint64_t
+stack_memcpy16_xfunc(uint64_t argument)
+{
+	RTE_ASSERT(stack_memcpy_size == 16);
+	memcpy(stack_memcpy_dst, stack_memcpy_src, 16);
+	return argument + 1;
+}
+
+static uint64_t
+stack_rte_memcpy16_xfunc(uint64_t argument)
+{
+	RTE_ASSERT(stack_memcpy_size == 16);
+	rte_memcpy(stack_memcpy_dst, stack_memcpy_src, 16);
+	return argument + 1;
+}
+
+static uint64_t
+stack_memcpy_xfunc(uint64_t argument)
+{
+	memcpy(stack_memcpy_dst, stack_memcpy_src, stack_memcpy_size);
+	return argument + 1;
+}
+
+static uint64_t
+stack_rte_memcpy_xfunc(uint64_t argument)
+{
+	rte_memcpy(stack_memcpy_dst, stack_memcpy_src, stack_memcpy_size);
+	return argument + 1;
+}
+
+static int
+stack_memcpy_subtest(text_xfunc_t xfunc, size_t size, size_t src_offset, size_t dst_offset)
+{
+	stack_memcpy_size = size;
+
+	char *const src_buffer = malloc(size + src_offset);
+	char *const dst_buffer = malloc(size + dst_offset);
+
+	if (src_buffer == NULL || dst_buffer == NULL) {
+		free(dst_buffer);
+		free(src_buffer);
+		return TEST_FAILED;
+	}
+
+	memset(src_buffer + src_offset, 0x2a, size);
+	stack_memcpy_src = src_buffer + src_offset;
+
+	memset(dst_buffer + dst_offset, 0x55, size);
+	stack_memcpy_dst = dst_buffer + dst_offset;
+
+	const int initial_memcmp_rc = memcmp(stack_memcpy_dst, stack_memcpy_src, size);
+	const int test_rc = call_from_bpf_test(xfunc);
+	const int memcmp_rc = memcmp(stack_memcpy_dst, stack_memcpy_src, size);
+
+	free(dst_buffer);
+	free(src_buffer);
+
+	if (test_rc == TEST_SKIPPED)
+		return TEST_SKIPPED;
+
+	RTE_TEST_ASSERT_FAIL(initial_memcmp_rc, "expect memcmp() to fail initially");
+	RTE_TEST_ASSERT_SUCCESS(test_rc, "expect call_from_bpf_test(xfunc) to succeed");
+	RTE_TEST_ASSERT_SUCCESS(memcmp_rc, "expect memcmp() to succeed");
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_stack_memcpy(void)
+{
+	for (int offsets = 0; offsets < 4; ++offsets) {
+		const bool src_offset = offsets & 1;
+		const bool dst_offset = offsets & 2;
+		int test_rc;
+
+		test_rc = stack_memcpy_subtest(stack_memcpy16_xfunc,
+			16, src_offset, dst_offset);
+		if (test_rc == TEST_SKIPPED)
+			return test_rc;
+		RTE_TEST_ASSERT_SUCCESS(test_rc,
+			"expect stack_memcpy_subtest(stack_memcpy16_xfunc, "
+				"16, %i, %i) to succeed",
+			src_offset, dst_offset);
+
+		test_rc = stack_memcpy_subtest(stack_rte_memcpy16_xfunc,
+			16, src_offset, dst_offset);
+		if (test_rc == TEST_SKIPPED)
+			return test_rc;
+		RTE_TEST_ASSERT_SUCCESS(test_rc,
+			"expect stack_memcpy_subtest(stack_rte_memcpy16_xfunc, "
+				"16, %i, %i) to succeed",
+			src_offset, dst_offset);
+
+		for (size_t size = 1; size <= 1024; size <<= 1) {
+			test_rc = stack_memcpy_subtest(stack_memcpy_xfunc,
+				size, src_offset, dst_offset);
+			if (test_rc == TEST_SKIPPED)
+				return test_rc;
+			RTE_TEST_ASSERT_SUCCESS(test_rc,
+				"expect stack_memcpy_subtest(stack_memcpy_xfunc, "
+					"%zu, %i, %i) to succeed",
+				size, src_offset, dst_offset);
+
+			test_rc = stack_memcpy_subtest(stack_rte_memcpy_xfunc,
+				size, src_offset, dst_offset);
+			if (test_rc == TEST_SKIPPED)
+				return test_rc;
+			RTE_TEST_ASSERT_SUCCESS(test_rc,
+				"expect stack_memcpy_subtest(stack_rte_memcpy_xfunc, "
+					"%zu, %i, %i) to succeed",
+				size, src_offset, dst_offset);
+		}
+	}
+	return TEST_SUCCESS;
+}
+
+REGISTER_FAST_TEST(bpf_stack_memcpy_autotest, NOHUGE_OK, ASAN_OK, test_stack_memcpy);
+
+/*
+ * The BPF elf load test needs the BPF programs to be successfully
+ * compiled into generated file bpf_test.h. This means having
+ * clang with BPF target and xxd command to encode object.
+ *
+ * Test also needs the NULL PMD to be able to have something
+ * to insert filter onto.
+ */
+#if defined(TEST_BPF_ELF_LOAD) && defined(RTE_NET_NULL)
 
 /*
  * Helper function to write BPF object data to temporary file.
@@ -3529,7 +4180,7 @@ static int bpf_tx_test(uint16_t port, const char *tmpfile, struct rte_mempool *p
 	const struct rte_bpf_prm prm = {
 		.prog_arg = {
 			.type = RTE_BPF_ARG_PTR,
-			.size = sizeof(struct rte_mbuf),
+			.size = sizeof(struct dummy_net),
 		},
 	};
 	int ret;
@@ -3580,6 +4231,7 @@ test_bpf_elf_tx_load(void)
 	mb_pool = rte_pktmbuf_pool_create("bpf_tx_test_pool", BPF_TEST_POOLSIZE,
 					  0, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
 					  SOCKET_ID_ANY);
+	TEST_ASSERT(mb_pool != NULL, "failed to create mempool");
 
 	ret = null_vdev_setup(null_dev, &port, mb_pool);
 	if (ret != 0)
@@ -3627,7 +4279,7 @@ static int bpf_rx_test(uint16_t port, const char *tmpfile, struct rte_mempool *p
 	const struct rte_bpf_prm prm = {
 		.prog_arg = {
 			.type = RTE_BPF_ARG_PTR,
-			.size = sizeof(struct rte_mbuf),
+			.size = sizeof(struct dummy_net),
 		},
 	};
 	int ret;
@@ -3664,7 +4316,7 @@ test_bpf_elf_rx_load(void)
 	static const char null_dev[] = "net_null_bpf0";
 	struct rte_mempool *pool = NULL;
 	char *tmpfile = NULL;
-	uint16_t port;
+	uint16_t port = UINT16_MAX;
 	int ret;
 
 	printf("%s start\n", __func__);
@@ -3745,13 +4397,13 @@ test_bpf_elf(void)
 static int
 test_bpf_elf(void)
 {
-	printf("BPF compile not supported, skipping test\n");
+	printf("BPF compile or NULL PMD not supported, skipping test\n");
 	return TEST_SKIPPED;
 }
 
-#endif /* !TEST_BPF_ELF_LOAD */
+#endif /* !(TEST_BPF_ELF_LOAD && RTE_NULL) */
 
-REGISTER_FAST_TEST(bpf_elf_autotest, true, true, test_bpf_elf);
+REGISTER_FAST_TEST(bpf_elf_autotest, NOHUGE_OK, ASAN_OK, test_bpf_elf);
 
 #ifndef RTE_HAS_LIBPCAP
 
@@ -3969,4 +4621,463 @@ test_bpf_convert(void)
 
 #endif /* RTE_HAS_LIBPCAP */
 
-REGISTER_FAST_TEST(bpf_convert_autotest, true, true, test_bpf_convert);
+REGISTER_FAST_TEST(bpf_convert_autotest, NOHUGE_OK, ASAN_OK, test_bpf_convert);
+
+/*
+ * Tests of BPF atomic instructions.
+ */
+
+/* Value that should be returned by the xchg test programs. */
+#define XCHG_RETURN_VALUE 0xdeadbeefcafebabe
+
+/* Operand of XADD, should overflow both 32-bit and 64-bit parts of initial value. */
+#define XADD_OPERAND 0xc1c3c5c7c9cbcdcf
+
+/* Argument type of the xchg test program. */
+struct xchg_arg {
+	uint64_t value0;
+	uint64_t value1;
+};
+
+/* Initial value of the data area passed to the xchg test program. */
+static const struct xchg_arg xchg_input = {
+	.value0 = 0xa0a1a2a3a4a5a6a7,
+	.value1 = 0xb0b1b2b3b4b5b6b7,
+};
+
+/* Run program against xchg_input and compare output value with expected. */
+static int
+run_xchg_test(uint32_t nb_ins, const struct ebpf_insn *ins, struct xchg_arg expected)
+{
+	const struct rte_bpf_prm prm = {
+		.ins = ins,
+		.nb_ins = nb_ins,
+		.prog_arg = {
+			.type = RTE_BPF_ARG_PTR,
+			.size = sizeof(struct xchg_arg),
+		},
+	};
+
+	for (int use_jit = false; use_jit <= true; ++use_jit) {
+		struct xchg_arg argument = xchg_input;
+		uint64_t return_value;
+
+		struct rte_bpf *const bpf = rte_bpf_load(&prm);
+		RTE_TEST_ASSERT_NOT_NULL(bpf, "expect rte_bpf_load() != NULL");
+
+		if (use_jit) {
+			struct rte_bpf_jit jit;
+			RTE_TEST_ASSERT_SUCCESS(rte_bpf_get_jit(bpf, &jit),
+				"expect rte_bpf_get_jit() to succeed");
+			if (jit.func == NULL) {
+				/* No JIT on this platform. */
+				rte_bpf_destroy(bpf);
+				continue;
+			}
+
+			return_value = jit.func(&argument);
+		} else
+			return_value = rte_bpf_exec(bpf, &argument);
+
+		rte_bpf_destroy(bpf);
+
+		RTE_TEST_ASSERT_EQUAL(return_value, XCHG_RETURN_VALUE,
+			"expect return_value == %#jx, found %#jx, use_jit=%d",
+			(uintmax_t)XCHG_RETURN_VALUE, (uintmax_t)return_value,
+			use_jit);
+
+		RTE_TEST_ASSERT_EQUAL(argument.value0, expected.value0,
+			"expect value0 == %#jx, found %#jx, use_jit=%d",
+			(uintmax_t)expected.value0, (uintmax_t)argument.value0,
+			use_jit);
+
+		RTE_TEST_ASSERT_EQUAL(argument.value1, expected.value1,
+			"expect value1 == %#jx, found %#jx, use_jit=%d",
+			(uintmax_t)expected.value1, (uintmax_t)argument.value1,
+			use_jit);
+	}
+
+	return TEST_SUCCESS;
+}
+
+/*
+ * Test 32-bit XADD.
+ *
+ * - Pre-fill r0 with return value.
+ * - Fill r2 with XADD_OPERAND.
+ * - Add (uint32_t)XADD_OPERAND to *(uint32_t *)&value0.
+ * - Negate r2 and use it in the next operation to verify it was not corrupted.
+ * - Add (uint32_t)-XADD_OPERAND to *(uint32_t *)&value1.
+ * - Return r0 which should remain unchanged.
+ */
+
+static int
+test_xadd32(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set r0 to return value. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_0,
+			.imm = (uint32_t)XCHG_RETURN_VALUE,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XCHG_RETURN_VALUE >> 32,
+		},
+		{
+			/* Set r2 to XADD operand. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_2,
+			.imm = (uint32_t)XADD_OPERAND,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XADD_OPERAND >> 32,
+		},
+		{
+			/* Atomically add r2 to value0, 32-bit. */
+			.code = (BPF_STX | EBPF_ATOMIC | BPF_W),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = BPF_ATOMIC_ADD,
+		},
+		{
+			/* Negate r2. */
+			.code = (EBPF_ALU64 | BPF_NEG | BPF_K),
+			.dst_reg = EBPF_REG_2,
+		},
+		{
+			/* Atomically add r2 to value1, 32-bit. */
+			.code = (BPF_STX | EBPF_ATOMIC | BPF_W),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value1),
+			.imm = BPF_ATOMIC_ADD,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	const struct xchg_arg expected = {
+#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
+		/* Only high 32 bits should be added. */
+		.value0 = xchg_input.value0 + (XADD_OPERAND & RTE_GENMASK64(63, 32)),
+		.value1 = xchg_input.value1 - (XADD_OPERAND & RTE_GENMASK64(63, 32)),
+#elif RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+		/* Only low 32 bits should be added, without carry. */
+		.value0 = (xchg_input.value0 & RTE_GENMASK64(63, 32)) |
+			((xchg_input.value0 + XADD_OPERAND) & RTE_GENMASK64(31, 0)),
+		.value1 = (xchg_input.value1 & RTE_GENMASK64(63, 32)) |
+			((xchg_input.value1 - XADD_OPERAND) & RTE_GENMASK64(31, 0)),
+#else
+#error Unsupported endianness.
+#endif
+	};
+	return run_xchg_test(RTE_DIM(ins), ins, expected);
+}
+
+REGISTER_FAST_TEST(bpf_xadd32_autotest, NOHUGE_OK, ASAN_OK, test_xadd32);
+
+/*
+ * Test 64-bit XADD.
+ *
+ * - Pre-fill r0 with return value.
+ * - Fill r2 with XADD_OPERAND.
+ * - Add XADD_OPERAND to value0.
+ * - Negate r2 and use it in the next operation to verify it was not corrupted.
+ * - Add -XADD_OPERAND to value1.
+ * - Return r0 which should remain unchanged.
+ */
+
+static int
+test_xadd64(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set r0 to return value. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_0,
+			.imm = (uint32_t)XCHG_RETURN_VALUE,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XCHG_RETURN_VALUE >> 32,
+		},
+		{
+			/* Set r2 to XADD operand. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_2,
+			.imm = (uint32_t)XADD_OPERAND,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XADD_OPERAND >> 32,
+		},
+		{
+			/* Atomically add r2 to value0. */
+			.code = (BPF_STX | EBPF_ATOMIC | EBPF_DW),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = BPF_ATOMIC_ADD,
+		},
+		{
+			/* Negate r2. */
+			.code = (EBPF_ALU64 | BPF_NEG | BPF_K),
+			.dst_reg = EBPF_REG_2,
+		},
+		{
+			/* Atomically add r2 to value1. */
+			.code = (BPF_STX | EBPF_ATOMIC | EBPF_DW),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value1),
+			.imm = BPF_ATOMIC_ADD,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	const struct xchg_arg expected = {
+		.value0 = xchg_input.value0 + XADD_OPERAND,
+		.value1 = xchg_input.value1 - XADD_OPERAND,
+	};
+	return run_xchg_test(RTE_DIM(ins), ins, expected);
+}
+
+REGISTER_FAST_TEST(bpf_xadd64_autotest, NOHUGE_OK, ASAN_OK, test_xadd64);
+
+/*
+ * Test 32-bit XCHG.
+ *
+ * - Pre-fill r2 with return value.
+ * - Exchange *(uint32_t *)&value0 and *(uint32_t *)&value1 via r2.
+ * - Upper half of r2 should get cleared, so add it back before returning.
+ */
+
+static int
+test_xchg32(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set r2 to return value. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_2,
+			.imm = (uint32_t)XCHG_RETURN_VALUE,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XCHG_RETURN_VALUE >> 32,
+		},
+		{
+			/* Atomically exchange r2 with value0, 32-bit. */
+			.code = (BPF_STX | EBPF_ATOMIC | BPF_W),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = BPF_ATOMIC_XCHG,
+		},
+		{
+			/* Atomically exchange r2 with value1, 32-bit. */
+			.code = (BPF_STX | EBPF_ATOMIC | BPF_W),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value1),
+			.imm = BPF_ATOMIC_XCHG,
+		},
+		{
+			/* Atomically exchange r2 with value0, 32-bit. */
+			.code = (BPF_STX | EBPF_ATOMIC | BPF_W),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = BPF_ATOMIC_XCHG,
+		},
+		{
+			/* Set upper half of r0 to return value. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_0,
+			.imm = 0,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XCHG_RETURN_VALUE >> 32,
+		},
+		{
+			/*
+			 * Add r2 (should have upper half cleared by this time)
+			 * to r0 to use as a return value.
+			 */
+			.code = (EBPF_ALU64 | BPF_ADD | BPF_X),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	struct xchg_arg expected = {
+#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
+	/* Only high 32 bits should be exchanged. */
+		.value0 =
+			(xchg_input.value0 & RTE_GENMASK64(31, 0)) |
+			(xchg_input.value1 & RTE_GENMASK64(63, 32)),
+		.value1 =
+			(xchg_input.value1 & RTE_GENMASK64(31, 0)) |
+			(xchg_input.value0 & RTE_GENMASK64(63, 32)),
+#elif RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+	/* Only low 32 bits should be exchanged. */
+		.value0 =
+			(xchg_input.value1 & RTE_GENMASK64(31, 0)) |
+			(xchg_input.value0 & RTE_GENMASK64(63, 32)),
+		.value1 =
+			(xchg_input.value0 & RTE_GENMASK64(31, 0)) |
+			(xchg_input.value1 & RTE_GENMASK64(63, 32)),
+#else
+#error Unsupported endianness.
+#endif
+	};
+	return run_xchg_test(RTE_DIM(ins), ins, expected);
+}
+
+REGISTER_FAST_TEST(bpf_xchg32_autotest, NOHUGE_OK, ASAN_OK, test_xchg32);
+
+/*
+ * Test 64-bit XCHG.
+ *
+ * - Pre-fill r2 with return value.
+ * - Exchange value0 and value1 via r2.
+ * - Return r2, which should remain unchanged.
+ */
+
+static int
+test_xchg64(void)
+{
+	static const struct ebpf_insn ins[] = {
+		{
+			/* Set r2 to return value. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_2,
+			.imm = (uint32_t)XCHG_RETURN_VALUE,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XCHG_RETURN_VALUE >> 32,
+		},
+		{
+			/* Atomically exchange r2 with value0. */
+			.code = (BPF_STX | EBPF_ATOMIC | EBPF_DW),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = BPF_ATOMIC_XCHG,
+		},
+		{
+			/* Atomically exchange r2 with value1. */
+			.code = (BPF_STX | EBPF_ATOMIC | EBPF_DW),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value1),
+			.imm = BPF_ATOMIC_XCHG,
+		},
+		{
+			/* Atomically exchange r2 with value0. */
+			.code = (BPF_STX | EBPF_ATOMIC | EBPF_DW),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = BPF_ATOMIC_XCHG,
+		},
+		{
+			/* Copy r2 to r0 to use as a return value. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	const struct xchg_arg expected = {
+		.value0 = xchg_input.value1,
+		.value1 = xchg_input.value0,
+	};
+	return run_xchg_test(RTE_DIM(ins), ins, expected);
+}
+
+REGISTER_FAST_TEST(bpf_xchg64_autotest, NOHUGE_OK, ASAN_OK, test_xchg64);
+
+/*
+ * Test invalid and unsupported atomic imm values (also valid ones for control).
+ *
+ * For realism use a meaningful subset of the test_xchg64 program.
+ */
+
+static int
+test_atomic_imm(int32_t imm, bool is_valid)
+{
+	const struct ebpf_insn ins[] = {
+		{
+			/* Set r2 to return value. */
+			.code = (BPF_LD | BPF_IMM | EBPF_DW),
+			.dst_reg = EBPF_REG_2,
+			.imm = (uint32_t)XCHG_RETURN_VALUE,
+		},
+		{
+			/* Second part of 128-bit instruction. */
+			.imm = XCHG_RETURN_VALUE >> 32,
+		},
+		{
+			/* Atomically exchange r2 with value0. */
+			.code = (BPF_STX | EBPF_ATOMIC | EBPF_DW),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_1,
+			.off = offsetof(struct xchg_arg, value0),
+			.imm = imm,
+		},
+		{
+			/* Copy r2 to r0 to use as a return value. */
+			.code = (EBPF_ALU64 | EBPF_MOV | BPF_X),
+			.src_reg = EBPF_REG_2,
+			.dst_reg = EBPF_REG_0,
+		},
+		{
+			.code = (BPF_JMP | EBPF_EXIT),
+		},
+	};
+	const struct rte_bpf_prm prm = {
+		.ins = ins,
+		.nb_ins = RTE_DIM(ins),
+		.prog_arg = {
+			.type = RTE_BPF_ARG_PTR,
+			.size = sizeof(struct xchg_arg),
+		},
+	};
+
+	struct rte_bpf *const bpf = rte_bpf_load(&prm);
+	rte_bpf_destroy(bpf);
+
+	if (is_valid)
+		RTE_TEST_ASSERT_NOT_NULL(bpf, "expect rte_bpf_load() != NULL, imm=%#x", imm);
+	else
+		RTE_TEST_ASSERT_NULL(bpf, "expect rte_bpf_load() == NULL, imm=%#x", imm);
+
+	return TEST_SUCCESS;
+}
+
+static int
+test_atomic_imms(void)
+{
+	RTE_TEST_ASSERT_SUCCESS(test_atomic_imm(INT32_MIN, false), "expect success");
+	for (int32_t imm = BPF_ATOMIC_ADD - 1; imm <= BPF_ATOMIC_XCHG + 1; ++imm) {
+		const bool is_valid = imm == BPF_ATOMIC_ADD || imm == BPF_ATOMIC_XCHG;
+		RTE_TEST_ASSERT_SUCCESS(test_atomic_imm(imm, is_valid), "expect success");
+	}
+	RTE_TEST_ASSERT_SUCCESS(test_atomic_imm(INT32_MAX, false), "expect success");
+
+	return TEST_SUCCESS;
+}
+
+REGISTER_FAST_TEST(bpf_atomic_imms_autotest, NOHUGE_OK, ASAN_OK, test_atomic_imms);

@@ -37,6 +37,7 @@ Features of the CNXK Ethdev PMD are:
 - Inline IPsec processing support
 - Ingress meter support
 - Queue based priority flow control support
+- Plain packet reassembly on CN20K SoC family
 - Port representors
 - Represented port pattern matching and action
 - Port representor pattern matching and action
@@ -492,6 +493,19 @@ Runtime Config Options
    For example::
 
       -a 0002:02:00.0,disable_xqe_drop=1
+
+- ``Configure RXC time step`` (default ``1000``)
+
+   RXC time step/granularity for reassembly can be specified by
+   ``rxc_step`` devargs parameter.
+
+   For example::
+
+      -a 0002:02:00.0,rxc_step=10000
+
+   With the above configuration, reassembly time step will be set to 10000 microseconds.
+   Default RXC time step will be set to 1000 microseconds when reassembly is configured.
+   It will be used for OCTEON CN20K SoC family.
 
 .. note::
 

@@ -102,7 +102,10 @@ crypto_cipher_algorithm_strings[] = {
 	[RTE_CRYPTO_CIPHER_SM4_CTR]	= "sm4-ctr",
 	[RTE_CRYPTO_CIPHER_SM4_CFB]	= "sm4-cfb",
 	[RTE_CRYPTO_CIPHER_SM4_OFB]	= "sm4-ofb",
-	[RTE_CRYPTO_CIPHER_SM4_XTS]	= "sm4-xts"
+	[RTE_CRYPTO_CIPHER_SM4_XTS]	= "sm4-xts",
+	[RTE_CRYPTO_CIPHER_SNOW5G_NEA4]	= "snow5g-nea4",
+	[RTE_CRYPTO_CIPHER_AES_NEA5]	= "aes-nea5",
+	[RTE_CRYPTO_CIPHER_ZUC_NEA6]	= "zuc-nea6",
 };
 
 /**
@@ -162,6 +165,10 @@ crypto_auth_algorithm_strings[] = {
 
 	[RTE_CRYPTO_AUTH_SHAKE_128]	 = "shake-128",
 	[RTE_CRYPTO_AUTH_SHAKE_256]	 = "shake-256",
+
+	[RTE_CRYPTO_AUTH_SNOW5G_NIA4] = "snow5g-nia4",
+	[RTE_CRYPTO_AUTH_AES_NIA5]	 = "aes-nia5",
+	[RTE_CRYPTO_AUTH_ZUC_NIA6]	 = "zuc-nia6",
 };
 
 /**
@@ -175,6 +182,10 @@ crypto_aead_algorithm_strings[] = {
 	[RTE_CRYPTO_AEAD_AES_GCM]	= "aes-gcm",
 	[RTE_CRYPTO_AEAD_CHACHA20_POLY1305] = "chacha20-poly1305",
 	[RTE_CRYPTO_AEAD_SM4_GCM]   = "sm4-gcm",
+
+	[RTE_CRYPTO_AEAD_SNOW5G_NCA4] = "snow5g-nca4",
+	[RTE_CRYPTO_AEAD_AES_NCA5]    = "aes-nca5",
+	[RTE_CRYPTO_AEAD_ZUC_NCA6]    = "zuc-nca6",
 };
 
 
@@ -1166,6 +1177,27 @@ rte_cryptodev_find_free_device_index(void)
 	return RTE_CRYPTO_MAX_DEVS;
 }
 
+static uint8_t
+rte_cryptodev_find_device_by_name(const char *name)
+{
+	char mz_name[RTE_MEMZONE_NAMESIZE];
+	const struct rte_memzone *mz;
+	struct rte_cryptodev_data *data;
+	uint8_t dev_id;
+
+	for (dev_id = 0; dev_id < RTE_CRYPTO_MAX_DEVS; dev_id++) {
+		snprintf(mz_name, sizeof(mz_name), "rte_cryptodev_data_%u", dev_id);
+		mz = rte_memzone_lookup(mz_name);
+		if (mz == NULL)
+			continue;
+
+		data = mz->addr;
+		if (strncmp(data->name, name, RTE_CRYPTODEV_NAME_MAX_LEN) == 0)
+			return dev_id;
+	}
+	return RTE_CRYPTO_MAX_DEVS;
+}
+
 RTE_EXPORT_INTERNAL_SYMBOL(rte_cryptodev_pmd_allocate)
 struct rte_cryptodev *
 rte_cryptodev_pmd_allocate(const char *name, int socket_id)
@@ -1179,10 +1211,18 @@ rte_cryptodev_pmd_allocate(const char *name, int socket_id)
 		return NULL;
 	}
 
-	dev_id = rte_cryptodev_find_free_device_index();
-	if (dev_id == RTE_CRYPTO_MAX_DEVS) {
-		CDEV_LOG_ERR("Reached maximum number of crypto devices");
-		return NULL;
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		dev_id = rte_cryptodev_find_device_by_name(name);
+		if (dev_id == RTE_CRYPTO_MAX_DEVS) {
+			CDEV_LOG_ERR("Device %s does not exist in primary process", name);
+			return NULL;
+		}
+	} else {
+		dev_id = rte_cryptodev_find_free_device_index();
+		if (dev_id == RTE_CRYPTO_MAX_DEVS) {
+			CDEV_LOG_ERR("Reached maximum number of crypto devices");
+			return NULL;
+		}
 	}
 
 	cryptodev = rte_cryptodev_pmd_get_dev(dev_id);

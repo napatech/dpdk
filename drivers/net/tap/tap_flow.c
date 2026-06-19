@@ -706,6 +706,13 @@ tap_flow_create_tcp(const struct rte_flow_item *item, struct convert_data *info)
  * @return
  *   0 on success.
  */
+/*
+ * Maximum size of a flow item in bytes.
+ * Must be larger than all supported rte_flow_item_* structures
+ * (currently the largest is rte_flow_item_ipv6 at ~44 bytes).
+ */
+#define TAP_FLOW_ITEM_MAX_SIZE 128
+
 static int
 tap_flow_item_validate(const struct rte_flow_item *item,
 		       unsigned int size,
@@ -754,11 +761,13 @@ tap_flow_item_validate(const struct rte_flow_item *item,
 	 * TC does not support range so anything else is invalid.
 	 */
 	if (item->spec && item->last) {
-		uint8_t spec[size];
-		uint8_t last[size];
+		uint8_t spec[TAP_FLOW_ITEM_MAX_SIZE];
+		uint8_t last[TAP_FLOW_ITEM_MAX_SIZE];
 		const uint8_t *apply = default_mask;
 		unsigned int i;
 
+		if (size > TAP_FLOW_ITEM_MAX_SIZE)
+			return -1;
 		if (item->mask)
 			apply = item->mask;
 		for (i = 0; i < size; ++i) {
@@ -1235,6 +1244,12 @@ tap_flow_create(struct rte_eth_dev *dev,
 	struct tap_nlmsg *msg = NULL;
 	int err;
 
+	if (pmd->flow_init == 0 && tap_flow_init(pmd) < 0) {
+		rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE,
+				   NULL,
+				   "can't create rule, qdisc not initialized");
+		goto fail;
+	}
 	if (!pmd->if_index) {
 		rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_HANDLE,
 				   NULL,
@@ -1293,7 +1308,7 @@ tap_flow_create(struct rte_eth_dev *dev,
 			rte_flow_error_set(
 				error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 				"cannot allocate memory for rte_flow");
-			goto fail;
+			goto fail_remove;
 		}
 		msg = &remote_flow->msg;
 		/* set the rule if_index for the remote netdevice */
@@ -1307,14 +1322,14 @@ tap_flow_create(struct rte_eth_dev *dev,
 			rte_flow_error_set(
 				error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
 				NULL, "rte flow rule validation failed");
-			goto fail;
+			goto fail_remove;
 		}
 		err = tap_nl_send(pmd->nlsk_fd, &msg->nh);
 		if (err < 0) {
 			rte_flow_error_set(
 				error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
 				NULL, "Failure sending nl request");
-			goto fail;
+			goto fail_remove;
 		}
 		err = tap_nl_recv_ack(pmd->nlsk_fd);
 		if (err < 0) {
@@ -1325,15 +1340,22 @@ tap_flow_create(struct rte_eth_dev *dev,
 				error, ENOMEM, RTE_FLOW_ERROR_TYPE_HANDLE,
 				NULL,
 				"overlapping rules or Kernel too old for flower support");
-			goto fail;
+			goto fail_remove;
 		}
 		flow->remote_flow = remote_flow;
 	}
 	return flow;
+
+fail_remove:
+	/* Delete the local TC rule that was already installed */
+	flow->msg.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	flow->msg.nh.nlmsg_type = RTM_DELTFILTER;
+	if (tap_nl_send(pmd->nlsk_fd, &flow->msg.nh) >= 0)
+		tap_nl_recv_ack(pmd->nlsk_fd);
+	LIST_REMOVE(flow, next);
 fail:
 	rte_free(remote_flow);
-	if (flow)
-		tap_flow_free(pmd, flow);
+	tap_flow_free(pmd, flow);
 	return NULL;
 }
 
@@ -1618,8 +1640,10 @@ int tap_flow_implicit_create(struct pmd_internals *pmd,
 	err = tap_nl_recv_ack(pmd->nlsk_fd);
 	if (err < 0) {
 		/* Silently ignore re-entering existing rule */
-		if (errno == EEXIST)
+		if (errno == EEXIST) {
+			rte_free(remote_flow);
 			goto success;
+		}
 		TAP_LOG(ERR,
 			"Kernel refused TC filter rule creation (%d): %s",
 			errno, strerror(errno));
@@ -1874,6 +1898,26 @@ static int rss_add_actions(struct rte_flow *flow, struct pmd_internals *pmd,
 	return add_actions(flow, RTE_DIM(adata), adata, TCA_FLOWER_ACT);
 }
 #endif
+
+int
+tap_flow_init(struct pmd_internals *pmd)
+{
+	if (qdisc_create_multiq(pmd->nlsk_fd, pmd->if_index) < 0) {
+		TAP_LOG(ERR, "%s: failed to create multiq qdisc.",
+			pmd->name);
+		return -1;
+	}
+
+	if (qdisc_create_ingress(pmd->nlsk_fd, pmd->if_index) < 0) {
+		TAP_LOG(ERR, "%s: failed to create ingress qdisc.",
+			pmd->name);
+		return -1;
+	}
+
+	pmd->flow_init = 1;
+
+	return 0;
+}
 
 /**
  * Get rte_flow operations.

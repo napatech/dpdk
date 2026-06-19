@@ -64,7 +64,7 @@ struct inst_node {
 	uint8_t cur_edge:4;
 	uint8_t edge_type[MAX_EDGES];
 	uint32_t edge_dest[MAX_EDGES];
-	uint32_t prev_node;
+	struct inst_node *prev_node;
 	struct {
 		struct bpf_eval_state *cur;   /* save/restore for jcc targets */
 		struct bpf_eval_state *start;
@@ -243,8 +243,8 @@ eval_add(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, uint64_t msk)
 
 	rv.u.min = (rd->u.min + rs->u.min) & msk;
 	rv.u.max = (rd->u.max + rs->u.max) & msk;
-	rv.s.min = (rd->s.min + rs->s.min) & msk;
-	rv.s.max = (rd->s.max + rs->s.max) & msk;
+	rv.s.min = ((uint64_t)rd->s.min + (uint64_t)rs->s.min) & msk;
+	rv.s.max = ((uint64_t)rd->s.max + (uint64_t)rs->s.max) & msk;
 
 	/*
 	 * if at least one of the operands is not constant,
@@ -272,8 +272,8 @@ eval_sub(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, uint64_t msk)
 
 	rv.u.min = (rd->u.min - rs->u.max) & msk;
 	rv.u.max = (rd->u.max - rs->u.min) & msk;
-	rv.s.min = (rd->s.min - rs->s.max) & msk;
-	rv.s.max = (rd->s.max - rs->s.min) & msk;
+	rv.s.min = ((uint64_t)rd->s.min - (uint64_t)rs->s.max) & msk;
+	rv.s.max = ((uint64_t)rd->s.max - (uint64_t)rs->s.min) & msk;
 
 	/*
 	 * if at least one of the operands is not constant,
@@ -910,6 +910,16 @@ eval_store(struct bpf_verifier *bvf, const struct ebpf_insn *ins)
 
 	if (BPF_CLASS(ins->code) == BPF_STX) {
 		rs = st->rv[ins->src_reg];
+		if (BPF_MODE(ins->code) == EBPF_ATOMIC)
+			switch (ins->imm) {
+			case BPF_ATOMIC_ADD:
+				break;
+			case BPF_ATOMIC_XCHG:
+				eval_max_bound(&st->rv[ins->src_reg], msk);
+				break;
+			default:
+				return "unsupported atomic operation";
+			}
 		eval_apply_mask(&rs, msk);
 	} else
 		eval_fill_imm(&rs, msk, ins->imm);
@@ -926,7 +936,7 @@ eval_store(struct bpf_verifier *bvf, const struct ebpf_insn *ins)
 
 		sv = st->sv + rd.u.max / sizeof(uint64_t);
 		if (BPF_CLASS(ins->code) == BPF_STX &&
-				BPF_MODE(ins->code) == EBPF_XADD)
+				BPF_MODE(ins->code) == EBPF_ATOMIC)
 			eval_max_bound(sv, msk);
 		else
 			*sv = rs;
@@ -1549,17 +1559,17 @@ static const struct bpf_ins_check ins_chk[UINT8_MAX + 1] = {
 		.imm = { .min = 0, .max = 0},
 		.eval = eval_store,
 	},
-	/* atomic add instructions */
-	[(BPF_STX | EBPF_XADD | BPF_W)] = {
+	/* atomic instructions */
+	[(BPF_STX | EBPF_ATOMIC | BPF_W)] = {
 		.mask = { .dreg = ALL_REGS, .sreg = ALL_REGS},
 		.off = { .min = 0, .max = UINT16_MAX},
-		.imm = { .min = 0, .max = 0},
+		.imm = { .min = BPF_ATOMIC_ADD, .max = BPF_ATOMIC_XCHG},
 		.eval = eval_store,
 	},
-	[(BPF_STX | EBPF_XADD | EBPF_DW)] = {
+	[(BPF_STX | EBPF_ATOMIC | EBPF_DW)] = {
 		.mask = { .dreg = ALL_REGS, .sreg = ALL_REGS},
 		.off = { .min = 0, .max = UINT16_MAX},
-		.imm = { .min = 0, .max = 0},
+		.imm = { .min = BPF_ATOMIC_ADD, .max = BPF_ATOMIC_XCHG},
 		.eval = eval_store,
 	},
 	/* store IMM instructions */
@@ -1827,7 +1837,7 @@ add_edge(struct bpf_verifier *bvf, struct inst_node *node, uint32_t nidx)
 {
 	uint32_t ne;
 
-	if (nidx > bvf->prm->nb_ins) {
+	if (nidx >= bvf->prm->nb_ins) {
 		RTE_BPF_LOG_LINE(ERR,
 			"%s: program boundary violation at pc: %u, next pc: %u",
 			__func__, get_node_idx(bvf, node), nidx);
@@ -1875,25 +1885,25 @@ set_edge_type(struct bpf_verifier *bvf, struct inst_node *node,
 	bvf->edge_type[type]++;
 }
 
-static struct inst_node *
-get_prev_node(struct bpf_verifier *bvf, struct inst_node *node)
-{
-	return  bvf->in + node->prev_node;
-}
-
 /*
  * Depth-First Search (DFS) through previously constructed
  * Control Flow Graph (CFG).
  * Information collected at this path would be used later
  * to determine is there any loops, and/or unreachable instructions.
+ * PREREQUISITE: there is at least one node.
  */
 static void
 dfs(struct bpf_verifier *bvf)
 {
 	struct inst_node *next, *node;
 
-	node = bvf->in;
-	while (node != NULL) {
+	RTE_ASSERT(bvf->nb_nodes != 0);
+	/*
+	 * Since there is at least one node, node with index 0 always exists;
+	 * it is our program entry point.
+	 */
+	node = &bvf->in[0];
+	do {
 
 		if (node->colour == WHITE)
 			set_node_colour(bvf, node, GREY);
@@ -1910,7 +1920,7 @@ dfs(struct bpf_verifier *bvf)
 
 			if (next != NULL) {
 				/* proceed with next child */
-				next->prev_node = get_node_idx(bvf, node);
+				next->prev_node = node;
 				node = next;
 			} else {
 				/*
@@ -1919,11 +1929,11 @@ dfs(struct bpf_verifier *bvf)
 				 */
 				set_node_colour(bvf, node, BLACK);
 				node->cur_edge = 0;
-				node = get_prev_node(bvf, node);
+				node = node->prev_node;
 			}
 		} else
 			node = NULL;
-	}
+	} while (node != NULL);
 }
 
 /*
@@ -2061,6 +2071,12 @@ validate(struct bpf_verifier *bvf)
 
 	if (rc != 0)
 		return rc;
+
+	if (bvf->nb_nodes == 0) {
+		RTE_BPF_LOG_LINE(ERR, "%s(%p) the program is empty",
+			__func__, bvf);
+		return -EINVAL;
+	}
 
 	dfs(bvf);
 
@@ -2478,7 +2494,7 @@ evaluate(struct bpf_verifier *bvf)
 				next = NULL;
 				stats.nb_prune++;
 			} else {
-				next->prev_node = get_node_idx(bvf, node);
+				next->prev_node = node;
 				node = next;
 			}
 		} else {
@@ -2489,11 +2505,9 @@ evaluate(struct bpf_verifier *bvf)
 			 */
 			node->cur_edge = 0;
 			save_safe_eval_state(bvf, node);
-			node = get_prev_node(bvf, node);
+			node = node->prev_node;
 
-			/* finished */
-			if (node == bvf->in)
-				node = NULL;
+			/* first node will not have prev, signalling finish */
 		}
 	}
 

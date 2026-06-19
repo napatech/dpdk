@@ -351,16 +351,24 @@ mlx5_flex_flow_translate_item(struct rte_eth_dev *dev,
 	spec = item->spec;
 	mask = item->mask;
 	tp = (struct mlx5_flex_item *)spec->handle;
+	/* Validate mapnum to prevent using tainted loop bound */
+	if (tp->mapnum > MLX5_FLEX_ITEM_MAPPING_NUM)
+		return;
 	for (i = 0; i < tp->mapnum && pos < (spec->length * CHAR_BIT); i++) {
 		struct mlx5_flex_pattern_field *map = tp->map + i;
 		uint32_t val, msk, def;
 		int id = mlx5_flex_get_sample_id(tp, i, &pos, is_inner);
 
-		if (id == -1)
+		/* Validate id to prevent using tainted value as array index */
+		if (id < 0)
 			continue;
 		MLX5_ASSERT(id < (int)tp->devx_fp->num_samples);
 		if (id >= (int)tp->devx_fp->num_samples ||
 		    id >= MLX5_GRAPH_NODE_SAMPLE_NUM)
+			return;
+		/* Validate width and shift to prevent using tainted values as loop bounds */
+		if (map->width == 0 || map->width > sizeof(uint32_t) * CHAR_BIT ||
+		    (uint32_t)(map->shift + map->width) > sizeof(uint32_t) * CHAR_BIT)
 			return;
 		def = (uint32_t)(RTE_BIT64(map->width) - 1);
 		def <<= (sizeof(uint32_t) * CHAR_BIT - map->shift - map->width);
@@ -458,7 +466,7 @@ mlx5_flex_release_index(struct rte_eth_dev *dev,
  *    6     b00000011  0x03
  *    7     b00000001  0x01
  */
-static uint8_t
+uint8_t
 mlx5_flex_hdr_len_mask(uint8_t shift,
 		       const struct mlx5_hca_flex_attr *attr)
 {
@@ -482,6 +490,7 @@ mlx5_flex_translate_length(struct mlx5_hca_flex_attr *attr,
 		return rte_flow_error_set
 			(error, EINVAL, RTE_FLOW_ERROR_TYPE_ITEM, NULL,
 			 "not byte aligned header length field");
+	node->header_length_field_offset_mode = !attr->header_length_field_mode_wa;
 	switch (field->field_mode) {
 	case FIELD_MODE_DUMMY:
 		return rte_flow_error_set
@@ -572,7 +581,6 @@ mlx5_flex_translate_length(struct mlx5_hca_flex_attr *attr,
 		node->header_length_field_mask = mask;
 		node->header_length_field_shift = shift;
 		node->header_length_field_offset = offset;
-		node->header_length_field_offset_mode = !attr->header_length_field_mode_wa;
 		break;
 	}
 	case FIELD_MODE_BITMASK:
@@ -1369,9 +1377,9 @@ mlx5_flex_translate_conf(struct rte_eth_dev *dev,
  *   Non-NULL opaque pointer on success, NULL otherwise and rte_errno is set.
  */
 struct rte_flow_item_flex_handle *
-flow_dv_item_create(struct rte_eth_dev *dev,
-		    const struct rte_flow_item_flex_conf *conf,
-		    struct rte_flow_error *error)
+mlx5_flow_dv_item_create(struct rte_eth_dev *dev,
+			 const struct rte_flow_item_flex_conf *conf,
+			 struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flex_parser_devx devx_config = { .devx_obj = NULL };
@@ -1420,9 +1428,9 @@ error:
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-flow_dv_item_release(struct rte_eth_dev *dev,
-		     const struct rte_flow_item_flex_handle *handle,
-		     struct rte_flow_error *error)
+mlx5_flow_dv_item_release(struct rte_eth_dev *dev,
+			  const struct rte_flow_item_flex_handle *handle,
+			  struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_flex_item *flex =

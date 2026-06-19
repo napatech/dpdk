@@ -916,11 +916,11 @@ i40e_build_ctob(uint32_t td_cmd,
 		unsigned int size,
 		uint32_t td_tag)
 {
-	return rte_cpu_to_le_64(I40E_TX_DESC_DTYPE_DATA |
-			((uint64_t)td_cmd  << I40E_TXD_QW1_CMD_SHIFT) |
-			((uint64_t)td_offset << I40E_TXD_QW1_OFFSET_SHIFT) |
-			((uint64_t)size  << I40E_TXD_QW1_TX_BUF_SZ_SHIFT) |
-			((uint64_t)td_tag  << I40E_TXD_QW1_L2TAG1_SHIFT));
+	return rte_cpu_to_le_64(CI_TX_DESC_DTYPE_DATA |
+			((uint64_t)td_cmd  << CI_TXD_QW1_CMD_S) |
+			((uint64_t)td_offset << CI_TXD_QW1_OFFSET_S) |
+			((uint64_t)size  << CI_TXD_QW1_TX_BUF_SZ_S) |
+			((uint64_t)td_tag  << CI_TXD_QW1_L2TAG1_S));
 }
 
 /*
@@ -1377,15 +1377,15 @@ i40e_find_available_buffer(struct rte_eth_dev *dev)
 	 */
 	if (fdir_info->txq_available_buf_count <= 0) {
 		uint16_t tmp_tail;
-		volatile struct i40e_tx_desc *tmp_txdp;
+		volatile struct ci_tx_desc *tmp_txdp;
 
 		tmp_tail = txq->tx_tail;
-		tmp_txdp = &txq->i40e_tx_ring[tmp_tail + 1];
+		tmp_txdp = &txq->ci_tx_ring[tmp_tail + 1];
 
 		do {
 			if ((tmp_txdp->cmd_type_offset_bsz &
-					rte_cpu_to_le_64(I40E_TXD_QW1_DTYPE_MASK)) ==
-					rte_cpu_to_le_64(I40E_TX_DESC_DTYPE_DESC_DONE))
+					rte_cpu_to_le_64(CI_TXD_QW1_DTYPE_M)) ==
+					rte_cpu_to_le_64(CI_TX_DESC_DTYPE_DESC_DONE))
 				fdir_info->txq_available_buf_count++;
 			else
 				break;
@@ -1628,7 +1628,7 @@ i40e_flow_fdir_filter_programming(struct i40e_pf *pf,
 	struct ci_tx_queue *txq = pf->fdir.txq;
 	struct ci_rx_queue *rxq = pf->fdir.rxq;
 	const struct i40e_fdir_action *fdir_action = &filter->action;
-	volatile struct i40e_tx_desc *txdp;
+	volatile struct ci_tx_desc *txdp;
 	volatile struct i40e_filter_program_desc *fdirdp;
 	uint32_t td_cmd;
 	uint16_t vsi_id;
@@ -1637,7 +1637,7 @@ i40e_flow_fdir_filter_programming(struct i40e_pf *pf,
 
 	PMD_DRV_LOG(INFO, "filling filter programming descriptor.");
 	fdirdp = (volatile struct i40e_filter_program_desc *)
-				(&txq->i40e_tx_ring[txq->tx_tail]);
+				(&txq->ci_tx_ring[txq->tx_tail]);
 
 	fdirdp->qindex_flex_ptype_vsi =
 			rte_cpu_to_le_32((fdir_action->rx_queue <<
@@ -1707,12 +1707,12 @@ i40e_flow_fdir_filter_programming(struct i40e_pf *pf,
 	fdirdp->fd_id = rte_cpu_to_le_32(filter->soft_id);
 
 	PMD_DRV_LOG(INFO, "filling transmit descriptor.");
-	txdp = &txq->i40e_tx_ring[txq->tx_tail + 1];
+	txdp = &txq->ci_tx_ring[txq->tx_tail + 1];
 	txdp->buffer_addr = rte_cpu_to_le_64(pf->fdir.dma_addr[txq->tx_tail >> 1]);
 
-	td_cmd = I40E_TX_DESC_CMD_EOP |
-		 I40E_TX_DESC_CMD_RS  |
-		 I40E_TX_DESC_CMD_DUMMY;
+	td_cmd = CI_TX_DESC_CMD_EOP |
+		 CI_TX_DESC_CMD_RS  |
+		 CI_TX_DESC_CMD_DUMMY;
 
 	txdp->cmd_type_offset_bsz =
 		i40e_build_ctob(td_cmd, 0, I40E_FDIR_PKT_LEN, 0);
@@ -1731,8 +1731,8 @@ i40e_flow_fdir_filter_programming(struct i40e_pf *pf,
 	if (wait_status) {
 		for (i = 0; i < I40E_FDIR_MAX_WAIT_US; i++) {
 			if ((txdp->cmd_type_offset_bsz &
-					rte_cpu_to_le_64(I40E_TXD_QW1_DTYPE_MASK)) ==
-					rte_cpu_to_le_64(I40E_TX_DESC_DTYPE_DESC_DONE))
+					rte_cpu_to_le_64(CI_TXD_QW1_DTYPE_M)) ==
+					rte_cpu_to_le_64(CI_TX_DESC_DTYPE_DESC_DONE))
 				break;
 			rte_delay_us(1);
 		}

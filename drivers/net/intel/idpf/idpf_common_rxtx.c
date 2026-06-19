@@ -5,10 +5,11 @@
 #include <eal_export.h>
 #include <rte_mbuf_dyn.h>
 #include <rte_errno.h>
+#include <rte_bitops.h>
 
 #include "idpf_common_rxtx.h"
 #include "idpf_common_device.h"
-#include "../common/rx.h"
+#include "idpf_ptp.h"
 
 int idpf_timestamp_dynfield_offset = -1;
 uint64_t idpf_timestamp_dynflag;
@@ -72,6 +73,11 @@ idpf_qc_tx_thresh_check(uint16_t nb_desc, uint16_t tx_rs_thresh,
 		DRV_LOG(ERR, "tx_rs_thresh (%u) must be a divisor of the "
 			"number of TX descriptors (%u).",
 			tx_rs_thresh, nb_desc);
+		return -EINVAL;
+	}
+	if (!rte_is_power_of_2(tx_rs_thresh)) {
+		DRV_LOG(ERR, "tx_rs_thresh must be a power of 2. (tx_rs_thresh=%u)",
+			tx_rs_thresh);
 		return -EINVAL;
 	}
 
@@ -213,13 +219,11 @@ idpf_qc_split_tx_descq_reset(struct ci_tx_queue *txq)
 	prev = (uint16_t)(txq->sw_nb_desc - 1);
 	for (i = 0; i < txq->sw_nb_desc; i++) {
 		txe[i].mbuf = NULL;
-		txe[i].last_id = i;
 		txe[prev].next_id = i;
 		prev = i;
 	}
 
 	txq->tx_tail = 0;
-	txq->nb_tx_used = 0;
 
 	/* Use this as next to clean for split desc queue */
 	txq->last_desc_cleaned = 0;
@@ -250,6 +254,58 @@ idpf_qc_split_tx_complq_reset(struct ci_tx_queue *cq)
 	cq->expected_gen_id = 1;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(idpf_splitq_rearm_common)
+void
+idpf_splitq_rearm_common(struct idpf_rx_queue *rx_bufq)
+{
+	struct rte_mbuf **rxp = &rx_bufq->sw_ring[rx_bufq->rxrearm_start];
+	volatile union virtchnl2_rx_buf_desc *rxdp = rx_bufq->rx_ring;
+	uint16_t rx_id;
+	int i;
+
+	rxdp += rx_bufq->rxrearm_start;
+
+	/* Pull 'n' more MBUFs into the software ring */
+	if (rte_mbuf_raw_alloc_bulk(rx_bufq->mp,
+			(void *)rxp, IDPF_RXQ_REARM_THRESH) < 0) {
+		if (rx_bufq->rxrearm_nb + IDPF_RXQ_REARM_THRESH >=
+				rx_bufq->nb_rx_desc) {
+			for (i = 0; i < IDPF_VPMD_DESCS_PER_LOOP; i++) {
+				rxp[i] = &rx_bufq->fake_mbuf;
+				rxdp[i] = (union virtchnl2_rx_buf_desc){0};
+			}
+		}
+		rte_atomic_fetch_add_explicit(&rx_bufq->rx_stats.mbuf_alloc_failed,
+			IDPF_RXQ_REARM_THRESH, rte_memory_order_relaxed);
+		return;
+	}
+
+	/* Initialize the mbufs in vector, process 8 mbufs in one loop */
+	for (i = 0; i < IDPF_RXQ_REARM_THRESH;
+			i += 8, rxp += 8, rxdp += 8) {
+		rxdp[0].split_rd.pkt_addr = rxp[0]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[1].split_rd.pkt_addr = rxp[1]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[2].split_rd.pkt_addr = rxp[2]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[3].split_rd.pkt_addr = rxp[3]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[4].split_rd.pkt_addr = rxp[4]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[5].split_rd.pkt_addr = rxp[5]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[6].split_rd.pkt_addr = rxp[6]->buf_iova + RTE_PKTMBUF_HEADROOM;
+		rxdp[7].split_rd.pkt_addr = rxp[7]->buf_iova + RTE_PKTMBUF_HEADROOM;
+	}
+
+	rx_bufq->rxrearm_start += IDPF_RXQ_REARM_THRESH;
+	if (rx_bufq->rxrearm_start >= rx_bufq->nb_rx_desc)
+		rx_bufq->rxrearm_start = 0;
+
+	rx_bufq->rxrearm_nb -= IDPF_RXQ_REARM_THRESH;
+
+	rx_id = (uint16_t)((rx_bufq->rxrearm_start == 0) ?
+			     (rx_bufq->nb_rx_desc - 1) : (rx_bufq->rxrearm_start - 1));
+
+	/* Update the tail pointer on the NIC */
+	IDPF_PCI_REG_WRITE(rx_bufq->qrx_tail, rx_id);
+}
+
 RTE_EXPORT_INTERNAL_SYMBOL(idpf_qc_single_tx_queue_reset)
 void
 idpf_qc_single_tx_queue_reset(struct ci_tx_queue *txq)
@@ -264,22 +320,20 @@ idpf_qc_single_tx_queue_reset(struct ci_tx_queue *txq)
 	}
 
 	txe = txq->sw_ring;
-	size = sizeof(struct idpf_base_tx_desc) * txq->nb_tx_desc;
+	size = sizeof(struct ci_tx_desc) * txq->nb_tx_desc;
 	for (i = 0; i < size; i++)
-		((volatile char *)txq->idpf_tx_ring)[i] = 0;
+		((volatile char *)txq->ci_tx_ring)[i] = 0;
 
 	prev = (uint16_t)(txq->nb_tx_desc - 1);
 	for (i = 0; i < txq->nb_tx_desc; i++) {
-		txq->idpf_tx_ring[i].qw1 =
-			rte_cpu_to_le_64(IDPF_TX_DESC_DTYPE_DESC_DONE);
+		txq->ci_tx_ring[i].cmd_type_offset_bsz =
+			rte_cpu_to_le_64(CI_TX_DESC_DTYPE_DESC_DONE);
 		txe[i].mbuf =  NULL;
-		txe[i].last_id = i;
 		txe[prev].next_id = i;
 		prev = i;
 	}
 
 	txq->tx_tail = 0;
-	txq->nb_tx_used = 0;
 
 	txq->last_desc_cleaned = txq->nb_tx_desc - 1;
 	txq->nb_tx_free = txq->nb_tx_desc - 1;
@@ -334,6 +388,7 @@ idpf_qc_tx_queue_release(void *txq)
 	}
 
 	ci_txq_release_all_mbufs(q, false);
+	rte_free(q->rs_last_id);
 	rte_free(q->sw_ring);
 	rte_memzone_free(q->mz);
 	rte_free(q);
@@ -433,58 +488,6 @@ idpf_qc_split_rxq_mbufs_alloc(struct idpf_rx_queue *rxq)
 	rxq->rx_tail = rxq->nb_rx_desc - 1;
 
 	return 0;
-}
-
-#define IDPF_TIMESYNC_REG_WRAP_GUARD_BAND  10000
-/* Helper function to convert a 32b nanoseconds timestamp to 64b. */
-static inline uint64_t
-idpf_tstamp_convert_32b_64b(struct idpf_adapter *ad, uint32_t flag,
-			    uint32_t in_timestamp)
-{
-#ifdef RTE_ARCH_X86_64
-	struct idpf_hw *hw = &ad->hw;
-	const uint64_t mask = 0xFFFFFFFF;
-	uint32_t hi, lo, lo2, delta;
-	uint64_t ns;
-
-	if (flag != 0) {
-		IDPF_WRITE_REG(hw, GLTSYN_CMD_SYNC_0_0, PF_GLTSYN_CMD_SYNC_SHTIME_EN_M);
-		IDPF_WRITE_REG(hw, GLTSYN_CMD_SYNC_0_0, PF_GLTSYN_CMD_SYNC_EXEC_CMD_M |
-			       PF_GLTSYN_CMD_SYNC_SHTIME_EN_M);
-		lo = IDPF_READ_REG(hw, PF_GLTSYN_SHTIME_L_0);
-		hi = IDPF_READ_REG(hw, PF_GLTSYN_SHTIME_H_0);
-		/*
-		 * On typical system, the delta between lo and lo2 is ~1000ns,
-		 * so 10000 seems a large-enough but not overly-big guard band.
-		 */
-		if (lo > (UINT32_MAX - IDPF_TIMESYNC_REG_WRAP_GUARD_BAND))
-			lo2 = IDPF_READ_REG(hw, PF_GLTSYN_SHTIME_L_0);
-		else
-			lo2 = lo;
-
-		if (lo2 < lo) {
-			lo = IDPF_READ_REG(hw, PF_GLTSYN_SHTIME_L_0);
-			hi = IDPF_READ_REG(hw, PF_GLTSYN_SHTIME_H_0);
-		}
-
-		ad->time_hw = ((uint64_t)hi << 32) | lo;
-	}
-
-	delta = (in_timestamp - (uint32_t)(ad->time_hw & mask));
-	if (delta > (mask / 2)) {
-		delta = ((uint32_t)(ad->time_hw & mask) - in_timestamp);
-		ns = ad->time_hw - delta;
-	} else {
-		ns = ad->time_hw + delta;
-	}
-
-	return ns;
-#else /* !RTE_ARCH_X86_64 */
-	RTE_SET_USED(ad);
-	RTE_SET_USED(flag);
-	RTE_SET_USED(in_timestamp);
-	return 0;
-#endif /* RTE_ARCH_X86_64 */
 }
 
 #define IDPF_RX_FLEX_DESC_ADV_STATUS0_XSUM_S				\
@@ -732,20 +735,27 @@ idpf_dp_splitq_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			ptype_tbl[(rte_le_to_cpu_16(rx_desc->ptype_err_fflags0) &
 				   VIRTCHNL2_RX_FLEX_DESC_ADV_PTYPE_M) >>
 				  VIRTCHNL2_RX_FLEX_DESC_ADV_PTYPE_S];
+
+		if ((rxm->packet_type & RTE_PTYPE_L2_MASK) == RTE_PTYPE_L2_ETHER_TIMESYNC)
+			rxm->ol_flags |= RTE_MBUF_F_RX_IEEE1588_PTP;
+
 		status_err0_qw1 = rte_le_to_cpu_16(rx_desc->status_err0_qw1);
 		pkt_flags = idpf_splitq_rx_csum_offload(status_err0_qw1);
 		pkt_flags |= idpf_splitq_rx_rss_offload(rxm, rx_desc);
 		if (idpf_timestamp_dynflag > 0 &&
 		    (rxq->offloads & IDPF_RX_OFFLOAD_TIMESTAMP)) {
 			/* timestamp */
+			rxq->time_high = rte_le_to_cpu_32(rx_desc->ts_high);
 			ts_ns = idpf_tstamp_convert_32b_64b(ad,
-							    rxq->hw_register_set,
-							    rte_le_to_cpu_32(rx_desc->ts_high));
+							    rxq->hw_register_set, true,
+							    rxq->time_high);
 			rxq->hw_register_set = 0;
 			*RTE_MBUF_DYNFIELD(rxm,
 					   idpf_timestamp_dynfield_offset,
 					   rte_mbuf_timestamp_t *) = ts_ns;
 			first_seg->ol_flags |= idpf_timestamp_dynflag;
+			if (rx_desc->ts_low & VIRTCHNL2_RX_FLEX_TSTAMP_VALID)
+				rxm->ol_flags |= RTE_MBUF_F_RX_IEEE1588_TMST;
 		}
 
 		first_seg->ol_flags |= pkt_flags;
@@ -839,43 +849,50 @@ idpf_split_tx_free(struct ci_tx_queue *cq)
 static inline uint16_t
 idpf_calc_context_desc(uint64_t flags)
 {
-	if ((flags & RTE_MBUF_F_TX_TCP_SEG) != 0)
-		return 1;
+	static uint64_t mask = RTE_MBUF_F_TX_TCP_SEG |
+		RTE_MBUF_F_TX_IEEE1588_TMST;
 
-	return 0;
+	return (flags & mask) ? 1 : 0;
 }
 
-/* set TSO context descriptor
+/* set a context descriptor, returns 0 if no context needed, 1 if context set
  */
-static inline void
-idpf_set_splitq_tso_ctx(struct rte_mbuf *mbuf,
-			union idpf_tx_offload tx_offload,
-			volatile union idpf_flex_tx_ctx_desc *ctx_desc)
+static inline uint16_t
+idpf_get_context_desc(uint64_t ol_flags, const struct rte_mbuf *mbuf,
+		 const union ci_tx_offload *tx_offload,
+		 const struct ci_tx_queue *txq __rte_unused,
+		 uint64_t *qw0, uint64_t *qw1)
 {
-	uint16_t cmd_dtype;
+	uint16_t tso_segsz = mbuf->tso_segsz;
 	uint32_t tso_len;
 	uint8_t hdr_len;
 
-	if (tx_offload.l4_len == 0) {
-		TX_LOG(DEBUG, "L4 length set to 0");
-		return;
-	}
+	if (idpf_calc_context_desc(ol_flags) == 0)
+		return 0;
 
-	hdr_len = tx_offload.l2_len +
-		tx_offload.l3_len +
-		tx_offload.l4_len;
-	cmd_dtype = IDPF_TX_DESC_DTYPE_FLEX_TSO_CTX |
-		IDPF_TX_FLEX_CTX_DESC_CMD_TSO;
-	tso_len = mbuf->pkt_len - hdr_len;
+	if (ol_flags & RTE_MBUF_F_TX_TCP_SEG) {
+		/* TSO context descriptor setup */
+		if (tx_offload->l4_len == 0) {
+			TX_LOG(DEBUG, "L4 length set to 0");
+			return 0;
+		}
 
-	ctx_desc->tso.qw1.cmd_dtype = rte_cpu_to_le_16(cmd_dtype);
-	ctx_desc->tso.qw0.hdr_len = hdr_len;
-	ctx_desc->tso.qw0.mss_rt =
-		rte_cpu_to_le_16((uint16_t)mbuf->tso_segsz &
-				 IDPF_TXD_FLEX_CTX_MSS_RT_M);
-	ctx_desc->tso.qw0.flex_tlen =
-		rte_cpu_to_le_32(tso_len &
-				 IDPF_TXD_FLEX_CTX_MSS_RT_M);
+		hdr_len = tx_offload->l2_len + tx_offload->l3_len + tx_offload->l4_len;
+		tso_len = mbuf->pkt_len - hdr_len;
+
+		*qw0 = rte_cpu_to_le_32(tso_len & IDPF_TXD_FLEX_CTX_MSS_RT_M) |
+	       ((uint64_t)rte_cpu_to_le_16(tso_segsz & IDPF_TXD_FLEX_CTX_MSS_RT_M) << 32) |
+	       ((uint64_t)hdr_len << 48);
+		*qw1 = rte_cpu_to_le_16(IDPF_TX_DESC_DTYPE_FLEX_TSO_CTX |
+			IDPF_TX_FLEX_CTX_DESC_CMD_TSO);
+	} else if (ol_flags & RTE_MBUF_F_TX_IEEE1588_TMST)
+		*qw1 = FIELD_PREP(IDPF_TXD_QW1_CMD_M, IDPF_TX_CTX_DESC_TSYN) |
+			FIELD_PREP(IDPF_TXD_QW1_DTYPE_M, IDPF_TX_DESC_DTYPE_CTX) |
+			((uint64_t)FIELD_PREP(IDPF_TX_DESC_CTX_TSYN_L_M, txq->latch_idx) << 16) |
+			((uint64_t)FIELD_PREP(IDPF_TX_DESC_CTX_TSYN_H_M, txq->latch_idx >> 2)
+			<< 32);
+
+	return 1;
 }
 
 RTE_EXPORT_INTERNAL_SYMBOL(idpf_dp_splitq_xmit_pkts)
@@ -887,7 +904,7 @@ idpf_dp_splitq_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	volatile struct idpf_flex_tx_sched_desc *txr;
 	volatile struct idpf_flex_tx_sched_desc *txd;
 	struct ci_tx_entry *sw_ring;
-	union idpf_tx_offload tx_offload = {0};
+	union ci_tx_offload tx_offload = {0};
 	struct ci_tx_entry *txe, *txn;
 	uint16_t nb_used, tx_id, sw_id;
 	struct rte_mbuf *tx_pkt;
@@ -933,20 +950,29 @@ idpf_dp_splitq_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		tx_offload.l4_len = tx_pkt->l4_len;
 		tx_offload.tso_segsz = tx_pkt->tso_segsz;
 		/* Calculate the number of context descriptors needed. */
-		nb_ctx = idpf_calc_context_desc(ol_flags);
-		nb_used = tx_pkt->nb_segs + nb_ctx;
+		uint64_t cd_qw0 = 0, cd_qw1 = 0;
+		nb_ctx = idpf_get_context_desc(ol_flags, tx_pkt, &tx_offload, txq,
+					  &cd_qw0, &cd_qw1);
 
-		if (ol_flags & IDPF_TX_CKSUM_OFFLOAD_MASK)
+		/* Calculate the number of TX descriptors needed for
+		 * each packet. For TSO packets, use ci_calc_pkt_desc as
+		 * the mbuf data size might exceed max data size that hw allows
+		 * per tx desc.
+		 */
+		if (ol_flags & RTE_MBUF_F_TX_TCP_SEG)
+			nb_used = ci_calc_pkt_desc(tx_pkt) + nb_ctx;
+		else
+			nb_used = tx_pkt->nb_segs + nb_ctx;
+
+		if (ol_flags & CI_TX_CKSUM_OFFLOAD_MASK)
 			cmd_dtype = IDPF_TXD_FLEX_FLOW_CMD_CS_EN;
 
 		/* context descriptor */
 		if (nb_ctx != 0) {
-			volatile union idpf_flex_tx_ctx_desc *ctx_desc =
-				(volatile union idpf_flex_tx_ctx_desc *)&txr[tx_id];
+			uint64_t *ctx_desc = RTE_CAST_PTR(uint64_t *, &txr[tx_id]);
 
-			if ((ol_flags & RTE_MBUF_F_TX_TCP_SEG) != 0)
-				idpf_set_splitq_tso_ctx(tx_pkt, tx_offload,
-							ctx_desc);
+			ctx_desc[0] = cd_qw0;
+			ctx_desc[1] = cd_qw1;
 
 			tx_id++;
 			if (tx_id == txq->nb_tx_desc)
@@ -977,12 +1003,12 @@ idpf_dp_splitq_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		txd->qw1.cmd_dtype |= IDPF_TXD_FLEX_FLOW_CMD_EOP;
 
 		txq->nb_tx_free = (uint16_t)(txq->nb_tx_free - nb_used);
-		txq->nb_tx_used = (uint16_t)(txq->nb_tx_used + nb_used);
+		txq->rs_compl_count += nb_used;
 
-		if (txq->nb_tx_used >= 32) {
+		if (txq->rs_compl_count >= 32) {
 			txd->qw1.cmd_dtype |= IDPF_TXD_FLEX_FLOW_CMD_RE;
 			/* Update txq RE bit counters */
-			txq->nb_tx_used = 0;
+			txq->rs_compl_count = 0;
 		}
 	}
 
@@ -1167,17 +1193,22 @@ idpf_dp_singleq_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 		rxm->ol_flags |= pkt_flags;
 
+		if ((rxm->packet_type & RTE_PTYPE_L2_MASK) == RTE_PTYPE_L2_ETHER_TIMESYNC)
+			rxm->ol_flags |= RTE_MBUF_F_RX_IEEE1588_PTP;
+
 		if (idpf_timestamp_dynflag > 0 &&
 		    (rxq->offloads & IDPF_RX_OFFLOAD_TIMESTAMP) != 0) {
 			/* timestamp */
+			rxq->time_high = rte_le_to_cpu_32(rxd.flex_nic_wb.flex_ts.ts_high);
 			ts_ns = idpf_tstamp_convert_32b_64b(ad,
-					    rxq->hw_register_set,
-					    rte_le_to_cpu_32(rxd.flex_nic_wb.flex_ts.ts_high));
+					    rxq->hw_register_set, true,
+					    rxq->time_high);
 			rxq->hw_register_set = 0;
 			*RTE_MBUF_DYNFIELD(rxm,
 					   idpf_timestamp_dynfield_offset,
 					   rte_mbuf_timestamp_t *) = ts_ns;
 			rxm->ol_flags |= idpf_timestamp_dynflag;
+			rxm->ol_flags |= RTE_MBUF_F_RX_IEEE1588_TMST;
 		}
 
 		rx_pkts[nb_rx++] = rxm;
@@ -1217,6 +1248,9 @@ idpf_dp_singleq_recv_scatter_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 	if (unlikely(!rxq) || unlikely(!rxq->q_started))
 		return nb_rx;
+
+	if ((rxq->offloads & IDPF_RX_OFFLOAD_TIMESTAMP) != 0)
+		rxq->hw_register_set = 1;
 
 	while (nb_rx < nb_pkts) {
 		rxdp = &rx_ring[rx_id];
@@ -1298,17 +1332,22 @@ idpf_dp_singleq_recv_scatter_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			ptype_tbl[(uint8_t)(rte_cpu_to_le_16(rxd.flex_nic_wb.ptype_flex_flags0) &
 				VIRTCHNL2_RX_FLEX_DESC_PTYPE_M)];
 
+		if ((first_seg->packet_type & RTE_PTYPE_L2_MASK) == RTE_PTYPE_L2_ETHER_TIMESYNC)
+			first_seg->ol_flags |= RTE_MBUF_F_RX_IEEE1588_PTP;
+
 		if (idpf_timestamp_dynflag > 0 &&
 		    (rxq->offloads & IDPF_RX_OFFLOAD_TIMESTAMP) != 0) {
 			/* timestamp */
+			rxq->time_high = rte_le_to_cpu_32(rxd.flex_nic_wb.flex_ts.ts_high);
 			ts_ns = idpf_tstamp_convert_32b_64b(ad,
-				rxq->hw_register_set,
-				rte_le_to_cpu_32(rxd.flex_nic_wb.flex_ts.ts_high));
+				rxq->hw_register_set, true,
+				rxq->time_high);
 			rxq->hw_register_set = 0;
 			*RTE_MBUF_DYNFIELD(rxm,
 					   idpf_timestamp_dynfield_offset,
 					   rte_mbuf_timestamp_t *) = ts_ns;
 			first_seg->ol_flags |= idpf_timestamp_dynflag;
+			first_seg->ol_flags |= RTE_MBUF_F_RX_IEEE1588_TMST;
 		}
 
 		first_seg->ol_flags |= pkt_flags;
@@ -1326,213 +1365,24 @@ idpf_dp_singleq_recv_scatter_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	return nb_rx;
 }
 
-static inline int
-idpf_xmit_cleanup(struct ci_tx_queue *txq)
-{
-	uint16_t last_desc_cleaned = txq->last_desc_cleaned;
-	struct ci_tx_entry *sw_ring = txq->sw_ring;
-	uint16_t nb_tx_desc = txq->nb_tx_desc;
-	uint16_t desc_to_clean_to;
-	uint16_t nb_tx_to_clean;
-
-	volatile struct idpf_base_tx_desc *txd = txq->idpf_tx_ring;
-
-	desc_to_clean_to = (uint16_t)(last_desc_cleaned + txq->tx_rs_thresh);
-	if (desc_to_clean_to >= nb_tx_desc)
-		desc_to_clean_to = (uint16_t)(desc_to_clean_to - nb_tx_desc);
-
-	desc_to_clean_to = sw_ring[desc_to_clean_to].last_id;
-	if ((txd[desc_to_clean_to].qw1 &
-	     rte_cpu_to_le_64(IDPF_TXD_QW1_DTYPE_M)) !=
-	    rte_cpu_to_le_64(IDPF_TX_DESC_DTYPE_DESC_DONE)) {
-		TX_LOG(DEBUG, "TX descriptor %4u is not done "
-		       "(port=%d queue=%d)", desc_to_clean_to,
-		       txq->port_id, txq->queue_id);
-		return -1;
-	}
-
-	if (last_desc_cleaned > desc_to_clean_to)
-		nb_tx_to_clean = (uint16_t)((nb_tx_desc - last_desc_cleaned) +
-					    desc_to_clean_to);
-	else
-		nb_tx_to_clean = (uint16_t)(desc_to_clean_to -
-					    last_desc_cleaned);
-
-	txd[desc_to_clean_to].qw1 = 0;
-
-	txq->last_desc_cleaned = desc_to_clean_to;
-	txq->nb_tx_free = (uint16_t)(txq->nb_tx_free + nb_tx_to_clean);
-
-	return 0;
-}
-
 /* TX function */
 RTE_EXPORT_INTERNAL_SYMBOL(idpf_dp_singleq_xmit_pkts)
 uint16_t
 idpf_dp_singleq_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			  uint16_t nb_pkts)
 {
-	volatile struct idpf_base_tx_desc *txd;
-	volatile struct idpf_base_tx_desc *txr;
-	union idpf_tx_offload tx_offload = {0};
-	struct ci_tx_entry *txe, *txn;
-	struct ci_tx_entry *sw_ring;
-	struct ci_tx_queue *txq;
-	struct rte_mbuf *tx_pkt;
-	struct rte_mbuf *m_seg;
-	uint64_t buf_dma_addr;
-	uint32_t td_offset;
-	uint64_t ol_flags;
-	uint16_t tx_last;
-	uint16_t nb_used;
-	uint16_t nb_ctx;
-	uint16_t td_cmd;
-	uint16_t tx_id;
-	uint16_t nb_tx;
-	uint16_t slen;
-
-	nb_tx = 0;
-	txq = tx_queue;
-
-	if (unlikely(txq == NULL))
-		return nb_tx;
-
-	sw_ring = txq->sw_ring;
-	txr = txq->idpf_tx_ring;
-	tx_id = txq->tx_tail;
-	txe = &sw_ring[tx_id];
-
-	/* Check if the descriptor ring needs to be cleaned. */
-	if (txq->nb_tx_free < txq->tx_free_thresh)
-		(void)idpf_xmit_cleanup(txq);
-
-	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
-		td_cmd = 0;
-		td_offset = 0;
-
-		tx_pkt = *tx_pkts++;
-		RTE_MBUF_PREFETCH_TO_FREE(txe->mbuf);
-
-		ol_flags = tx_pkt->ol_flags;
-		tx_offload.l2_len = tx_pkt->l2_len;
-		tx_offload.l3_len = tx_pkt->l3_len;
-		tx_offload.l4_len = tx_pkt->l4_len;
-		tx_offload.tso_segsz = tx_pkt->tso_segsz;
-		/* Calculate the number of context descriptors needed. */
-		nb_ctx = idpf_calc_context_desc(ol_flags);
-
-		/* The number of descriptors that must be allocated for
-		 * a packet equals to the number of the segments of that
-		 * packet plus 1 context descriptor if needed.
-		 */
-		nb_used = (uint16_t)(tx_pkt->nb_segs + nb_ctx);
-		tx_last = (uint16_t)(tx_id + nb_used - 1);
-
-		/* Circular ring */
-		if (tx_last >= txq->nb_tx_desc)
-			tx_last = (uint16_t)(tx_last - txq->nb_tx_desc);
-
-		TX_LOG(DEBUG, "port_id=%u queue_id=%u"
-		       " tx_first=%u tx_last=%u",
-		       txq->port_id, txq->queue_id, tx_id, tx_last);
-
-		if (nb_used > txq->nb_tx_free) {
-			if (idpf_xmit_cleanup(txq) != 0) {
-				if (nb_tx == 0)
-					return 0;
-				goto end_of_tx;
-			}
-			if (unlikely(nb_used > txq->tx_rs_thresh)) {
-				while (nb_used > txq->nb_tx_free) {
-					if (idpf_xmit_cleanup(txq) != 0) {
-						if (nb_tx == 0)
-							return 0;
-						goto end_of_tx;
-					}
-				}
-			}
-		}
-
-		if (ol_flags & IDPF_TX_CKSUM_OFFLOAD_MASK)
-			td_cmd |= IDPF_TX_FLEX_DESC_CMD_CS_EN;
-
-		if (nb_ctx != 0) {
-			/* Setup TX context descriptor if required */
-			volatile union idpf_flex_tx_ctx_desc *ctx_txd =
-				(volatile union idpf_flex_tx_ctx_desc *)
-				&txr[tx_id];
-
-			txn = &sw_ring[txe->next_id];
-			RTE_MBUF_PREFETCH_TO_FREE(txn->mbuf);
-			if (txe->mbuf != NULL) {
-				rte_pktmbuf_free_seg(txe->mbuf);
-				txe->mbuf = NULL;
-			}
-
-			/* TSO enabled */
-			if ((ol_flags & RTE_MBUF_F_TX_TCP_SEG) != 0)
-				idpf_set_splitq_tso_ctx(tx_pkt, tx_offload,
-							ctx_txd);
-
-			txe->last_id = tx_last;
-			tx_id = txe->next_id;
-			txe = txn;
-		}
-
-		m_seg = tx_pkt;
-		do {
-			txd = &txr[tx_id];
-			txn = &sw_ring[txe->next_id];
-
-			if (txe->mbuf != NULL)
-				rte_pktmbuf_free_seg(txe->mbuf);
-			txe->mbuf = m_seg;
-
-			/* Setup TX Descriptor */
-			slen = m_seg->data_len;
-			buf_dma_addr = rte_mbuf_data_iova(m_seg);
-			txd->buf_addr = rte_cpu_to_le_64(buf_dma_addr);
-			txd->qw1 = rte_cpu_to_le_64(IDPF_TX_DESC_DTYPE_DATA |
-				((uint64_t)td_cmd  << IDPF_TXD_QW1_CMD_S) |
-				((uint64_t)td_offset << IDPF_TXD_QW1_OFFSET_S) |
-				((uint64_t)slen << IDPF_TXD_QW1_TX_BUF_SZ_S));
-
-			txe->last_id = tx_last;
-			tx_id = txe->next_id;
-			txe = txn;
-			m_seg = m_seg->next;
-		} while (m_seg);
-
-		/* The last packet data descriptor needs End Of Packet (EOP) */
-		td_cmd |= IDPF_TX_DESC_CMD_EOP;
-		txq->nb_tx_used = (uint16_t)(txq->nb_tx_used + nb_used);
-		txq->nb_tx_free = (uint16_t)(txq->nb_tx_free - nb_used);
-
-		if (txq->nb_tx_used >= txq->tx_rs_thresh) {
-			TX_LOG(DEBUG, "Setting RS bit on TXD id="
-			       "%4u (port=%d queue=%d)",
-			       tx_last, txq->port_id, txq->queue_id);
-
-			td_cmd |= IDPF_TX_DESC_CMD_RS;
-
-			/* Update txq RS bit counters */
-			txq->nb_tx_used = 0;
-		}
-
-		txd->qw1 |= rte_cpu_to_le_16(td_cmd << IDPF_TXD_QW1_CMD_S);
-	}
-
-end_of_tx:
-	rte_wmb();
-
-	TX_LOG(DEBUG, "port_id=%u queue_id=%u tx_tail=%u nb_tx=%u",
-	       txq->port_id, txq->queue_id, tx_id, nb_tx);
-
-	IDPF_PCI_REG_WRITE(txq->qtx_tail, tx_id);
-	txq->tx_tail = tx_id;
-
-	return nb_tx;
+	return ci_xmit_pkts(tx_queue, tx_pkts, nb_pkts, CI_VLAN_IN_L2TAG1,
+			idpf_get_context_desc, NULL, NULL);
 }
+
+RTE_EXPORT_INTERNAL_SYMBOL(idpf_dp_singleq_xmit_pkts_simple)
+uint16_t
+idpf_dp_singleq_xmit_pkts_simple(void *tx_queue, struct rte_mbuf **tx_pkts,
+				   uint16_t nb_pkts)
+{
+	return ci_xmit_pkts_simple(tx_queue, tx_pkts, nb_pkts);
+}
+
 
 /* TX prep functions */
 RTE_EXPORT_INTERNAL_SYMBOL(idpf_dp_prep_pkts)
@@ -1667,15 +1517,15 @@ const struct ci_rx_path_info idpf_rx_path_infos[] = {
 		.features = {
 			.rx_offloads = IDPF_RX_SCALAR_OFFLOADS,
 			.simd_width = RTE_VECT_SIMD_DISABLED,
-			.extra.single_queue = true}},
+			.single_queue = true}},
 	[IDPF_RX_SINGLEQ_SCATTERED] = {
 		.pkt_burst = idpf_dp_singleq_recv_scatter_pkts,
 		.info = "Single Scalar Scattered",
 		.features = {
 			.rx_offloads = IDPF_RX_SCALAR_OFFLOADS,
 			.simd_width = RTE_VECT_SIMD_DISABLED,
-			.extra.scattered = true,
-			.extra.single_queue = true}},
+			.scattered = true,
+			.single_queue = true}},
 #ifdef RTE_ARCH_X86
 	[IDPF_RX_SINGLEQ_AVX2] = {
 		.pkt_burst = idpf_dp_singleq_recv_pkts_avx2,
@@ -1683,7 +1533,14 @@ const struct ci_rx_path_info idpf_rx_path_infos[] = {
 		.features = {
 			.rx_offloads = IDPF_RX_VECTOR_OFFLOADS,
 			.simd_width = RTE_VECT_SIMD_256,
-			.extra.single_queue = true}},
+			.single_queue = true}},
+	[IDPF_RX_AVX2] = {
+		.pkt_burst = idpf_dp_splitq_recv_pkts_avx2,
+		.info = "Split AVX2 Vector",
+		.features = {
+			.rx_offloads = IDPF_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256,
+			}},
 #ifdef CC_AVX512_SUPPORT
 	[IDPF_RX_AVX512] = {
 		.pkt_burst = idpf_dp_splitq_recv_pkts_avx512,
@@ -1697,7 +1554,74 @@ const struct ci_rx_path_info idpf_rx_path_infos[] = {
 		.features = {
 			.rx_offloads = IDPF_RX_VECTOR_OFFLOADS,
 			.simd_width = RTE_VECT_SIMD_512,
-			.extra.single_queue = true}},
+			.single_queue = true}},
+#endif /* CC_AVX512_SUPPORT */
+#endif /* RTE_ARCH_X86 */
+};
+
+RTE_EXPORT_INTERNAL_SYMBOL(idpf_tx_path_infos)
+const struct ci_tx_path_info idpf_tx_path_infos[] = {
+	[IDPF_TX_DEFAULT] = {
+		.pkt_burst = idpf_dp_splitq_xmit_pkts,
+		.info = "Split Scalar",
+		.features = {
+			.tx_offloads = IDPF_TX_SCALAR_OFFLOADS
+		}
+	},
+	[IDPF_TX_SINGLEQ] = {
+		.pkt_burst = idpf_dp_singleq_xmit_pkts,
+		.info = "Single Scalar",
+		.features = {
+			.tx_offloads = IDPF_TX_SCALAR_OFFLOADS,
+			.single_queue = true
+		}
+	},
+	[IDPF_TX_SINGLEQ_SIMPLE] = {
+		.pkt_burst = idpf_dp_singleq_xmit_pkts_simple,
+		.info = "Single Queue Scalar Simple",
+		.features = {
+			.tx_offloads = IDPF_TX_VECTOR_OFFLOADS,
+			.single_queue = true,
+			.simple_tx = true,
+		}
+	},
+
+#ifdef RTE_ARCH_X86
+	[IDPF_TX_SINGLEQ_AVX2] = {
+		.pkt_burst = idpf_dp_singleq_xmit_pkts_avx2,
+		.info = "Single AVX2",
+		.features = {
+			.tx_offloads = IDPF_TX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256,
+			.single_queue = true
+		}
+	},
+	[IDPF_TX_AVX2] = {
+		.pkt_burst = idpf_dp_splitq_xmit_pkts_avx2,
+		.info = "Split AVX2",
+		.features = {
+			.tx_offloads = IDPF_TX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256
+		}
+	},
+#ifdef CC_AVX512_SUPPORT
+	[IDPF_TX_AVX512] = {
+		.pkt_burst = idpf_dp_splitq_xmit_pkts_avx512,
+		.info = "Split AVX512",
+		.features = {
+			.tx_offloads = IDPF_TX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_512
+		}
+	},
+	[IDPF_TX_SINGLEQ_AVX512] = {
+		.pkt_burst = idpf_dp_singleq_xmit_pkts_avx512,
+		.info = "Single AVX512",
+		.features = {
+			.tx_offloads = IDPF_TX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_512,
+			.single_queue = true
+		}
+	},
 #endif /* CC_AVX512_SUPPORT */
 #endif /* RTE_ARCH_X86 */
 };

@@ -38,7 +38,7 @@ static int rtl_dev_infos_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
 static int rtl_dev_stats_get(struct rte_eth_dev *dev,
 			     struct rte_eth_stats *rte_stats,
-			     struct eth_queue_stats *qstats);
+			     struct eth_queue_stats *qstats __rte_unused);
 static int rtl_dev_stats_reset(struct rte_eth_dev *dev);
 static int rtl_promiscuous_enable(struct rte_eth_dev *dev);
 static int rtl_promiscuous_disable(struct rte_eth_dev *dev);
@@ -167,10 +167,11 @@ _rtl_setup_link(struct rte_eth_dev *dev)
 		switch (hw->chipset_name) {
 		case RTL8125A:
 		case RTL8125B:
-		case RTL8168KB:
 		case RTL8125BP:
 		case RTL8125D:
 		case RTL8125CP:
+		case RTL9151A:
+		case RTL8125K:
 			speed_mode = SPEED_2500;
 			break;
 		case RTL8126A:
@@ -412,10 +413,33 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	struct rtl_hw *hw = &adapter->hw;
 
 	dev_info->min_rx_bufsize = 1024;
-	dev_info->max_rx_pktlen = JUMBO_FRAME_9K;
 	dev_info->max_mac_addrs = 1;
 
-	if (hw->mcfg >= CFG_METHOD_69) {
+	switch (hw->mcfg) {
+	case CFG_METHOD_48:
+	case CFG_METHOD_49:
+		dev_info->max_rx_pktlen = JUMBO_FRAME_16K - 1;
+		break;
+	case CFG_METHOD_50:
+	case CFG_METHOD_51:
+	case CFG_METHOD_54:
+	case CFG_METHOD_55:
+	case CFG_METHOD_56:
+	case CFG_METHOD_57:
+	case CFG_METHOD_58:
+	case CFG_METHOD_60:
+	case CFG_METHOD_61:
+	case CFG_METHOD_70:
+	case CFG_METHOD_71:
+	case CFG_METHOD_91:
+		dev_info->max_rx_pktlen = JUMBO_FRAME_16K;
+		break;
+	default:
+		dev_info->max_rx_pktlen = JUMBO_FRAME_9K;
+		break;
+	}
+
+	if (hw->mcfg >= CFG_METHOD_70) {
 		dev_info->max_rx_queues = 4;
 		dev_info->max_tx_queues = 2;
 	} else {
@@ -450,6 +474,8 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	case RTL8125BP:
 	case RTL8125D:
 	case RTL8125CP:
+	case RTL9151A:
+	case RTL8125K:
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_2_5G;
 		break;
 	}
@@ -910,7 +936,7 @@ rtl_dev_init(struct rte_eth_dev *dev)
 
 	rtl_disable_intr(hw);
 
-	rtl_hw_initialize(hw);
+	rtl_hw_initialize(hw, pci_dev);
 
 	/* Read the permanent MAC address out of ROM */
 	rtl_get_mac_address(hw, perm_addr);

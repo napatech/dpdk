@@ -87,6 +87,9 @@ The command line options are:
 *	``--deletion-rate``
 	Enable deletion rate calculations.
 
+*	``--query-rate``
+	Enable query rate calculations.
+
 *	``--dump-socket-mem``
 	Dump the memory stats for each socket before the insertion and after.
 

@@ -23,7 +23,6 @@ struct zxdh_hw_internal zxdh_hw_internal[RTE_MAX_ETHPORTS];
 struct zxdh_dev_nic_shared_data dev_nic_sd[ZXDH_SLOT_MAX];
 static rte_spinlock_t zxdh_shared_data_lock = RTE_SPINLOCK_INITIALIZER;
 struct zxdh_shared_data *zxdh_shared_data;
-struct zxdh_net_hdr_dl g_net_hdr_dl[RTE_MAX_ETHPORTS];
 struct zxdh_mtr_res g_mtr_res;
 
 #define ZXDH_INVALID_DTBQUE      0xFFFF
@@ -62,7 +61,8 @@ zxdh_dev_infos_get(struct rte_eth_dev *dev,
 	dev_info->rx_offload_capa |= (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
 					RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
 					RTE_ETH_RX_OFFLOAD_TCP_CKSUM |
-					RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM);
+					RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+					RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM);
 	dev_info->rx_offload_capa |= (RTE_ETH_RX_OFFLOAD_SCATTER);
 	dev_info->rx_offload_capa |=  RTE_ETH_RX_OFFLOAD_TCP_LRO;
 	dev_info->rx_offload_capa |=  RTE_ETH_RX_OFFLOAD_RSS_HASH;
@@ -76,15 +76,15 @@ zxdh_dev_infos_get(struct rte_eth_dev *dev,
 
 	dev_info->tx_offload_capa = (RTE_ETH_TX_OFFLOAD_MULTI_SEGS);
 	dev_info->tx_offload_capa |= (RTE_ETH_TX_OFFLOAD_TCP_TSO |
-					RTE_ETH_TX_OFFLOAD_UDP_TSO);
+					RTE_ETH_TX_OFFLOAD_UDP_TSO |
+					RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO);
 	dev_info->tx_offload_capa |= (RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
 					RTE_ETH_TX_OFFLOAD_QINQ_INSERT |
 					RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO);
 	dev_info->tx_offload_capa |= (RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
 					RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
 					RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
-					RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
-					RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM);
+					RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM);
 
 	return 0;
 }
@@ -409,7 +409,7 @@ free_intr_vec:
 static void
 zxdh_update_net_hdr_dl(struct zxdh_hw *hw)
 {
-	struct zxdh_net_hdr_dl *net_hdr_dl = &g_net_hdr_dl[hw->port_id];
+	struct zxdh_net_hdr_dl *net_hdr_dl = hw->net_hdr_dl;
 	memset(net_hdr_dl, 0, ZXDH_DL_NET_HDR_SIZE);
 
 	if (zxdh_tx_offload_enabled(hw)) {
@@ -520,6 +520,9 @@ zxdh_get_available_channel(struct rte_eth_dev *dev, uint8_t queue_type)
 	uint32_t res_bit = (total_queue_num + inval_bit) % 32;
 	uint32_t vq_reg_num = (total_queue_num + inval_bit) / 32 + (res_bit ? 1 : 0);
 	int32_t ret = 0;
+	uint32_t addr = 0;
+	uint32_t var = 0;
+	int32_t ph_chno = 0;
 
 	ret = zxdh_timedlock(hw, 1000);
 	if (ret) {
@@ -528,15 +531,14 @@ zxdh_get_available_channel(struct rte_eth_dev *dev, uint8_t queue_type)
 	}
 
 	for (phy_vq_reg = 0; phy_vq_reg < vq_reg_num; phy_vq_reg++) {
-		uint32_t addr = ZXDH_QUERES_SHARE_BASE +
-		(phy_vq_reg + phy_vq_reg_oft) * sizeof(uint32_t);
-		uint32_t var = zxdh_read_bar_reg(dev, ZXDH_BAR0_INDEX, addr);
+		addr = ZXDH_QUERES_SHARE_BASE +
+			(phy_vq_reg + phy_vq_reg_oft) * sizeof(uint32_t);
+		var = zxdh_read_bar_reg(dev, ZXDH_BAR0_INDEX, addr);
 		if (phy_vq_reg == 0) {
 			for (j = (inval_bit + base); j < 32; j += 2) {
 				/* Got the available channel & update COI table */
 				if ((var & (1 << j)) == 0) {
 					var |= (1 << j);
-					zxdh_write_bar_reg(dev, ZXDH_BAR0_INDEX, addr, var);
 					done = 1;
 					break;
 				}
@@ -548,7 +550,6 @@ zxdh_get_available_channel(struct rte_eth_dev *dev, uint8_t queue_type)
 				/* Got the available channel & update COI table */
 				if ((var & (1 << j)) == 0) {
 					var |= (1 << j);
-					zxdh_write_bar_reg(dev, ZXDH_BAR0_INDEX, addr, var);
 					done = 1;
 					break;
 				}
@@ -560,7 +561,6 @@ zxdh_get_available_channel(struct rte_eth_dev *dev, uint8_t queue_type)
 				/* Got the available channel & update COI table */
 				if ((var & (1 << j)) == 0) {
 					var |= (1 << j);
-					zxdh_write_bar_reg(dev, ZXDH_BAR0_INDEX, addr, var);
 					done = 1;
 					break;
 				}
@@ -568,6 +568,16 @@ zxdh_get_available_channel(struct rte_eth_dev *dev, uint8_t queue_type)
 			if (done)
 				break;
 		}
+	}
+
+	if (done) {
+		ph_chno = (phy_vq_reg + phy_vq_reg_oft) * 32 + j;
+		if (zxdh_datach_set(dev, ph_chno) != 0) {
+			zxdh_release_lock(hw);
+			PMD_DRV_LOG(ERR, "zxdh_datach_set queue pcie addr failed");
+			return -1;
+		}
+		zxdh_write_bar_reg(dev, ZXDH_BAR0_INDEX, addr, var);
 	}
 
 	zxdh_release_lock(hw);
@@ -641,7 +651,8 @@ zxdh_init_queue(struct rte_eth_dev *dev, uint16_t vtpci_logic_qidx)
 	uint32_t vq_size = 0;
 	int32_t ret = 0;
 
-	if (hw->channel_context[vtpci_logic_qidx].valid == 0) {
+	if (vtpci_logic_qidx >= ZXDH_QUEUES_NUM_MAX ||
+		hw->channel_context[vtpci_logic_qidx].valid == 0) {
 		PMD_DRV_LOG(ERR, "lch %d is invalid", vtpci_logic_qidx);
 		return -EINVAL;
 	}
@@ -650,7 +661,10 @@ zxdh_init_queue(struct rte_eth_dev *dev, uint16_t vtpci_logic_qidx)
 	PMD_DRV_LOG(DEBUG, "vtpci_logic_qidx :%d setting up physical queue: %u on NUMA node %d",
 			vtpci_logic_qidx, vtpci_phy_qidx, numa_node);
 
-	vq_size = ZXDH_QUEUE_DEPTH;
+	if (queue_type == ZXDH_VTNET_RQ)
+		vq_size = hw->queue_conf->conf[vtpci_logic_qidx >> 1].rx_nb_desc;
+	else
+		vq_size = hw->queue_conf->conf[vtpci_logic_qidx >> 1].tx_nb_desc;
 
 	if (ZXDH_VTPCI_OPS(hw)->set_queue_num != NULL)
 		ZXDH_VTPCI_OPS(hw)->set_queue_num(hw, vtpci_phy_qidx, vq_size);
@@ -890,6 +904,7 @@ zxdh_rx_csum_lro_offload_configure(struct rte_eth_dev *dev)
 	uint32_t need_accelerator = rxmode->offloads & (RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM |
 		RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
 		RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
+		RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM |
 		RTE_ETH_RX_OFFLOAD_TCP_CKSUM |
 		RTE_ETH_RX_OFFLOAD_TCP_LRO);
 	int ret;
@@ -904,6 +919,8 @@ zxdh_rx_csum_lro_offload_configure(struct rte_eth_dev *dev)
 		port_attr.tcp_udp_checksum_offload  =
 		(rxmode->offloads & (RTE_ETH_RX_OFFLOAD_UDP_CKSUM | RTE_ETH_RX_OFFLOAD_TCP_CKSUM))
 					? true : false;
+		port_attr.outer_udp_checksum_offload =
+			(rxmode->offloads & RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM) ? true : false;
 		port_attr.lro_offload =
 				(rxmode->offloads & RTE_ETH_RX_OFFLOAD_TCP_LRO) ? true : false;
 		port_attr.accelerator_offload_flag  = need_accelerator ? true : false;
@@ -947,6 +964,17 @@ zxdh_rx_csum_lro_offload_configure(struct rte_eth_dev *dev)
 		}
 
 		zxdh_msg_head_build(hw, ZXDH_PORT_ATTRS_SET, &msg_info);
+		attr_msg->mode = ZXDH_PORT_OUTER_UDP_CHECKSUM_OFFLOAD_FLAG;
+		attr_msg->value =
+			(rxmode->offloads & RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM) ? true : false;
+		ret = zxdh_vf_send_msg_to_pf(dev, &msg_info, sizeof(msg_info), NULL, 0);
+		if (ret) {
+			PMD_DRV_LOG(ERR,
+				"%s outer_udp_checksum offload failed to send msg", __func__);
+			return ret;
+		}
+
+		zxdh_msg_head_build(hw, ZXDH_PORT_ATTRS_SET, &msg_info);
 		attr_msg->mode = ZXDH_PORT_LRO_OFFLOAD_FLAG;
 		attr_msg->value = (rxmode->offloads & RTE_ETH_RX_OFFLOAD_TCP_LRO) ? true : false;
 		ret = zxdh_vf_send_msg_to_pf(dev, &msg_info, sizeof(msg_info), NULL, 0);
@@ -977,12 +1005,6 @@ zxdh_dev_conf_offload(struct rte_eth_dev *dev)
 	ret = zxdh_vlan_offload_configure(dev);
 	if (ret) {
 		PMD_DRV_LOG(ERR, "zxdh_vlan_offload_configure failed");
-		return ret;
-	}
-
-	ret = zxdh_rss_configure(dev);
-	if (ret) {
-		PMD_DRV_LOG(ERR, "rss configure failed");
 		return ret;
 	}
 
@@ -1081,52 +1103,6 @@ zxdh_dev_configure(struct rte_eth_dev *dev)
 	hw->has_tx_offload = zxdh_tx_offload_enabled(hw);
 	hw->has_rx_offload = zxdh_rx_offload_enabled(hw);
 
-	if (dev->data->nb_rx_queues == hw->rx_qnum &&
-			dev->data->nb_tx_queues == hw->tx_qnum) {
-		PMD_DRV_LOG(DEBUG, "The queue not need to change. queue_rx %d queue_tx %d",
-				hw->rx_qnum, hw->tx_qnum);
-		/*no queue changed */
-		goto end;
-	}
-
-	PMD_DRV_LOG(DEBUG, "queue changed need reset");
-	/* Reset the device although not necessary at startup */
-	zxdh_pci_reset(hw);
-
-	/* Tell the host we've noticed this device. */
-	zxdh_pci_set_status(hw, ZXDH_CONFIG_STATUS_ACK);
-
-	/* Tell the host we've known how to drive the device. */
-	zxdh_pci_set_status(hw, ZXDH_CONFIG_STATUS_DRIVER);
-	/* The queue needs to be released when reconfiguring*/
-	if (hw->vqs != NULL) {
-		zxdh_dev_free_mbufs(dev);
-		zxdh_free_queues(dev);
-	}
-
-	hw->rx_qnum = dev->data->nb_rx_queues;
-	hw->tx_qnum = dev->data->nb_tx_queues;
-	ret = zxdh_alloc_queues(dev);
-	if (ret < 0)
-		return ret;
-
-	zxdh_datach_set(dev);
-
-	if (zxdh_configure_intr(dev) < 0) {
-		PMD_DRV_LOG(ERR, "Failed to configure interrupt");
-		zxdh_free_queues(dev);
-		return -1;
-	}
-
-	ret = zxdh_rss_qid_config(dev);
-	if (ret) {
-		PMD_DRV_LOG(ERR, "Failed to configure base qid!");
-		return -1;
-	}
-
-	zxdh_pci_reinit_complete(hw);
-
-end:
 	zxdh_dev_conf_offload(dev);
 	zxdh_update_net_hdr_dl(hw);
 	return ret;
@@ -1264,6 +1240,12 @@ zxdh_priv_res_free(struct zxdh_hw *priv)
 
 	rte_free(priv->channel_context);
 	priv->channel_context = NULL;
+
+	rte_free(priv->queue_conf);
+	priv->queue_conf = NULL;
+
+	rte_free(priv->net_hdr_dl);
+	priv->net_hdr_dl = NULL;
 }
 
 static int
@@ -1354,6 +1336,86 @@ zxdh_mac_config(struct rte_eth_dev *eth_dev)
 	return ret;
 }
 
+static int32_t zxdh_reconfig_queues(struct rte_eth_dev *dev)
+{
+	int32_t ret;
+	struct zxdh_hw *hw = dev->data->dev_private;
+
+	zxdh_pci_reset(hw);
+
+	/* Tell the host we've noticed this device. */
+	zxdh_pci_set_status(hw, ZXDH_CONFIG_STATUS_ACK);
+
+	/* Tell the host we've known how to drive the device. */
+	zxdh_pci_set_status(hw, ZXDH_CONFIG_STATUS_DRIVER);
+	/* The queue needs to be released when reconfiguring */
+	if (hw->vqs != NULL) {
+		zxdh_dev_free_mbufs(dev);
+		zxdh_free_queues(dev);
+	}
+
+	hw->rx_qnum = dev->data->nb_rx_queues;
+	hw->tx_qnum = dev->data->nb_tx_queues;
+	ret = zxdh_alloc_queues(dev);
+	if (ret < 0)
+		return ret;
+
+	if (zxdh_configure_intr(dev) < 0) {
+		PMD_DRV_LOG(ERR, "Failed to configure interrupt");
+		zxdh_free_queues(dev);
+		return -1;
+	}
+
+	zxdh_pci_reinit_complete(hw);
+	return 0;
+}
+
+static int32_t zxdh_config_queue(struct rte_eth_dev *dev)
+{
+	struct zxdh_hw *hw = dev->data->dev_private;
+	int32_t ret = 0, i = 0;
+
+	if (hw->queue_conf->queue_changed) {
+		ret = zxdh_reconfig_queues(dev);
+		if (ret)
+			return ret;
+
+		ret = zxdh_rss_qid_config(dev);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to configure base qid!");
+			return -1;
+		}
+
+		ret = zxdh_rss_configure(dev);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to config rss");
+			return -1;
+		}
+		hw->queue_conf->queue_changed = 0;
+	}
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		ret = zxdh_tx_queue_config(dev, i);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to config tx queue");
+			return ret;
+		}
+	}
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		ret = zxdh_rx_queue_config(dev, i);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to config rx queue");
+			return ret;
+		}
+		ret = zxdh_dev_rx_queue_setup_finish(dev, i);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int
 zxdh_dev_start(struct rte_eth_dev *dev)
 {
@@ -1363,12 +1425,9 @@ zxdh_dev_start(struct rte_eth_dev *dev)
 	uint16_t logic_qidx;
 	uint16_t i;
 
-	for (i = 0; i < dev->data->nb_rx_queues; i++) {
-		logic_qidx = 2 * i + ZXDH_RQ_QUEUE_IDX;
-		ret = zxdh_dev_rx_queue_setup_finish(dev, logic_qidx);
-		if (ret < 0)
-			return ret;
-	}
+	ret = zxdh_config_queue(dev);
+	if (ret)
+		return ret;
 
 	zxdh_set_rxtx_funcs(dev);
 	ret = zxdh_intr_enable(dev);
@@ -1389,6 +1448,10 @@ zxdh_dev_start(struct rte_eth_dev *dev)
 		vq = hw->vqs[logic_qidx];
 		zxdh_queue_notify(vq);
 	}
+
+	if (hw->is_pf)
+		zxdh_link_speed_set(dev);
+	zxdh_autoneg_stats_get(dev);
 
 	hw->admin_status = RTE_ETH_LINK_UP;
 	zxdh_dev_link_update(dev, 0);
@@ -1509,6 +1572,16 @@ static const struct eth_dev_ops zxdh_eth_dev_ops = {
 	.flow_ops_get			 = zxdh_flow_ops_get,
 };
 
+const struct eth_dev_ops zxdh_eth_dev_secondary_ops = {
+	.dev_infos_get			 = zxdh_dev_infos_get,
+	.stats_get				 = zxdh_dev_stats_get,
+	.xstats_get				 = zxdh_dev_xstats_get,
+	.xstats_get_names		 = zxdh_dev_xstats_get_names,
+	.rxq_info_get			 = zxdh_rxq_info_get,
+	.txq_info_get			 = zxdh_txq_info_get,
+	.dev_supported_ptypes_get = zxdh_dev_supported_ptypes_get,
+};
+
 static int32_t
 zxdh_init_device(struct rte_eth_dev *eth_dev)
 {
@@ -1561,6 +1634,8 @@ zxdh_agent_comm(struct rte_eth_dev *eth_dev, struct zxdh_hw *hw)
 		PMD_DRV_LOG(ERR, "Failed to get panel_id");
 		return -1;
 	}
+
+	zxdh_speed_modes_get(eth_dev);
 
 	if (hw->switchoffload)
 		hw->phyport = 9;
@@ -2081,6 +2156,20 @@ zxdh_priv_res_init(struct zxdh_hw *hw)
 		PMD_DRV_LOG(ERR, "Failed to allocate channel_context");
 		return -ENOMEM;
 	}
+
+	hw->queue_conf = rte_zmalloc("zxdh_queue_conf", sizeof(struct zxdh_queue_conf), 0);
+	if (hw->queue_conf == NULL) {
+		PMD_DRV_LOG(ERR, "Failed to allocate queue conf");
+		return -ENOMEM;
+	}
+
+	hw->net_hdr_dl = rte_zmalloc("zxdh_net_hdr_dl", sizeof(struct zxdh_net_hdr_dl), 0);
+	if (hw->net_hdr_dl == NULL) {
+		PMD_DRV_LOG(ERR, "Failed to allocate %zu bytes store queue conf",
+					sizeof(struct zxdh_net_hdr_dl));
+		return -ENOMEM;
+	}
+
 	return 0;
 }
 
@@ -2117,6 +2206,12 @@ zxdh_eth_dev_init(struct rte_eth_dev *eth_dev)
 	int ret = 0;
 
 	eth_dev->dev_ops = &zxdh_eth_dev_ops;
+
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		eth_dev->dev_ops = &zxdh_eth_dev_secondary_ops;
+		ZXDH_VTPCI_OPS(hw) = &zxdh_dev_pci_ops;
+		return 0;
+	}
 
 	/* Allocate memory for storing MAC addresses */
 	eth_dev->data->mac_addrs = rte_zmalloc("zxdh_mac",

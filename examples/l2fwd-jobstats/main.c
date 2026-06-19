@@ -13,7 +13,6 @@
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_memory.h>
-#include <rte_memcpy.h>
 #include <rte_eal.h>
 #include <rte_launch.h>
 #include <rte_cycles.h>
@@ -542,7 +541,9 @@ l2fwd_main_loop(void)
 		} while (likely(stats_read_pending == 0));
 
 		rte_spinlock_unlock(&qconf->lock);
-		rte_pause();
+		while (rte_atomic_load_explicit(&qconf->stats_read_pending,
+					rte_memory_order_relaxed) != 0)
+			rte_pause();
 	}
 	/* >8 End of minimize impact of stats reading. */
 }

@@ -2,6 +2,7 @@
  * Copyright(c) 2020 Intel Corporation
  */
 
+#include <stdlib.h>
 #include <stdalign.h>
 
 #include <rte_cryptodev.h>
@@ -467,7 +468,7 @@ iavf_ipsec_crypto_security_association_add(struct iavf_adapter *adapter,
 	request_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sa_cfg);
 
-	request = rte_malloc("iavf-sad-add-request", request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -475,7 +476,7 @@ iavf_ipsec_crypto_security_association_add(struct iavf_adapter *adapter,
 
 	response_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sa_cfg_resp);
-	response = rte_malloc("iavf-sad-add-response", response_len, 0);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -553,8 +554,8 @@ iavf_ipsec_crypto_security_association_add(struct iavf_adapter *adapter,
 	else
 		rc = response->ipsec_data.sa_cfg_resp->sa_handle;
 update_cleanup:
-	rte_free(response);
-	rte_free(request);
+	free(response);
+	free(request);
 
 	return rc;
 }
@@ -728,8 +729,7 @@ iavf_ipsec_crypto_inbound_security_policy_add(struct iavf_adapter *adapter,
 
 	request_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sp_cfg);
-	request = rte_malloc("iavf-inbound-security-policy-add-request",
-				request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -770,8 +770,7 @@ iavf_ipsec_crypto_inbound_security_policy_add(struct iavf_adapter *adapter,
 
 	response_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sp_cfg_resp);
-	response = rte_malloc("iavf-inbound-security-policy-add-response",
-				response_len, 0);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -792,8 +791,8 @@ iavf_ipsec_crypto_inbound_security_policy_add(struct iavf_adapter *adapter,
 		rc = response->ipsec_data.sp_cfg_resp->rule_id;
 
 update_cleanup:
-	rte_free(request);
-	rte_free(response);
+	free(request);
+	free(response);
 
 	return rc;
 }
@@ -808,7 +807,7 @@ iavf_ipsec_crypto_sa_update_esn(struct iavf_adapter *adapter,
 
 	request_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sa_update);
-	request = rte_malloc("iavf-sa-update-request", request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -816,7 +815,7 @@ iavf_ipsec_crypto_sa_update_esn(struct iavf_adapter *adapter,
 
 	response_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_resp);
-	response = rte_malloc("iavf-sa-update-response", response_len, 0);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -846,8 +845,8 @@ iavf_ipsec_crypto_sa_update_esn(struct iavf_adapter *adapter,
 		rc = response->ipsec_data.ipsec_resp->resp;
 
 update_cleanup:
-	rte_free(request);
-	rte_free(response);
+	free(request);
+	free(response);
 
 	return rc;
 }
@@ -905,7 +904,7 @@ iavf_ipsec_crypto_security_policy_delete(struct iavf_adapter *adapter,
 
 	request_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sp_destroy);
-	request = rte_malloc("iavf-sp-del-request", request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -913,7 +912,7 @@ iavf_ipsec_crypto_security_policy_delete(struct iavf_adapter *adapter,
 
 	response_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_resp);
-	response = rte_malloc("iavf-sp-del-response", response_len, 0);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -944,8 +943,8 @@ iavf_ipsec_crypto_security_policy_delete(struct iavf_adapter *adapter,
 		return response->ipsec_data.ipsec_status->status;
 
 update_cleanup:
-	rte_free(request);
-	rte_free(response);
+	free(request);
+	free(response);
 
 	return rc;
 }
@@ -962,7 +961,7 @@ iavf_ipsec_crypto_sa_del(struct iavf_adapter *adapter,
 	request_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_sa_destroy);
 
-	request = rte_malloc("iavf-sa-del-request", request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -971,7 +970,7 @@ iavf_ipsec_crypto_sa_del(struct iavf_adapter *adapter,
 	response_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_resp);
 
-	response = rte_malloc("iavf-sa-del-response", response_len, 0);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -1013,8 +1012,8 @@ iavf_ipsec_crypto_sa_del(struct iavf_adapter *adapter,
 		rc = -EFAULT;
 
 update_cleanup:
-	rte_free(response);
-	rte_free(request);
+	free(response);
+	free(request);
 
 	return rc;
 }
@@ -1168,7 +1167,7 @@ iavf_ipsec_crypto_device_capabilities_get(struct iavf_adapter *adapter,
 
 	request_len = sizeof(struct inline_ipsec_msg);
 
-	request = rte_malloc("iavf-device-capability-request", request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -1176,8 +1175,7 @@ iavf_ipsec_crypto_device_capabilities_get(struct iavf_adapter *adapter,
 
 	response_len = sizeof(struct inline_ipsec_msg) +
 			sizeof(struct virtchnl_ipsec_cap);
-	response = rte_malloc("iavf-device-capability-response",
-			response_len, 0);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -1203,8 +1201,8 @@ iavf_ipsec_crypto_device_capabilities_get(struct iavf_adapter *adapter,
 	memcpy(capability, response->ipsec_data.ipsec_cap, sizeof(*capability));
 
 update_cleanup:
-	rte_free(response);
-	rte_free(request);
+	free(response);
+	free(request);
 
 	return rc;
 }
@@ -1593,16 +1591,15 @@ iavf_ipsec_crypto_status_get(struct iavf_adapter *adapter,
 
 	request_len = sizeof(struct inline_ipsec_msg);
 
-	request = rte_malloc("iavf-device-status-request", request_len, 0);
+	request = calloc(1, request_len);
 	if (request == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
 	}
 
 	response_len = sizeof(struct inline_ipsec_msg) +
-			sizeof(struct virtchnl_ipsec_cap);
-	response = rte_malloc("iavf-device-status-response",
-			response_len, 0);
+			sizeof(struct virtchnl_ipsec_status);
+	response = calloc(1, response_len);
 	if (response == NULL) {
 		rc = -ENOMEM;
 		goto update_cleanup;
@@ -1628,8 +1625,8 @@ iavf_ipsec_crypto_status_get(struct iavf_adapter *adapter,
 	memcpy(status, response->ipsec_data.ipsec_status, sizeof(*status));
 
 update_cleanup:
-	rte_free(response);
-	rte_free(request);
+	free(response);
+	free(request);
 
 	return rc;
 }
@@ -1644,7 +1641,7 @@ iavf_ipsec_crypto_supported(struct iavf_adapter *adapter)
 	/** Capability check for IPsec Crypto */
 	if (resources && (resources->vf_cap_flags &
 		VIRTCHNL_VF_OFFLOAD_INLINE_IPSEC_CRYPTO)) {
-		struct virtchnl_ipsec_status status;
+		struct virtchnl_ipsec_status status = {0};
 		int rc = iavf_ipsec_crypto_status_get(adapter, &status);
 		if (rc == 0 && status.status == INLINE_IPSEC_STATUS_AVAILABLE)
 			crypto_supported = true;
@@ -1983,7 +1980,6 @@ static struct iavf_flow_parser iavf_ipsec_flow_parser = {
 	.array = iavf_ipsec_flow_pattern,
 	.array_len = RTE_DIM(iavf_ipsec_flow_pattern),
 	.parse_pattern_action = iavf_ipsec_flow_parse,
-	.stage = IAVF_FLOW_STAGE_IPSEC_CRYPTO,
 };
 
 RTE_INIT(iavf_ipsec_flow_engine_register)

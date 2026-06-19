@@ -105,7 +105,7 @@ enum mcfg {
 	CFG_METHOD_69,
 	CFG_METHOD_70,
 	CFG_METHOD_71,
-	CFG_METHOD_91,
+	CFG_METHOD_91 = 91,
 	CFG_METHOD_MAX,
 	CFG_METHOD_DEFAULT = 0xFF
 };
@@ -271,6 +271,8 @@ enum RTL_registers {
 	IB2SOC_DATA    = 0x0014,
 	IB2SOC_CMD     = 0x0018,
 	IB2SOC_IMR     = 0x001C,
+	/* 9151 */
+	TxConfigV2     = 0x60B0,
 };
 
 enum RTL_register_content {
@@ -525,6 +527,9 @@ enum RTL_chipset_name {
 	RTL8125BP,
 	RTL8125D,
 	RTL8125CP,
+	RTL8168KD,
+	RTL9151A,
+	RTL8125K,
 	RTL8126A,
 	RTL8168EP,
 	RTL8168FP,
@@ -563,6 +568,8 @@ enum RTL_chipset_name {
 #define TX_DMA_BURST_16     0
 #define InterFrameGap       0x03    /* 3 means InterFrameGap = the shortest one */
 #define Rx_Fetch_Number_8  (1 << 30)
+#define Rx_Fetch_Number_12  (BIT_30 | BIT_29)
+#define Rx_Fetch_Number_20  (BIT_31 | BIT_29)
 #define Rx_Close_Multiple  (1 << 21)
 #define RxEarly_off_V2	   (1 << 11)
 #define Rx_Single_fetch_V2 (1 << 14)
@@ -614,6 +621,7 @@ enum RTL_chipset_name {
  */
 #define RTL_ETH_OVERHEAD (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + VLAN_TAG_SIZE)
 #define JUMBO_FRAME_9K  (9 * 1024 - RTE_ETHER_HDR_LEN - RTE_VLAN_HLEN - RTE_ETHER_CRC_LEN)
+#define JUMBO_FRAME_16K  (16 * 1024 - RTE_ETHER_HDR_LEN - RTE_VLAN_HLEN - RTE_ETHER_CRC_LEN)
 
 #define DMA_BIT_MASK(n) (((n) == 64) ? ~0ULL : ((1ULL << (n)) - 1))
 

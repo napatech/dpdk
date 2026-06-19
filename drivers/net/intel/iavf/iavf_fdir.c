@@ -773,6 +773,15 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 			raw_spec = item->spec;
 			raw_mask = item->mask;
 
+			if (!raw_spec || !raw_mask) {
+				PMD_DRV_LOG(ERR, "NULL RAW spec/mask");
+				rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ITEM,
+						item,
+						"NULL RAW spec/mask");
+				return -rte_errno;
+			}
+
 			if (item_num != 1)
 				return -rte_errno;
 
@@ -1623,7 +1632,6 @@ static struct iavf_flow_parser iavf_fdir_parser = {
 	.array = iavf_fdir_pattern,
 	.array_len = RTE_DIM(iavf_fdir_pattern),
 	.parse_pattern_action = iavf_fdir_parse,
-	.stage = IAVF_FLOW_STAGE_DISTRIBUTOR,
 };
 
 RTE_INIT(iavf_fdir_engine_register)

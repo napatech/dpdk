@@ -7,19 +7,15 @@
 #include "../r8169_phy.h"
 #include "rtl8126a_mcu.h"
 
-/* For RTL8126A, CFG_METHOD_69,70,71 */
+/* For RTL8126A, CFG_METHOD_70,71 */
 
 static void
 hw_init_rxcfg_8126a(struct rtl_hw *hw)
 {
 	switch (hw->mcfg) {
-	case CFG_METHOD_69:
-		RTL_W32(hw, RxConfig, Rx_Fetch_Number_8 | RxCfg_pause_slot_en |
-			(RX_DMA_BURST_512 << RxCfgDMAShift));
-		break;
 	case CFG_METHOD_70:
 	case CFG_METHOD_71:
-		RTL_W32(hw, RxConfig, Rx_Fetch_Number_8 | Rx_Close_Multiple |
+		RTL_W32(hw, RxConfig, Rx_Fetch_Number_20 | Rx_Close_Multiple |
 			RxCfg_pause_slot_en | (RX_DMA_BURST_512 << RxCfgDMAShift));
 		break;
 	}
@@ -29,18 +25,11 @@ static void
 hw_ephy_config_8126a(struct rtl_hw *hw)
 {
 	switch (hw->mcfg) {
-	case CFG_METHOD_69:
 	case CFG_METHOD_70:
 	case CFG_METHOD_71:
 		/* nothing to do */
 		break;
 	}
-}
-
-static void
-rtl_hw_phy_config_8126a_1(struct rtl_hw *hw)
-{
-	rtl_set_eth_phy_ocp_bit(hw, 0xA442, BIT_11);
 }
 
 static void
@@ -467,15 +456,20 @@ rtl_hw_phy_config_8126a_3(struct rtl_hw *hw)
 	rtl_set_eth_phy_ocp_bit(hw, 0xA430, BIT_1 | BIT_0);
 
 	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xB54C, 0xFFC0, 0x3700);
+
+	rtl_set_eth_phy_ocp_bit(hw, 0xB648, BIT_6);
+	rtl_mdio_direct_write_phy_ocp(hw, 0xB87C, 0x8082);
+	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xB87E, 0xFF00, 0x5D00);
+	rtl_mdio_direct_write_phy_ocp(hw, 0xB87C, 0x807C);
+	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xB87E, 0xFF00, 0x5000);
+	rtl_mdio_direct_write_phy_ocp(hw, 0xB87C, 0x809D);
+	rtl_clear_and_set_eth_phy_ocp_bit(hw, 0xB87E, 0xFF00, 0x5000);
 }
 
 static void
 hw_phy_config_8126a(struct rtl_hw *hw)
 {
 	switch (hw->mcfg) {
-	case CFG_METHOD_69:
-		rtl_hw_phy_config_8126a_1(hw);
-		break;
 	case CFG_METHOD_70:
 		rtl_hw_phy_config_8126a_2(hw);
 		break;
@@ -497,9 +491,6 @@ hw_mac_mcu_config_8126a(struct rtl_hw *hw)
 	hw->hw_mcu_patch_code_ver = rtl_get_hw_mcu_patch_code_ver(hw);
 
 	switch (hw->mcfg) {
-	case CFG_METHOD_69:
-		rtl_set_mac_mcu_8126a_1(hw);
-		break;
 	case CFG_METHOD_70:
 		rtl_set_mac_mcu_8126a_2(hw);
 		break;
@@ -513,9 +504,6 @@ static void
 hw_phy_mcu_config_8126a(struct rtl_hw *hw)
 {
 	switch (hw->mcfg) {
-	case CFG_METHOD_69:
-		rtl_set_phy_mcu_8126a_1(hw);
-		break;
 	case CFG_METHOD_70:
 		rtl_set_phy_mcu_8126a_2(hw);
 		break;

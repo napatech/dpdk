@@ -79,6 +79,7 @@
 #define ROC_CPT_SHA2_HMAC_LEN	16
 #define ROC_CPT_DES_IV_LEN	8
 
+#define ROC_CPT_DES_KEY_LEN	    8
 #define ROC_CPT_DES3_KEY_LEN	    24
 #define ROC_CPT_AES128_KEY_LEN	    16
 #define ROC_CPT_AES192_KEY_LEN	    24
@@ -130,7 +131,12 @@
 	 BITS_PER_LONG_LONG)
 
 /* ROC CPTR Cache */
+#if defined(ROC_PLATFORM_CN10K) || defined(ROC_PLATFORM_CN9K)
+#define ROC_CPTR_CACHE_LINE_SZ 128
+#else
 #define ROC_CPTR_CACHE_LINE_SZ 256
+#endif
+
 #define ROC_CPTR_ALIGN	       ROC_CPTR_CACHE_LINE_SZ
 
 #define ROC_CPT_CQ_ENTRY_SIZE_UNIT 32
@@ -159,6 +165,7 @@ struct roc_cpt_lf {
 	bool cpt_cq_ena;
 	uint8_t cq_entry_size;
 	uint32_t cq_size;
+	uint32_t cq_head;
 	/* End of Input parameters */
 	struct plt_pci_device *pci_dev;
 	struct dev *dev;

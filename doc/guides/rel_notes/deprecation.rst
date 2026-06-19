@@ -30,6 +30,16 @@ Deprecation Notices
   Use the ``-S <service-corelist>`` parameter instead
   to specify the cores to be used for background services in DPDK.
 
+* eal: The entire VFIO API (``rte_vfio_*``) will be made internal only,
+  and will only be available to EAL and drivers.
+  Group-based API (``rte_vfio_*_group_*``) will be removed
+  and replaced with unified container device assignment API.
+  This change will be made in 26.11 release.
+
+* vdpa: The vDPA driver API will no longer offer ``get_vfio_group_fd``
+  as part of its internal API. All drivers will be adjusted
+  to use the new unified VFIO container device assignment API.
+
 * rte_atomicNN_xxx: These APIs do not take memory order parameter. This does
   not allow for writing optimized code for all the CPU architectures supported
   in DPDK. DPDK has adopted the atomic operations from
@@ -121,6 +131,11 @@ Deprecation Notices
   The legacy actions should be removed
   once ``MODIFY_FIELD`` alternative is implemented in drivers.
 
+* cryptodev: Support for OpenSSL versions earlier than 3.0 is deprecated
+  and will be removed. OpenSSL 1.1.1 reached end-of-life in September 2023.
+  The minimum supported OpenSSL version will be 3.0,
+  and version checks for earlier OpenSSL versions will be removed from the PMD.
+
 * pipeline: The pipeline library legacy API (functions rte_pipeline_*)
   will be deprecated and subsequently removed in DPDK 24.11 release.
   Before this, the new pipeline library API (functions rte_swx_pipeline_*)
@@ -139,11 +154,3 @@ Deprecation Notices
 * bus/vmbus: Starting DPDK 25.11, all the vmbus API defined in
   ``drivers/bus/vmbus/rte_bus_vmbus.h`` will become internal to DPDK.
   Those API functions are used internally by DPDK core and netvsc PMD.
-
-* net/intel: Drivers that have an SSE vector path alongside other vector paths,
-  namely i40e, iavf and ice, will have their SSE vector paths removed in DPDK 25.11.
-  Modern x86 systems all support AVX2, if not AVX-512,
-  so the SSE path is no longer widely used.
-  This change will not result in any feature loss,
-  as the fallback scalar paths which have feature parity with SSE
-  will be used in the cases where the SSE paths would have been used.

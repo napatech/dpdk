@@ -44,7 +44,7 @@ NUMA is required by most modern machines, not needed for non-NUMA architectures.
    using the below guide. If you're using a different compiler,
    make sure you're using the proper executable name.
 
-The numa header files and lib file is generated in the include and lib folder
+The numa header files and lib file are generated in the include and lib folders
 respectively under ``<numa install dir>``.
 
 Meson prerequisites
@@ -185,7 +185,7 @@ provided the cross file has been modified accordingly::
 LLVM/Clang toolchain
 --------------------
 
-Obtain the cross tool chain
+Obtain the cross toolchain
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The latest LLVM/Clang cross compiler toolchain can be downloaded from:
@@ -236,7 +236,7 @@ use the following command to cross-compile DPDK for the target machine::
 Cross Compiling DPDK with LLVM/Clang toolchain using Meson on Ubuntu 18.04
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-On most popular Linux distribution it is not necessary to download
+On most popular Linux distributions, it is not necessary to download
 the toolchains, but rather use the packages provided by said distributions.
 On Ubuntu 18.04, these packages are needed:
 
@@ -260,7 +260,7 @@ option::
 
    meson setup soc_build -Dplatform=<target_soc>
 
-Substitute <target_soc> with one of the supported SoCs
+Replace <target_soc> with one of the supported SoCs.
 
 .. literalinclude:: ../../../config/arm/meson.build
    :start-after: Start of SoCs list

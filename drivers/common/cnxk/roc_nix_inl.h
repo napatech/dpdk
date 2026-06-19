@@ -36,13 +36,18 @@
 #define ROC_NIX_INL_INB_CUSTOM_SA_SZ 512
 
 /* Reassembly configuration */
+#define ROC_NIX_INL_REAS_STEP_MAX	  0xFFFFF
+#define ROC_NIX_INL_REAS_STEP_DFLT	  0x3E8 /* 1 ms */
 #define ROC_NIX_INL_REAS_ACTIVE_LIMIT	  0xFFF
 #define ROC_NIX_INL_REAS_ACTIVE_THRESHOLD 10
 #define ROC_NIX_INL_REAS_ZOMBIE_LIMIT	  0xFFF
 #define ROC_NIX_INL_REAS_ZOMBIE_THRESHOLD 10
 
+#define ROC_NIX_INL_RXC_QUE_BLK_THR 0x40UL
+
 enum nix_inl_event_type {
-	NIX_INL_CPT_CQ = 1,
+	NIX_INL_INB_CPT_CQ = 1,
+	NIX_INL_OUTB_CPT_CQ,
 	NIX_INL_SSO,
 	NIX_INL_SOFT_EXPIRY_THRD,
 };
@@ -158,7 +163,7 @@ bool __roc_api roc_nix_inl_inb_is_enabled(struct roc_nix *roc_nix);
 uintptr_t __roc_api roc_nix_inl_inb_sa_base_get(struct roc_nix *roc_nix,
 						bool inl_dev_sa);
 uint16_t roc_nix_inl_inb_ipsec_profile_id_get(struct roc_nix *roc_nix, bool inb_inl_dev);
-uint16_t roc_nix_inl_inb_reass_profile_id_get(struct roc_nix *roc_nix, bool inb_inl_dev);
+uint16_t __roc_api roc_nix_inl_inb_reass_profile_id_get(struct roc_nix *roc_nix, bool inb_inl_dev);
 bool __roc_api roc_nix_inl_inb_rx_inject_enable(struct roc_nix *roc_nix, bool inl_dev_sa);
 uint32_t __roc_api roc_nix_inl_inb_spi_range(struct roc_nix *roc_nix,
 					     bool inl_dev_sa, uint32_t *min,

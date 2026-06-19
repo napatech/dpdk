@@ -176,7 +176,7 @@ struct mlx5_nl_mac_addr {
 	int mac_n; /**< Number of addresses in the array. */
 };
 
-RTE_ATOMIC(uint32_t) atomic_sn;
+static RTE_ATOMIC(uint32_t) atomic_sn;
 
 /* Generate Netlink sequence number. */
 #define MLX5_NL_SN_GENERATE (rte_atomic_fetch_add_explicit(&atomic_sn, 1, \
@@ -482,7 +482,7 @@ mlx5_nl_mac_addr_cb(struct nlmsghdr *nh, void *arg)
 				rte_errno = ENOMEM;
 				return -rte_errno;
 			}
-#ifdef RTE_LIBRTE_MLX5_DEBUG
+#ifdef RTE_PMD_MLX5_DEBUG
 			char m[RTE_ETHER_ADDR_FMT_SIZE];
 
 			rte_ether_format_addr(m, RTE_ETHER_ADDR_FMT_SIZE,
@@ -581,8 +581,8 @@ mlx5_nl_mac_addr_modify(int nlsk_fd, unsigned int iface_idx,
 	} req = {
 		.hdr = {
 			.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg)),
-			.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE |
-				NLM_F_EXCL | NLM_F_ACK,
+			.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK |
+				(add ? NLM_F_CREATE | NLM_F_EXCL : 0),
 			.nlmsg_type = add ? RTM_NEWNEIGH : RTM_DELNEIGH,
 		},
 		.ndm = {
@@ -612,7 +612,6 @@ mlx5_nl_mac_addr_modify(int nlsk_fd, unsigned int iface_idx,
 		goto error;
 	return 0;
 error:
-#ifdef RTE_LIBRTE_MLX5_DEBUG
 	{
 		char m[RTE_ETHER_ADDR_FMT_SIZE];
 
@@ -622,7 +621,6 @@ error:
 			iface_idx,
 			add ? "add" : "remove", m, strerror(rte_errno));
 	}
-#endif
 	return -rte_errno;
 }
 

@@ -90,7 +90,7 @@ To see the status of all network ports on the system:
     =====================
     <none>
 
-To bind device ``eth1``,``04:00.1``, to the ``vfio-pci`` driver:
+To bind device ``eth1``, ``04:00.1``, to the ``vfio-pci`` driver:
 
 .. code-block:: console
 
@@ -120,7 +120,7 @@ To make use of VFIO, the ``vfio-pci`` module must be loaded:
     sudo modprobe vfio-pci
 
 VFIO kernel is usually present by default in all distributions,
-however please consult your distributions documentation to make sure that is the case.
+however please consult your distribution's documentation to make sure that is the case.
 
 To make use of full VFIO functionality,
 both kernel and BIOS must support and be configured
@@ -358,7 +358,7 @@ or PMD name matches platform device name, all in that order.
 
 VFIO Platform depends on ARM/ARM64 and is usually enabled on distributions
 running on these systems.
-Consult your distributions documentation to make sure that is the case.
+Consult your distribution's documentation to make sure that is the case.
 
 
 .. _bifurcated_driver:
@@ -366,7 +366,7 @@ Consult your distributions documentation to make sure that is the case.
 Bifurcated Driver
 -----------------
 
-PMDs which use the bifurcated driver co-exists with the device kernel driver.
+PMDs which use the bifurcated driver co-exist with the device kernel driver.
 On such model the NIC is controlled by the kernel, while the data
 path is performed by the PMD directly on top of the device.
 
@@ -428,7 +428,7 @@ It can be loaded as shown below:
    the Linux kernel may disallow the use of UIO on the system.
    Therefore, devices for use by DPDK should be bound to the ``vfio-pci`` kernel module
    rather than any UIO-based module.
-   For more details see :ref:`linux_gsg_binding_kernel` below.
+   For more details see :ref:`linux_gsg_binding_kernel` above.
 
 .. note::
 

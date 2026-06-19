@@ -123,6 +123,10 @@ struct mbox_msghdr {
 	  msg_rsp)                                                             \
 	M(NPA_CN20K_AQ_ENQ, 0x404, npa_cn20k_aq_enq, npa_cn20k_aq_enq_req,     \
 	  npa_cn20k_aq_enq_rsp)                                                \
+	M(NPA_CN20K_DPC_ALLOC, 0x405, npa_cn20k_dpc_alloc,                     \
+	  npa_cn20k_dpc_alloc_req, npa_cn20k_dpc_alloc_rsp)                    \
+	M(NPA_CN20K_DPC_FREE,  0x406, npa_cn20k_dpc_free,                      \
+	  npa_cn20k_dpc_free_req, msg_rsp)                                     \
 	/* SSO/SSOW mbox IDs (range 0x600 - 0x7FF) */                          \
 	M(SSO_LF_ALLOC, 0x600, sso_lf_alloc, sso_lf_alloc_req,                 \
 	  sso_lf_alloc_rsp)                                                    \
@@ -1397,6 +1401,8 @@ struct npa_cn20k_aq_enq_req {
 		__io struct npa_cn20k_aura_s aura;
 		/* Valid when op == WRITE/INIT and ctype == POOL */
 		__io struct npa_cn20k_pool_s pool;
+		/* Valid when op == WRITE/INIT and ctype == HALO */
+		__io struct npa_cn20k_halo_s halo;
 	};
 	/* Mask data when op == WRITE (1=write, 0=don't write) */
 	union {
@@ -1404,6 +1410,8 @@ struct npa_cn20k_aq_enq_req {
 		__io struct npa_cn20k_aura_s aura_mask;
 		/* Valid when op == WRITE and ctype == POOL */
 		__io struct npa_cn20k_pool_s pool_mask;
+		/* Valid when op == WRITE/INIT and ctype == HALO */
+		__io struct npa_cn20k_halo_s halo_mask;
 	};
 };
 
@@ -1414,7 +1422,24 @@ struct npa_cn20k_aq_enq_rsp {
 		__io struct npa_cn20k_aura_s aura;
 		/* Valid when op == READ and ctype == POOL */
 		__io struct npa_cn20k_pool_s pool;
+		/* Valid when op == READ and ctype == HALO */
+		__io struct npa_cn20k_halo_s halo;
 	};
+};
+
+struct npa_cn20k_dpc_alloc_req {
+	struct mbox_msghdr hdr;
+	uint16_t __io dpc_conf;
+};
+
+struct npa_cn20k_dpc_alloc_rsp {
+	struct mbox_msghdr hdr;
+	uint8_t __io cntr_id;
+};
+
+struct npa_cn20k_dpc_free_req {
+	struct mbox_msghdr hdr;
+	uint8_t __io cntr_id;
 };
 
 /* Disable all contexts of type 'ctype' */
@@ -1844,12 +1869,12 @@ struct nix_rq_cpt_field_mask_cfg_req {
 		uint64_t __io rq_ctx_word_mask[RQ_CTX_MASK_MAX];
 		__io struct nix_cn10k_rq_ctx_s rq_mask;
 	};
-	struct nix_lf_rx_ipec_cfg1_req {
+	struct nix_lf_rx_ipsec_cfg1_inline_replay_req {
 		uint32_t __io spb_cpt_aura;
 		uint8_t __io rq_mask_enable;
 		uint8_t __io spb_cpt_sizem1;
 		uint8_t __io spb_cpt_enable;
-	} ipsec_cfg1;
+	} ipsec_cfg1_inline_replay;
 };
 
 struct nix_lso_format_cfg {
@@ -2423,7 +2448,9 @@ struct cpt_rx_inline_qcfg_req {
 	uint8_t __io pf_func_ctx;
 	uint8_t __io inflight_limit;
 	uint8_t __io queue_pri;
-	uint8_t __io rsvd[32]; /* For future extensions */
+	uint8_t __io cq_remap;
+	uint8_t __io pdb_ena;
+	uint8_t __io rsvd[30]; /* For future extensions */
 };
 
 #define CPT_INLINE_INBOUND  0

@@ -2,6 +2,7 @@
  * Copyright (c) 2022 NVIDIA Corporation & Affiliates
  */
 
+#include <eal_export.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
 #include <rte_stdatomic.h>
@@ -368,6 +369,7 @@ static int flow_hw_async_destroy_validate(struct rte_eth_dev *dev,
 					  const uint32_t queue,
 					  const struct rte_flow_hw *flow,
 					  struct rte_flow_error *error);
+static bool flow_hw_should_create_nat64_actions(struct mlx5_priv *priv);
 
 const struct mlx5_flow_driver_ops mlx5_flow_hw_drv_ops;
 
@@ -572,6 +574,87 @@ flow_hw_hashfields_set(struct mlx5_flow_rss_desc *rss_desc,
 	if (rss_inner)
 		fields |= IBV_RX_HASH_INNER;
 	*hash_fields |= fields;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_rss_tir_register, 26.03)
+int
+rte_pmd_mlx5_rss_tir_register(uint16_t port_id,
+			      const struct rte_flow_action_rss *rss,
+			      struct rte_pmd_mlx5_rss_devx *devx)
+{
+	struct rte_eth_dev *dev;
+	struct mlx5_hrxq *hrxq;
+	struct mlx5_flow_rss_desc rss_desc = {
+		.hws_flags = MLX5DR_ACTION_FLAG_ROOT_RX,
+	};
+
+	if (rte_eth_dev_is_valid_port(port_id) < 0) {
+		DRV_LOG(ERR, "port %u: no Ethernet device", port_id);
+		rte_errno = ENODEV;
+		return -rte_errno;
+	}
+	if (!rss->queue_num || !rss->queue) {
+		DRV_LOG(ERR, "port %u: invalid RSS queues configuration", port_id);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	if (rss->key && rss->key_len != MLX5_RSS_HASH_KEY_LEN) {
+		DRV_LOG(ERR, "port %u: RSS key length must be %d",
+			port_id, MLX5_RSS_HASH_KEY_LEN);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	dev = &rte_eth_devices[port_id];
+	if (!mlx5_hws_active(dev)) {
+		DRV_LOG(ERR, "port %u: HWS not active", port_id);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	rss_desc.queue_num = rss->queue_num;
+	rss_desc.const_q = rss->queue;
+	if (rss->queue_num > 1) {
+		memcpy(rss_desc.key,
+		       rss->key ? rss->key : mlx5_rss_hash_default_key,
+		       MLX5_RSS_HASH_KEY_LEN);
+		rss_desc.key_len = MLX5_RSS_HASH_KEY_LEN;
+		rss_desc.types = !rss->types ? RTE_ETH_RSS_IP : rss->types;
+		rss_desc.symmetric_hash_function = MLX5_RSS_IS_SYMM(rss->func);
+		flow_hw_hashfields_set(&rss_desc, &rss_desc.hash_fields);
+		mlx5_flow_dv_action_rss_l34_hash_adjust(rss->types,
+							&rss_desc.hash_fields);
+		if (rss->level > 1) {
+			rss_desc.hash_fields |= IBV_RX_HASH_INNER;
+			rss_desc.tunnel = 1;
+		}
+	}
+
+	hrxq = mlx5_hrxq_get(dev, &rss_desc);
+	if (!hrxq) {
+		DRV_LOG(ERR, "port %u: failed to allocate DevX", port_id);
+		return -rte_errno;
+	}
+	devx->destroy_handle = hrxq;
+	devx->obj = hrxq->tir->obj;
+	devx->id = hrxq->tir->id;
+
+	return 0;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_rss_tir_unregister, 26.03)
+int
+rte_pmd_mlx5_rss_tir_unregister(uint16_t port_id, void *handle)
+{
+	struct rte_eth_dev *dev;
+	struct mlx5_hrxq *hrxq = handle;
+
+	if (rte_eth_dev_is_valid_port(port_id) < 0) {
+		DRV_LOG(ERR, "port %u: no Ethernet device", port_id);
+		rte_errno = ENODEV;
+		return -rte_errno;
+	}
+	dev = &rte_eth_devices[port_id];
+	mlx5_hrxq_obj_release(dev, hrxq);
+	return 0;
 }
 
 uint64_t
@@ -816,14 +899,14 @@ flow_hw_tir_action_register(struct rte_eth_dev *dev,
 		rss_desc.queue_num = rss->queue_num;
 		rss_desc.const_q = rss->queue;
 		memcpy(rss_desc.key,
-		       !rss->key ? rss_hash_default_key : rss->key,
+		       !rss->key ? mlx5_rss_hash_default_key : rss->key,
 		       MLX5_RSS_HASH_KEY_LEN);
 		rss_desc.key_len = MLX5_RSS_HASH_KEY_LEN;
 		rss_desc.types = !rss->types ? RTE_ETH_RSS_IP : rss->types;
 		rss_desc.symmetric_hash_function = MLX5_RSS_IS_SYMM(rss->func);
 		flow_hw_hashfields_set(&rss_desc, &rss_desc.hash_fields);
-		flow_dv_action_rss_l34_hash_adjust(rss->types,
-						   &rss_desc.hash_fields);
+		mlx5_flow_dv_action_rss_l34_hash_adjust(rss->types,
+							&rss_desc.hash_fields);
 		if (rss->level > 1) {
 			rss_desc.hash_fields |= IBV_RX_HASH_INNER;
 			rss_desc.tunnel = 1;
@@ -885,7 +968,7 @@ __flow_hw_actions_release(struct rte_eth_dev *dev, struct mlx5_hw_actions *acts)
 	if (acts->mark)
 		if (!(rte_atomic_fetch_sub_explicit(&priv->hws_mark_refcnt, 1,
 				rte_memory_order_relaxed) - 1))
-			flow_hw_rxq_flag_set(dev, false);
+			mlx5_flow_hw_rxq_flag_set(dev, false);
 
 	if (acts->jump) {
 		struct mlx5_flow_group *grp;
@@ -1646,7 +1729,7 @@ flow_hw_modify_field_compile(struct rte_eth_dev *dev,
 	item.mask = &mask;
 	memset(&dummy, 0, sizeof(dummy));
 	resource = &dummy.resource;
-	ret = flow_dv_convert_modify_action(&item, field, dcopy, resource, type, error);
+	ret = mlx5_flow_dv_convert_modify_action(&item, field, dcopy, resource, type, error);
 	if (ret)
 		return ret;
 	MLX5_ASSERT(resource->actions_num > 0);
@@ -1870,64 +1953,67 @@ static rte_be32_t vlan_hdr_to_be32(const struct rte_flow_action *actions)
 #endif
 }
 
-static __rte_always_inline struct mlx5_aso_mtr *
+static __rte_always_inline int
 flow_hw_meter_mark_alloc(struct rte_eth_dev *dev, uint32_t queue,
 			 const struct rte_flow_action *action,
 			 struct mlx5_hw_q_job *job, bool push,
+			 struct mlx5_aso_mtr **aso_mtr,
 			 struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_aso_mtr_pool *pool = priv->hws_mpool;
 	const struct rte_flow_action_meter_mark *meter_mark = action->conf;
-	struct mlx5_aso_mtr *aso_mtr;
 	struct mlx5_flow_meter_info *fm;
 	uint32_t mtr_id = 0;
 	uintptr_t handle = (uintptr_t)MLX5_INDIRECT_ACTION_TYPE_METER_MARK <<
 					MLX5_INDIRECT_ACTION_TYPE_OFFSET;
 
-	if (priv->shared_host) {
-		rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-				   "Meter mark actions can only be created on the host port");
-		return NULL;
-	}
+	if (priv->shared_host)
+		return rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+					  "Meter mark actions can only be created on the host port");
+	MLX5_ASSERT(aso_mtr);
 	if (meter_mark->profile == NULL)
-		return NULL;
-	aso_mtr = mlx5_ipool_malloc(pool->idx_pool, &mtr_id);
-	if (!aso_mtr) {
-		rte_flow_error_set(error, ENOMEM,
-				   RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL,
-				   "failed to allocate aso meter entry");
+		return rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+					  "No Meter mark profile");
+
+	*aso_mtr = mlx5_ipool_malloc(pool->idx_pool, &mtr_id);
+	if (!*aso_mtr) {
 		if (mtr_id)
 			mlx5_ipool_free(pool->idx_pool, mtr_id);
-		return NULL;
+		return rte_flow_error_set(error, ENOMEM,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL,
+					  "failed to allocate aso meter entry");
 	}
 	/* Fill the flow meter parameters. */
-	aso_mtr->type = ASO_METER_INDIRECT;
-	fm = &aso_mtr->fm;
+	(*aso_mtr)->type = ASO_METER_INDIRECT;
+	fm = &(*aso_mtr)->fm;
 	fm->meter_id = mtr_id;
 	fm->profile = (struct mlx5_flow_meter_profile *)(meter_mark->profile);
 	fm->is_enable = meter_mark->state;
 	fm->color_aware = meter_mark->color_mode;
-	aso_mtr->pool = pool;
-	aso_mtr->state = (queue == MLX5_HW_INV_QUEUE) ?
+	(*aso_mtr)->pool = pool;
+	(*aso_mtr)->state = (queue == MLX5_HW_INV_QUEUE) ?
 			  ASO_METER_WAIT : ASO_METER_WAIT_ASYNC;
-	aso_mtr->offset = mtr_id - 1;
-	aso_mtr->init_color = fm->color_aware ? RTE_COLORS : RTE_COLOR_GREEN;
+	(*aso_mtr)->offset = mtr_id - 1;
+	(*aso_mtr)->init_color = fm->color_aware ? RTE_COLORS : RTE_COLOR_GREEN;
 	job->action = (void *)(handle | mtr_id);
 	/* Update ASO flow meter by wqe. */
-	if (mlx5_aso_meter_update_by_wqe(priv, queue, aso_mtr,
+	if (mlx5_aso_meter_update_by_wqe(priv, queue, *aso_mtr,
 					 &priv->mtr_bulk, job, push)) {
 		mlx5_ipool_free(pool->idx_pool, mtr_id);
-		return NULL;
+		return rte_flow_error_set(error, EBUSY,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL,
+					  "Failed to enqueue ASO meter update");
 	}
 	/* Wait for ASO object completion. */
 	if (queue == MLX5_HW_INV_QUEUE &&
-	    mlx5_aso_mtr_wait(priv, aso_mtr, true)) {
+	    mlx5_aso_mtr_wait(priv, *aso_mtr, true)) {
 		mlx5_ipool_free(pool->idx_pool, mtr_id);
-		return NULL;
+		return -EIO;
 	}
-	return aso_mtr;
+	return 0;
 }
 
 static __rte_always_inline int
@@ -1941,20 +2027,22 @@ flow_hw_meter_mark_compile(struct rte_eth_dev *dev,
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_aso_mtr_pool *pool = priv->hws_mpool;
-	struct mlx5_aso_mtr *aso_mtr;
+	struct mlx5_aso_mtr *aso_mtr = NULL;
 	struct mlx5_hw_q_job *job =
 		flow_hw_action_job_init(priv, queue, NULL, NULL, NULL,
 					MLX5_HW_Q_JOB_TYPE_CREATE,
 					MLX5_HW_INDIRECT_TYPE_LEGACY, NULL);
+	int ret;
 
 	if (!job)
 		return -1;
-	aso_mtr = flow_hw_meter_mark_alloc(dev, queue, action, job,
-					   true, error);
-	if (!aso_mtr) {
-		if (queue == MLX5_HW_INV_QUEUE)
-			queue = CTRL_QUEUE_ID(priv);
-		flow_hw_job_put(priv, job, queue);
+	ret = flow_hw_meter_mark_alloc(dev, queue, action, job, true, &aso_mtr, error);
+	if (ret) {
+		if (ret != -EIO) {
+			if (queue == MLX5_HW_INV_QUEUE)
+				queue = CTRL_QUEUE_ID(priv);
+			flow_hw_job_put(priv, job, queue);
+		}
 		return -1;
 	}
 
@@ -2217,6 +2305,60 @@ table_template_translate_indirect_list(struct rte_eth_dev *dev,
 	return ret;
 }
 
+/**
+ * Translate given encap action and mask to raw tunnel header buffer.
+ *
+ * @param[in] action
+ *   Pointer to encap action.
+ * @param[in] mask
+ *   Pointer to encap action's mask.
+ * @param[out] conf_encap_data
+ *   Buffer where tunnel header will be written.
+ * @param[out] data_size
+ *   Pointer to tunnel header size.
+ * @param[out] error
+ *   Pointer to error structure.
+ *
+ * @return
+ *   0 or greater if translation was successful.
+ *   Negative errno value otherwise.
+ *
+ *   If returned value is 0, then action is not shared in the actions template
+ *   If bigger than 0, then it is shared.
+ */
+static int
+translate_l2_encap_action(const struct rte_flow_action *action,
+			  const struct rte_flow_action *mask,
+			  uint8_t conf_encap_data[MLX5_ENCAP_MAX_LEN],
+			  size_t *data_size,
+			  struct rte_flow_error *error)
+{
+	struct rte_flow_item *conf_item;
+	int ret;
+
+	if (action->conf == NULL)
+		return rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION_CONF, NULL,
+					  "Missing VXLAN/NVGRE encap action configuration");
+
+	/* Only these 2 action types receive encap data as flow item pattern. */
+	MLX5_ASSERT(action->type == RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP ||
+		    action->type == RTE_FLOW_ACTION_TYPE_NVGRE_ENCAP);
+	if (action->type == RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP)
+		conf_item = MLX5_CONST_ENCAP_ITEM(rte_flow_action_vxlan_encap, action->conf);
+	else
+		conf_item = MLX5_CONST_ENCAP_ITEM(rte_flow_action_nvgre_encap, action->conf);
+	if (conf_item == NULL)
+		return rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION_CONF, NULL,
+				"Missing VXLAN/NVGRE tunnel definition in action config");
+
+	ret = mlx5_flow_dv_convert_encap_data(conf_item, conf_encap_data, data_size, error);
+	if (ret < 0)
+		return ret;
+
+	/* If mask is provided, then action is shared */
+	return mask->conf != NULL;
+}
+
 static void
 mlx5_set_reformat_header(struct mlx5dr_action_reformat_header *hdr,
 			 uint8_t *encap_data,
@@ -2230,8 +2372,6 @@ static int
 mlx5_tbl_translate_reformat(struct mlx5_priv *priv,
 			    struct mlx5_hw_actions *acts,
 			    struct rte_flow_actions_template *at,
-			    const struct rte_flow_item *enc_item,
-			    const struct rte_flow_item *enc_item_m,
 			    uint8_t *encap_data, uint8_t *encap_data_m,
 			    struct mlx5_tbl_multi_pattern_ctx *mp_ctx,
 			    size_t data_size, uint16_t reformat_src,
@@ -2240,22 +2380,12 @@ mlx5_tbl_translate_reformat(struct mlx5_priv *priv,
 {
 	int mp_reformat_ix = mlx5_multi_pattern_reformat_to_index(refmt_type);
 	struct mlx5dr_action_reformat_header hdr;
-	uint8_t buf[MLX5_ENCAP_MAX_LEN];
 	bool shared_rfmt = false;
 	int ret;
 
 	MLX5_ASSERT(at->reformat_off != UINT16_MAX);
-	if (enc_item) {
-		MLX5_ASSERT(!encap_data);
-		ret = flow_dv_convert_encap_data(enc_item, buf, &data_size, error);
-		if (ret)
-			return ret;
-		encap_data = buf;
-		if (enc_item_m)
-			shared_rfmt = true;
-	} else if (encap_data && encap_data_m) {
+	if (encap_data && encap_data_m)
 		shared_rfmt = true;
-	}
 	acts->encap_decap = mlx5_malloc(MLX5_MEM_ZERO,
 					sizeof(*acts->encap_decap) + data_size,
 					0, SOCKET_ID_ANY);
@@ -2349,7 +2479,7 @@ mlx5_tbl_translate_modify_header(struct rte_eth_dev *dev,
 					  NULL, "translate modify_header: no memory for modify header context");
 	rte_memcpy(acts->mhdr, mhdr, sizeof(*mhdr));
 	if (!mhdr->shared) {
-		pattern.data = (__be64 *)acts->mhdr->mhdr_cmds;
+		pattern.data = (rte_be64_t *)acts->mhdr->mhdr_cmds;
 		typeof(mp_ctx->mh) *mh = &mp_ctx->mh;
 		uint32_t idx = mh->elements_num;
 		mh->pattern[mh->elements_num++] = pattern;
@@ -2383,7 +2513,7 @@ mlx5_tbl_ensure_shared_modify_header(struct rte_eth_dev *dev,
 	uint16_t mhdr_ix = acts->mhdr->pos;
 	uint32_t flags = mlx5_hw_act_flag[!!attr->group][tbl_type] | MLX5DR_ACTION_FLAG_SHARED;
 
-	pattern.data = (__be64 *)acts->mhdr->mhdr_cmds;
+	pattern.data = (rte_be64_t *)acts->mhdr->mhdr_cmds;
 	acts->mhdr->action = mlx5dr_action_create_modify_header(priv->dr_ctx, 1,
 								&pattern, 0, flags);
 	if (!acts->mhdr->action)
@@ -2527,8 +2657,8 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 	enum mlx5dr_action_type recom_type = MLX5DR_ACTION_TYP_LAST;
 	const struct rte_flow_action_raw_encap *raw_encap_data;
 	const struct rte_flow_action_ipv6_ext_push *ipv6_ext_data;
-	const struct rte_flow_item *enc_item = NULL, *enc_item_m = NULL;
 	uint16_t reformat_src = 0, recom_src = 0;
+	uint8_t converted_encap_data[MLX5_ENCAP_MAX_LEN] = { 0 };
 	uint8_t *encap_data = NULL, *encap_data_m = NULL;
 	uint8_t *push_data = NULL, *push_data_m = NULL;
 	size_t data_size = 0, push_size = 0;
@@ -2547,6 +2677,7 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 	int ret, err;
 	bool is_root = mlx5_group_id_is_root(cfg->attr.flow_attr.group);
 	bool unified_fdb = is_unified_fdb(priv);
+	struct mlx5dr_action *dr_action = NULL;
 
 	flow_hw_modify_field_init(&mhdr, at);
 	type = get_mlx5dr_table_type(attr, cfg->attr.specialize, unified_fdb);
@@ -2585,27 +2716,61 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 		case RTE_FLOW_ACTION_TYPE_VOID:
 			break;
 		case RTE_FLOW_ACTION_TYPE_DROP:
-			acts->rule_acts[dr_pos].action =
-				priv->hw_drop[!!attr->group];
+			dr_action = mlx5_hws_global_action_drop_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate drop action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate drop action");
+				goto err;
+			}
+			acts->rule_acts[dr_pos].action = dr_action;
 			break;
 		case RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR:
 			if (is_root) {
 				DRV_LOG(ERR, "Port representor is not supported in root table.");
 				goto err;
 			}
-			acts->rule_acts[dr_pos].action = priv->hw_def_miss;
+			dr_action = mlx5_hws_global_action_def_miss_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate port representor action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate port representor action");
+				goto err;
+			}
+			acts->rule_acts[dr_pos].action = dr_action;
 			break;
 		case RTE_FLOW_ACTION_TYPE_FLAG:
+			dr_action = mlx5_hws_global_action_tag_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate flag action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate flag action");
+				goto err;
+			}
 			acts->mark = true;
 			acts->rule_acts[dr_pos].tag.value =
 				mlx5_flow_mark_set(MLX5_FLOW_MARK_DEFAULT);
-			acts->rule_acts[dr_pos].action =
-				priv->hw_tag[!!attr->group];
+			acts->rule_acts[dr_pos].action = dr_action;
 			rte_atomic_fetch_add_explicit(&priv->hws_mark_refcnt, 1,
 					rte_memory_order_relaxed);
-			flow_hw_rxq_flag_set(dev, true);
+			mlx5_flow_hw_rxq_flag_set(dev, true);
 			break;
 		case RTE_FLOW_ACTION_TYPE_MARK:
+			dr_action = mlx5_hws_global_action_tag_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate mark action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate mark action");
+				goto err;
+			}
 			acts->mark = true;
 			if (masks->conf &&
 			    ((const struct rte_flow_action_mark *)
@@ -2618,15 +2783,22 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 								   actions->type,
 								   src_pos, dr_pos))
 				goto err;
-			acts->rule_acts[dr_pos].action =
-				priv->hw_tag[!!attr->group];
+			acts->rule_acts[dr_pos].action = dr_action;
 			rte_atomic_fetch_add_explicit(&priv->hws_mark_refcnt, 1,
 					rte_memory_order_relaxed);
-			flow_hw_rxq_flag_set(dev, true);
+			mlx5_flow_hw_rxq_flag_set(dev, true);
 			break;
 		case RTE_FLOW_ACTION_TYPE_OF_PUSH_VLAN:
-			acts->rule_acts[dr_pos].action =
-				priv->hw_push_vlan[type];
+			dr_action = mlx5_hws_global_action_push_vlan_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate push VLAN action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate push VLAN action");
+				goto err;
+			}
+			acts->rule_acts[dr_pos].action = dr_action;
 			if (is_template_masked_push_vlan(masks->conf))
 				acts->rule_acts[dr_pos].push_vlan.vlan_hdr =
 					vlan_hdr_to_be32(actions);
@@ -2641,8 +2813,16 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 			masks += of_vlan_offset;
 			break;
 		case RTE_FLOW_ACTION_TYPE_OF_POP_VLAN:
-			acts->rule_acts[dr_pos].action =
-				priv->hw_pop_vlan[type];
+			dr_action = mlx5_hws_global_action_pop_vlan_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate pop VLAN action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate pop VLAN action");
+				goto err;
+			}
+			acts->rule_acts[dr_pos].action = dr_action;
 			break;
 		case RTE_FLOW_ACTION_TYPE_JUMP:
 			if (masks->conf &&
@@ -2697,23 +2877,17 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 			}
 			break;
 		case RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP:
-			MLX5_ASSERT(!reformat_used);
-			enc_item = MLX5_CONST_ENCAP_ITEM(rte_flow_action_vxlan_encap,
-							 actions->conf);
-			if (masks->conf)
-				enc_item_m = MLX5_CONST_ENCAP_ITEM(rte_flow_action_vxlan_encap,
-								   masks->conf);
-			reformat_used = true;
-			reformat_src = src_pos;
-			refmt_type = MLX5DR_ACTION_TYP_REFORMAT_L2_TO_TNL_L2;
-			break;
 		case RTE_FLOW_ACTION_TYPE_NVGRE_ENCAP:
 			MLX5_ASSERT(!reformat_used);
-			enc_item = MLX5_CONST_ENCAP_ITEM(rte_flow_action_nvgre_encap,
-							 actions->conf);
-			if (masks->conf)
-				enc_item_m = MLX5_CONST_ENCAP_ITEM(rte_flow_action_nvgre_encap,
-								   masks->conf);
+			ret = translate_l2_encap_action(actions, masks, converted_encap_data,
+							&data_size, error);
+			if (ret < 0)
+				goto err;
+			/* If masked action, then use converted encap data for shared action. */
+			if (ret > 0) {
+				encap_data = converted_encap_data;
+				encap_data_m = converted_encap_data;
+			}
 			reformat_used = true;
 			reformat_src = src_pos;
 			refmt_type = MLX5DR_ACTION_TYP_REFORMAT_L2_TO_TNL_L2;
@@ -2785,14 +2959,24 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 			break;
 		case RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL:
 			if (is_root) {
-				__flow_hw_action_template_destroy(dev, acts);
 				rte_flow_error_set(&sub_error, ENOTSUP,
 					RTE_FLOW_ERROR_TYPE_ACTION,
 					NULL,
 					"Send to kernel action on root table is not supported in HW steering mode");
 				goto err;
 			}
-			acts->rule_acts[dr_pos].action = priv->hw_send_to_kernel[type];
+			dr_action = mlx5_hws_global_action_send_to_kernel_get(priv,
+					type,
+					MLX5_HW_LOWEST_PRIO_ROOT);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate send to kernel action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate send to kernel action");
+				goto err;
+			}
+			acts->rule_acts[dr_pos].action = dr_action;
 			break;
 		case RTE_FLOW_ACTION_TYPE_MODIFY_FIELD:
 			err = flow_hw_modify_field_compile(dev, attr, actions,
@@ -2878,19 +3062,54 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 				goto err;
 			break;
 		case MLX5_RTE_FLOW_ACTION_TYPE_DEFAULT_MISS:
-			acts->rule_acts[dr_pos].action = priv->hw_def_miss;
+			dr_action = mlx5_hws_global_action_def_miss_get(priv, type, is_root);
+			if (dr_action == NULL) {
+				DRV_LOG(ERR, "port %u failed to allocate default miss action",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate default miss action");
+				goto err;
+			}
+			acts->rule_acts[dr_pos].action = dr_action;
 			break;
 		case RTE_FLOW_ACTION_TYPE_NAT64:
 			if (masks->conf &&
 			    ((const struct rte_flow_action_nat64 *)masks->conf)->type) {
 				const struct rte_flow_action_nat64 *nat64_c =
 					(const struct rte_flow_action_nat64 *)actions->conf;
-
-				acts->rule_acts[dr_pos].action =
-					priv->action_nat64[type][nat64_c->type];
-			} else if (__flow_hw_act_data_general_append(priv, acts,
-								     actions->type,
-								     src_pos, dr_pos))
+				dr_action = mlx5_hws_global_action_nat64_get(priv,
+									     type,
+									     nat64_c->type);
+				if (dr_action == NULL) {
+					DRV_LOG(ERR, "port %u failed to allocate NAT64 action",
+						priv->dev_data->port_id);
+					rte_flow_error_set(&sub_error, ENOMEM,
+							   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+							   "failed to allocate NAT64 action");
+					goto err;
+				}
+				acts->rule_acts[dr_pos].action = dr_action;
+				break;
+			}
+			acts->nat64[RTE_FLOW_NAT64_6TO4] = mlx5_hws_global_action_nat64_get(priv,
+					type,
+					RTE_FLOW_NAT64_6TO4);
+			acts->nat64[RTE_FLOW_NAT64_4TO6] = mlx5_hws_global_action_nat64_get(priv,
+					type,
+					RTE_FLOW_NAT64_4TO6);
+			if (!acts->nat64[RTE_FLOW_NAT64_6TO4] ||
+			    !acts->nat64[RTE_FLOW_NAT64_4TO6]) {
+				DRV_LOG(ERR, "port %u failed to allocate both NAT64 actions",
+					priv->dev_data->port_id);
+				rte_flow_error_set(&sub_error, ENOMEM,
+						   RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						   "failed to allocate both NAT64 actions");
+				goto err;
+			}
+			if (__flow_hw_act_data_general_append(priv, acts,
+							      actions->type,
+							      src_pos, dr_pos))
 				goto err;
 			break;
 		case RTE_FLOW_ACTION_TYPE_JUMP_TO_TABLE_INDEX:
@@ -2950,7 +3169,6 @@ __flow_hw_translate_actions_template(struct rte_eth_dev *dev,
 	}
 	if (reformat_used) {
 		ret = mlx5_tbl_translate_reformat(priv, acts, at,
-						  enc_item, enc_item_m,
 						  encap_data, encap_data_m,
 						  mp_ctx, data_size,
 						  reformat_src,
@@ -3125,8 +3343,8 @@ flow_hw_shared_action_get(struct rte_eth_dev *dev,
 		rss_desc.level = act_data->shared_rss.level;
 		rss_desc.types = act_data->shared_rss.types;
 		rss_desc.symmetric_hash_function = act_data->shared_rss.symmetric_hash_function;
-		flow_dv_hashfields_set(item_flags, &rss_desc, &hash_fields);
-		hrxq_idx = flow_dv_action_rss_hrxq_lookup
+		mlx5_flow_dv_hashfields_set(item_flags, &rss_desc, &hash_fields);
+		hrxq_idx = mlx5_flow_dv_action_rss_hrxq_lookup
 			(dev, act_data->shared_rss.idx, hash_fields);
 		if (hrxq_idx)
 			hrxq = mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_HRXQ],
@@ -3608,13 +3826,15 @@ flow_hw_actions_construct(struct rte_eth_dev *dev,
 		case RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP:
 			enc_item = ((const struct rte_flow_action_vxlan_encap *)
 				   action->conf)->definition;
-			if (flow_dv_convert_encap_data(enc_item, ap->encap_data, &encap_len, NULL))
+			if (mlx5_flow_dv_convert_encap_data(enc_item, ap->encap_data,
+							    &encap_len, NULL))
 				goto error;
 			break;
 		case RTE_FLOW_ACTION_TYPE_NVGRE_ENCAP:
 			enc_item = ((const struct rte_flow_action_nvgre_encap *)
 				   action->conf)->definition;
-			if (flow_dv_convert_encap_data(enc_item, ap->encap_data, &encap_len, NULL))
+			if (mlx5_flow_dv_convert_encap_data(enc_item, ap->encap_data,
+							    &encap_len, NULL))
 				goto error;
 			break;
 		case RTE_FLOW_ACTION_TYPE_RAW_ENCAP:
@@ -3754,9 +3974,7 @@ flow_hw_actions_construct(struct rte_eth_dev *dev,
 			break;
 		case RTE_FLOW_ACTION_TYPE_NAT64:
 			nat64_c = action->conf;
-			MLX5_ASSERT(table->type < MLX5DR_TABLE_TYPE_MAX);
-			rule_acts[act_data->action_dst].action =
-				priv->action_nat64[table->type][nat64_c->type];
+			rule_acts[act_data->action_dst].action = hw_acts->nat64[nat64_c->type];
 			break;
 		case RTE_FLOW_ACTION_TYPE_JUMP_TO_TABLE_INDEX:
 			jump_table = ((const struct rte_flow_action_jump_to_table_index *)
@@ -4401,6 +4619,9 @@ mlx5_hw_pull_flow_transfer_comp(struct rte_eth_dev *dev,
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_ring *ring = priv->hw_q[queue].flow_transfer_completed;
 
+	if (ring == NULL)
+		return 0;
+
 	size = RTE_MIN(rte_ring_count(ring), n_res);
 	for (i = 0; i < size; i++) {
 		res[i].status = RTE_FLOW_OP_SUCCESS;
@@ -4632,8 +4853,9 @@ __flow_hw_push_action(struct rte_eth_dev *dev,
 	struct mlx5_hw_q *hw_q = &priv->hw_q[queue];
 
 	mlx5_hw_push_queue(hw_q->indir_iq, hw_q->indir_cq);
-	mlx5_hw_push_queue(hw_q->flow_transfer_pending,
-			   hw_q->flow_transfer_completed);
+	if (hw_q->flow_transfer_pending != NULL && hw_q->flow_transfer_completed != NULL)
+		mlx5_hw_push_queue(hw_q->flow_transfer_pending,
+				   hw_q->flow_transfer_completed);
 	if (!priv->shared_host) {
 		if (priv->hws_ctpool)
 			mlx5_aso_push_wqe(priv->sh,
@@ -4757,8 +4979,8 @@ __flow_hw_pull_comp(struct rte_eth_dev *dev,
  *    0 on success, negative value otherwise and rte_errno is set.
  */
 int
-flow_hw_q_flow_flush(struct rte_eth_dev *dev,
-		     struct rte_flow_error *error)
+mlx5_flow_hw_q_flow_flush(struct rte_eth_dev *dev,
+			  struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hw_q *hw_q = &priv->hw_q[MLX5_DEFAULT_FLUSH_QUEUE];
@@ -5291,8 +5513,8 @@ error:
  *    0 on success, negative value otherwise and rte_errno is set.
  */
 int
-flow_hw_table_update(struct rte_eth_dev *dev,
-		     struct rte_flow_error *error)
+mlx5_flow_hw_table_update(struct rte_eth_dev *dev,
+			  struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_flow_template_table *tbl;
@@ -5347,7 +5569,8 @@ __translate_group(struct rte_eth_dev *dev,
 						  NULL,
 						  "group index not supported");
 		*table_group = group + 1;
-	} else if (mlx5_vport_tx_metadata_passing_enabled(priv->sh) && flow_attr->egress) {
+	} else if (mlx5_vport_tx_metadata_passing_enabled(priv->sh) &&
+		   flow_attr->egress && external) {
 		/*
 		 * If VM cross GVMI metadata Tx was enabled, PMD creates a default
 		 * flow rule in the group 0 to copy metadata value.
@@ -6743,8 +6966,7 @@ flow_hw_validate_action_push_vlan(struct rte_eth_dev *dev,
 }
 
 static int
-flow_hw_validate_action_default_miss(struct rte_eth_dev *dev,
-				     const struct rte_flow_actions_template_attr *attr,
+flow_hw_validate_action_default_miss(const struct rte_flow_actions_template_attr *attr,
 				     uint64_t action_flags,
 				     struct rte_flow_error *error)
 {
@@ -6753,16 +6975,10 @@ flow_hw_validate_action_default_miss(struct rte_eth_dev *dev,
 	 * flows. So this validation can be ignored. It can be kept right now since
 	 * the validation will be done only once.
 	 */
-	struct mlx5_priv *priv = dev->data->dev_private;
-
 	if (!attr->ingress || attr->egress || attr->transfer)
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					  "DEFAULT MISS is only supported in ingress.");
-	if (!priv->hw_def_miss)
-		return rte_flow_error_set(error, EINVAL,
-					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
-					  "DEFAULT MISS action does not exist.");
 	if (action_flags & MLX5_FLOW_FATE_ACTIONS)
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
@@ -6771,76 +6987,16 @@ flow_hw_validate_action_default_miss(struct rte_eth_dev *dev,
 }
 
 static int
-flow_hw_validate_action_nat64(struct rte_eth_dev *dev,
-			      const struct rte_flow_actions_template_attr *attr,
-			      const struct rte_flow_action *action,
-			      const struct rte_flow_action *mask,
-			      uint64_t action_flags,
-			      struct rte_flow_error *error)
+flow_hw_validate_action_nat64(struct rte_eth_dev *dev, struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	const struct rte_flow_action_nat64 *nat64_c;
-	enum rte_flow_nat64_type cov_type;
 
-	RTE_SET_USED(action_flags);
-	if (mask->conf && ((const struct rte_flow_action_nat64 *)mask->conf)->type) {
-		nat64_c = (const struct rte_flow_action_nat64 *)action->conf;
-		cov_type = nat64_c->type;
-		if ((attr->ingress && !priv->action_nat64[MLX5DR_TABLE_TYPE_NIC_RX][cov_type]) ||
-		    (attr->egress && !priv->action_nat64[MLX5DR_TABLE_TYPE_NIC_TX][cov_type]))
-			goto err_out;
-		if (attr->transfer) {
-			if (!is_unified_fdb(priv)) {
-				if (!priv->action_nat64[MLX5DR_TABLE_TYPE_FDB][cov_type])
-					goto err_out;
-			} else {
-				if (!priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_RX][cov_type] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_TX][cov_type] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_UNIFIED][cov_type])
-					goto err_out;
-			}
-		}
-	} else {
-		/*
-		 * Usually, the actions will be used on both directions. For non-masked actions,
-		 * both directions' actions will be checked.
-		 */
-		if (attr->ingress)
-			if (!priv->action_nat64[MLX5DR_TABLE_TYPE_NIC_RX][RTE_FLOW_NAT64_6TO4] ||
-			    !priv->action_nat64[MLX5DR_TABLE_TYPE_NIC_RX][RTE_FLOW_NAT64_4TO6])
-				goto err_out;
-		if (attr->egress)
-			if (!priv->action_nat64[MLX5DR_TABLE_TYPE_NIC_TX][RTE_FLOW_NAT64_6TO4] ||
-			    !priv->action_nat64[MLX5DR_TABLE_TYPE_NIC_TX][RTE_FLOW_NAT64_4TO6])
-				goto err_out;
-		if (attr->transfer) {
-			if (!is_unified_fdb(priv)) {
-				if (!priv->action_nat64[MLX5DR_TABLE_TYPE_FDB]
-						       [RTE_FLOW_NAT64_6TO4] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB]
-						       [RTE_FLOW_NAT64_4TO6])
-					goto err_out;
-			} else {
-				if (!priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_RX]
-						       [RTE_FLOW_NAT64_6TO4] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_RX]
-						       [RTE_FLOW_NAT64_4TO6] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_TX]
-						       [RTE_FLOW_NAT64_6TO4] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_TX]
-						       [RTE_FLOW_NAT64_4TO6] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_UNIFIED]
-						       [RTE_FLOW_NAT64_6TO4] ||
-				    !priv->action_nat64[MLX5DR_TABLE_TYPE_FDB_UNIFIED]
-						       [RTE_FLOW_NAT64_4TO6])
-					goto err_out;
-			}
-		}
-	}
+	if (!flow_hw_should_create_nat64_actions(priv))
+		return rte_flow_error_set(error, EOPNOTSUPP,
+					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
+					  "NAT64 action is not supported.");
+
 	return 0;
-err_out:
-	return rte_flow_error_set(error, EOPNOTSUPP, RTE_FLOW_ERROR_TYPE_ACTION,
-				  NULL, "NAT64 action is not supported.");
 }
 
 static int
@@ -7231,36 +7387,14 @@ mlx5_flow_hw_actions_validate(struct rte_eth_dev *dev,
 			action_flags |= MLX5_FLOW_ACTION_JUMP;
 			break;
 #ifdef HAVE_MLX5DV_DR_ACTION_CREATE_DEST_ROOT_TABLE
-		case RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL: {
-			bool res;
-
+		case RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL:
 			if (priv->shared_host)
 				return rte_flow_error_set(error, ENOTSUP,
 							  RTE_FLOW_ERROR_TYPE_ACTION,
 							  action,
 							  "action not supported in guest port");
-			if (attr->ingress) {
-				res = priv->hw_send_to_kernel[MLX5DR_TABLE_TYPE_NIC_RX];
-			} else if (attr->egress) {
-				res = priv->hw_send_to_kernel[MLX5DR_TABLE_TYPE_NIC_TX];
-			} else {
-				if (!is_unified_fdb(priv))
-					res = priv->hw_send_to_kernel[MLX5DR_TABLE_TYPE_FDB];
-				else
-					res =
-					    priv->hw_send_to_kernel[MLX5DR_TABLE_TYPE_FDB_RX] &&
-					    priv->hw_send_to_kernel[MLX5DR_TABLE_TYPE_FDB_TX] &&
-					    priv->hw_send_to_kernel[MLX5DR_TABLE_TYPE_FDB_UNIFIED];
-			}
-			if (!res)
-				return rte_flow_error_set(error, ENOTSUP,
-							  RTE_FLOW_ERROR_TYPE_ACTION,
-							  action,
-							  "action is not available");
-
 			action_flags |= MLX5_FLOW_ACTION_SEND_TO_KERNEL;
 			break;
-		}
 #endif
 		case RTE_FLOW_ACTION_TYPE_QUEUE:
 			ret = mlx5_hw_validate_action_queue(dev, action, mask,
@@ -7396,8 +7530,7 @@ mlx5_flow_hw_actions_validate(struct rte_eth_dev *dev,
 			action_flags |= MLX5_FLOW_ACTION_OF_PUSH_VLAN;
 			break;
 		case RTE_FLOW_ACTION_TYPE_NAT64:
-			ret = flow_hw_validate_action_nat64(dev, attr, action, mask,
-							    action_flags, error);
+			ret = flow_hw_validate_action_nat64(dev, error);
 			if (ret != 0)
 				return ret;
 			action_flags |= MLX5_FLOW_ACTION_NAT64;
@@ -7406,8 +7539,7 @@ mlx5_flow_hw_actions_validate(struct rte_eth_dev *dev,
 			actions_end = true;
 			break;
 		case MLX5_RTE_FLOW_ACTION_TYPE_DEFAULT_MISS:
-			ret = flow_hw_validate_action_default_miss(dev, attr,
-								   action_flags, error);
+			ret = flow_hw_validate_action_default_miss(attr, action_flags, error);
 			if (ret < 0)
 				return ret;
 			action_flags |= MLX5_FLOW_ACTION_DEFAULT_MISS;
@@ -8384,23 +8516,132 @@ mlx5_hw_validate_item_nsh(struct rte_eth_dev *dev,
 	return mlx5_flow_validate_item_nsh(dev, item, error);
 }
 
-static bool
-mlx5_hw_flow_tunnel_ip_check(uint64_t last_item, uint64_t *item_flags)
+static inline uint8_t
+mlx5_hw_flow_get_next_protocol(const struct rte_flow_item *item)
 {
-	bool tunnel;
+	if (!item || !item->spec)
+		return 0xff;
 
-	if (last_item == MLX5_FLOW_LAYER_OUTER_L3_IPV4 ||
-	    last_item == MLX5_FLOW_LAYER_OUTER_L3_IPV6) {
-		tunnel = true;
-		*item_flags |= MLX5_FLOW_LAYER_IPIP;
-	} else if (last_item == MLX5_FLOW_LAYER_OUTER_L3_IPV6 ||
-		   last_item == MLX5_FLOW_ITEM_OUTER_IPV6_ROUTING_EXT) {
-		tunnel = true;
-		*item_flags |= MLX5_FLOW_LAYER_IPV6_ENCAP;
-	} else {
-		tunnel = false;
+	switch (item->type) {
+	case RTE_FLOW_ITEM_TYPE_IPV4: {
+		const struct rte_flow_item_ipv4 *spec = item->spec;
+		const struct rte_flow_item_ipv4 *mask = item->mask;
+
+		/* If mask is NULL or next_proto_id field in mask is 0,
+		 * then next_protocol in spec should not be read
+		 */
+		if (!mask || mask->hdr.next_proto_id == 0)
+			return 0xff;
+
+		return spec->hdr.next_proto_id & mask->hdr.next_proto_id;
 	}
-	return tunnel;
+	case RTE_FLOW_ITEM_TYPE_IPV6: {
+		const struct rte_flow_item_ipv6 *spec = item->spec;
+		const struct rte_flow_item_ipv6 *mask = item->mask;
+
+		/* If mask is NULL or proto field in mask is 0,
+		 * then proto in spec should not be read
+		 */
+		if (!mask || mask->hdr.proto == 0)
+			return 0xff;
+
+		return spec->hdr.proto & mask->hdr.proto;
+	}
+	case RTE_FLOW_ITEM_TYPE_IPV6_FRAG_EXT: {
+		const struct rte_flow_item_ipv6_frag_ext *spec = item->spec;
+		const struct rte_flow_item_ipv6_frag_ext *mask = item->mask;
+
+		/* If mask is NULL or next_header field in mask is 0,
+		 * then next_header in spec should not be read
+		 */
+		if (!mask || mask->hdr.next_header == 0)
+			return 0xff;
+
+		return spec->hdr.next_header & mask->hdr.next_header;
+	}
+	default:
+		return 0xff;
+	}
+}
+
+static int
+mlx5_hw_flow_tunnel_ip_check(uint64_t last_item,
+			     const struct rte_flow_item *last_l3_item,
+			     const struct rte_flow_item *item,
+			     uint64_t *item_flags,
+			     struct rte_flow_error *error)
+{
+	uint64_t tunnel_flag = 0;
+	uint8_t outer_protocol;
+
+	/* IP tunnel detection - only single-level tunneling supported */
+	if (last_l3_item && (last_item == MLX5_FLOW_LAYER_OUTER_L3_IPV4 ||
+			     last_item == MLX5_FLOW_LAYER_OUTER_L3_IPV6)) {
+		/*
+		 * Tunnel type determination strategy:
+		 * 1. If previous L3 item has protocol field specified, use it (RFC compliant)
+		 * 2. Otherwise, fall back to inner header type (what's being encapsulated)
+		 */
+		outer_protocol = mlx5_hw_flow_get_next_protocol(last_l3_item);
+
+		if (outer_protocol != 0xff) {
+			/* Proto field specified in outer hdr mask - use RFC-compliant detection */
+			switch (outer_protocol) {
+			case IPPROTO_IPIP:  /* 4 - IP-in-IP */
+				/* Outer header indicates IPv4 payload */
+				if (item->type == RTE_FLOW_ITEM_TYPE_IPV6)
+					return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ITEM, item,
+						"protocol mismatch: outer proto is IPIP but inner is IPv6");
+				tunnel_flag = MLX5_FLOW_LAYER_IPIP;
+				break;
+			case IPPROTO_IPV6:  /* 41 - IPv6-in-IP */
+				/* Outer header indicates IPv6 payload */
+				if (item->type == RTE_FLOW_ITEM_TYPE_IPV4)
+					return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ITEM, item,
+						"protocol mismatch: outer proto is IPV6 but inner is IPv4");
+				tunnel_flag = MLX5_FLOW_LAYER_IPV6_ENCAP;
+				break;
+			default:
+				/* Unknown/unsupported protocol, fall back to inner header type */
+				goto fallback_classification;
+			}
+		} else {
+fallback_classification:
+			/*
+			 * Protocol field not specified or unknown - classify based on
+			 * what is being encapsulated (inner header type)
+			 */
+			if (item->type == RTE_FLOW_ITEM_TYPE_IPV4)
+				tunnel_flag = MLX5_FLOW_LAYER_IPIP;
+			else if (item->type == RTE_FLOW_ITEM_TYPE_IPV6)
+				tunnel_flag = MLX5_FLOW_LAYER_IPV6_ENCAP;
+			else
+				return 0; /* Not an IP item - shouldn't happen, but be defensive */
+		}
+
+		/* Check for unsupported nested tunneling after tunnel is detected */
+		if (*item_flags & MLX5_FLOW_LAYER_TUNNEL)
+			return rte_flow_error_set(error, ENOTSUP,
+						  RTE_FLOW_ERROR_TYPE_ITEM, item,
+						  "multiple tunnel layers not supported");
+
+		*item_flags |= tunnel_flag;
+		return 1; /* Tunnel detected */
+	} else if (last_item == MLX5_FLOW_ITEM_OUTER_IPV6_ROUTING_EXT) {
+		/* Special case: IPv6 routing extension header */
+		/* Check for unsupported nested tunneling */
+		if (*item_flags & MLX5_FLOW_LAYER_TUNNEL)
+			return rte_flow_error_set(error, ENOTSUP,
+						  RTE_FLOW_ERROR_TYPE_ITEM, item,
+						  "multiple tunnel layers not supported");
+
+		*item_flags |= MLX5_FLOW_LAYER_IPV6_ENCAP;
+		return 1; /* Tunnel detected */
+	}
+
+	return 0; /* No tunnel */
 }
 
 const struct rte_flow_item_ipv4 hws_nic_ipv4_mask = {
@@ -8475,6 +8716,7 @@ __flow_hw_pattern_validate(struct rte_eth_dev *dev,
 			 struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
+	const struct rte_flow_item *last_l3_item = NULL;
 	const struct rte_flow_item *item;
 	const struct rte_flow_item *gtp_item = NULL;
 	const struct rte_flow_item *gre_item = NULL;
@@ -8677,21 +8919,28 @@ __flow_hw_pattern_validate(struct rte_eth_dev *dev,
 				    MLX5_FLOW_LAYER_OUTER_VLAN;
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
-			tunnel |= mlx5_hw_flow_tunnel_ip_check(last_item,
-							       item_flags);
+			ret = mlx5_hw_flow_tunnel_ip_check(last_item, last_l3_item, item,
+							   item_flags, error);
+			if (ret < 0)
+				return ret;
+			tunnel |= (ret > 0);
 			ret = mlx5_flow_dv_validate_item_ipv4(dev, item,
-							      *item_flags,
-							      last_item, 0,
-							      &hws_nic_ipv4_mask,
-							      error);
+							*item_flags,
+							last_item, 0,
+							&hws_nic_ipv4_mask,
+							error);
 			if (ret)
 				return ret;
 			last_item = tunnel ? MLX5_FLOW_LAYER_INNER_L3_IPV4 :
-				    MLX5_FLOW_LAYER_OUTER_L3_IPV4;
+				MLX5_FLOW_LAYER_OUTER_L3_IPV4;
+			last_l3_item = item;
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV6:
-			tunnel |= mlx5_hw_flow_tunnel_ip_check(last_item,
-							       item_flags);
+			ret = mlx5_hw_flow_tunnel_ip_check(last_item, last_l3_item, item,
+							item_flags, error);
+			if (ret < 0)
+				return ret;
+			tunnel |= (ret > 0);
 			ret = mlx5_flow_validate_item_ipv6(dev, item,
 							   *item_flags,
 							   last_item, 0,
@@ -8701,6 +8950,7 @@ __flow_hw_pattern_validate(struct rte_eth_dev *dev,
 				return ret;
 			last_item = tunnel ? MLX5_FLOW_LAYER_INNER_L3_IPV6 :
 				    MLX5_FLOW_LAYER_OUTER_L3_IPV6;
+			last_l3_item = item;
 			break;
 		case RTE_FLOW_ITEM_TYPE_UDP:
 			ret = mlx5_flow_validate_item_udp(dev, item,
@@ -9024,6 +9274,7 @@ static struct rte_flow_pattern_template *
 flow_hw_pattern_template_create(struct rte_eth_dev *dev,
 			     const struct rte_flow_pattern_template_attr *attr,
 			     const struct rte_flow_item items[],
+			     bool external,
 			     struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
@@ -9178,9 +9429,11 @@ setup_pattern_template:
 		}
 	}
 	rte_atomic_fetch_add_explicit(&it->refcnt, 1, rte_memory_order_relaxed);
-	rc = pattern_template_validate(dev, &it, 1, error);
-	if (rc)
-		goto error;
+	if (external) {
+		rc = pattern_template_validate(dev, &it, 1, error);
+		if (rc)
+			goto error;
+	}
 	LIST_INSERT_HEAD(&priv->flow_hw_itt, it, next);
 	return it;
 error:
@@ -9197,6 +9450,16 @@ error:
 	if (copied_items)
 		mlx5_free(copied_items);
 	return NULL;
+}
+
+static struct rte_flow_pattern_template *
+flow_hw_external_pattern_template_create
+			(struct rte_eth_dev *dev,
+			 const struct rte_flow_pattern_template_attr *attr,
+			 const struct rte_flow_item items[],
+			 struct rte_flow_error *error)
+{
+	return flow_hw_pattern_template_create(dev, attr, items, true, error);
 }
 
 /**
@@ -9291,7 +9554,7 @@ flow_hw_info_get(struct rte_eth_dev *dev,
  *   Group entry on success, NULL otherwise and rte_errno is set.
  */
 struct mlx5_list_entry *
-flow_hw_grp_create_cb(void *tool_ctx, void *cb_ctx)
+mlx5_flow_hw_grp_create_cb(void *tool_ctx, void *cb_ctx)
 {
 	struct mlx5_dev_ctx_shared *sh = tool_ctx;
 	struct mlx5_flow_cb_ctx *ctx = cb_ctx;
@@ -9349,11 +9612,11 @@ flow_hw_grp_create_cb(void *tool_ctx, void *cb_ctx)
 	}
 
 	grp_data->matchers = mlx5_list_create(matcher_name, sh, true,
-					      flow_matcher_create_cb,
-					      flow_matcher_match_cb,
-					      flow_matcher_remove_cb,
-					      flow_matcher_clone_cb,
-					      flow_matcher_clone_free_cb);
+					      mlx5_flow_matcher_create_cb,
+					      mlx5_flow_matcher_match_cb,
+					      mlx5_flow_matcher_remove_cb,
+					      mlx5_flow_matcher_clone_cb,
+					      mlx5_flow_matcher_clone_free_cb);
 	grp_data->dev = dev;
 	grp_data->idx = idx;
 	grp_data->group_id = attr->group;
@@ -9384,7 +9647,7 @@ error:
  *   Pointer to the entry to be removed.
  */
 void
-flow_hw_grp_remove_cb(void *tool_ctx, struct mlx5_list_entry *entry)
+mlx5_flow_hw_grp_remove_cb(void *tool_ctx, struct mlx5_list_entry *entry)
 {
 	struct mlx5_dev_ctx_shared *sh = tool_ctx;
 	struct mlx5_flow_group *grp_data =
@@ -9415,8 +9678,8 @@ flow_hw_grp_remove_cb(void *tool_ctx, struct mlx5_list_entry *entry)
  *   0 on matched, 1 on miss matched.
  */
 int
-flow_hw_grp_match_cb(void *tool_ctx __rte_unused, struct mlx5_list_entry *entry,
-		     void *cb_ctx)
+mlx5_flow_hw_grp_match_cb(void *tool_ctx __rte_unused, struct mlx5_list_entry *entry,
+			  void *cb_ctx)
 {
 	struct mlx5_flow_cb_ctx *ctx = cb_ctx;
 	struct mlx5_flow_group *grp_data =
@@ -9448,12 +9711,13 @@ flow_hw_grp_match_cb(void *tool_ctx __rte_unused, struct mlx5_list_entry *entry,
  *   0 on matched, 1 on miss matched.
  */
 struct mlx5_list_entry *
-flow_hw_grp_clone_cb(void *tool_ctx, struct mlx5_list_entry *oentry,
-		     void *cb_ctx)
+mlx5_flow_hw_grp_clone_cb(void *tool_ctx, struct mlx5_list_entry *oentry,
+			  void *cb_ctx)
 {
 	struct mlx5_dev_ctx_shared *sh = tool_ctx;
 	struct mlx5_flow_cb_ctx *ctx = cb_ctx;
 	struct mlx5_flow_group *grp_data;
+	struct mlx5_flow_group *old_grp_data;
 	struct rte_flow_error *error = ctx->error;
 	uint32_t idx = 0;
 
@@ -9465,7 +9729,8 @@ flow_hw_grp_clone_cb(void *tool_ctx, struct mlx5_list_entry *oentry,
 				   "cannot allocate flow table data entry");
 		return NULL;
 	}
-	memcpy(grp_data, oentry, sizeof(*grp_data));
+	old_grp_data = container_of(oentry, typeof(*old_grp_data), entry);
+	memcpy(grp_data, old_grp_data, sizeof(*grp_data));
 	grp_data->idx = idx;
 	return &grp_data->entry;
 }
@@ -9479,7 +9744,7 @@ flow_hw_grp_clone_cb(void *tool_ctx, struct mlx5_list_entry *oentry,
  *   Pointer to the group to be freed.
  */
 void
-flow_hw_grp_clone_free_cb(void *tool_ctx, struct mlx5_list_entry *entry)
+mlx5_flow_hw_grp_clone_free_cb(void *tool_ctx, struct mlx5_list_entry *entry)
 {
 	struct mlx5_dev_ctx_shared *sh = tool_ctx;
 	struct mlx5_flow_group *grp_data =
@@ -9505,7 +9770,7 @@ flow_hw_grp_clone_free_cb(void *tool_ctx, struct mlx5_list_entry *entry)
  *   0 on success, positive value otherwise.
  */
 int
-flow_hw_create_vport_action(struct rte_eth_dev *dev)
+mlx5_flow_hw_create_vport_action(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_eth_dev *proxy_dev;
@@ -9555,7 +9820,7 @@ flow_hw_create_vport_action(struct rte_eth_dev *dev)
  *   Pointer to Ethernet device which will be the action destination.
  */
 void
-flow_hw_destroy_vport_action(struct rte_eth_dev *dev)
+mlx5_flow_hw_destroy_vport_action(struct rte_eth_dev *dev)
 {
 	struct rte_eth_dev *proxy_dev;
 	struct mlx5_priv *proxy_priv;
@@ -9623,55 +9888,6 @@ flow_hw_free_vport_actions(struct mlx5_priv *priv)
 	priv->hw_vport = NULL;
 }
 
-#ifdef HAVE_MLX5DV_DR_ACTION_CREATE_DEST_ROOT_TABLE
-static __rte_always_inline void
-_create_send_to_kernel_actions(struct mlx5_priv *priv, int type)
-{
-	int action_flag;
-
-	action_flag = mlx5_hw_act_flag[1][type];
-	priv->hw_send_to_kernel[type] =
-		mlx5dr_action_create_dest_root(priv->dr_ctx,
-				MLX5_HW_LOWEST_PRIO_ROOT,
-				action_flag);
-	if (!priv->hw_send_to_kernel[type])
-		DRV_LOG(WARNING, "Unable to create HWS send to kernel action");
-}
-#endif
-
-static void
-flow_hw_create_send_to_kernel_actions(__rte_unused struct mlx5_priv *priv,
-				      __rte_unused bool is_proxy)
-{
-#ifdef HAVE_MLX5DV_DR_ACTION_CREATE_DEST_ROOT_TABLE
-	int i, from, to;
-	bool unified_fdb = is_unified_fdb(priv);
-
-	for (i = MLX5DR_TABLE_TYPE_NIC_RX; i <= MLX5DR_TABLE_TYPE_NIC_TX; i++)
-		_create_send_to_kernel_actions(priv, i);
-
-	if (is_proxy) {
-		from = unified_fdb ? MLX5DR_TABLE_TYPE_FDB_RX : MLX5DR_TABLE_TYPE_FDB;
-		to = unified_fdb ? MLX5DR_TABLE_TYPE_FDB_UNIFIED : MLX5DR_TABLE_TYPE_FDB;
-		for (i = from; i <= to; i++)
-			_create_send_to_kernel_actions(priv, i);
-	}
-#endif
-}
-
-static void
-flow_hw_destroy_send_to_kernel_action(struct mlx5_priv *priv)
-{
-	int i;
-
-	for (i = MLX5DR_TABLE_TYPE_NIC_RX; i < MLX5DR_TABLE_TYPE_MAX; i++) {
-		if (priv->hw_send_to_kernel[i]) {
-			mlx5dr_action_destroy(priv->hw_send_to_kernel[i]);
-			priv->hw_send_to_kernel[i] = NULL;
-		}
-	}
-}
-
 static bool
 flow_hw_should_create_nat64_actions(struct mlx5_priv *priv)
 {
@@ -9683,94 +9899,6 @@ flow_hw_should_create_nat64_actions(struct mlx5_priv *priv)
 			return false;
 
 	return true;
-}
-
-static void
-flow_hw_destroy_nat64_actions(struct mlx5_priv *priv)
-{
-	uint32_t i;
-
-	for (i = MLX5DR_TABLE_TYPE_NIC_RX; i < MLX5DR_TABLE_TYPE_MAX; i++) {
-		if (priv->action_nat64[i][RTE_FLOW_NAT64_6TO4]) {
-			(void)mlx5dr_action_destroy(priv->action_nat64[i][RTE_FLOW_NAT64_6TO4]);
-			priv->action_nat64[i][RTE_FLOW_NAT64_6TO4] = NULL;
-		}
-		if (priv->action_nat64[i][RTE_FLOW_NAT64_4TO6]) {
-			(void)mlx5dr_action_destroy(priv->action_nat64[i][RTE_FLOW_NAT64_4TO6]);
-			priv->action_nat64[i][RTE_FLOW_NAT64_4TO6] = NULL;
-		}
-	}
-}
-
-static int
-_create_nat64_actions(struct mlx5_priv *priv,
-		      struct mlx5dr_action_nat64_attr *attr,
-		      int type,
-		      struct rte_flow_error *error)
-{
-	const uint32_t flags[MLX5DR_TABLE_TYPE_MAX] = {
-		MLX5DR_ACTION_FLAG_HWS_RX | MLX5DR_ACTION_FLAG_SHARED,
-		MLX5DR_ACTION_FLAG_HWS_TX | MLX5DR_ACTION_FLAG_SHARED,
-		MLX5DR_ACTION_FLAG_HWS_FDB | MLX5DR_ACTION_FLAG_SHARED,
-		MLX5DR_ACTION_FLAG_HWS_FDB_RX | MLX5DR_ACTION_FLAG_SHARED,
-		MLX5DR_ACTION_FLAG_HWS_FDB_TX | MLX5DR_ACTION_FLAG_SHARED,
-		MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED | MLX5DR_ACTION_FLAG_SHARED,
-	};
-	struct mlx5dr_action *act;
-
-	attr->flags = (enum mlx5dr_action_nat64_flags)
-		(MLX5DR_ACTION_NAT64_V6_TO_V4 | MLX5DR_ACTION_NAT64_BACKUP_ADDR);
-	act = mlx5dr_action_create_nat64(priv->dr_ctx, attr, flags[type]);
-	if (!act)
-		return rte_flow_error_set(error, rte_errno,
-				RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-				"Failed to create v6 to v4 action.");
-	priv->action_nat64[type][RTE_FLOW_NAT64_6TO4] = act;
-	attr->flags = (enum mlx5dr_action_nat64_flags)
-		(MLX5DR_ACTION_NAT64_V4_TO_V6 | MLX5DR_ACTION_NAT64_BACKUP_ADDR);
-	act = mlx5dr_action_create_nat64(priv->dr_ctx, attr, flags[type]);
-	if (!act)
-		return rte_flow_error_set(error, rte_errno,
-				RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
-				"Failed to create v4 to v6 action.");
-	priv->action_nat64[type][RTE_FLOW_NAT64_4TO6] = act;
-	return 0;
-}
-
-static int
-flow_hw_create_nat64_actions(struct mlx5_priv *priv, struct rte_flow_error *error)
-{
-	struct mlx5dr_action_nat64_attr attr;
-	uint8_t regs[MLX5_FLOW_NAT64_REGS_MAX];
-	uint32_t i, from, to;
-	int rc;
-	bool unified_fdb = is_unified_fdb(priv);
-
-	attr.registers = regs;
-	/* Try to use 3 registers by default. */
-	attr.num_of_registers = MLX5_FLOW_NAT64_REGS_MAX;
-	for (i = 0; i < MLX5_FLOW_NAT64_REGS_MAX; i++) {
-		MLX5_ASSERT(priv->sh->registers.nat64_regs[i] != REG_NON);
-		regs[i] = mlx5_convert_reg_to_field(priv->sh->registers.nat64_regs[i]);
-	}
-	for (i = MLX5DR_TABLE_TYPE_NIC_RX; i <= MLX5DR_TABLE_TYPE_NIC_TX; i++) {
-		rc = _create_nat64_actions(priv, &attr, i, error);
-		if (rc)
-			return rc;
-	}
-	if (priv->sh->config.dv_esw_en) {
-		from = unified_fdb ? MLX5DR_TABLE_TYPE_FDB_RX :
-					MLX5DR_TABLE_TYPE_FDB;
-		to = unified_fdb ? MLX5DR_TABLE_TYPE_FDB_UNIFIED :
-			MLX5DR_TABLE_TYPE_FDB;
-
-		for (i = from; i <= to; i++) {
-			rc = _create_nat64_actions(priv, &attr, i, error);
-			if (rc)
-				return rc;
-		}
-	}
-	return 0;
 }
 
 /**
@@ -9804,7 +9932,7 @@ flow_hw_create_tx_repr_sq_pattern_tmpl(struct rte_eth_dev *dev, struct rte_flow_
 		},
 	};
 
-	return flow_hw_pattern_template_create(dev, &attr, items, error);
+	return flow_hw_pattern_template_create(dev, &attr, items, false, error);
 }
 
 static __rte_always_inline uint32_t
@@ -10096,7 +10224,7 @@ flow_hw_create_ctrl_esw_mgr_pattern_template(struct rte_eth_dev *dev,
 		},
 	};
 
-	return flow_hw_pattern_template_create(dev, &attr, items, error);
+	return flow_hw_pattern_template_create(dev, &attr, items, false, error);
 }
 
 /**
@@ -10150,7 +10278,7 @@ flow_hw_create_ctrl_regc_sq_pattern_template(struct rte_eth_dev *dev,
 		},
 	};
 
-	return flow_hw_pattern_template_create(dev, &attr, items, error);
+	return flow_hw_pattern_template_create(dev, &attr, items, false, error);
 }
 
 /**
@@ -10187,7 +10315,7 @@ flow_hw_create_ctrl_port_pattern_template(struct rte_eth_dev *dev,
 		},
 	};
 
-	return flow_hw_pattern_template_create(dev, &attr, items, error);
+	return flow_hw_pattern_template_create(dev, &attr, items, false, error);
 }
 
 /*
@@ -10223,7 +10351,8 @@ flow_hw_create_lacp_rx_pattern_template(struct rte_eth_dev *dev, struct rte_flow
 			.type = RTE_FLOW_ITEM_TYPE_END,
 		},
 	};
-	return flow_hw_pattern_template_create(dev, &pa_attr, eth_all, error);
+	return flow_hw_pattern_template_create(dev, &pa_attr, eth_all,
+					       false, error);
 }
 
 /**
@@ -11117,73 +11246,6 @@ err:
 	return ret;
 }
 
-static void
-flow_hw_destroy_vlan(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	enum mlx5dr_table_type i;
-
-	for (i = MLX5DR_TABLE_TYPE_NIC_RX; i < MLX5DR_TABLE_TYPE_MAX; i++) {
-		if (priv->hw_pop_vlan[i]) {
-			mlx5dr_action_destroy(priv->hw_pop_vlan[i]);
-			priv->hw_pop_vlan[i] = NULL;
-		}
-		if (priv->hw_push_vlan[i]) {
-			mlx5dr_action_destroy(priv->hw_push_vlan[i]);
-			priv->hw_push_vlan[i] = NULL;
-		}
-	}
-}
-
-static int
-_create_vlan(struct mlx5_priv *priv, enum mlx5dr_table_type type)
-{
-	const enum mlx5dr_action_flags flags[MLX5DR_TABLE_TYPE_MAX] = {
-		MLX5DR_ACTION_FLAG_HWS_RX,
-		MLX5DR_ACTION_FLAG_HWS_TX,
-		MLX5DR_ACTION_FLAG_HWS_FDB,
-		MLX5DR_ACTION_FLAG_HWS_FDB_RX,
-		MLX5DR_ACTION_FLAG_HWS_FDB_TX,
-		MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED,
-	};
-
-	/* rte_errno is set in the mlx5dr_action* functions. */
-	priv->hw_pop_vlan[type] =
-		mlx5dr_action_create_pop_vlan(priv->dr_ctx, flags[type]);
-	if (!priv->hw_pop_vlan[type])
-		return -rte_errno;
-	priv->hw_push_vlan[type] =
-		mlx5dr_action_create_push_vlan(priv->dr_ctx, flags[type]);
-	if (!priv->hw_push_vlan[type])
-		return -rte_errno;
-	return 0;
-}
-
-static int
-flow_hw_create_vlan(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	enum mlx5dr_table_type i, from, to;
-	int rc;
-	bool unified_fdb = is_unified_fdb(priv);
-
-	for (i = MLX5DR_TABLE_TYPE_NIC_RX; i <= MLX5DR_TABLE_TYPE_NIC_TX; i++) {
-		rc = _create_vlan(priv, i);
-		if (rc)
-			return rc;
-	}
-	from = unified_fdb ? MLX5DR_TABLE_TYPE_FDB_RX : MLX5DR_TABLE_TYPE_FDB;
-	to = unified_fdb ? MLX5DR_TABLE_TYPE_FDB_UNIFIED : MLX5DR_TABLE_TYPE_FDB;
-	if (priv->sh->config.dv_esw_en && priv->master) {
-		for (i = from; i <= to; i++) {
-			rc = _create_vlan(priv, i);
-			if (rc)
-				return rc;
-		}
-	}
-	return 0;
-}
-
 void
 mlx5_flow_hw_cleanup_ctrl_rx_tables(struct rte_eth_dev *dev)
 {
@@ -11467,7 +11529,7 @@ flow_hw_create_ctrl_rx_pattern_template
 		{ .type = RTE_FLOW_ITEM_TYPE_END }
 	};
 
-	return flow_hw_pattern_template_create(dev, &attr, items, NULL);
+	return flow_hw_pattern_template_create(dev, &attr, items, false, NULL);
 }
 
 int
@@ -11691,7 +11753,7 @@ flow_hw_action_template_drop_init(struct rte_eth_dev *dev,
 }
 
 static void
-__flow_hw_resource_release(struct rte_eth_dev *dev, bool ctx_close)
+__mlx5_flow_hw_resource_release(struct rte_eth_dev *dev, bool ctx_close)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_flow_template_table *tbl, *temp_tbl;
@@ -11700,7 +11762,7 @@ __flow_hw_resource_release(struct rte_eth_dev *dev, bool ctx_close)
 	struct mlx5_flow_group *grp, *temp_grp;
 	uint32_t i;
 
-	flow_hw_rxq_flag_set(dev, false);
+	mlx5_flow_hw_rxq_flag_set(dev, false);
 	flow_hw_flush_all_ctrl_flows(dev);
 	flow_hw_cleanup_ctrl_fdb_tables(dev);
 	flow_hw_cleanup_ctrl_nic_tables(dev);
@@ -11736,17 +11798,6 @@ __flow_hw_resource_release(struct rte_eth_dev *dev, bool ctx_close)
 		claim_zero(flow_hw_actions_template_destroy(dev, at, NULL));
 		at = temp_at;
 	}
-	for (i = 0; i < MLX5_HW_ACTION_FLAG_MAX; i++) {
-		if (priv->hw_drop[i])
-			mlx5dr_action_destroy(priv->hw_drop[i]);
-		if (priv->hw_tag[i])
-			mlx5dr_action_destroy(priv->hw_tag[i]);
-	}
-	if (priv->hw_def_miss)
-		mlx5dr_action_destroy(priv->hw_def_miss);
-	flow_hw_destroy_nat64_actions(priv);
-	flow_hw_destroy_vlan(dev);
-	flow_hw_destroy_send_to_kernel_action(priv);
 	flow_hw_free_vport_actions(priv);
 	if (priv->acts_ipool) {
 		mlx5_ipool_destroy(priv->acts_ipool);
@@ -11767,6 +11818,7 @@ __flow_hw_resource_release(struct rte_eth_dev *dev, bool ctx_close)
 		priv->ct_mng = NULL;
 	}
 	mlx5_flow_quota_destroy(dev);
+	mlx5_hws_global_actions_cleanup(priv);
 	if (priv->hw_q) {
 		for (i = 0; i < priv->nb_queue; i++) {
 			struct mlx5_hw_q *hwq = &priv->hw_q[i];
@@ -11805,6 +11857,60 @@ mlx5_hwq_ring_create(uint16_t port_id, uint32_t queue, uint32_t size, const char
 	snprintf(mz_name, sizeof(mz_name), "port_%u_%s_%u", port_id, str, queue);
 	return rte_ring_create(mz_name, size, SOCKET_ID_ANY,
 			       RING_F_SP_ENQ | RING_F_SC_DEQ | RING_F_EXACT_SZ);
+}
+
+static int
+flow_hw_queue_setup_rings(struct rte_eth_dev *dev,
+			  uint16_t queue,
+			  uint32_t queue_size,
+			  bool nt_mode)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	/* HWS queue info container must be already allocated. */
+	MLX5_ASSERT(priv->hw_q != NULL);
+
+	/* Notice ring name length is limited. */
+	priv->hw_q[queue].indir_cq = mlx5_hwq_ring_create
+		(dev->data->port_id, queue, queue_size, "indir_act_cq");
+	if (!priv->hw_q[queue].indir_cq) {
+		DRV_LOG(ERR, "port %u failed to allocate indir_act_cq ring for HWS",
+			dev->data->port_id);
+		return -ENOMEM;
+	}
+
+	priv->hw_q[queue].indir_iq = mlx5_hwq_ring_create
+		(dev->data->port_id, queue, queue_size, "indir_act_iq");
+	if (!priv->hw_q[queue].indir_iq) {
+		DRV_LOG(ERR, "port %u failed to allocate indir_act_iq ring for HWS",
+			dev->data->port_id);
+		return -ENOMEM;
+	}
+
+	/*
+	 * Sync flow API does not require rings used for table resize handling,
+	 * because these rings are only used through async flow APIs.
+	 */
+	if (nt_mode)
+		return 0;
+
+	priv->hw_q[queue].flow_transfer_pending = mlx5_hwq_ring_create
+		(dev->data->port_id, queue, queue_size, "tx_pending");
+	if (!priv->hw_q[queue].flow_transfer_pending) {
+		DRV_LOG(ERR, "port %u failed to allocate tx_pending ring for HWS",
+			dev->data->port_id);
+		return -ENOMEM;
+	}
+
+	priv->hw_q[queue].flow_transfer_completed = mlx5_hwq_ring_create
+		(dev->data->port_id, queue, queue_size, "tx_done");
+	if (!priv->hw_q[queue].flow_transfer_completed) {
+		DRV_LOG(ERR, "port %u failed to allocate tx_done ring for HWS",
+			dev->data->port_id);
+		return -ENOMEM;
+	}
+
+	return 0;
 }
 
 static int
@@ -11889,9 +11995,7 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 	struct rte_flow_queue_attr **_queue_attr = NULL;
 	struct rte_flow_queue_attr ctrl_queue_attr = {0};
 	bool is_proxy = !!(priv->sh->config.dv_esw_en && priv->master);
-	bool unified_fdb = is_unified_fdb(priv);
 	int ret = 0;
-	uint32_t action_flags;
 	bool strict_queue = false;
 
 	error->type = RTE_FLOW_ERROR_TYPE_NONE;
@@ -11927,7 +12031,7 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 							"is not supported");
 		}
 		/* Reconfiguration, need to release all resources from previous allocation. */
-		__flow_hw_resource_release(dev, true);
+		__mlx5_flow_hw_resource_release(dev, true);
 	}
 	priv->hw_attr = flow_hw_alloc_copy_config(port_attr, nb_queue, queue_attr, nt_mode, error);
 	if (!priv->hw_attr) {
@@ -11975,22 +12079,8 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 		      &priv->hw_q[i].job[_queue_attr[i]->size];
 		for (j = 0; j < _queue_attr[i]->size; j++)
 			priv->hw_q[i].job[j] = &job[j];
-		/* Notice ring name length is limited. */
-		priv->hw_q[i].indir_cq = mlx5_hwq_ring_create
-			(dev->data->port_id, i, _queue_attr[i]->size, "indir_act_cq");
-		if (!priv->hw_q[i].indir_cq)
-			goto err;
-		priv->hw_q[i].indir_iq = mlx5_hwq_ring_create
-			(dev->data->port_id, i, _queue_attr[i]->size, "indir_act_iq");
-		if (!priv->hw_q[i].indir_iq)
-			goto err;
-		priv->hw_q[i].flow_transfer_pending = mlx5_hwq_ring_create
-			(dev->data->port_id, i, _queue_attr[i]->size, "tx_pending");
-		if (!priv->hw_q[i].flow_transfer_pending)
-			goto err;
-		priv->hw_q[i].flow_transfer_completed = mlx5_hwq_ring_create
-			(dev->data->port_id, i, _queue_attr[i]->size, "tx_done");
-		if (!priv->hw_q[i].flow_transfer_completed)
+
+		if (flow_hw_queue_setup_rings(dev, i, _queue_attr[i]->size, nt_mode) < 0)
 			goto err;
 	}
 	dr_ctx_attr.pd = priv->sh->cdev->pd;
@@ -12075,65 +12165,11 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 	if (port_attr->nb_meters || (host_priv && host_priv->hws_mpool))
 		if (mlx5_flow_meter_init(dev, port_attr->nb_meters, 0, 0, nb_q_updated))
 			goto err;
-	/* Add global actions. */
-	for (i = 0; i < MLX5_HW_ACTION_FLAG_MAX; i++) {
-		uint32_t act_flags = 0;
-		uint32_t tag_flags = mlx5_hw_act_flag[i][0];
-		bool tag_fdb_rx = !!priv->sh->cdev->config.hca_attr.fdb_rx_set_flow_tag_stc;
-
-		act_flags = mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_NIC_RX] |
-			    mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_NIC_TX];
-		if (is_proxy) {
-			if (unified_fdb) {
-				act_flags |=
-					(mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_FDB_RX] |
-					 mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_FDB_TX] |
-					 mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_FDB_UNIFIED]);
-				if (i == MLX5_HW_ACTION_FLAG_NONE_ROOT && tag_fdb_rx)
-					tag_flags |= mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_FDB_RX];
-			} else {
-				act_flags |= mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_FDB];
-				if (i == MLX5_HW_ACTION_FLAG_NONE_ROOT && tag_fdb_rx)
-					tag_flags |= mlx5_hw_act_flag[i][MLX5DR_TABLE_TYPE_FDB];
-			}
-		}
-		priv->hw_drop[i] = mlx5dr_action_create_dest_drop(priv->dr_ctx, act_flags);
-		if (!priv->hw_drop[i])
-			goto err;
-		priv->hw_tag[i] = mlx5dr_action_create_tag
-			(priv->dr_ctx, tag_flags);
-		if (!priv->hw_tag[i])
-			goto err;
-	}
 	if (priv->sh->config.dv_esw_en) {
 		ret = flow_hw_setup_tx_repr_tagging(dev, error);
 		if (ret)
 			goto err;
 	}
-	/*
-	 * DEFAULT_MISS action have different behaviors in different domains.
-	 * In FDB, it will steering the packets to the E-switch manager.
-	 * In NIC Rx root, it will steering the packet to the kernel driver stack.
-	 * An action with all bits set in the flag can be created and the HWS
-	 * layer will translate it properly when being used in different rules.
-	 */
-	action_flags = MLX5DR_ACTION_FLAG_ROOT_RX | MLX5DR_ACTION_FLAG_HWS_RX |
-		       MLX5DR_ACTION_FLAG_ROOT_TX | MLX5DR_ACTION_FLAG_HWS_TX;
-	if (is_proxy) {
-		if (unified_fdb)
-			action_flags |=
-				(MLX5DR_ACTION_FLAG_ROOT_FDB |
-				 MLX5DR_ACTION_FLAG_HWS_FDB_RX |
-				 MLX5DR_ACTION_FLAG_HWS_FDB_TX |
-				 MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED);
-		else
-			action_flags |=
-				(MLX5DR_ACTION_FLAG_ROOT_FDB |
-				 MLX5DR_ACTION_FLAG_HWS_FDB);
-	}
-	priv->hw_def_miss = mlx5dr_action_create_default_miss(priv->dr_ctx, action_flags);
-	if (!priv->hw_def_miss)
-		goto err;
 	if (is_proxy) {
 		ret = flow_hw_create_vport_actions(priv);
 		if (ret) {
@@ -12154,8 +12190,6 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 			goto err;
 		}
 	}
-	if (!priv->shared_host)
-		flow_hw_create_send_to_kernel_actions(priv, is_proxy);
 	if (port_attr->nb_conn_tracks || (host_priv && host_priv->hws_ctpool)) {
 		if (mlx5_flow_ct_init(dev, port_attr->nb_conn_tracks, nb_q_updated))
 			goto err;
@@ -12194,20 +12228,6 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 		if (ret < 0)
 			goto err;
 	}
-	ret = flow_hw_create_vlan(dev);
-	if (ret) {
-		rte_flow_error_set(error, -ret, RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-				   NULL, "Failed to VLAN actions.");
-		goto err;
-	}
-	if (flow_hw_should_create_nat64_actions(priv)) {
-		if (flow_hw_create_nat64_actions(priv, error))
-			goto err;
-	} else {
-		DRV_LOG(WARNING, "Cannot create NAT64 action on port %u, "
-			"please check the FW version. NAT64 will not be supported.",
-			dev->data->port_id);
-	}
 	if (_queue_attr)
 		mlx5_free(_queue_attr);
 	if (port_attr->flags & RTE_FLOW_PORT_FLAG_STRICT_QUEUE)
@@ -12215,7 +12235,7 @@ __flow_hw_configure(struct rte_eth_dev *dev,
 	dev->flow_fp_ops = &mlx5_flow_hw_fp_ops;
 	return 0;
 err:
-	__flow_hw_resource_release(dev, true);
+	__mlx5_flow_hw_resource_release(dev, true);
 	if (_queue_attr)
 		mlx5_free(_queue_attr);
 	/* Do not overwrite the internal errno information. */
@@ -12264,18 +12284,18 @@ flow_hw_configure(struct rte_eth_dev *dev,
  *   Pointer to the rte_eth_dev structure.
  */
 void
-flow_hw_resource_release(struct rte_eth_dev *dev)
+mlx5_flow_hw_resource_release(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
 	if (!priv->dr_ctx)
 		return;
-	__flow_hw_resource_release(dev, false);
+	__mlx5_flow_hw_resource_release(dev, false);
 }
 
 /* Sets vport tag and mask, for given port, used in HWS rules. */
 void
-flow_hw_set_port_info(struct rte_eth_dev *dev)
+mlx5_flow_hw_set_port_info(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	uint16_t port_id = dev->data->port_id;
@@ -12290,7 +12310,7 @@ flow_hw_set_port_info(struct rte_eth_dev *dev)
 
 /* Clears vport tag and mask used for HWS rules. */
 void
-flow_hw_clear_port_info(struct rte_eth_dev *dev)
+mlx5_flow_hw_clear_port_info(struct rte_eth_dev *dev)
 {
 	uint16_t port_id = dev->data->port_id;
 	struct flow_hw_port_info *info;
@@ -12537,7 +12557,7 @@ flow_hw_action_handle_validate(struct rte_eth_dev *dev, uint32_t queue,
 	case RTE_FLOW_ACTION_TYPE_METER_MARK:
 		return flow_hw_validate_action_meter_mark(dev, action, true, error);
 	case RTE_FLOW_ACTION_TYPE_RSS:
-		return flow_dv_action_validate(dev, conf, action, error);
+		return mlx5_flow_dv_action_validate(dev, conf, action, error);
 	case RTE_FLOW_ACTION_TYPE_QUOTA:
 		return 0;
 	default:
@@ -12649,12 +12669,13 @@ flow_hw_action_handle_create(struct rte_eth_dev *dev, uint32_t queue,
 	struct mlx5_hw_q_job *job = NULL;
 	struct mlx5_priv *priv = dev->data->dev_private;
 	const struct rte_flow_action_age *age;
-	struct mlx5_aso_mtr *aso_mtr;
+	struct mlx5_aso_mtr *aso_mtr = NULL;
 	cnt_id_t cnt_id;
 	uint32_t age_idx;
 	bool push = flow_hw_action_push(attr);
 	bool aso = false;
 	bool force_job = action->type == RTE_FLOW_ACTION_TYPE_METER_MARK;
+	int ret;
 
 	if (!mlx5_hw_ctx_validate(dev, error))
 		return NULL;
@@ -12710,13 +12731,19 @@ flow_hw_action_handle_create(struct rte_eth_dev *dev, uint32_t queue,
 		break;
 	case RTE_FLOW_ACTION_TYPE_METER_MARK:
 		aso = true;
-		aso_mtr = flow_hw_meter_mark_alloc(dev, queue, action, job, push, error);
-		if (!aso_mtr)
+		ret = flow_hw_meter_mark_alloc(dev, queue, action, job, push, &aso_mtr, error);
+		if (ret) {
+			if (ret != -EIO) {
+				if (queue == MLX5_HW_INV_QUEUE)
+					queue = CTRL_QUEUE_ID(priv);
+				flow_hw_job_put(priv, job, queue);
+			}
 			break;
+		}
 		handle = (void *)(uintptr_t)job->action;
 		break;
 	case RTE_FLOW_ACTION_TYPE_RSS:
-		handle = flow_dv_action_create(dev, conf, action, error);
+		handle = mlx5_flow_dv_action_create(dev, conf, action, error);
 		break;
 	case RTE_FLOW_ACTION_TYPE_QUOTA:
 		aso = true;
@@ -12728,7 +12755,7 @@ flow_hw_action_handle_create(struct rte_eth_dev *dev, uint32_t queue,
 				   NULL, "action type not supported");
 		break;
 	}
-	if (job && !force_job) {
+	if (job && (!force_job || handle)) {
 		job->action = handle;
 		flow_hw_action_finalize(dev, queue, job, push, aso,
 					handle != NULL);
@@ -12841,7 +12868,7 @@ flow_hw_action_handle_update(struct rte_eth_dev *dev, uint32_t queue,
 						  job, error);
 		break;
 	case MLX5_INDIRECT_ACTION_TYPE_RSS:
-		ret = flow_dv_action_update(dev, handle, update, error);
+		ret = mlx5_flow_dv_action_update(dev, handle, update, error);
 		break;
 	case MLX5_INDIRECT_ACTION_TYPE_QUOTA:
 		aso = true;
@@ -12959,7 +12986,7 @@ flow_hw_action_handle_destroy(struct rte_eth_dev *dev, uint32_t queue,
 		aso = true;
 		break;
 	case MLX5_INDIRECT_ACTION_TYPE_RSS:
-		ret = flow_dv_action_destroy(dev, handle, error);
+		ret = mlx5_flow_dv_action_destroy(dev, handle, error);
 		break;
 	case MLX5_INDIRECT_ACTION_TYPE_QUOTA:
 		break;
@@ -13453,8 +13480,8 @@ flow_hw_get_aged_flows(struct rte_eth_dev *dev, void **contexts,
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-flow_hw_init(struct rte_eth_dev *dev,
-	     struct rte_flow_error *error)
+mlx5_flow_hw_init(struct rte_eth_dev *dev,
+		  struct rte_flow_error *error)
 {
 	const struct rte_flow_port_attr port_attr = {0};
 	const struct rte_flow_queue_attr queue_attr = {.size = MLX5_NT_DEFAULT_QUEUE_SIZE};
@@ -13557,7 +13584,7 @@ flow_hw_modify_hdr_resource_register
 			      &dummy.dv_resource.root, &dummy.dv_resource.ft_type,
 			      &dummy.dv_resource.flags);
 	dummy.dv_resource.flags |= MLX5DR_ACTION_FLAG_SHARED;
-	ret = __flow_modify_hdr_resource_register(dev, &dummy.dv_resource,
+	ret = mlx5_flow_modify_hdr_resource_register(dev, &dummy.dv_resource,
 		&dv_resource_ptr, error);
 	if (ret)
 		return ret;
@@ -13612,7 +13639,7 @@ flow_hw_encap_decap_resource_register
 		MLX5_ASSERT(dv_resource.size <= MLX5_ENCAP_MAX_LEN);
 		memcpy(&dv_resource.buf, reformat->reformat_hdr->data, dv_resource.size);
 	}
-	ret = __flow_encap_decap_resource_register(dev, &dv_resource, is_root,
+	ret = mlx5_flow_encap_decap_resource_register(dev, &dv_resource, is_root,
 		&dv_resource_ptr, error);
 	if (ret)
 		return ret;
@@ -14015,7 +14042,7 @@ static int flow_hw_apply(const struct rte_flow_item items[],
  *   0 on success, negative errno value otherwise and rte_errno set.
  */
 int
-flow_hw_create_flow(struct rte_eth_dev *dev, enum mlx5_flow_type type,
+mlx5_flow_hw_create_flow(struct rte_eth_dev *dev, enum mlx5_flow_type type,
 		    const struct rte_flow_attr *attr,
 		    const struct rte_flow_item items[],
 		    const struct rte_flow_action actions[],
@@ -14057,9 +14084,9 @@ flow_hw_create_flow(struct rte_eth_dev *dev, enum mlx5_flow_type type,
 	/* TODO TBD flow_hw_handle_tunnel_offload(). */
 	(*flow)->nt_rule = true;
 	(*flow)->nt2hws->matcher = &matcher;
-	ret = __flow_dv_translate_items_hws(items, &flow_attr, &matcher.mask.buf,
-					    MLX5_SET_MATCHER_HS_M, NULL,
-					    NULL, true, error);
+	ret = mlx5_flow_dv_translate_items_hws_impl(items, &flow_attr, &matcher.mask.buf,
+						    MLX5_SET_MATCHER_HS_M, NULL,
+						    NULL, true, error);
 
 	if (ret)
 		goto error;
@@ -14126,7 +14153,7 @@ error:
 #endif
 
 void
-flow_hw_destroy(struct rte_eth_dev *dev, struct rte_flow_hw *flow)
+mlx5_flow_hw_destroy(struct rte_eth_dev *dev, struct rte_flow_hw *flow)
 {
 	int ret;
 	struct mlx5_priv *priv = dev->data->dev_private;
@@ -14156,7 +14183,7 @@ flow_hw_destroy(struct rte_eth_dev *dev, struct rte_flow_hw *flow)
 	if (flow->nt2hws->flow_aux)
 		flow->nt2hws->flow_aux = NULL;
 	if (flow->nt2hws->rix_encap_decap) {
-		flow_encap_decap_resource_release(dev, flow->nt2hws->rix_encap_decap);
+		mlx5_flow_encap_decap_resource_release(dev, flow->nt2hws->rix_encap_decap);
 		flow->nt2hws->rix_encap_decap = 0;
 	}
 	if (flow->nt2hws->modify_hdr) {
@@ -14187,8 +14214,8 @@ flow_hw_destroy(struct rte_eth_dev *dev, struct rte_flow_hw *flow)
  *   Address of flow to destroy.
  */
 void
-flow_hw_list_destroy(struct rte_eth_dev *dev, enum mlx5_flow_type type,
-		     uintptr_t flow_addr)
+mlx5_flow_hw_list_destroy(struct rte_eth_dev *dev, enum mlx5_flow_type type,
+			  uintptr_t flow_addr)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_flow_hw *flow = (struct rte_flow_hw *)flow_addr;
@@ -14200,7 +14227,7 @@ flow_hw_list_destroy(struct rte_eth_dev *dev, enum mlx5_flow_type type,
 	while (!SLIST_EMPTY(&head)) {
 		flow = SLIST_FIRST(&head);
 		SLIST_REMOVE_HEAD(&head, nt2hws->next);
-		flow_hw_destroy(dev, flow);
+		mlx5_flow_hw_destroy(dev, flow);
 		/* Release flow memory by idx */
 		mlx5_ipool_free(priv->flows[type], flow->idx);
 	}
@@ -14294,10 +14321,10 @@ static uintptr_t flow_hw_list_create(struct rte_eth_dev *dev,
 	}
 	if (action_flags & MLX5_FLOW_ACTION_RSS) {
 		const struct rte_flow_action_rss
-			*rss_conf = flow_nta_locate_rss(dev, actions, error);
-		flow = flow_nta_handle_rss(dev, attr, items, actions, rss_conf,
-					   item_flags, action_flags, external,
-					   type, error);
+			*rss_conf = mlx5_flow_nta_locate_rss(dev, actions, error);
+		flow = mlx5_flow_nta_handle_rss(dev, attr, items, actions, rss_conf,
+						item_flags, action_flags, external,
+						type, error);
 		if (flow) {
 			flow->nt2hws->rix_mreg_copy = cpy_idx;
 			cpy_idx = 0;
@@ -14308,9 +14335,9 @@ static uintptr_t flow_hw_list_create(struct rte_eth_dev *dev,
 		goto free;
 	}
 	/* Create single flow. */
-	ret = flow_hw_create_flow(dev, type, resource.suffix.attr, resource.suffix.items,
-				  resource.suffix.actions, item_flags, action_flags,
-				  external, &flow, error);
+	ret = mlx5_flow_hw_create_flow(dev, type, resource.suffix.attr, resource.suffix.items,
+				       resource.suffix.actions, item_flags, action_flags,
+				       external, &flow, error);
 	if (ret)
 		goto free;
 	if (flow) {
@@ -14321,8 +14348,8 @@ static uintptr_t flow_hw_list_create(struct rte_eth_dev *dev,
 		/* Fall Through to prefix flow creation. */
 	}
 prefix_flow:
-	ret = flow_hw_create_flow(dev, type, attr, items, resource.prefix.actions,
-				  item_flags, action_flags, external, &prfx_flow, error);
+	ret = mlx5_flow_hw_create_flow(dev, type, attr, items, resource.prefix.actions,
+				       item_flags, action_flags, external, &prfx_flow, error);
 	if (ret)
 		goto free;
 	if (prfx_flow) {
@@ -14334,9 +14361,9 @@ prefix_flow:
 	}
 free:
 	if (prfx_flow)
-		flow_hw_list_destroy(dev, type, (uintptr_t)prfx_flow);
+		mlx5_flow_hw_list_destroy(dev, type, (uintptr_t)prfx_flow);
 	if (flow)
-		flow_hw_list_destroy(dev, type, (uintptr_t)flow);
+		mlx5_flow_hw_list_destroy(dev, type, (uintptr_t)flow);
 	if (cpy_idx)
 		mlx5_flow_nta_del_copy_action(dev, cpy_idx);
 	if (split > 0)
@@ -14571,8 +14598,8 @@ hw_mirror_clone_reformat(const struct rte_flow_action *actions,
 		       MLX5DR_ACTION_TYP_REFORMAT_L2_TO_TNL_L3 :
 		       MLX5DR_ACTION_TYP_REFORMAT_L2_TO_TNL_L2;
 	if (encap_item) {
-		ret = flow_dv_convert_encap_data(encap_item, reformat_buf,
-						 &reformat->reformat_data_sz, NULL);
+		ret = mlx5_flow_dv_convert_encap_data(encap_item, reformat_buf,
+						      &reformat->reformat_data_sz, NULL);
 		if (ret)
 			return -EINVAL;
 		reformat->reformat_data = reformat_buf;
@@ -14589,7 +14616,9 @@ hw_mirror_format_clone(struct rte_eth_dev *dev,
 			const struct mlx5_flow_template_table_cfg *table_cfg,
 			const struct rte_flow_action *actions,
 			struct mlx5dr_action_dest_attr *dest_attr,
-			uint8_t *reformat_buf, struct rte_flow_error *error)
+			uint8_t *reformat_buf,
+			enum mlx5dr_table_type table_type,
+			struct rte_flow_error *error)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	int ret;
@@ -14619,7 +14648,13 @@ hw_mirror_format_clone(struct rte_eth_dev *dev,
 				return ret;
 			break;
 		case RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR:
-			dest_attr->dest = priv->hw_def_miss;
+			dest_attr->dest = mlx5_hws_global_action_def_miss_get(priv,
+									      table_type,
+									      false);
+			if (dest_attr->dest == NULL)
+				return rte_flow_error_set(error, ENOMEM,
+						RTE_FLOW_ERROR_TYPE_STATE, NULL,
+						"failed to allocate port representor action");
 			break;
 		case RTE_FLOW_ACTION_TYPE_RAW_DECAP:
 			decap_seen = true;
@@ -14701,7 +14736,7 @@ mlx5_hw_create_mirror(struct rte_eth_dev *dev,
 		}
 		ret = hw_mirror_format_clone(dev, &mirror->clone[i], table_cfg,
 					     clone_actions, &mirror_attr[i],
-					     reformat_buf[i], error);
+					     reformat_buf[i], table_type, error);
 
 		if (ret)
 			goto error;
@@ -15358,6 +15393,12 @@ flow_hw_update_resized(struct rte_eth_dev *dev, uint32_t queue,
 	};
 
 	MLX5_ASSERT(hw_flow->flags & MLX5_FLOW_HW_FLOW_FLAG_MATCHER_SELECTOR);
+	/*
+	 * Update resized can be called only through async flow API.
+	 * These rings are allocated if and only if async flow API was configured.
+	 */
+	MLX5_ASSERT(priv->hw_q[queue].flow_transfer_completed != NULL);
+	MLX5_ASSERT(priv->hw_q[queue].flow_transfer_pending != NULL);
 	/**
 	 * mlx5dr_matcher_resize_rule_move() accepts original table matcher -
 	 * the one that was used BEFORE table resize.
@@ -15442,14 +15483,15 @@ flow_hw_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 	return 0;
 }
 
+
 const struct mlx5_flow_driver_ops mlx5_flow_hw_drv_ops = {
 	.list_create = flow_hw_list_create,
-	.list_destroy = flow_hw_list_destroy,
+	.list_destroy = mlx5_flow_hw_list_destroy,
 	.validate = flow_hw_validate,
 	.info_get = flow_hw_info_get,
 	.configure = flow_hw_configure,
 	.pattern_validate = flow_hw_pattern_validate,
-	.pattern_template_create = flow_hw_pattern_template_create,
+	.pattern_template_create = flow_hw_external_pattern_template_create,
 	.pattern_template_destroy = flow_hw_pattern_template_destroy,
 	.actions_validate = flow_hw_actions_validate,
 	.actions_template_create = flow_hw_actions_template_create,
@@ -15490,8 +15532,8 @@ const struct mlx5_flow_driver_ops mlx5_flow_hw_drv_ops = {
 	.query = flow_hw_query,
 	.get_aged_flows = flow_hw_get_aged_flows,
 	.get_q_aged_flows = flow_hw_get_q_aged_flows,
-	.item_create = flow_dv_item_create,
-	.item_release = flow_dv_item_release,
+	.item_create = mlx5_flow_dv_item_create,
+	.item_release = mlx5_flow_dv_item_release,
 	.flow_calc_table_hash = flow_hw_calc_table_hash,
 	.flow_calc_encap_hash = flow_hw_calc_encap_hash,
 };
@@ -16784,7 +16826,7 @@ mlx5_flow_hw_ctrl_flow_dmac_vlan_destroy(struct rte_eth_dev *dev,
 }
 
 struct mlx5_ecpri_parser_profile *
-flow_hw_get_ecpri_parser_profile(void *dr_ctx)
+mlx5_flow_hw_get_ecpri_parser_profile(void *dr_ctx)
 {
 	uint16_t port_id;
 	bool found = false;
@@ -17286,7 +17328,7 @@ flow_hw_async_op_validate(struct rte_eth_dev *dev,
 /**
  * Validate user input for rte_flow_async_create() implementation.
  *
- * If RTE_LIBRTE_MLX5_DEBUG macro is not defined, this function is a no-op.
+ * If RTE_PMD_MLX5_DEBUG macro is not defined, this function is a no-op.
  *
  * @param[in] dev
  *   Pointer to the rte_eth_dev structure.
@@ -17348,7 +17390,7 @@ flow_hw_async_create_validate(struct rte_eth_dev *dev,
 /**
  * Validate user input for rte_flow_async_update() implementation.
  *
- * If RTE_LIBRTE_MLX5_DEBUG macro is not defined, this function is a no-op.
+ * If RTE_PMD_MLX5_DEBUG macro is not defined, this function is a no-op.
  *
  * @param[in] dev
  *   Pointer to the rte_eth_dev structure.
@@ -17387,7 +17429,7 @@ flow_hw_async_update_validate(struct rte_eth_dev *dev,
 /**
  * Validate user input for rte_flow_async_destroy() implementation.
  *
- * If RTE_LIBRTE_MLX5_DEBUG macro is not defined, this function is a no-op.
+ * If RTE_PMD_MLX5_DEBUG macro is not defined, this function is a no-op.
  *
  * @param[in] dev
  *   Pointer to the rte_eth_dev structure.

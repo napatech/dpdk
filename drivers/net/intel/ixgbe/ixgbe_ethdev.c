@@ -32,9 +32,7 @@
 #include <rte_random.h>
 #include <dev_driver.h>
 #include <rte_hash_crc.h>
-#ifdef RTE_LIB_SECURITY
 #include <rte_security_driver.h>
-#endif
 #include <rte_os_shim.h>
 
 #include "ixgbe_logs.h"
@@ -911,7 +909,8 @@ ixgbe_dev_queue_stats_mapping_set(struct rte_eth_dev *eth_dev,
 		(hw->mac.type != ixgbe_mac_X540) &&
 		(hw->mac.type != ixgbe_mac_X550) &&
 		(hw->mac.type != ixgbe_mac_X550EM_x) &&
-		(hw->mac.type != ixgbe_mac_X550EM_a))
+		(hw->mac.type != ixgbe_mac_X550EM_a) &&
+		(hw->mac.type != ixgbe_mac_E610))
 		return -ENOSYS;
 
 	PMD_INIT_LOG(DEBUG, "Setting port %d, %s queue_id %d to stat index %d",
@@ -1176,11 +1175,9 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	/* Unlock any pending hardware semaphore */
 	ixgbe_swfw_lock_reset(hw);
 
-#ifdef RTE_LIB_SECURITY
 	/* Initialize security_ctx only for primary process*/
 	if (ixgbe_ipsec_ctx_create(eth_dev))
 		return -ENOMEM;
-#endif
 
 	/* Initialize DCB configuration*/
 	memset(dcb_config, 0, sizeof(struct ixgbe_dcb_config));
@@ -1361,10 +1358,8 @@ err_pf_host_init:
 	rte_free(eth_dev->data->hash_mac_addrs);
 	eth_dev->data->hash_mac_addrs = NULL;
 err_exit:
-#ifdef RTE_LIB_SECURITY
 	rte_free(eth_dev->security_ctx);
 	eth_dev->security_ctx = NULL;
-#endif
 	return ret;
 }
 
@@ -2134,10 +2129,11 @@ ixgbe_vlan_hw_extend_enable(struct rte_eth_dev *dev)
 	ctrl |= IXGBE_EXTENDED_VLAN;
 	IXGBE_WRITE_REG(hw, IXGBE_CTRL_EXT, ctrl);
 
-	/* Clear pooling mode of PFVTCTL. It's required by X550. */
+	/* Clear pooling mode of PFVTCTL. It's required by X550 and E610. */
 	if (hw->mac.type == ixgbe_mac_X550 ||
 	    hw->mac.type == ixgbe_mac_X550EM_x ||
-	    hw->mac.type == ixgbe_mac_X550EM_a) {
+	    hw->mac.type == ixgbe_mac_X550EM_a ||
+	    hw->mac.type == ixgbe_mac_E610) {
 		ctrl = IXGBE_READ_REG(hw, IXGBE_VT_CTL);
 		ctrl &= ~IXGBE_VT_CTL_POOLING_MODE_MASK;
 		IXGBE_WRITE_REG(hw, IXGBE_VT_CTL, ctrl);
@@ -2830,6 +2826,7 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 		case ixgbe_mac_X550:
 		case ixgbe_mac_X550EM_x:
 		case ixgbe_mac_X550EM_a:
+		case ixgbe_mac_E610:
 			speed = IXGBE_LINK_SPEED_X550_AUTONEG;
 			break;
 		default:
@@ -3145,10 +3142,8 @@ ixgbe_dev_close(struct rte_eth_dev *dev)
 	/* Remove all Traffic Manager configuration */
 	ixgbe_tm_conf_uninit(dev);
 
-#ifdef RTE_LIB_SECURITY
 	rte_free(dev->security_ctx);
 	dev->security_ctx = NULL;
-#endif
 
 	return ret;
 }
@@ -4046,10 +4041,11 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	if (hw->mac.type == ixgbe_mac_X540 ||
 	    hw->mac.type == ixgbe_mac_X540_vf ||
 	    hw->mac.type == ixgbe_mac_X550 ||
-	    hw->mac.type == ixgbe_mac_X550_vf) {
+	    hw->mac.type == ixgbe_mac_X550_vf ||
+	    hw->mac.type == ixgbe_mac_E610) {
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_100M;
 	}
-	if (hw->mac.type == ixgbe_mac_X550) {
+	if (hw->mac.type == ixgbe_mac_X550 || hw->mac.type == ixgbe_mac_E610) {
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_2_5G;
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_5G;
 	}
@@ -7665,7 +7661,8 @@ ixgbe_update_e_tag_eth_type(struct ixgbe_hw *hw,
 
 	if (hw->mac.type != ixgbe_mac_X550 &&
 	    hw->mac.type != ixgbe_mac_X550EM_x &&
-	    hw->mac.type != ixgbe_mac_X550EM_a) {
+	    hw->mac.type != ixgbe_mac_X550EM_a &&
+	    hw->mac.type != ixgbe_mac_E610) {
 		return -ENOTSUP;
 	}
 
@@ -7686,7 +7683,8 @@ ixgbe_e_tag_enable(struct ixgbe_hw *hw)
 
 	if (hw->mac.type != ixgbe_mac_X550 &&
 	    hw->mac.type != ixgbe_mac_X550EM_x &&
-	    hw->mac.type != ixgbe_mac_X550EM_a) {
+	    hw->mac.type != ixgbe_mac_X550EM_a &&
+	    hw->mac.type != ixgbe_mac_E610) {
 		return -ENOTSUP;
 	}
 
@@ -7709,7 +7707,8 @@ ixgbe_e_tag_filter_del(struct rte_eth_dev *dev,
 
 	if (hw->mac.type != ixgbe_mac_X550 &&
 	    hw->mac.type != ixgbe_mac_X550EM_x &&
-	    hw->mac.type != ixgbe_mac_X550EM_a) {
+	    hw->mac.type != ixgbe_mac_X550EM_a &&
+	    hw->mac.type != ixgbe_mac_E610) {
 		return -ENOTSUP;
 	}
 
@@ -7745,7 +7744,8 @@ ixgbe_e_tag_filter_add(struct rte_eth_dev *dev,
 
 	if (hw->mac.type != ixgbe_mac_X550 &&
 	    hw->mac.type != ixgbe_mac_X550EM_x &&
-	    hw->mac.type != ixgbe_mac_X550EM_a) {
+	    hw->mac.type != ixgbe_mac_X550EM_a &&
+	    hw->mac.type != ixgbe_mac_E610) {
 		return -ENOTSUP;
 	}
 
@@ -7932,7 +7932,8 @@ ixgbe_e_tag_forwarding_en_dis(struct rte_eth_dev *dev, bool en)
 
 	if (hw->mac.type != ixgbe_mac_X550 &&
 	    hw->mac.type != ixgbe_mac_X550EM_x &&
-	    hw->mac.type != ixgbe_mac_X550EM_a) {
+	    hw->mac.type != ixgbe_mac_X550EM_a &&
+	    hw->mac.type != ixgbe_mac_E610) {
 		return -ENOTSUP;
 	}
 

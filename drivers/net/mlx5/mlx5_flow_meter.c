@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: BSD-3-Clause
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2018 Mellanox Technologies, Ltd
  */
 #include <math.h>
@@ -2416,7 +2415,7 @@ mlx5_flow_meter_find(struct mlx5_priv *priv, uint32_t meter_id,
  *   Pointer to the meter info found on success, NULL otherwise.
  */
 struct mlx5_flow_meter_info *
-flow_dv_meter_find_by_idx(struct mlx5_priv *priv, uint32_t idx)
+mlx5_flow_dv_meter_find_by_idx(struct mlx5_priv *priv, uint32_t idx)
 {
 	struct mlx5_aso_mtr *aso_mtr;
 

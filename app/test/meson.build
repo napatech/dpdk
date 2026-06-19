@@ -112,7 +112,7 @@ source_file_deps = {
         'net'] + packet_burst_generator_deps + virtual_pmd_deps,
     'test_link_bonding_mode4.c': ['ethdev', 'net_ring', 'net_bond',
         'net'] + packet_burst_generator_deps,
-    'test_link_bonding_rssconf.c': ['ethdev', 'bus_vdev', 'net_bond'],
+    'test_link_bonding_rssconf.c': ['ethdev', 'bus_vdev', 'net_bond', 'net_null'],
     'test_logs.c': [],
     'test_lpm.c': ['net', 'lpm'],
     'test_lpm6.c': ['lpm'],
@@ -135,7 +135,7 @@ source_file_deps = {
     'test_mp_secondary.c': ['hash'],
     'test_net_ether.c': ['net'],
     'test_net_ip6.c': ['net'],
-    'test_pcapng.c': ['ethdev', 'net', 'pcapng', 'bus_vdev'],
+    'test_pcapng.c': ['net_null', 'net', 'ethdev', 'pcapng', 'bus_vdev'],
     'test_pdcp.c': ['eventdev', 'pdcp', 'net', 'timer', 'security'],
     'test_pdump.c': ['pdump'] + sample_packet_forward_deps,
     'test_per_lcore.c': [],
@@ -144,6 +144,7 @@ source_file_deps = {
     'test_pmd_perf.c': ['ethdev', 'net'] + packet_burst_generator_deps,
     'test_pmd_ring.c': ['net_ring', 'ethdev', 'bus_vdev'],
     'test_pmd_ring_perf.c': ['ethdev', 'net_ring', 'bus_vdev'],
+    'test_pmd_tap.c': ['ethdev', 'net_tap', 'bus_vdev'],
     'test_pmu.c': ['pmu'],
     'test_power.c': ['power', 'power_acpi', 'power_kvm_vm', 'power_intel_pstate',
         'power_amd_pstate', 'power_cppc'],
@@ -209,7 +210,7 @@ source_file_deps = {
     'test_trace.c': [],
     'test_trace_perf.c': [],
     'test_trace_register.c': [],
-    'test_vdev.c': ['kvargs', 'bus_vdev'],
+    'test_vdev.c': ['kvargs', 'bus_vdev', 'net_null'],
     'test_version.c': [],
 }
 
@@ -217,6 +218,12 @@ source_file_ext_deps = {
     'test_compressdev.c': ['zlib'],
     'test_pcapng.c': ['pcap'],
 }
+
+# the NULL ethdev is used by a number of tests, in some cases as an optional dependency.
+# for developer builds, warn user if its missing and we are building the tests.
+if not dpdk_conf.has('RTE_NET_NULL') and developer_mode
+    warning('For unit testing, the net/null PMD should be enabled in the build to enable tests that depend on it.')
+endif
 
 def_lib = get_option('default_library')
 foreach f, f_deps : source_file_deps
@@ -256,11 +263,11 @@ foreach d:optional_deps
 endforeach
 
 cflags += no_wvla_cflag
+cflags += no_shadow_cflag
 
 extra_flags = [
         # Strict-aliasing rules are violated by uint8_t[] to context size casts.
         '-fno-strict-aliasing',
-        '-Wno-format-truncation',
 ]
 
 foreach arg: extra_flags

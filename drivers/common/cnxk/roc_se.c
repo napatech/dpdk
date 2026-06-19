@@ -25,6 +25,9 @@ static uint8_t zuc_key256_mac16[16] = {0x23, 0x2f, 0x25, 0x2a, 0x6d, 0x40,
 				       0x40, 0x40, 0x40, 0x40, 0x40, 0x40,
 				       0x40, 0x52, 0x10, 0x30};
 
+static uint8_t zuc_key256_v2[16] = {0x64, 0x43, 0x7b, 0x2a, 0x11, 0x05, 0x51, 0x42,
+				    0x1a, 0x31, 0x18, 0x66, 0x14, 0x2e, 0x01, 0x5c};
+
 static inline void
 cpt_snow3g_key_gen(const uint8_t *ck, uint32_t *keyx)
 {
@@ -88,12 +91,14 @@ cpt_ciph_type_set(roc_se_cipher_type type, struct roc_se_ctx *ctx, uint16_t key_
 		fc_type = ROC_SE_FC_GEN;
 		break;
 	case ROC_SE_ZUC_EEA3:
+	case ROC_SE_ZUC_NEA6:
 		if (unlikely(key_len != 16)) {
 			/*
 			 * ZUC 256 is not supported with older microcode
 			 * where pdcp_iv_offset is 16
 			 */
-			if (chained_op || (ctx->pdcp_iv_offset == 16)) {
+			if ((chained_op ||
+			     (!roc_model_is_cn20k() && (ctx->pdcp_iv_offset == 16)))) {
 				plt_err("ZUC 256 is not supported with chained operations");
 				return -1;
 			}
@@ -110,6 +115,11 @@ cpt_ciph_type_set(roc_se_cipher_type type, struct roc_se_ctx *ctx, uint16_t key_
 			fc_type = ROC_SE_PDCP_CHAIN;
 		else
 			fc_type = ROC_SE_PDCP;
+		break;
+	case ROC_SE_SNOW5G_NEA4:
+		if (unlikely(key_len != 32))
+			return -1;
+		fc_type = ROC_SE_PDCP;
 		break;
 	case ROC_SE_AES_CTR_EEA2:
 		if (chained_op)
@@ -283,7 +293,7 @@ roc_se_auth_key_set(struct roc_se_ctx *se_ctx, roc_se_auth_type type, const uint
 
 	chained_op = se_ctx->ciph_then_auth || se_ctx->auth_then_ciph;
 
-	if ((type >= ROC_SE_ZUC_EIA3) && (type <= ROC_SE_KASUMI_F9_ECB)) {
+	if ((type >= ROC_SE_ZUC_EIA3) && (type <= ROC_SE_ZUC_NIA6)) {
 		uint32_t keyx[4];
 		int key_type;
 
@@ -312,13 +322,27 @@ roc_se_auth_key_set(struct roc_se_ctx *se_ctx, roc_se_auth_type type, const uint
 			se_ctx->zsk_flags = 0x1;
 			opcode_major = ROC_SE_MAJOR_OP_PDCP_CHAIN;
 			break;
+		case ROC_SE_SNOW5G_NIA4:
+			pctx->w0.s.state_conf = ROC_SE_PDCP_CHAIN_CTX_KEY_IV;
+			pctx->w0.s.auth_type = ROC_SE_PDCP_CHAIN_ALG_TYPE_SNOW5G;
+			pctx->w0.s.mac_len = mac_len;
+			pctx->w0.s.auth_key_len = 3;
+			memcpy(pctx->st.auth_key, key, key_len);
+
+			se_ctx->fc_type = ROC_SE_PDCP;
+			se_ctx->pdcp_auth_alg = ROC_SE_PDCP_ALG_TYPE_SNOW5G;
+			se_ctx->zsk_flags = 0x1;
+			opcode_major = ROC_SE_MAJOR_OP_PDCP_CHAIN;
+			break;
 		case ROC_SE_ZUC_EIA3:
+		case ROC_SE_ZUC_NIA6:
 			if (unlikely(key_len != 16)) {
 				/*
 				 * ZUC 256 is not supported with older microcode
 				 * where pdcp_iv_offset is 16
 				 */
-				if (chained_op || (se_ctx->pdcp_iv_offset == 16)) {
+				if ((chained_op ||
+				     (!roc_model_is_cn20k() && (se_ctx->pdcp_iv_offset == 16)))) {
 					plt_err("ZUC 256 is not supported with chained operations");
 					return -1;
 				}
@@ -331,13 +355,16 @@ roc_se_auth_key_set(struct roc_se_ctx *se_ctx, roc_se_auth_type type, const uint
 			pctx->w0.s.auth_type = ROC_SE_PDCP_CHAIN_ALG_TYPE_ZUC;
 			pctx->w0.s.mac_len = mac_len;
 			memcpy(pctx->st.auth_key, key, key_len);
-			if (key_len == 32)
+
+			if (!roc_model_is_cn20k() && key_len == 32)
 				roc_se_zuc_bytes_swap(pctx->st.auth_key, key_len);
+
 			cpt_zuc_const_update(pctx->st.auth_zuc_const, key_len, mac_len);
 			se_ctx->fc_type = ROC_SE_PDCP_CHAIN;
 
 			if (!chained_op)
 				se_ctx->fc_type = ROC_SE_PDCP;
+
 			se_ctx->pdcp_auth_alg = ROC_SE_PDCP_ALG_TYPE_ZUC;
 			se_ctx->zsk_flags = 0x1;
 			opcode_major = ROC_SE_MAJOR_OP_PDCP_CHAIN;
@@ -542,7 +569,16 @@ roc_se_ciph_key_set(struct roc_se_ctx *se_ctx, roc_se_cipher_type type, const ui
 		se_ctx->pdcp_ci_alg = ROC_SE_PDCP_ALG_TYPE_SNOW3G;
 		se_ctx->zsk_flags = 0;
 		goto success;
+	case ROC_SE_SNOW5G_NEA4:
+		pctx->w0.s.state_conf = ROC_SE_PDCP_CHAIN_CTX_KEY_IV;
+		pctx->w0.s.cipher_type = ROC_SE_PDCP_CHAIN_ALG_TYPE_SNOW5G;
+		pctx->w0.s.ci_key_len = 3;
+		memcpy(pctx->st.ci_key, key, key_len);
+		se_ctx->pdcp_ci_alg = ROC_SE_PDCP_ALG_TYPE_SNOW5G;
+		se_ctx->zsk_flags = 0;
+		goto success;
 	case ROC_SE_ZUC_EEA3:
+	case ROC_SE_ZUC_NEA6:
 		key_type = cpt_pdcp_chain_key_type_get(key_len);
 		if (key_type < 0)
 			return key_type;
@@ -551,8 +587,12 @@ roc_se_ciph_key_set(struct roc_se_ctx *se_ctx, roc_se_cipher_type type, const ui
 		pctx->w0.s.cipher_type = ROC_SE_PDCP_CHAIN_ALG_TYPE_ZUC;
 		memcpy(pctx->st.ci_key, key, key_len);
 		if (key_len == 32) {
-			roc_se_zuc_bytes_swap(pctx->st.ci_key, key_len);
-			memcpy(pctx->st.ci_zuc_const, zuc_key256, 16);
+			if (roc_model_is_cn20k())
+				memcpy(pctx->st.ci_zuc_const, zuc_key256_v2, 16);
+			else {
+				memcpy(pctx->st.ci_zuc_const, zuc_key256, 16);
+				roc_se_zuc_bytes_swap(pctx->st.ci_key, key_len);
+			}
 		} else
 			memcpy(pctx->st.ci_zuc_const, zuc_key128, 32);
 		se_ctx->pdcp_ci_alg = ROC_SE_PDCP_ALG_TYPE_ZUC;

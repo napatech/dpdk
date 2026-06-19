@@ -786,7 +786,7 @@ static int bnxt_update_phy_setting(struct bnxt *bp)
 	return rc;
 }
 
-static void bnxt_free_prev_ring_stats(struct bnxt *bp)
+static void bnxt_free_prev_ring_stats_ext(struct bnxt *bp)
 {
 	/* tpa v2 devices use ext variant local struct */
 	if (BNXT_TPA_V2_P7(bp)) {
@@ -796,6 +796,10 @@ static void bnxt_free_prev_ring_stats(struct bnxt *bp)
 		bp->prev_tx_ring_stats_ext = NULL;
 		return;
 	}
+}
+
+static void bnxt_free_prev_ring_stats(struct bnxt *bp)
+{
 	rte_free(bp->prev_rx_ring_stats);
 	rte_free(bp->prev_tx_ring_stats);
 	bp->prev_rx_ring_stats = NULL;
@@ -804,17 +808,19 @@ static void bnxt_free_prev_ring_stats(struct bnxt *bp)
 
 static int bnxt_alloc_prev_ring_ext_stats(struct bnxt *bp)
 {
-	bp->prev_rx_ring_stats_ext = rte_zmalloc("bnxt_prev_rx_ring_stats_ext",
-						 sizeof(struct bnxt_ring_stats_ext) *
-						 bp->rx_cp_nr_rings,
-						 0);
+	if (bp->prev_rx_ring_stats_ext == NULL)
+		bp->prev_rx_ring_stats_ext = rte_zmalloc("bnxt_prev_rx_ring_stats_ext",
+							 sizeof(struct bnxt_ring_stats_ext) *
+							 bp->rx_cp_nr_rings,
+							 0);
 	if (bp->prev_rx_ring_stats_ext == NULL)
 		return -ENOMEM;
 
-	bp->prev_tx_ring_stats_ext = rte_zmalloc("bnxt_prev_tx_ring_stats_ext",
-						 sizeof(struct bnxt_ring_stats_ext) *
-						 bp->tx_cp_nr_rings,
-						 0);
+	if (bp->prev_tx_ring_stats_ext == NULL)
+		bp->prev_tx_ring_stats_ext = rte_zmalloc("bnxt_prev_tx_ring_stats_ext",
+							 sizeof(struct bnxt_ring_stats_ext) *
+							 bp->tx_cp_nr_rings,
+							 0);
 
 	if (bp->tx_cp_nr_rings > 0 && bp->prev_tx_ring_stats_ext == NULL)
 		goto error;
@@ -831,24 +837,26 @@ static int bnxt_alloc_prev_ring_stats(struct bnxt *bp)
 	if (BNXT_TPA_V2_P7(bp))
 		return bnxt_alloc_prev_ring_ext_stats(bp);
 
-	bp->prev_rx_ring_stats =  rte_zmalloc("bnxt_prev_rx_ring_stats",
-					      sizeof(struct bnxt_ring_stats) *
-					      bp->rx_cp_nr_rings,
-					      0);
+	if (bp->prev_rx_ring_stats == NULL)
+		bp->prev_rx_ring_stats =  rte_zmalloc("bnxt_prev_rx_ring_stats",
+						      sizeof(struct bnxt_ring_stats) *
+						      bp->rx_cp_nr_rings,
+						      0);
 	if (bp->prev_rx_ring_stats == NULL)
 		return -ENOMEM;
 
-	bp->prev_tx_ring_stats = rte_zmalloc("bnxt_prev_tx_ring_stats",
-					     sizeof(struct bnxt_ring_stats) *
-					     bp->tx_cp_nr_rings,
-					     0);
+	if (bp->prev_tx_ring_stats == NULL)
+		bp->prev_tx_ring_stats = rte_zmalloc("bnxt_prev_tx_ring_stats",
+						     sizeof(struct bnxt_ring_stats) *
+						     bp->tx_cp_nr_rings,
+						     0);
 	if (bp->tx_cp_nr_rings > 0 && bp->prev_tx_ring_stats == NULL)
 		goto error;
 
 	return 0;
 
 error:
-	bnxt_free_prev_ring_stats(bp);
+	bnxt_free_prev_ring_stats_ext(bp);
 	return -ENOMEM;
 }
 
@@ -1686,6 +1694,7 @@ static void bnxt_ptp_stop(struct bnxt *bp)
 
 static int bnxt_ptp_start(struct bnxt *bp)
 {
+	struct bnxt_ptp_cfg *ptp = bp->ptp_cfg;
 	int rc;
 
 	rc = bnxt_schedule_ptp_alarm(bp);
@@ -1694,6 +1703,14 @@ static int bnxt_ptp_start(struct bnxt *bp)
 	} else {
 		bp->flags2 |= BNXT_FLAGS2_PTP_TIMESYNC_ENABLED;
 		bp->flags2 |= BNXT_FLAGS2_PTP_ALARM_SCHEDULED;
+
+		/* extra mbuf field to store timestamp information */
+		if (rte_mbuf_dyn_rx_timestamp_register(&ptp->mb_rx_timestamp_offset,
+						       &ptp->mb_rx_timestamp_flag) != 0) {
+			PMD_DRV_LOG_LINE(ERR,
+					 "Failed to register mbuf field for Rx timestamp");
+			return -rte_errno;
+		}
 	}
 
 	return rc;
@@ -1758,7 +1775,6 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 	bnxt_shutdown_nic(bp);
 	bnxt_hwrm_if_change(bp, false);
 
-	bnxt_free_prev_ring_stats(bp);
 	rte_free(bp->mark_table);
 	bp->mark_table = NULL;
 
@@ -1818,6 +1834,8 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	struct rte_eth_link *link = &eth_dev->data->dev_link;
 	int vlan_mask = 0;
 	int rc, retry_cnt = BNXT_IF_CHANGE_RETRY_COUNT;
+	struct bnxt_tx_queue *txq;
+	uint16_t queue_idx;
 
 	if (bp->rx_cp_nr_rings > RTE_ETHDEV_QUEUE_STAT_CNTRS)
 		PMD_DRV_LOG_LINE(ERR,
@@ -1901,6 +1919,27 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	if (BNXT_P5_PTP_TIMESYNC_ENABLED(bp))
 		bnxt_schedule_ptp_alarm(bp);
 
+	/* There are a few conditions for which fast free is not supported.
+	 * PTP can be enabled/disabled without restarting some programs.
+	 */
+	for (queue_idx = 0; queue_idx < bp->tx_nr_rings; queue_idx++) {
+		txq = eth_dev->data->tx_queues[queue_idx];
+		if (BNXT_P5_PTP_TIMESYNC_ENABLED(bp) || bp->ieee_1588) {
+			txq->offloads &= ~RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+			if (BNXT_P5_PTP_TIMESYNC_ENABLED(bp) || bp->ieee_1588)
+				txq->tx_free_thresh = RTE_BNXT_MIN_TX_BURST;
+			else
+				txq->tx_free_thresh =
+					RTE_MIN(rte_align32pow2(txq->nb_tx_desc) / 4,
+						RTE_BNXT_MAX_TX_BURST);
+		} else {
+			txq->offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+			txq->tx_free_thresh =
+				RTE_MIN(rte_align32pow2(txq->nb_tx_desc) / 4,
+					RTE_BNXT_MAX_TX_BURST);
+		}
+	}
+
 	return 0;
 
 error:
@@ -1966,6 +2005,8 @@ static int bnxt_dev_close_op(struct rte_eth_dev *eth_dev)
 	if (eth_dev->data->dev_started)
 		ret = bnxt_dev_stop(eth_dev);
 
+	bnxt_free_prev_ring_stats_ext(bp);
+	bnxt_free_prev_ring_stats(bp);
 	bnxt_uninit_resources(bp, false);
 
 	bnxt_drv_uninit(bp);

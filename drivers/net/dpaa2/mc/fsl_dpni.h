@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
+/* SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0
  *
  * Copyright 2013-2016 Freescale Semiconductor Inc.
  * Copyright 2016-2025 NXP
@@ -121,6 +121,12 @@ struct fsl_mc_io;
  * The stashing is enabled by default.
  */
 #define DPNI_OPT_STASHING_DIS			0x002000
+/*
+ * PFDR in PEB mode (v1 layout).
+ * The total number of Rx descriptors is limited to 11264 in this mode.
+ * When not set, PFDRs are stored in DDR and there is no such limit.
+ */
+#define DPNI_OPT_V1_PFDR_IN_PEB		0x80000000
 /**
  * Software sequence maximum layout size
  */

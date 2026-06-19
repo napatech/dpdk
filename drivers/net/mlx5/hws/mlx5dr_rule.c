@@ -38,6 +38,10 @@ static void mlx5dr_rule_skip(struct mlx5dr_matcher *matcher,
 
 	if (mt->item_flags & MLX5_FLOW_ITEM_REPRESENTED_PORT) {
 		v = items[mt->vport_item_id].spec;
+		if (unlikely(!v)) {
+			DR_LOG(NOTICE, "Fail to get vport item, ignoring");
+			return;
+		}
 		vport = flow_hw_conv_port_id(matcher->tbl->ctx, v->port_id);
 		if (unlikely(!vport)) {
 			DR_LOG(ERR, "Fail to map port ID %d, ignoring", v->port_id);
@@ -483,7 +487,7 @@ static int mlx5dr_rule_create_hws(struct mlx5dr_rule *rule,
 	bool is_jumbo = mlx5dr_matcher_mt_is_jumbo(mt);
 	struct mlx5dr_matcher *matcher = rule->matcher;
 	struct mlx5dr_context *ctx = matcher->tbl->ctx;
-	struct mlx5dr_send_ste_attr ste_attr = {0};
+	MLX5DR_ASAN_ALIGN struct mlx5dr_send_ste_attr ste_attr = {0};
 	struct mlx5dr_send_ring_dep_wqe *dep_wqe;
 	struct mlx5dr_actions_wqe_setter *setter;
 	struct mlx5dr_actions_apply_data apply;
@@ -738,10 +742,10 @@ int mlx5dr_rule_create_root_no_comp(struct mlx5dr_rule *rule,
 
 	flow_attr.tbl_type = rule->matcher->tbl->type;
 
-	ret = flow_dv_translate_items_hws(items, &flow_attr, value->match_buf,
-					  MLX5_SET_MATCHER_HS_V, NULL,
-					  &match_criteria,
-					  &error);
+	ret = mlx5_flow_dv_translate_items_hws(items, &flow_attr, value->match_buf,
+					       MLX5_SET_MATCHER_HS_V, NULL,
+					       &match_criteria,
+					       &error);
 	if (ret) {
 		DR_LOG(ERR, "Failed to convert items to PRM [%s]", error.message);
 		goto free_value;

@@ -22,6 +22,7 @@ static int nbl_chan_init_tx_queue(union nbl_chan_info *chan_info)
 {
 	struct nbl_chan_ring *txq = &chan_info->mailbox.txq;
 	size_t size = chan_info->mailbox.num_txq_entries * sizeof(struct nbl_chan_tx_desc);
+	int i;
 
 	txq->desc = nbl_alloc_dma_mem(&txq->desc_mem, size);
 	if (!txq->desc) {
@@ -36,7 +37,11 @@ static int nbl_chan_init_tx_queue(union nbl_chan_info *chan_info)
 		goto req_wait_queue_failed;
 	}
 
-	size = chan_info->mailbox.num_txq_entries * chan_info->mailbox.txq_buf_size;
+	for (i = 0; i < chan_info->mailbox.num_txq_entries; i++)
+		rte_atomic_store_explicit(&chan_info->mailbox.wait[i].status, NBL_MBX_STATUS_IDLE,
+					  rte_memory_order_relaxed);
+
+	size = (u64)chan_info->mailbox.num_txq_entries * (u64)chan_info->mailbox.txq_buf_size;
 	txq->buf = nbl_alloc_dma_mem(&txq->buf_mem, size);
 	if (!txq->buf) {
 		NBL_LOG(ERR, "Allocate memory for chan tx buffer arrays failed");
@@ -66,7 +71,7 @@ static int nbl_chan_init_rx_queue(union nbl_chan_info *chan_info)
 		return -ENOMEM;
 	}
 
-	size = chan_info->mailbox.num_rxq_entries * chan_info->mailbox.rxq_buf_size;
+	size = (u64)chan_info->mailbox.num_rxq_entries * (u64)chan_info->mailbox.rxq_buf_size;
 	rxq->buf = nbl_alloc_dma_mem(&rxq->buf_mem, size);
 	if (!rxq->buf) {
 		NBL_LOG(ERR, "Allocate memory for chan rx buffer arrays failed");
@@ -163,7 +168,7 @@ static int nbl_chan_prepare_rx_bufs(struct nbl_channel_mgt *chan_mgt,
 	desc = rxq->desc;
 	for (i = 0; i < chan_info->mailbox.num_rxq_entries - 1; i++) {
 		desc[i].flags = NBL_CHAN_RX_DESC_AVAIL;
-		desc[i].buf_addr = rxq->buf_mem.pa + i * chan_info->mailbox.rxq_buf_size;
+		desc[i].buf_addr = rxq->buf_mem.pa + (u64)i * (u64)chan_info->mailbox.rxq_buf_size;
 		desc[i].buf_len = chan_info->mailbox.rxq_buf_size;
 	}
 
@@ -253,24 +258,55 @@ static void nbl_chan_recv_ack_msg(void *priv, uint16_t srcid, uint16_t msgid,
 	uint32_t ack_msgid;
 	uint32_t ack_msgtype;
 	uint32_t copy_len;
+	int status = NBL_MBX_STATUS_WAITING;
 
 	chan_info = NBL_CHAN_MGT_TO_CHAN_INFO(chan_mgt);
 	ack_msgtype = *payload;
 	ack_msgid = *(payload + 1);
+
+	if (ack_msgid >= chan_mgt->chan_info->mailbox.num_txq_entries) {
+		NBL_LOG(ERR, "Invalid msg id %u, msg type %u", ack_msgid, ack_msgtype);
+		return;
+	}
+
 	wait_head = &chan_info->mailbox.wait[ack_msgid];
+	if (wait_head->msg_type != ack_msgtype) {
+		NBL_LOG(ERR, "Invalid msg id %u, msg type %u, wait msg type %u",
+			ack_msgid, ack_msgtype, wait_head->msg_type);
+		return;
+	}
+
+	if (!rte_atomic_compare_exchange_strong_explicit(&wait_head->status, &status,
+							 NBL_MBX_STATUS_ACKING,
+							 rte_memory_order_acq_rel,
+							 rte_memory_order_relaxed)) {
+		NBL_LOG(ERR, "Invalid wait status %d msg id %u, msg type %u",
+			wait_head->status, ack_msgid, ack_msgtype);
+		return;
+	}
+
 	wait_head->ack_err = *(payload + 2);
 
 	NBL_LOG(DEBUG, "recv ack, srcid:%u, msgtype:%u, msgid:%u, ack_msgid:%u,"
-		" data_len:%u, ack_data_len:%u",
-		srcid, ack_msgtype, msgid, ack_msgid, data_len, wait_head->ack_data_len);
+		" data_len:%u, ack_data_len:%u, ack_err:%d",
+		srcid, ack_msgtype, msgid, ack_msgid, data_len,
+		wait_head->ack_data_len, wait_head->ack_err);
 
 	if (wait_head->ack_err >= 0 && (data_len > 3 * sizeof(uint32_t))) {
 		/* the mailbox msg parameter structure may change */
+		if (data_len - 3 * sizeof(uint32_t) != wait_head->ack_data_len)
+			NBL_LOG(INFO, "payload_len does not match ack_len!,"
+				" srcid:%u, msgtype:%u, msgid:%u, ack_msgid %u,"
+				" data_len:%u, ack_data_len:%u",
+				srcid, ack_msgtype, msgid,
+				ack_msgid, data_len, wait_head->ack_data_len);
 		copy_len = RTE_MIN(wait_head->ack_data_len, data_len - 3 * sizeof(uint32_t));
-		memcpy(wait_head->ack_data, payload + 3, copy_len);
+		if (copy_len)
+			memcpy(wait_head->ack_data, payload + 3, copy_len);
 	}
 
-	rte_atomic_store_explicit(&wait_head->acked, 1, rte_memory_order_release);
+	rte_atomic_store_explicit(&wait_head->status, NBL_MBX_STATUS_ACKED,
+				  rte_memory_order_release);
 }
 
 static void nbl_chan_recv_msg(struct nbl_channel_mgt *chan_mgt, void *data)
@@ -324,7 +360,8 @@ static void nbl_chan_advance_rx_ring(struct nbl_channel_mgt *chan_mgt,
 	rx_desc = NBL_CHAN_RX_DESC(rxq, next_to_use);
 
 	rx_desc->flags = NBL_CHAN_RX_DESC_AVAIL;
-	rx_desc->buf_addr = rxq->buf_mem.pa + chan_info->mailbox.rxq_buf_size * next_to_use;
+	rx_desc->buf_addr = rxq->buf_mem.pa +
+				(u64)chan_info->mailbox.rxq_buf_size * (u64)next_to_use;
 	rx_desc->buf_len = chan_info->mailbox.rxq_buf_size;
 
 	rte_wmb();
@@ -347,7 +384,7 @@ static void nbl_chan_clean_queue(void *priv)
 
 	next_to_clean = rxq->next_to_clean;
 	rx_desc = NBL_CHAN_RX_DESC(rxq, next_to_clean);
-	data = (u8 *)rxq->buf + next_to_clean * chan_info->mailbox.rxq_buf_size;
+	data = (u8 *)rxq->buf + (u64)next_to_clean * (u64)chan_info->mailbox.rxq_buf_size;
 	while (rx_desc->flags & NBL_CHAN_RX_DESC_USED) {
 		rte_rmb();
 		nbl_chan_recv_msg(chan_mgt, data);
@@ -358,7 +395,7 @@ static void nbl_chan_clean_queue(void *priv)
 		if (next_to_clean == chan_info->mailbox.num_rxq_entries)
 			next_to_clean = 0;
 		rx_desc = NBL_CHAN_RX_DESC(rxq, next_to_clean);
-		data = (u8 *)rxq->buf + next_to_clean * chan_info->mailbox.rxq_buf_size;
+		data = (u8 *)rxq->buf + (u64)next_to_clean * (u64)chan_info->mailbox.rxq_buf_size;
 	}
 	rxq->next_to_clean = next_to_clean;
 }
@@ -370,23 +407,34 @@ static uint16_t nbl_chan_update_txqueue(union nbl_chan_info *chan_info,
 {
 	struct nbl_chan_ring *txq;
 	struct nbl_chan_tx_desc *tx_desc;
+	struct nbl_chan_waitqueue_head *wait_head;
 	uint64_t pa;
 	void *va;
 	uint16_t next_to_use;
+	int status;
+
+	if (arg_len > NBL_CHAN_BUF_LEN - sizeof(*tx_desc)) {
+		NBL_LOG(ERR, "arg_len: %zu, too long!", arg_len);
+		return 0xFFFF;
+	}
 
 	txq = &chan_info->mailbox.txq;
 	next_to_use = txq->next_to_use;
-	va = (u8 *)txq->buf + next_to_use * chan_info->mailbox.txq_buf_size;
-	pa = txq->buf_mem.pa + next_to_use * chan_info->mailbox.txq_buf_size;
+
+	wait_head = &chan_info->mailbox.wait[next_to_use];
+	status = rte_atomic_load_explicit(&wait_head->status, rte_memory_order_acquire);
+	if (status != NBL_MBX_STATUS_IDLE && status != NBL_MBX_STATUS_TIMEOUT) {
+		NBL_LOG(ERR, "too much inflight mailbox msg, msg id %u", next_to_use);
+		return 0xFFFF;
+	}
+
+	va = (u8 *)txq->buf + (u64)next_to_use * (u64)chan_info->mailbox.txq_buf_size;
+	pa = txq->buf_mem.pa + (u64)next_to_use * (u64)chan_info->mailbox.txq_buf_size;
 	tx_desc = NBL_CHAN_TX_DESC(txq, next_to_use);
 
 	tx_desc->dstid = dstid;
 	tx_desc->msg_type = msg_type;
 	tx_desc->msgid = next_to_use;
-	if (arg_len > NBL_CHAN_BUF_LEN - sizeof(*tx_desc)) {
-		NBL_LOG(ERR, "arg_len: %zu, too long!", arg_len);
-		return -1;
-	}
 
 	if (arg_len > NBL_CHAN_TX_DESC_EMBEDDED_DATA_LEN) {
 		memcpy(va, arg, arg_len);
@@ -417,6 +465,7 @@ static int nbl_chan_send_msg(void *priv, struct nbl_chan_send_info *chan_send)
 	uint16_t msgid;
 	int ret;
 	int retry_time = 0;
+	int status = NBL_MBX_STATUS_WAITING;
 
 	if (chan_mgt->state)
 		return -EIO;
@@ -430,8 +479,7 @@ static int nbl_chan_send_msg(void *priv, struct nbl_chan_send_info *chan_send)
 
 	if (msgid == 0xFFFF) {
 		rte_spinlock_unlock(&chan_info->mailbox.txq_lock);
-		NBL_LOG(ERR, "chan tx queue full, send msgtype:%u"
-			" to dstid:%u failed",
+		NBL_LOG(ERR, "chan tx queue full, send msgtype:%u to dstid:%u failed",
 			chan_send->msg_type, chan_send->dstid);
 		return -ECOMM;
 	}
@@ -445,23 +493,34 @@ static int nbl_chan_send_msg(void *priv, struct nbl_chan_send_info *chan_send)
 	wait_head = &chan_info->mailbox.wait[msgid];
 	wait_head->ack_data = chan_send->resp;
 	wait_head->ack_data_len = chan_send->resp_len;
-	rte_atomic_store_explicit(&wait_head->acked, 0, rte_memory_order_relaxed);
 	wait_head->msg_type = chan_send->msg_type;
-	rte_wmb();
+	rte_atomic_store_explicit(&wait_head->status, NBL_MBX_STATUS_WAITING,
+				  rte_memory_order_release);
 	nbl_chan_kick_tx_ring(chan_mgt, chan_info);
 	rte_spinlock_unlock(&chan_info->mailbox.txq_lock);
 
 	while (1) {
-		if (rte_atomic_load_explicit(&wait_head->acked, rte_memory_order_acquire))
-			return wait_head->ack_err;
+		if (rte_atomic_load_explicit(&wait_head->status, rte_memory_order_acquire) ==
+		    NBL_MBX_STATUS_ACKED) {
+			ret = wait_head->ack_err;
+			rte_atomic_store_explicit(&wait_head->status, NBL_MBX_STATUS_IDLE,
+						  rte_memory_order_release);
+			return ret;
+		}
 
 		rte_delay_us(50);
 		retry_time++;
-		if (retry_time > NBL_CHAN_RETRY_TIMES)
-			return -EIO;
+		if (retry_time > NBL_CHAN_RETRY_TIMES &&
+		    rte_atomic_compare_exchange_strong_explicit(&wait_head->status,
+								&status, NBL_MBX_STATUS_TIMEOUT,
+								rte_memory_order_acq_rel,
+								rte_memory_order_relaxed)) {
+			NBL_LOG(ERR, "send msgtype:%u msgid %u to dstid:%u timeout",
+				chan_send->msg_type, msgid, chan_send->dstid);
+			break;
+		}
 	}
-
-	return 0;
+	return -EIO;
 }
 
 static int nbl_chan_send_ack(void *priv, struct nbl_chan_ack_info *chan_ack)

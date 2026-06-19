@@ -190,6 +190,10 @@ mlx5_rxq_info_get(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 		RTE_BIT32(rxq->elts_n);
 	qinfo->avail_thresh = rxq_priv ?
 		mlx5_rxq_lwm_to_percentage(rxq_priv) : 0;
+	if (rxq_ctrl != NULL) {
+		qinfo->conf.share_group = rxq_ctrl->share_group;
+		qinfo->conf.share_qid = rxq_ctrl->share_qid;
+	}
 }
 
 /**
@@ -618,7 +622,7 @@ mlx5_rx_err_handle(struct mlx5_rxq_data *rxq, uint8_t vec,
 		}
 		/* Try to find the actual cq_ci in hardware for shared queue. */
 		if (rxq->shared)
-			rxq_sync_cq(rxq);
+			mlx5_rxq_sync_cq(rxq);
 		rxq->err_state = MLX5_RXQ_ERR_STATE_NEED_READY;
 		/* Fall-through */
 	case MLX5_RXQ_ERR_STATE_NEED_READY:
@@ -1000,8 +1004,7 @@ rxq_cq_to_mbuf(struct mlx5_rxq_data *rxq, struct rte_mbuf *pkt,
 			vlan_strip = cqe->hdr_type_etc &
 				     RTE_BE16(MLX5_CQE_VLAN_STRIPPED);
 		else
-			vlan_strip = mcqe->hdr_type &
-				     RTE_BE16(MLX5_CQE_VLAN_STRIPPED);
+			vlan_strip = mcqe->hdr_type & MLX5_CQE_VLAN_STRIPPED;
 		if (vlan_strip) {
 			pkt->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
 			pkt->vlan_tci = rte_be_to_cpu_16(cqe->vlan_info);
@@ -1708,7 +1711,7 @@ mlx5_rx_queue_lwm_set(struct rte_eth_dev *dev, uint16_t rx_queue_id,
 	}
 	rxq_data = &rxq->ctrl->rxq;
 	/* Ensure the Rq is created by devx. */
-	if (priv->obj_ops.rxq_obj_new != devx_obj_ops.rxq_obj_new) {
+	if (priv->obj_ops.rxq_obj_new != mlx5_devx_obj_ops.rxq_obj_new) {
 		rte_errno = EINVAL;
 		return -rte_errno;
 	}

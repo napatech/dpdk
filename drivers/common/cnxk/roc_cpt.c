@@ -677,10 +677,9 @@ cpt_get_blkaddr(struct dev *dev)
 	 * attached to. Assume CPT LF's of only one block are attached
 	 * to a pffunc.
 	 */
-	if (dev_is_vf(dev))
-		off = RVU_VF_BLOCK_ADDRX_DISC(RVU_BLOCK_ADDR_CPT1);
-	else
-		off = RVU_PF_BLOCK_ADDRX_DISC(RVU_BLOCK_ADDR_CPT1);
+
+	/* PF and VF block address offset is same, hence using common offset */
+	off = RVU_BLOCK_ADDRX_DISC(RVU_BLOCK_ADDR_CPT1);
 
 	reg = plt_read64(dev->bar2 + off);
 
@@ -712,7 +711,7 @@ cpt_lf_cq_init(struct roc_cpt_lf *lf)
 
 	lf_cq_base.s.addr = addr >> 7;
 	plt_write64(lf_cq_base.u, lf->rbase + CPT_LF_CQ_BASE);
-	lf_cq_size.s.size = PLT_ALIGN(len, ROC_ALIGN);
+	lf_cq_size.s.size = lf->cq_size;
 	plt_write64(lf_cq_size.u, lf->rbase + CPT_LF_CQ_SIZE);
 
 	return 0;
@@ -1275,8 +1274,8 @@ roc_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa_dptr, void *sa_cptr,
 	uint8_t egrp;
 	int i;
 
-	if (!plt_is_aligned(sa_cptr, 128)) {
-		plt_err("Context pointer should be 128B aligned");
+	if (!plt_is_aligned(sa_cptr, ROC_CPTR_ALIGN)) {
+		plt_err("Context pointer should be %dB aligned", ROC_CPTR_ALIGN);
 		return -EINVAL;
 	}
 

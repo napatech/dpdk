@@ -52,6 +52,11 @@ if meson.version().version_compare('>=1.1.0')
         endif
 endif
 
+if soc_type == 'all'
+    disable_template = true
+    cflags += '-DCNXK_DIS_TMPLT_FUNC'
+endif
+
 if soc_type == 'cn9k' or soc_type == 'all'
 # CN9K
 sources += files(
@@ -328,6 +333,7 @@ deps += ['bus_pci', 'cryptodev', 'eventdev', 'security']
 deps += ['common_cnxk', 'mempool_cnxk']
 
 cflags += no_wvla_cflag
+cflags += no_shadow_cflag
 
 # Allow implicit vector conversions and strict aliasing warning
 extra_flags = ['-flax-vector-conversions', '-Wno-strict-aliasing']

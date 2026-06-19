@@ -1,8 +1,6 @@
-/* * SPDX-License-Identifier: BSD-3-Clause
- *
- *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016-2025 NXP
- *
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
+ * Copyright 2016-2025 NXP
  */
 
 #include <time.h>
@@ -36,6 +34,8 @@
 #define DRIVER_TX_CONF "drv_tx_conf"
 #define DRIVER_RX_PARSE_ERR_DROP "drv_rx_parse_drop"
 #define DRIVER_ERROR_QUEUE  "drv_err_queue"
+#define DRIVER_NO_TAILDROP  "drv_no_taildrop"
+#define DRIVER_NO_DATA_STASHING "drv_no_data_stashing"
 #define CHECK_INTERVAL         100  /* 100ms */
 #define MAX_REPEAT_TIME        90   /* 9s (90 * 100ms) in total */
 
@@ -76,8 +76,9 @@ int dpaa2_timestamp_dynfield_offset = -1;
 
 bool dpaa2_print_parser_result;
 
-#define MAX_NB_RX_DESC		11264
-int total_nb_rx_desc;
+/* Rx descriptor limit when DPNI loads PFDRs in PEB */
+#define MAX_NB_RX_DESC_IN_PEB	11264
+static int total_nb_rx_desc;
 
 int dpaa2_valid_dev;
 struct rte_mempool *dpaa2_tx_sg_pool;
@@ -444,34 +445,18 @@ dpaa2_dev_rx_burst_mode_get(struct rte_eth_dev *dev,
 	__rte_unused uint16_t queue_id,
 	struct rte_eth_burst_mode *mode)
 {
-	struct rte_eth_conf *eth_conf = &dev->data->dev_conf;
-	int ret = -EINVAL;
-	unsigned int i;
-	const struct burst_info {
-		uint64_t flags;
-		const char *output;
-	} rx_offload_map[] = {
-			{RTE_ETH_RX_OFFLOAD_CHECKSUM, " Checksum,"},
-			{RTE_ETH_RX_OFFLOAD_SCTP_CKSUM, " SCTP csum,"},
-			{RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM, " Outer IPV4 csum,"},
-			{RTE_ETH_RX_OFFLOAD_OUTER_UDP_CKSUM, " Outer UDP csum,"},
-			{RTE_ETH_RX_OFFLOAD_VLAN_STRIP, " VLAN strip,"},
-			{RTE_ETH_RX_OFFLOAD_VLAN_FILTER, " VLAN filter,"},
-			{RTE_ETH_RX_OFFLOAD_TIMESTAMP, " Timestamp,"},
-			{RTE_ETH_RX_OFFLOAD_RSS_HASH, " RSS,"},
-			{RTE_ETH_RX_OFFLOAD_SCATTER, " Scattered,"}
-	};
+	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
 
-	/* Update Rx offload info */
-	for (i = 0; i < RTE_DIM(rx_offload_map); i++) {
-		if (eth_conf->rxmode.offloads & rx_offload_map[i].flags) {
-			snprintf(mode->info, sizeof(mode->info), "%s",
-				rx_offload_map[i].output);
-			ret = 0;
-			break;
-		}
-	}
-	return ret;
+	if (pkt_burst == dpaa2_dev_prefetch_rx)
+		snprintf(mode->info, sizeof(mode->info), "%s", "Scalar Prefetch");
+	else if (pkt_burst == dpaa2_dev_rx)
+		snprintf(mode->info, sizeof(mode->info), "%s", "Scalar");
+	else if (pkt_burst == dpaa2_dev_loopback_rx)
+		snprintf(mode->info, sizeof(mode->info), "%s", "Loopback");
+	else
+		return -EINVAL;
+
+	return 0;
 }
 
 static int
@@ -479,34 +464,18 @@ dpaa2_dev_tx_burst_mode_get(struct rte_eth_dev *dev,
 			__rte_unused uint16_t queue_id,
 			struct rte_eth_burst_mode *mode)
 {
-	struct rte_eth_conf *eth_conf = &dev->data->dev_conf;
-	int ret = -EINVAL;
-	unsigned int i;
-	const struct burst_info {
-		uint64_t flags;
-		const char *output;
-	} tx_offload_map[] = {
-			{RTE_ETH_TX_OFFLOAD_VLAN_INSERT, " VLAN Insert,"},
-			{RTE_ETH_TX_OFFLOAD_IPV4_CKSUM, " IPV4 csum,"},
-			{RTE_ETH_TX_OFFLOAD_UDP_CKSUM, " UDP csum,"},
-			{RTE_ETH_TX_OFFLOAD_TCP_CKSUM, " TCP csum,"},
-			{RTE_ETH_TX_OFFLOAD_SCTP_CKSUM, " SCTP csum,"},
-			{RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM, " Outer IPV4 csum,"},
-			{RTE_ETH_TX_OFFLOAD_MT_LOCKFREE, " MT lockfree,"},
-			{RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE, " MBUF free disable,"},
-			{RTE_ETH_TX_OFFLOAD_MULTI_SEGS, " Scattered,"}
-	};
+	eth_tx_burst_t pkt_burst = dev->tx_pkt_burst;
 
-	/* Update Tx offload info */
-	for (i = 0; i < RTE_DIM(tx_offload_map); i++) {
-		if (eth_conf->txmode.offloads & tx_offload_map[i].flags) {
-			snprintf(mode->info, sizeof(mode->info), "%s",
-				tx_offload_map[i].output);
-			ret = 0;
-			break;
-		}
-	}
-	return ret;
+	if (pkt_burst == dpaa2_dev_tx)
+		snprintf(mode->info, sizeof(mode->info), "%s", "Scalar");
+	else if (pkt_burst == dpaa2_dev_tx_ordered)
+		snprintf(mode->info, sizeof(mode->info), "%s", "Ordered");
+	else if (pkt_burst == rte_eth_pkt_burst_dummy)
+		snprintf(mode->info, sizeof(mode->info), "%s", "Dummy");
+	else
+		return -EINVAL;
+
+	return 0;
 }
 
 static int
@@ -622,9 +591,11 @@ fail:
 		priv->rx_vq[i--] = NULL;
 	}
 
-	if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
+	if (priv->rx_err_vq) {
 		dpaa2_q = priv->rx_err_vq;
 		dpaa2_queue_storage_free(dpaa2_q, RTE_MAX_LCORE);
+		rte_free(dpaa2_q);
+		priv->rx_err_vq = NULL;
 	}
 
 	rte_free(mc_q);
@@ -663,6 +634,9 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 
 	/* Queue allocation base */
 	if (priv->rx_vq[0]) {
+		/* Save base pointer before the loop NULLs rx_vq[] entries */
+		void *mc_q = priv->rx_vq[0];
+
 		/* cleaning up queue storage */
 		for (i = 0; i < priv->nb_rx_queues; i++) {
 			dpaa2_q = priv->rx_vq[i];
@@ -687,14 +661,15 @@ dpaa2_free_rx_tx_queues(struct rte_eth_dev *dev)
 				priv->tx_conf_vq[i] = NULL;
 			}
 		}
-		if (priv->flags & DPAAX_RX_ERROR_QUEUE_FLAG) {
+		if (priv->rx_err_vq) {
 			dpaa2_q = priv->rx_err_vq;
 			dpaa2_queue_storage_free(dpaa2_q, RTE_MAX_LCORE);
+			rte_free(dpaa2_q);
+			priv->rx_err_vq = NULL;
 		}
 
 		/*free memory for all queues (RX+TX) */
-		rte_free(priv->rx_vq[0]);
-		priv->rx_vq[0] = NULL;
+		rte_free(mc_q);
 	}
 }
 
@@ -901,10 +876,14 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 			dev, rx_queue_id, mb_pool, rx_conf);
 
 	total_nb_rx_desc += nb_rx_desc;
-	if (total_nb_rx_desc > MAX_NB_RX_DESC) {
-		DPAA2_PMD_WARN("Total nb_rx_desc exceeds %d limit. Please use Normal buffers",
-			       MAX_NB_RX_DESC);
-		DPAA2_PMD_WARN("To use Normal buffers, run 'export DPNI_NORMAL_BUF=1' before running dynamic_dpl.sh script");
+	if (total_nb_rx_desc > MAX_NB_RX_DESC_IN_PEB &&
+	    (priv->options & DPNI_OPT_V1_PFDR_IN_PEB)) {
+		DPAA2_PMD_WARN("RX descriptor exceeds limit(%d) to load PFDR in PEB",
+			       MAX_NB_RX_DESC_IN_PEB);
+		DPAA2_PMD_WARN("Suggest removing 0x%08x from DPNI creating options(0x%08x)",
+			       DPNI_OPT_V1_PFDR_IN_PEB, priv->options);
+		DPAA2_PMD_WARN("Or reduce RX descriptor number(%d) per queue",
+			       nb_rx_desc);
 	}
 
 	if (!priv->bp_list || priv->bp_list->mp != mb_pool) {
@@ -922,7 +901,6 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	dpaa2_q = priv->rx_vq[rx_queue_id];
 	dpaa2_q->mb_pool = mb_pool; /**< mbuf pool to populate RX ring. */
 	dpaa2_q->bp_array = rte_dpaa2_bpid_info;
-	dpaa2_q->nb_desc = UINT16_MAX;
 	dpaa2_q->offloads = rx_conf->offloads;
 
 	/*Get the flow id from given VQ id*/
@@ -954,7 +932,7 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		options |= DPNI_QUEUE_OPT_FLC;
 		cfg.flc.stash_control = true;
 		dpaa2_flc_stashing_clear_all(&cfg.flc.value);
-		if (getenv("DPAA2_DATA_STASHING_OFF")) {
+		if (priv->flags & DPAA2_DATA_STASHING_OFF) {
 			dpaa2_flc_stashing_set(DPAA2_FLC_DATA_STASHING, 0,
 				&cfg.flc.value);
 			dpaa2_q->data_stashing_off = 1;
@@ -975,11 +953,12 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		return ret;
 	}
 
+	dpaa2_q->nb_desc = nb_rx_desc;
+
 	if (!(priv->flags & DPAA2_RX_TAILDROP_OFF)) {
 		struct dpni_taildrop taildrop;
 
 		taildrop.enable = 1;
-		dpaa2_q->nb_desc = nb_rx_desc;
 		/* Private CGR will use tail drop length as nb_rx_desc.
 		 * for rest cases we can use standard byte based tail drop.
 		 * There is no HW restriction, but number of CGRs are limited,
@@ -1383,9 +1362,6 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		return ret;
 	}
 
-	/* Power up the phy. Needed to make the link go UP */
-	dpaa2_dev_set_link_up(dev);
-
 	for (i = 0; i < data->nb_rx_queues; i++) {
 		dpaa2_q = data->rx_queues[i];
 		ret = dpni_get_queue(dpni, CMD_PRI_LOW, priv->token,
@@ -1452,6 +1428,12 @@ dpaa2_dev_start(struct rte_eth_dev *dev)
 		/* enable dpni_irqs */
 		dpaa2_eth_setup_irqs(dev, 1);
 	}
+
+	/* Power up the phy. Needed to make the link go UP.
+	 * Called after LSC interrupt setup so that the link-up
+	 * event is not missed if the MAC negotiates quickly.
+	 */
+	dpaa2_dev_set_link_up(dev);
 
 	/* Change the tx burst function if ordered queues are used */
 	if (priv->en_ordered)
@@ -1570,6 +1552,11 @@ dpaa2_dev_close(struct rte_eth_dev *dev)
 		rte_free(priv->extract.tc_extract_param[i]);
 
 	rte_free(priv->extract.qos_extract_param);
+
+	rte_free(priv->cnt_idx_dma_mem);
+	rte_free(priv->cnt_values_dma_mem);
+	priv->cnt_idx_dma_mem = NULL;
+	priv->cnt_values_dma_mem = NULL;
 
 	DPAA2_PMD_INFO("%s: netdev deleted", dev->data->name);
 	return 0;
@@ -1926,7 +1913,6 @@ dpaa2_dev_xstats_get(struct rte_eth_dev *dev,
 	unsigned int i = 0, j = 0, num = RTE_DIM(dpaa2_xstats_strings);
 	struct dpaa2_dev_priv *priv = dev->data->dev_private;
 	union dpni_statistics value[13] = {};
-	struct mc_version mc_ver_info = {0};
 	struct dpni_rx_tc_policing_cfg cfg;
 	uint8_t page_id, stats_id;
 	uint64_t *cnt_values;
@@ -1997,44 +1983,24 @@ dpaa2_dev_xstats_get(struct rte_eth_dev *dev,
 		i++;
 	}
 
-	if (mc_get_version(dpni, CMD_PRI_LOW, &mc_ver_info))
-		DPAA2_PMD_WARN("Unable to obtain MC version");
-
-	/* mac_statistics supported on MC version > 10.39.0 */
-	if (mc_ver_info.major >= MC_VER_MAJOR &&
-	    mc_ver_info.minor >= MC_VER_MINOR &&
-	    mc_ver_info.revision > 0) {
-		dpaa2_dev_mac_setup_stats(dev);
-		retcode = dpni_get_mac_statistics(dpni, CMD_PRI_LOW, priv->token,
-						  priv->cnt_idx_iova,
-						  priv->cnt_values_iova,
-						  DPAA2_MAC_NUM_STATS);
-		if (retcode) {
-			while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
-				xstats[i].id = i;
-				xstats[i].value = 0;
-				i++;
-			}
-		}
-		if (!retcode) {
-			cnt_values = priv->cnt_values_dma_mem;
-			while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
-				/* mac counters value */
-				xstats[i].id = i;
-				xstats[i].value = rte_le_to_cpu_64(*cnt_values++);
-				i++;
-			}
-		}
-		rte_free(priv->cnt_values_dma_mem);
-		rte_free(priv->cnt_idx_dma_mem);
-		priv->cnt_idx_dma_mem = NULL;
-		priv->cnt_values_dma_mem = NULL;
-	} else {
+	if (priv->cnt_idx_dma_mem &&
+	    !dpni_get_mac_statistics(dpni, CMD_PRI_LOW, priv->token,
+				    priv->cnt_idx_iova,
+				    priv->cnt_values_iova,
+				    DPAA2_MAC_NUM_STATS)) {
+		cnt_values = priv->cnt_values_dma_mem;
 		while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
 			xstats[i].id = i;
-			xstats[i].value = 0;
+			xstats[i].value = rte_le_to_cpu_64(*cnt_values++);
 			i++;
 		}
+		return i;
+	}
+
+	while (i >= (num - DPAA2_MAC_NUM_STATS) && i < num) {
+		xstats[i].id = i;
+		xstats[i].value = 0;
+		i++;
 	}
 
 	return i;
@@ -2342,7 +2308,7 @@ dpaa2_dev_set_link_down(struct rte_eth_dev *dev)
 		}
 		if (dpni_enabled)
 			/* Allow the MC some slack */
-			rte_delay_us(100 * 1000);
+			rte_delay_ms(CHECK_INTERVAL);
 	} while (dpni_enabled && --retries);
 
 	if (!retries) {
@@ -2924,6 +2890,17 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		DPAA2_PMD_INFO("Rx loopback mode");
 	}
 
+	if (dpaa2_get_devargs(dev->devargs, DRIVER_NO_TAILDROP)) {
+		priv->flags |= DPAA2_RX_TAILDROP_OFF;
+		DPAA2_PMD_INFO("Rx taildrop disabled");
+	}
+
+	if (dpaa2_get_devargs(dev->devargs, DRIVER_NO_DATA_STASHING) ||
+	    getenv("DPAA2_DATA_STASHING_OFF")) {
+		priv->flags |= DPAA2_DATA_STASHING_OFF;
+		DPAA2_PMD_INFO("Data stashing disabled");
+	}
+
 	/* For secondary processes, the primary has done all the work */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		/* In case of secondary, only burst and ops API need to be
@@ -3156,7 +3133,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		if (ret < 0) {
 			DPAA2_PMD_ERR(" Error(%d) in loading softparser",
 				      ret);
-			return ret;
+			goto init_err;
 		}
 
 		ret = dpaa2_eth_enable_wriop_soft_parser(priv,
@@ -3164,7 +3141,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		if (ret < 0) {
 			DPAA2_PMD_ERR(" Error(%d) in enabling softparser",
 				      ret);
-			return ret;
+			goto init_err;
 		}
 	}
 
@@ -3175,6 +3152,17 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		eth_dev->data->name, dpaa2_dev->ep_name);
 
 	priv->speed_capa = dpaa2_dev_get_speed_capability(eth_dev);
+
+	/* mac_statistics supported on MC version > 10.39.0 */
+	{
+		struct mc_version mc_ver_info = {0};
+
+		if (!mc_get_version(dpni_dev, CMD_PRI_LOW, &mc_ver_info) &&
+		    mc_ver_info.major >= MC_VER_MAJOR &&
+		    mc_ver_info.minor >= MC_VER_MINOR &&
+		    mc_ver_info.revision > 0)
+			dpaa2_dev_mac_setup_stats(eth_dev);
+	}
 
 	return 0;
 init_err:
@@ -3410,5 +3398,7 @@ RTE_PMD_REGISTER_PARAM_STRING(NET_DPAA2_PMD_DRIVER_NAME,
 		DRIVER_NO_PREFETCH_MODE "=<int>"
 		DRIVER_TX_CONF "=<int>"
 		DRIVER_RX_PARSE_ERR_DROP "=<int>"
-		DRIVER_ERROR_QUEUE "=<int>");
+		DRIVER_ERROR_QUEUE "=<int>"
+		DRIVER_NO_TAILDROP "=<int>"
+		DRIVER_NO_DATA_STASHING "=<int>");
 RTE_LOG_REGISTER_DEFAULT(dpaa2_logtype_pmd, NOTICE);

@@ -63,7 +63,7 @@ class LinkTopology(IntEnum):
     @classmethod
     def default(cls) -> "LinkTopology":
         """The default topology required by test cases if not specified otherwise."""
-        return cls.TWO_LINKS
+        return cls.ONE_LINK
 
 
 class NicCapability(IntEnum):
@@ -218,6 +218,10 @@ class NicCapability(IntEnum):
     #:
     PORT_TX_OFFLOAD_SEND_ON_TIMESTAMP = auto()
     QUEUE_TX_OFFLOAD_SEND_ON_TIMESTAMP = auto()
+
+    def __str__(self):
+        """Override the default string representation to return the name of the capability."""
+        return self.name
 
 
 def requires_link_topology(

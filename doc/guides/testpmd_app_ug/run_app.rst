@@ -386,13 +386,19 @@ The command line options are:
 
     Generate multiple flows in txonly mode.
 
-*   ``--rxq-share=[X]``
+*   ``--txonly-flows=N``
+
+    Set the number of unique flows per lcore
+    when txonly multi-flow mode is enabled.
+    Valid range is 1 to 64. Default is 64.
+    Reducing this value limits the number of unique UDP source ports generated.
+
+*   ``--rxq-share``
 
     Create queues in shared Rx queue mode if device supports.
-    Shared Rx queues are grouped per X ports. X defaults to UINT32_MAX,
-    implies all ports join share group 1. Forwarding engine "shared-rxq"
-    should be used for shared Rx queues. This engine does Rx only and
-    update stream statistics accordingly.
+    Testpmd will assign unique share group index per each unique switch and Rx domain.
+    Forwarding engine "shared-rxq" should be used for shared Rx queues.
+    This engine does Rx only and updates stream statistics accordingly.
 
 *   ``--eth-link-speed``
 

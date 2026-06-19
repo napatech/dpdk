@@ -137,6 +137,7 @@ struct nbl_res_tx_ring {
 	volatile struct nbl_packed_desc *desc;
 	struct nbl_tx_entry *tx_entry;
 	const struct rte_memzone *net_hdr_mz;
+	const struct rte_memzone *desc_mz;
 	volatile uint8_t *notify;
 	const struct rte_eth_dev *eth_dev;
 	struct nbl_common_info *common;
@@ -178,6 +179,7 @@ struct nbl_res_tx_ring {
 struct nbl_res_rx_ring {
 	volatile struct nbl_packed_desc *desc;
 	struct nbl_rx_entry *rx_entry;
+	const struct rte_memzone *desc_mz;
 	struct rte_mempool *mempool;
 	volatile uint8_t *notify;
 	const struct rte_eth_dev *eth_dev;
@@ -217,8 +219,6 @@ struct nbl_txrx_mgt {
 	struct nbl_res_tx_ring **tx_rings;
 	struct nbl_res_rx_ring **rx_rings;
 	u16 queue_offset;
-	u8 tx_ring_num;
-	u8 rx_ring_num;
 };
 
 struct nbl_res_info {

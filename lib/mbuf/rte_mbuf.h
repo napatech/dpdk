@@ -780,9 +780,7 @@ void rte_pktmbuf_pool_init(struct rte_mempool *mp, void *opaque_arg);
  * @param name
  *   The name of the mbuf pool.
  * @param n
- *   The number of elements in the mbuf pool. The optimum size (in terms
- *   of memory usage) for a mempool is when n is a power of two minus one:
- *   n = (2^q - 1).
+ *   The number of elements in the mbuf pool.
  * @param cache_size
  *   Size of the per-core object cache. See rte_mempool_create() for
  *   details.
@@ -818,9 +816,7 @@ rte_pktmbuf_pool_create(const char *name, unsigned n,
  * @param name
  *   The name of the mbuf pool.
  * @param n
- *   The number of elements in the mbuf pool. The optimum size (in terms
- *   of memory usage) for a mempool is when n is a power of two minus one:
- *   n = (2^q - 1).
+ *   The number of elements in the mbuf pool.
  * @param cache_size
  *   Size of the per-core object cache. See rte_mempool_create() for
  *   details.
@@ -867,9 +863,7 @@ struct rte_pktmbuf_extmem {
  * @param name
  *   The name of the mbuf pool.
  * @param n
- *   The number of elements in the mbuf pool. The optimum size (in terms
- *   of memory usage) for a mempool is when n is a power of two minus one:
- *   n = (2^q - 1).
+ *   The number of elements in the mbuf pool.
  * @param cache_size
  *   Size of the per-core object cache. See rte_mempool_create() for
  *   details.
@@ -1334,17 +1328,23 @@ static inline void
 __rte_pktmbuf_free_direct(struct rte_mbuf *m)
 {
 	struct rte_mbuf *md;
+	bool refcnt_not_one;
 
 	RTE_ASSERT(RTE_MBUF_CLONED(m));
 
 	md = rte_mbuf_from_indirect(m);
 
-	if (rte_mbuf_refcnt_update(md, -1) == 0) {
-		md->next = NULL;
-		md->nb_segs = 1;
+	refcnt_not_one = unlikely(rte_mbuf_refcnt_read(md) != 1);
+	if (refcnt_not_one && __rte_mbuf_refcnt_update(md, -1) != 0)
+		return;
+
+	if (refcnt_not_one)
 		rte_mbuf_refcnt_set(md, 1);
-		rte_mbuf_raw_free(md);
-	}
+	if (md->nb_segs != 1)
+		md->nb_segs = 1;
+	if (md->next != NULL)
+		md->next = NULL;
+	rte_mbuf_raw_free(md);
 }
 
 /**
@@ -1837,7 +1837,7 @@ const void *__rte_pktmbuf_read(const struct rte_mbuf *m, uint32_t off,
 static inline const void *rte_pktmbuf_read(const struct rte_mbuf *m,
 	uint32_t off, uint32_t len, void *buf)
 {
-	if (likely(off + len <= rte_pktmbuf_data_len(m)))
+	if (likely((uint64_t)off + len <= rte_pktmbuf_data_len(m)))
 		return rte_pktmbuf_mtod_offset(m, char *, off);
 	else
 		return __rte_pktmbuf_read(m, off, len, buf);

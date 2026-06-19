@@ -17,7 +17,6 @@
 #include <rte_common.h>
 #include <rte_log.h>
 #include <rte_memory.h>
-#include <rte_memcpy.h>
 #include <rte_eal.h>
 #include <rte_launch.h>
 #include <rte_cycles.h>
@@ -133,23 +132,23 @@ static struct rte_ether_addr vmdq_ports_eth_addr[RTE_MAX_ETHPORTS];
 static inline int
 get_eth_conf(struct rte_eth_conf *eth_conf)
 {
-	struct rte_eth_vmdq_dcb_conf conf;
-	struct rte_eth_vmdq_rx_conf  vmdq_conf;
-	struct rte_eth_dcb_rx_conf   dcb_conf;
-	struct rte_eth_vmdq_dcb_tx_conf tx_conf;
+	struct rte_eth_vmdq_dcb_conf conf = {
+		.nb_queue_pools = (enum rte_eth_nb_pools)num_pools,
+		.nb_pool_maps = num_pools,
+	};
+	struct rte_eth_vmdq_rx_conf vmdq_conf = {
+		.nb_queue_pools = (enum rte_eth_nb_pools)num_pools,
+		.nb_pool_maps = num_pools,
+	};
+	struct rte_eth_dcb_rx_conf dcb_conf = {
+		.nb_tcs = (enum rte_eth_nb_tcs)num_tcs,
+	};
+	struct rte_eth_vmdq_dcb_tx_conf tx_conf = {
+		.nb_queue_pools = (enum rte_eth_nb_pools)num_pools,
+	};
 	uint8_t i;
 
-	conf.nb_queue_pools = (enum rte_eth_nb_pools)num_pools;
-	vmdq_conf.nb_queue_pools = (enum rte_eth_nb_pools)num_pools;
-	tx_conf.nb_queue_pools = (enum rte_eth_nb_pools)num_pools;
-	conf.nb_pool_maps = num_pools;
-	vmdq_conf.nb_pool_maps = num_pools;
-	conf.enable_default_pool = 0;
-	vmdq_conf.enable_default_pool = 0;
-	conf.default_pool = 0; /* set explicit value, even if not used */
-	vmdq_conf.default_pool = 0;
-
-	for (i = 0; i < conf.nb_pool_maps; i++) {
+	for (i = 0; i < num_pools; i++) {
 		conf.pool_map[i].vlan_id = vlan_tags[i];
 		vmdq_conf.pool_map[i].vlan_id = vlan_tags[i];
 		conf.pool_map[i].pools = 1UL << i;
@@ -160,16 +159,13 @@ get_eth_conf(struct rte_eth_conf *eth_conf)
 		dcb_conf.dcb_tc[i] = i % num_tcs;
 		tx_conf.dcb_tc[i] = i % num_tcs;
 	}
-	dcb_conf.nb_tcs = (enum rte_eth_nb_tcs)num_tcs;
-	(void)(rte_memcpy(eth_conf, &vmdq_dcb_conf_default, sizeof(*eth_conf)));
-	(void)(rte_memcpy(&eth_conf->rx_adv_conf.vmdq_dcb_conf, &conf,
-			  sizeof(conf)));
-	(void)(rte_memcpy(&eth_conf->rx_adv_conf.dcb_rx_conf, &dcb_conf,
-			  sizeof(dcb_conf)));
-	(void)(rte_memcpy(&eth_conf->rx_adv_conf.vmdq_rx_conf, &vmdq_conf,
-			  sizeof(vmdq_conf)));
-	(void)(rte_memcpy(&eth_conf->tx_adv_conf.vmdq_dcb_tx_conf, &tx_conf,
-			  sizeof(tx_conf)));
+
+	*eth_conf = vmdq_dcb_conf_default;
+	eth_conf->rx_adv_conf.vmdq_dcb_conf = conf;
+	eth_conf->rx_adv_conf.dcb_rx_conf = dcb_conf;
+	eth_conf->rx_adv_conf.vmdq_rx_conf = vmdq_conf;
+	eth_conf->tx_adv_conf.vmdq_dcb_tx_conf = tx_conf;
+
 	if (rss_enable) {
 		eth_conf->rxmode.mq_mode = RTE_ETH_MQ_RX_VMDQ_DCB_RSS;
 		eth_conf->rx_adv_conf.rss_conf.rss_hf = RTE_ETH_RSS_IP |
