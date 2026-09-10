@@ -16,7 +16,7 @@
 /* In QLEN must be whole number of 32 descriptors. */
 #define IAVF_ALIGN_RING_DESC      32
 #define IAVF_MIN_RING_DESC        64
-#define IAVF_MAX_RING_DESC        4096
+#define IAVF_MAX_RING_DESC        (8192 - 32)
 #define IAVF_DMA_MEM_ALIGN        4096
 /* Base address of the HW descriptor ring should be 128B aligned. */
 #define IAVF_RING_BASE_ALIGN      128
@@ -156,11 +156,18 @@
 		(RTE_MBUF_F_TX_OFFLOAD_MASK ^ IAVF_TX_OFFLOAD_MASK)
 
 #define IAVF_TX_LLDP_DYNFIELD "intel_pmd_dynfield_tx_lldp"
-#define IAVF_CHECK_TX_LLDP(m) \
-	((rte_pmd_iavf_tx_lldp_dynfield_offset > 0) && \
-	(*RTE_MBUF_DYNFIELD((m), \
-			rte_pmd_iavf_tx_lldp_dynfield_offset, \
-			uint8_t *)))
+
+/* LLDP Tx modes */
+#define IAVF_LLDP_DISABLED 0
+#define IAVF_LLDP_PTYPE    1
+#define IAVF_LLDP_DYNFIELD 2
+
+#define IAVF_CHECK_TX_LLDP(m, lldp_mode) \
+	((lldp_mode) && \
+	((((lldp_mode) == IAVF_LLDP_PTYPE) && \
+	((m)->packet_type & RTE_PTYPE_L2_MASK) == RTE_PTYPE_L2_ETHER_LLDP) || \
+	(((lldp_mode) == IAVF_LLDP_DYNFIELD) && \
+	*RTE_MBUF_DYNFIELD((m), rte_pmd_iavf_tx_lldp_dynfield_offset, uint8_t *))))
 
 extern uint64_t iavf_timestamp_dynflag;
 extern int iavf_timestamp_dynfield_offset;
@@ -558,8 +565,6 @@ uint16_t iavf_recv_scattered_pkts_vec(void *rx_queue,
 uint16_t iavf_recv_scattered_pkts_vec_flex_rxd(void *rx_queue,
 					       struct rte_mbuf **rx_pkts,
 					       uint16_t nb_pkts);
-uint16_t iavf_xmit_fixed_burst_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
-				  uint16_t nb_pkts);
 uint16_t iavf_recv_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
 				 uint16_t nb_pkts);
 uint16_t iavf_recv_pkts_vec_avx2_offload(void *rx_queue, struct rte_mbuf **rx_pkts,
@@ -588,6 +593,10 @@ uint16_t iavf_xmit_pkts_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 				 uint16_t nb_pkts);
 uint16_t iavf_xmit_pkts_vec_avx2_offload(void *tx_queue, struct rte_mbuf **tx_pkts,
 					 uint16_t nb_pkts);
+uint16_t iavf_xmit_pkts_vec_avx2_ctx(void *tx_queue, struct rte_mbuf **tx_pkts,
+				  uint16_t nb_pkts);
+uint16_t iavf_xmit_pkts_vec_avx2_ctx_offload(void *tx_queue, struct rte_mbuf **tx_pkts,
+				  uint16_t nb_pkts);
 int iavf_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc);
 int iavf_rx_vec_dev_check(struct rte_eth_dev *dev);
 int iavf_tx_vec_dev_check(struct rte_eth_dev *dev);

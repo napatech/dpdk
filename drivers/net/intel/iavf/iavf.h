@@ -76,6 +76,7 @@
 #define IAVF_QUEUE_ITR_INTERVAL_MAX     8160 /* 8160 us */
 
 #define IAVF_ALARM_INTERVAL 50000 /* us */
+#define IAVF_PHC_SYNC_ALARM_INTERVAL_US 200000
 
 /* The overhead from MTU to max frame size.
  * Considering QinQ packet, the VLAN tag needs to be counted twice.
@@ -242,7 +243,8 @@ struct iavf_info {
 	volatile RTE_ATOMIC(enum virtchnl_ops) pend_cmd; /* pending command not finished */
 	RTE_ATOMIC(uint32_t) pend_cmd_count;
 	int cmd_retval; /* return value of the cmd response from PF */
-	uint8_t *aq_resp; /* buffer to store the adminq response from PF */
+	uint8_t aq_resp[IAVF_AQ_BUF_SZ]; /* buffer to store the adminq response from PF */
+	bool aq_intr_enabled;
 
 	/** iAVF watchdog enable */
 	bool watchdog_enabled;
@@ -289,6 +291,8 @@ struct iavf_info {
 	struct rte_eth_dev *eth_dev;
 
 	bool in_reset_recovery;
+	bool reset_pending;
+	bool pf_reset_in_progress;
 
 	uint32_t ptp_caps;
 	rte_spinlock_t phc_time_aq_lock;
@@ -319,8 +323,10 @@ struct iavf_devargs {
 	uint16_t quanta_size;
 	uint32_t watchdog_period;
 	int auto_reset;
+	int auto_reconfig;
 	int no_poll_on_link_down;
 	uint64_t mbuf_check;
+	int enable_ptype_lldp;
 };
 
 struct iavf_security_ctx;
@@ -334,6 +340,9 @@ enum iavf_rx_func_type {
 	IAVF_RX_BULK_ALLOC,
 	IAVF_RX_BULK_ALLOC_FLEX_RXD,
 	IAVF_RX_NEON,
+	IAVF_RX_NEON_SCATTERED,
+	IAVF_RX_NEON_FLEX_RXD,
+	IAVF_RX_NEON_SCATTERED_FLEX_RXD,
 	IAVF_RX_AVX2,
 	IAVF_RX_AVX2_SCATTERED,
 	IAVF_RX_AVX2_OFFLOAD,
@@ -355,8 +364,11 @@ enum iavf_rx_func_type {
 enum iavf_tx_func_type {
 	IAVF_TX_DISABLED,
 	IAVF_TX_DEFAULT,
+	IAVF_TX_NEON,
 	IAVF_TX_AVX2,
 	IAVF_TX_AVX2_OFFLOAD,
+	IAVF_TX_AVX2_CTX,
+	IAVF_TX_AVX2_CTX_OFFLOAD,
 	IAVF_TX_AVX512,
 	IAVF_TX_AVX512_OFFLOAD,
 	IAVF_TX_AVX512_CTX,
@@ -383,8 +395,12 @@ struct iavf_adapter {
 	enum iavf_rx_func_type rx_func_type;
 	enum iavf_tx_func_type tx_func_type;
 	uint16_t fdir_ref_cnt;
+	rte_spinlock_t phc_sync_lock;
+	uint8_t phc_sync_ticks;
+	bool phc_sync_paused;
 	struct iavf_devargs devargs;
 	bool mac_primary_set;
+	uint16_t tpid;  /* VLAN tag identifier */
 };
 
 /* IAVF_DEV_PRIVATE_TO */
@@ -431,59 +447,6 @@ struct iavf_cmd_info {
 	uint32_t out_size;      /* buffer size for response */
 };
 
-/* notify current command done. Only call in case execute
- * _atomic_set_cmd successfully.
- */
-static inline void
-_notify_cmd(struct iavf_info *vf, int msg_ret)
-{
-	vf->cmd_retval = msg_ret;
-	rte_wmb();
-	vf->pend_cmd = VIRTCHNL_OP_UNKNOWN;
-}
-
-/* clear current command. Only call in case execute
- * _atomic_set_cmd successfully.
- */
-static inline void
-_clear_cmd(struct iavf_info *vf)
-{
-	rte_wmb();
-	vf->pend_cmd = VIRTCHNL_OP_UNKNOWN;
-	vf->cmd_retval = VIRTCHNL_STATUS_SUCCESS;
-}
-
-/* Check there is pending cmd in execution. If none, set new command. */
-static inline int
-_atomic_set_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
-{
-	enum virtchnl_ops op_unk = VIRTCHNL_OP_UNKNOWN;
-	int ret = rte_atomic_compare_exchange_strong_explicit(&vf->pend_cmd, &op_unk, ops,
-			rte_memory_order_acquire, rte_memory_order_acquire);
-
-	if (!ret)
-		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
-
-	rte_atomic_store_explicit(&vf->pend_cmd_count, 1, rte_memory_order_relaxed);
-
-	return !ret;
-}
-
-/* Check there is pending cmd in execution. If none, set new command. */
-static inline int
-_atomic_set_async_response_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
-{
-	enum virtchnl_ops op_unk = VIRTCHNL_OP_UNKNOWN;
-	int ret = rte_atomic_compare_exchange_strong_explicit(&vf->pend_cmd, &op_unk, ops,
-			rte_memory_order_acquire, rte_memory_order_acquire);
-
-	if (!ret)
-		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
-
-	rte_atomic_store_explicit(&vf->pend_cmd_count, 2, rte_memory_order_relaxed);
-
-	return !ret;
-}
 int iavf_check_api_version(struct iavf_adapter *adapter);
 int iavf_get_vf_resource(struct iavf_adapter *adapter);
 void iavf_dev_event_post(struct rte_eth_dev *dev,
@@ -507,7 +470,9 @@ int iavf_configure_rss_key(struct iavf_adapter *adapter);
 int iavf_configure_queues(struct iavf_adapter *adapter, uint16_t num_queue_pairs);
 int iavf_get_supported_rxdid(struct iavf_adapter *adapter);
 int iavf_config_vlan_strip_v2(struct iavf_adapter *adapter, bool enable);
+int iavf_config_outer_vlan_strip_v2(struct iavf_adapter *adapter, bool enable);
 int iavf_config_vlan_insert_v2(struct iavf_adapter *adapter, bool enable);
+int iavf_config_outer_vlan_insert_v2(struct iavf_adapter *adapter, bool enable);
 int iavf_add_del_vlan_v2(struct iavf_adapter *adapter, uint16_t vlanid,
 			 bool add);
 int iavf_get_vlan_offload_caps_v2(struct iavf_adapter *adapter);
@@ -517,8 +482,10 @@ void iavf_add_del_all_mac_addr(struct iavf_adapter *adapter, bool add);
 int iavf_dev_link_update(struct rte_eth_dev *dev,
 			__rte_unused int wait_to_complete);
 void iavf_dev_alarm_handler(void *param);
+void iavf_phc_sync_alarm_start(struct rte_eth_dev *dev);
+void iavf_phc_sync_alarm_stop(struct rte_eth_dev *dev);
 int iavf_query_stats(struct iavf_adapter *adapter,
-		    struct virtchnl_eth_stats **pstats);
+		    struct virtchnl_eth_stats *pstats);
 int iavf_config_promisc(struct iavf_adapter *adapter, bool enable_unicast,
 		       bool enable_multicast);
 int iavf_add_del_eth_addr(struct iavf_adapter *adapter,

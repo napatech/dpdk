@@ -790,6 +790,12 @@ rss_offload_types_display(uint64_t offload_types, uint16_t char_num_per_line)
 	printf("\n");
 }
 
+static void
+print_bool_capa(const char *label, int value)
+{
+	printf("%s: %s\n", label, value ? "supported" : "not supported");
+}
+
 void
 port_infos_display(portid_t port_id)
 {
@@ -802,6 +808,7 @@ port_infos_display(portid_t port_id)
 	static const char *info_border = "*********************";
 	uint16_t mtu;
 	char name[RTE_ETH_NAME_MAX_LEN];
+	char buf[16];
 	int ret;
 	char fw_version[ETHDEV_FWVERS_LEN];
 	uint32_t lanes;
@@ -835,7 +842,8 @@ port_infos_display(portid_t port_id)
 
 	if (rte_dev_devargs(dev_info.device) && rte_dev_devargs(dev_info.device)->args)
 		printf("\nDevargs: %s", rte_dev_devargs(dev_info.device)->args);
-	printf("\nConnect to socket: %u", port->socket_id);
+	printf("\nConnect to socket: %s",
+	       socket_id_str(port->socket_id, buf, sizeof(buf)));
 
 	if (port_numa[port_id] != NUMA_NO_CONFIG) {
 		mp = mbuf_pool_find(port_numa[port_id], 0);
@@ -843,7 +851,8 @@ port_infos_display(portid_t port_id)
 			printf("\nmemory allocation on the socket: %d",
 							port_numa[port_id]);
 	} else
-		printf("\nmemory allocation on the socket: %u",port->socket_id);
+		printf("\nmemory allocation on the socket: %s",
+		       socket_id_str(port->socket_id, buf, sizeof(buf)));
 
 	printf("\nLink status: %s\n", (link.link_status) ? ("up") : ("down"));
 	printf("Link speed: %s\n", rte_eth_link_speed_to_str(link.link_speed));
@@ -911,6 +920,17 @@ port_infos_display(portid_t port_id)
 		dev_info.max_rx_pktlen);
 	printf("Maximum configurable size of LRO aggregated packet: %u\n",
 		dev_info.max_lro_pkt_size);
+
+	printf("Rx split:\n");
+	printf("\tMax segments: %hu\n", dev_info.rx_seg_capa.max_nseg);
+	if (dev_info.rx_seg_capa.max_nseg > 0) {
+		print_bool_capa("\tMulti-pool", dev_info.rx_seg_capa.multi_pools);
+		print_bool_capa("\tBuffer offset", dev_info.rx_seg_capa.offset_allowed);
+		printf("\tOffset alignment: %u\n",
+				RTE_BIT32(dev_info.rx_seg_capa.offset_align_log2));
+		print_bool_capa("\tSelective Rx", dev_info.rx_seg_capa.selective_rx);
+	}
+
 	if (dev_info.max_vfs)
 		printf("Maximum number of VFs: %u\n", dev_info.max_vfs);
 	if (dev_info.max_vmdq_pools)
@@ -4162,7 +4182,7 @@ port_flow_flush(portid_t port_id)
 /** Dump flow rules. */
 int
 port_flow_dump(portid_t port_id, bool dump_all, uint64_t rule_id,
-		const char *file_name, bool is_user_id)
+		const char *file_name, bool is_user_id, bool append_to_file)
 {
 	int ret = 0;
 	FILE *file = stdout;
@@ -4198,7 +4218,7 @@ port_flow_dump(portid_t port_id, bool dump_all, uint64_t rule_id,
 	}
 
 	if (file_name && strlen(file_name)) {
-		file = fopen(file_name, "w");
+		file = fopen(file_name, append_to_file ? "a" : "w");
 		if (!file) {
 			fprintf(stderr, "Failed to create file %s: %s\n",
 				file_name, strerror(errno));
@@ -5625,6 +5645,7 @@ pkt_fwd_config_display(struct fwd_config *cfg)
 	struct fwd_stream *fs;
 	lcoreid_t  lc_id;
 	streamid_t sm_id;
+	char buf[16];
 
 	printf("%s%s%s packet forwarding%s - ports=%d - cores=%d - streams=%d - "
 		"NUMA support %s, MP allocation mode: %s\n",
@@ -5647,12 +5668,14 @@ pkt_fwd_config_display(struct fwd_config *cfg)
 		       fwd_lcores[lc_id]->stream_nb);
 		for (sm_id = 0; sm_id < fwd_lcores[lc_id]->stream_nb; sm_id++) {
 			fs = fwd_streams[fwd_lcores[lc_id]->stream_idx + sm_id];
-			printf("\n  RX P=%d/Q=%d (socket %u) -> TX "
-			       "P=%d/Q=%d (socket %u) ",
+			printf("\n  RX P=%d/Q=%d (socket %s) -> ",
 			       fs->rx_port, fs->rx_queue,
-			       ports[fs->rx_port].socket_id,
+			       socket_id_str(ports[fs->rx_port].socket_id,
+					     buf, sizeof(buf)));
+			printf("TX P=%d/Q=%d (socket %s) ",
 			       fs->tx_port, fs->tx_queue,
-			       ports[fs->tx_port].socket_id);
+			       socket_id_str(ports[fs->tx_port].socket_id,
+					     buf, sizeof(buf)));
 			print_ethaddr("peer=",
 				      &peer_eth_addrs[fs->peer_addr]);
 		}
@@ -6901,13 +6924,10 @@ vlan_tpid_set(portid_t port_id, enum rte_vlan_type vlan_type, uint16_t tp_id)
 }
 
 void
-tx_vlan_set(portid_t port_id, uint16_t vlan_id)
+tx_vlan_set(portid_t port_id, uint16_t vlan_tci)
 {
 	struct rte_eth_dev_info dev_info;
 	int ret;
-
-	if (vlan_id_is_invalid(vlan_id))
-		return;
 
 	if (ports[port_id].dev_conf.txmode.offloads &
 	    RTE_ETH_TX_OFFLOAD_QINQ_INSERT) {
@@ -6928,19 +6948,14 @@ tx_vlan_set(portid_t port_id, uint16_t vlan_id)
 
 	tx_vlan_reset(port_id);
 	ports[port_id].dev_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_VLAN_INSERT;
-	ports[port_id].tx_vlan_id = vlan_id;
+	ports[port_id].tx_vlan_tci = vlan_tci;
 }
 
 void
-tx_qinq_set(portid_t port_id, uint16_t vlan_id, uint16_t vlan_id_outer)
+tx_qinq_set(portid_t port_id, uint16_t vlan_tci, uint16_t vlan_tci_outer)
 {
 	struct rte_eth_dev_info dev_info;
 	int ret;
-
-	if (vlan_id_is_invalid(vlan_id))
-		return;
-	if (vlan_id_is_invalid(vlan_id_outer))
-		return;
 
 	ret = eth_dev_info_get_print_err(port_id, &dev_info);
 	if (ret != 0)
@@ -6956,8 +6971,8 @@ tx_qinq_set(portid_t port_id, uint16_t vlan_id, uint16_t vlan_id_outer)
 	tx_vlan_reset(port_id);
 	ports[port_id].dev_conf.txmode.offloads |= (RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
 						    RTE_ETH_TX_OFFLOAD_QINQ_INSERT);
-	ports[port_id].tx_vlan_id = vlan_id;
-	ports[port_id].tx_vlan_id_outer = vlan_id_outer;
+	ports[port_id].tx_vlan_tci = vlan_tci;
+	ports[port_id].tx_vlan_tci_outer = vlan_tci_outer;
 }
 
 void
@@ -6966,8 +6981,8 @@ tx_vlan_reset(portid_t port_id)
 	ports[port_id].dev_conf.txmode.offloads &=
 				~(RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
 				  RTE_ETH_TX_OFFLOAD_QINQ_INSERT);
-	ports[port_id].tx_vlan_id = 0;
-	ports[port_id].tx_vlan_id_outer = 0;
+	ports[port_id].tx_vlan_tci = 0;
+	ports[port_id].tx_vlan_tci_outer = 0;
 }
 
 void

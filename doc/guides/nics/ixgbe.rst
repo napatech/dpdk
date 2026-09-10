@@ -68,6 +68,7 @@ are listed in the Tested Platforms section of the Release Notes for each release
 ============  =====================  ===============  ===============
 DPDK version  Kernel driver version  E610 FW version  X550 FW version
 ============  =====================  ===============  ===============
+   26.07              6.4.4               1.60             3.70
    26.03              6.3.4               1.41             3.70
    25.11              6.2.5               1.30
 ============  =====================  ===============  ===============
@@ -102,7 +103,7 @@ By default, IXGBE_MAX_RING_DESC is set to 8192 and RTE_PMD_IXGBE_RX_MAX_BURST is
 Windows Prerequisites and Pre-conditions
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- Follow the :doc:`guide for Windows <../windows_gsg/run_apps>`
+- Follow the :doc:`guide for Windows </windows_gsg/run_apps>`
   to setup the basic DPDK environment.
 
 - Identify the Intel\ |reg| Ethernet adapter and get the latest NVM/FW version.
@@ -379,7 +380,7 @@ the VFs which are required.::
 Currently hot-plugging of representor ports is not supported so all required
 representors must be specified on the creation of the PF.
 
-.. _net_ixgbe_testpmd_commands:
+.. _ixgbe_testpmd_commands:
 
 Testpmd driver specific commands
 --------------------------------

@@ -214,8 +214,13 @@ crypto_asym_xform_strings[] = {
 	[RTE_CRYPTO_ASYM_XFORM_DH]	= "dh",
 	[RTE_CRYPTO_ASYM_XFORM_DSA]	= "dsa",
 	[RTE_CRYPTO_ASYM_XFORM_ECDSA]	= "ecdsa",
+	[RTE_CRYPTO_ASYM_XFORM_ECDH]	= "ecdh",
 	[RTE_CRYPTO_ASYM_XFORM_ECPM]	= "ecpm",
+	[RTE_CRYPTO_ASYM_XFORM_ECFPM]	= "ecfpm",
+	[RTE_CRYPTO_ASYM_XFORM_EDDSA]	= "eddsa",
 	[RTE_CRYPTO_ASYM_XFORM_SM2]	= "sm2",
+	[RTE_CRYPTO_ASYM_XFORM_ML_KEM]	= "ml-kem",
+	[RTE_CRYPTO_ASYM_XFORM_ML_DSA]	= "ml-dsa",
 };
 
 /**
@@ -811,6 +816,7 @@ cryptodev_cb_init(struct rte_cryptodev *dev)
 	if (dev->deq_cbs == NULL) {
 		CDEV_LOG_ERR("Failed to allocate memory for deq callbacks");
 		rte_free(dev->enq_cbs);
+		dev->enq_cbs = NULL;
 		return -ENOMEM;
 	}
 

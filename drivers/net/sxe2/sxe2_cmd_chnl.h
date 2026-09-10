@@ -1,0 +1,176 @@
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (C), 2025, Wuxi Stars Micro System Technologies Co., Ltd.
+ */
+
+#ifndef SXE2_CMD_CHNL_H
+#define SXE2_CMD_CHNL_H
+
+#include "sxe2_ethdev.h"
+#include "sxe2_drv_cmd.h"
+#include "sxe2_ioctl_chnl_func.h"
+
+int32_t sxe2_drv_dev_caps_get(struct sxe2_adapter *adapter,
+		struct sxe2_drv_dev_caps_resp *dev_caps);
+
+int32_t sxe2_drv_switchdev_info_get(struct sxe2_adapter *adapter,
+		struct sxe2_switchdev_info *switchdev_info);
+
+int32_t sxe2_drv_dev_info_get(struct sxe2_adapter *adapter,
+		struct sxe2_drv_dev_info_resp *dev_info_resp);
+
+int32_t sxe2_drv_dev_fw_info_get(struct sxe2_adapter *adapter,
+		struct sxe2_drv_dev_fw_info_resp *dev_fw_info_resp);
+
+int32_t sxe2_drv_vsi_add(struct sxe2_adapter *adapter, struct sxe2_vsi *vsi);
+
+int32_t sxe2_drv_vsi_del(struct sxe2_adapter *adapter, struct sxe2_vsi *vsi);
+
+int32_t sxe2_drv_rxq_switch(struct sxe2_adapter *adapter, struct sxe2_rx_queue *rxq, bool enable);
+
+int32_t sxe2_drv_txq_switch(struct sxe2_adapter *adapter, struct sxe2_tx_queue *txq, bool enable);
+
+int32_t sxe2_drv_rxq_ctxt_cfg(struct sxe2_adapter *adapter,
+			      struct sxe2_rx_queue *rxq,
+			      uint16_t rxq_cnt);
+
+int32_t sxe2_drv_txq_ctxt_cfg(struct sxe2_adapter *adapter,
+			      struct sxe2_tx_queue *txq,
+			      uint16_t txq_cnt);
+
+int32_t sxe2_drv_mac_link_status_get(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_promisc_config(struct sxe2_adapter *adapter, bool set);
+
+int32_t sxe2_drv_root_tree_release(struct rte_eth_dev *dev);
+
+int32_t sxe2_drv_root_tree_alloc(struct rte_eth_dev *dev);
+
+int32_t sxe2_drv_tm_commit(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_ipsec_resource_clear(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_ipsec_get_capa(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_ipsec_rxsa_add(struct sxe2_adapter *adapter,
+			    struct sxe2_ipsec_rx_sa *rx_sa,
+			    struct sxe2_ipsec_rx_tcam *rx_tcam,
+			    struct sxe2_ipsec_rx_udp_group *rx_udp_group);
+
+int32_t sxe2_drv_ipsec_txsa_add(struct sxe2_adapter *adapter,
+			    struct sxe2_ipsec_tx_sa *tx_sa);
+
+int32_t sxe2_drv_ipsec_rxsa_delete(struct sxe2_adapter *adapter,
+			       struct sxe2_ipsec_rx_sa *rx_sa);
+
+int32_t sxe2_drv_ipsec_txsa_delete(struct sxe2_adapter *adapter,
+			       uint16_t sa_id);
+
+int32_t sxe2_drv_promisc_config(struct sxe2_adapter *adapter, bool set);
+
+int32_t sxe2_drv_udp_tunnel_add(struct sxe2_adapter *adapter,
+			    enum sxe2_udp_tunnel_protocol tunnel_proto,
+			    uint16_t udp_port);
+
+int32_t sxe2_drv_udp_tunnel_del(struct sxe2_adapter *adapter,
+			    enum sxe2_udp_tunnel_protocol tunnel_proto,
+			    uint16_t udp_port);
+
+int32_t sxe2_drv_udp_tunnel_get(struct sxe2_adapter *adapter,
+			    struct sxe2_udp_tunnel_cfg *tunnel_config);
+
+int32_t sxe2_drv_get_udp_tunnel_port(struct sxe2_adapter *adapter,
+				 enum sxe2_flow_udp_tunnel_protocol proto,
+				 uint16_t *port);
+
+int32_t sxe2_drv_vsi_info_get(struct sxe2_adapter *adapter, struct sxe2_vsi *vsi);
+
+int32_t sxe2_drv_vsi_info_get(struct sxe2_adapter *adapter, struct sxe2_vsi *vsi);
+
+int32_t sxe2_drv_mac_link_status_get(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_get_mac_stats(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_mac_stats_reset(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_get_vsi_stats(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_vsi_stats_reset(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_queue_info_get_update(struct sxe2_adapter *adapter,
+				       struct eth_queue_stats *qstats);
+
+int32_t sxe2_drv_fc_state_get(struct sxe2_adapter *adapter,
+			      struct sxe2_drv_vsi_fc_get_resp *dev_fc_state_resp);
+
+int32_t sxe2_drv_rxq_mapping_set(struct rte_eth_dev *eth_dev, uint16_t queue_id, uint8_t pool_idx);
+
+int32_t sxe2_drv_txq_mapping_set(struct rte_eth_dev *eth_dev, uint16_t queue_id, uint8_t pool_idx);
+
+int32_t sxe2_drv_mapping_reset(struct rte_eth_dev *eth_dev);
+
+int32_t sxe2_drv_mapping_stats_info_clear(struct rte_eth_dev *eth_dev);
+
+int32_t sxe2_drv_rxq_mapping_set(struct rte_eth_dev *eth_dev, uint16_t queue_id, uint8_t pool_idx);
+
+int32_t sxe2_drv_allmulti_config(struct sxe2_adapter *adapter, bool set);
+
+int32_t sxe2_drv_uc_config(struct sxe2_adapter *adapter, struct rte_ether_addr *addr, bool add);
+
+int32_t sxe2_drv_switchdev_uplink_config(struct sxe2_adapter *adapter,  bool set);
+
+int32_t sxe2_drv_switchdev_repr_vf_config(struct sxe2_adapter *adapter,
+				struct sxe2_switchdev_repr_info *repr_vf, bool set);
+
+int32_t sxe2_drv_switchdev_cpvsi_get(struct sxe2_adapter *adapter, uint16_t *cp_vsi_id);
+
+int32_t sxe2_drv_switchdev_mode_get(struct sxe2_adapter *adapter, bool *is_switchdev);
+
+int32_t sxe2_drv_mc_config(struct sxe2_adapter *adapter, struct rte_ether_addr *addr, bool add);
+
+int32_t sxe2_drv_vlan_config_query(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_vlan_filter_id_config(struct sxe2_adapter *adapter,
+				       struct sxe2_vlan *vlan, bool on);
+
+int32_t sxe2_drv_vlan_insert_strip_cfg(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_vlan_filter_switch(struct sxe2_adapter *adapter, bool on);
+
+int32_t sxe2_drv_rss_key_set(struct sxe2_adapter *adapter, uint8_t *key, uint16_t key_size);
+
+int32_t sxe2_drv_rss_lut_set(struct sxe2_adapter *adapter, uint8_t *lut, uint16_t lut_size);
+
+int32_t sxe2_drv_rss_hash_ctrl_func(struct sxe2_adapter *adapter, enum sxe2_rss_hash_key_func func);
+
+int32_t sxe2_drv_rss_hf_add(struct sxe2_adapter *adapter,
+			struct sxe2_rss_hf_config *rss_conf);
+
+int32_t sxe2_drv_rss_hf_del(struct sxe2_adapter *adapter,
+				struct sxe2_rss_hf_config *rss_conf);
+
+int32_t sxe2_drv_rss_hf_clear(struct sxe2_adapter *adapter);
+
+int32_t sxe2_drv_ptp_gettime(struct sxe2_adapter *adapter, struct sxe2_rx_queue *rxq);
+
+int32_t sxe2_drv_rxq_bind_irq(struct sxe2_adapter *adapter, uint16_t rxq_idx, uint16_t msix_idx);
+
+int32_t sxe2_drv_rxq_unbind_irq(struct sxe2_adapter *adapter, uint16_t rxq_idx);
+
+int32_t sxe2_drv_flow_filter_add(struct sxe2_adapter *adapter, struct sxe2_flow *flow);
+
+int32_t sxe2_drv_flow_filter_del(struct sxe2_adapter *adapter, struct sxe2_flow *flow);
+
+int32_t sxe2_drv_flow_fnav_get_stat_id(struct sxe2_adapter *adapter, uint32_t *stat_id);
+
+int32_t sxe2_drv_flow_fnav_free_stat(struct sxe2_adapter *adapter, uint32_t stat_id);
+
+int32_t sxe2_drv_flow_fnav_query_stat(struct sxe2_adapter *adapter,
+		struct sxe2_fnav_cid_mgr *mgr);
+
+int32_t sxe2_drv_srcvsi_prune_config(struct sxe2_adapter *adapter,
+		uint16_t *vsi_list, uint16_t vsi_cnt, bool set);
+
+int32_t sxe2_drv_sfp_eeprom_read(struct sxe2_adapter *adapter,
+		struct sxe2_sfp_read_info *sfp_info);
+
+#endif /* SXE2_CMD_CHNL_H */

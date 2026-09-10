@@ -43,7 +43,7 @@ Apart from the basic methods explained above, the Hash Library API provides a fe
     the user to perform these operations faster, as the hash value is already computed.
 
 *   Add / lookup entry with key and data: A data is provided as input for add. Add allows the user to store
-    not only the key, but also the data which may be either a 8-byte integer or a pointer to external data (if data size is more than 8 bytes).
+    not only the key, but also the data which may be either an 8-byte integer or a pointer to external data (if data size is more than 8 bytes).
 
 *   Combination of the two options above: User can provide key, precomputed hash, and data.
 
@@ -73,7 +73,7 @@ multi-process mode).
 
 
 Multi-thread support
----------------------
+--------------------
 
 The hash library supports multithreading, and the user specifies the needed mode of operation at the creation time of the hash table
 by appropriately setting the flag. In all modes of operation lookups are thread-safe meaning lookups can be called from multiple
@@ -106,7 +106,7 @@ For concurrent writes, and concurrent reads and writes the following flag values
 
 
 Extendable Bucket Functionality support
-----------------------------------------
+---------------------------------------
 An extra flag is used to enable this functionality (flag is not set by default). When the (RTE_HASH_EXTRA_FLAGS_EXT_TABLE) is set and
 in the very unlikely case due to excessive hash collisions that a key has failed to be inserted, the hash table bucket is extended with a linked
 list to insert these failed keys. This feature is important for the workloads (e.g. telco workloads) that need to insert up to 100% of the
@@ -178,7 +178,7 @@ readers are not referencing the position anymore. User can configure integrated 
 
 
 Implementation Details (with Extendable Bucket)
--------------------------------------------------
+-----------------------------------------------
 When the RTE_HASH_EXTRA_FLAGS_EXT_TABLE flag is set, the hash table implementation still uses the same Cuckoo Hash algorithm to store the keys into
 the first and second tables. However, in the very unlikely event that a key can't be inserted after certain number of the Cuckoo displacements is
 reached, the secondary bucket of this key is extended
@@ -201,13 +201,11 @@ if there is a new entry to be added which primary location coincides with their 
 being pushed to their alternative location.
 Therefore, as user adds more entries to the hash table, distribution of the hash values
 in the buckets will change, being most of them in their primary location and a few in
-their secondary location, which the later will increase, as table gets busier.
+their secondary location, which the latter will increase, as table gets busier.
 This information is quite useful, as performance may be lower as more entries
 are evicted to their secondary location.
 
 See the tables below showing example entry distribution as table utilization increases.
-
-.. _table_hash_lib_1:
 
 .. table:: Entry distribution measured with an example table with 1024 random entries using jhash algorithm
 
@@ -230,8 +228,6 @@ See the tables below showing example entry distribution as table utilization inc
    +--------------+-----------------------+-------------------------+
 
 |
-
-.. _table_hash_lib_2:
 
 .. table:: Entry distribution measured with an example table with 1 million random entries using jhash algorithm
 

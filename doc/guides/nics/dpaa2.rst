@@ -406,7 +406,8 @@ Features of the DPAA2 PMD are:
 - Jumbo frames
 - Link flow control
 - Scattered and gather for TX and RX
-- :ref:`Traffic Management API <dptmapi>`
+- Rx queue interrupts
+- :ref:`dpaa2_dptmapi`
 
 
 Supported DPAA2 SoCs
@@ -419,9 +420,9 @@ Supported DPAA2 SoCs
 Prerequisites
 -------------
 
-See :doc:`../platform/dpaa2` for setup information
+See :doc:`/platform/dpaa2` for setup information
 
-- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
 .. note::
 
@@ -432,14 +433,11 @@ See :doc:`../platform/dpaa2` for setup information
 Driver compilation and testing
 ------------------------------
 
-Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-for details.
+Refer to the document :doc:`build_and_test` for details.
 
 #. Running testpmd:
 
-   Follow instructions available in the document
-   :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-   to run testpmd.
+   Follow instructions available in the document :doc:`build_and_test` to run testpmd.
 
    Example output:
 
@@ -553,13 +551,45 @@ is fixed and cannot be changed. So, even when the ``rxmode.mtu``
 member of ``struct rte_eth_conf`` is set to a value lower than 10240, frames
 up to 10240 bytes can still reach the host interface.
 
+Rx queue interrupts
+~~~~~~~~~~~~~~~~~~~
+
+Rx queue interrupts (``rte_eth_dev_rx_intr_*``) let a worker sleep on a queue
+instead of busy-polling.
+Note:
+
+- Each Rx queue needs its own DPCON (notification channel),
+  drawn from the shared fslmc bus pool.
+  The DPRC must provision at least as many DPCON objects
+  as Rx queues (these are shared with the event PMD);
+  queue setup fails with ``-ENODEV`` if the pool is exhausted.
+- ``rte_eth_dev_rx_intr_enable()`` / ``rte_eth_dev_rx_intr_disable()``
+  drive the per-lcore QBMan software portal
+  and must be called from the lcore that polls the queue.
+  The application must call ``rte_eth_dev_rx_intr_disable()`` on that lcore
+  before stopping or closing the port.
+- The queue's interrupt fd is bound when the queue is armed
+  (it follows the polling lcore's portal), not at queue setup.
+  The application must therefore arm a queue with ``rte_eth_dev_rx_intr_enable()``
+  before adding it to an epoll set with ``rte_eth_dev_rx_intr_ctl_q()``;
+  registering before arming would watch an unbound fd.
+  Several queues pinned to the same lcore share one portal fd,
+  so ``rte_eth_dev_rx_intr_ctl_q()`` returns ``-EEXIST`` after the first;
+  treat it as success.
+- The Rx error queue (``drv_err_queue`` devarg) is not drained
+  while a queue runs in interrupt mode.
+- The DPIO MSI is pinned to the polling core as a best-effort latency optimisation
+  (writes ``/proc/irq/<n>/smp_affinity``, needs privilege,
+  and irqbalance may move it back);
+  wakeups are delivered correctly regardless.
+
 Other Limitations
 ~~~~~~~~~~~~~~~~~
 
 - RSS hash key cannot be modified.
 - RSS RETA cannot be configured.
 
-.. _dptmapi:
+.. _dpaa2_dptmapi:
 
 Traffic Management API
 ----------------------
@@ -586,7 +616,7 @@ of configured tx queues.
 
 After hierarchy is complete it can be committed.
 
-For an additional description please refer to DPDK :doc:`../prog_guide/ethdev/traffic_management`.
+For an additional description please refer to DPDK :doc:`/prog_guide/ethdev/traffic_management`.
 
 Supported Features
 ~~~~~~~~~~~~~~~~~~
@@ -605,7 +635,7 @@ The following capabilities are supported:
 Usage example
 ~~~~~~~~~~~~~
 
-For a detailed usage description please refer to "Traffic Management" section in DPDK :doc:`../testpmd_app_ug/testpmd_funcs`.
+For a detailed usage description please refer to :ref:`testpmd_traffic_management`.
 
 #. Run testpmd as follows:
 

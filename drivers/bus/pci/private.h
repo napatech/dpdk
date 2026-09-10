@@ -29,23 +29,7 @@ extern int pci_bus_logtype;
 #define RTE_PCI_DEVICE_INTERNAL_CONST(ptr) \
 	container_of(ptr, const struct rte_pci_device_internal, device)
 
-/**
- * Structure describing the PCI bus
- */
-struct rte_pci_bus {
-	struct rte_bus bus;               /**< Inherit the generic class */
-	RTE_TAILQ_HEAD(, rte_pci_device) device_list; /**< List of PCI devices */
-	RTE_TAILQ_HEAD(, rte_pci_driver) driver_list; /**< List of PCI drivers */
-};
-
-extern struct rte_pci_bus rte_pci_bus;
-
-/* PCI Bus iterators */
-#define FOREACH_DEVICE_ON_PCIBUS(p)	\
-	RTE_TAILQ_FOREACH(p, &(rte_pci_bus.device_list), next)
-
-#define FOREACH_DRIVER_ON_PCIBUS(p)	\
-	RTE_TAILQ_FOREACH(p, &(rte_pci_bus.driver_list), next)
+extern struct rte_bus rte_pci_bus;
 
 struct rte_pci_driver;
 struct rte_pci_device;
@@ -81,42 +65,6 @@ pci_common_set(struct rte_pci_device *dev);
  */
 void
 pci_free(struct rte_pci_device_internal *pdev);
-
-/**
- * Validate whether a device with given PCI address should be ignored or not.
- *
- * @param pci_addr
- *	PCI address of device to be validated
- * @return
- *	true: if device is to be ignored,
- *	false: if device is to be scanned,
- */
-bool rte_pci_ignore_device(const struct rte_pci_addr *pci_addr);
-
-/**
- * Add a PCI device to the PCI Bus (append to PCI Device list). This function
- * also updates the bus references of the PCI Device (and the generic device
- * object embedded within.
- *
- * @param pci_dev
- *	PCI device to add
- * @return void
- */
-void rte_pci_add_device(struct rte_pci_device *pci_dev);
-
-/**
- * Insert a PCI device in the PCI Bus at a particular location in the device
- * list. It also updates the PCI Bus reference of the new devices to be
- * inserted.
- *
- * @param exist_pci_dev
- *	Existing PCI device in PCI Bus
- * @param new_pci_dev
- *	PCI device to be added before exist_pci_dev
- * @return void
- */
-void rte_pci_insert_device(struct rte_pci_device *exist_pci_dev,
-		struct rte_pci_device *new_pci_dev);
 
 /**
  * A structure describing a PCI mapping.
@@ -262,21 +210,6 @@ pci_uio_remap_resource(struct rte_pci_device *dev);
 int pci_uio_map_resource_by_index(struct rte_pci_device *dev, int res_idx,
 		struct mapped_pci_resource *uio_res, int map_idx);
 
-/*
- * Match the PCI Driver and Device using the ID Table
- *
- * @param pci_drv
- *      PCI driver from which ID table would be extracted
- * @param pci_dev
- *      PCI device to match against the driver
- * @return
- *      1 for successful match
- *      0 for unsuccessful match
- */
-int
-rte_pci_match(const struct rte_pci_driver *pci_drv,
-	      const struct rte_pci_device *pci_dev);
-
 /**
  * OS specific callbacks for rte_pci_get_iommu_class
  *
@@ -303,6 +236,9 @@ rte_pci_get_iommu_class(void);
  * matching any device against the provided
  * string.
  *
+ * @param bus
+ *   A pointer to the bus structure.
+ *
  * @param start
  *   Iteration starting point.
  *
@@ -317,7 +253,8 @@ rte_pci_get_iommu_class(void);
  *   NULL otherwise.
  */
 void *
-rte_pci_dev_iterate(const void *start,
+rte_pci_dev_iterate(const struct rte_bus *bus,
+		    const void *start,
 		    const char *str,
 		    const struct rte_dev_iterator *it);
 

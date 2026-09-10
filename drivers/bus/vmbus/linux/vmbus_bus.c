@@ -39,8 +39,6 @@ static const rte_uuid_t vmbus_nic_uuid = {
 	0xf2, 0xd2, 0xf9, 0x65, 0xed, 0xe
 };
 
-extern struct rte_vmbus_bus rte_vmbus_bus;
-
 /* Read sysfs file to get UUID */
 static int
 parse_sysfs_uuid(const char *filename, rte_uuid_t uu)
@@ -282,16 +280,14 @@ vmbus_scan_one(const char *name)
 	char filename[PATH_MAX];
 	char dirname[PATH_MAX];
 	unsigned long tmp;
-	char *dev_name;
 
 	dev = calloc(1, sizeof(*dev));
 	if (dev == NULL)
 		return -1;
 
-	dev->device.bus = &rte_vmbus_bus.bus;
-	dev->device.name = dev_name = strdup(name);
-	if (!dev->device.name)
+	if (rte_strscpy(dev->name, name, sizeof(dev->name)) < 0)
 		goto error;
+	dev->device.name = dev->name;
 
 	/* sysfs base directory
 	 *   /sys/bus/vmbus/devices/7a08391f-f5a0-4ac0-9802-d13fd964f8df
@@ -308,7 +304,6 @@ vmbus_scan_one(const char *name)
 
 	/* skip non-network devices */
 	if (rte_uuid_compare(dev->class_id, vmbus_nic_uuid) != 0) {
-		free(dev_name);
 		free(dev);
 		return 0;
 	}
@@ -333,7 +328,7 @@ vmbus_scan_one(const char *name)
 		dev->monitor_id = UINT8_MAX;
 	}
 
-	dev->device.devargs = vmbus_devargs_lookup(dev);
+	dev->device.devargs = rte_bus_find_devargs(&rte_vmbus_bus, dev->name);
 
 	dev->device.numa_node = SOCKET_ID_ANY;
 	if (vmbus_use_numa(dev)) {
@@ -348,16 +343,10 @@ vmbus_scan_one(const char *name)
 		}
 	}
 
-	/* Allocate interrupt handle instance */
-	dev->intr_handle =
-		rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
-	if (dev->intr_handle == NULL)
-		goto error;
-
 	/* device is valid, add in list (sorted) */
 	VMBUS_LOG(DEBUG, "Adding vmbus device %s", name);
 
-	TAILQ_FOREACH(dev2, &rte_vmbus_bus.device_list, next) {
+	RTE_BUS_FOREACH_DEV(dev2, &rte_vmbus_bus) {
 		int ret;
 
 		ret = rte_uuid_compare(dev->device_id, dev2->device_id);
@@ -365,22 +354,20 @@ vmbus_scan_one(const char *name)
 			continue;
 
 		if (ret < 0) {
-			vmbus_insert_device(dev2, dev);
+			rte_bus_insert_device(&rte_vmbus_bus, &dev2->device, &dev->device);
 		} else { /* already registered */
 			VMBUS_LOG(NOTICE,
 				"%s already registered", name);
-			free(dev_name);
 			free(dev);
 		}
 		return 0;
 	}
 
-	vmbus_add_device(dev);
+	rte_bus_add_device(&rte_vmbus_bus, &dev->device);
 	return 0;
 error:
 	VMBUS_LOG(DEBUG, "failed");
 
-	free(dev_name);
 	free(dev);
 	return -1;
 }

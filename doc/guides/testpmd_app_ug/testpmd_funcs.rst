@@ -1,8 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2010-2016 Intel Corporation.
 
-.. _testpmd_runtime:
-
 Testpmd Runtime Functions
 =========================
 
@@ -850,7 +848,8 @@ mbuf for remaining segments will be allocated from the last valid pool).
    testpmd> set rxpkts (x[,y]*)
 
 Where x[,y]* represents a CSV list of values, without white space. Zero value
-means to use the corresponding memory pool data buffer size.
+means to use the corresponding memory pool data buffer size,
+or to discard all remaining packet data for a discard segment (mbuf-size=0).
 
 set rxhdrs
 ~~~~~~~~~~
@@ -1117,17 +1116,40 @@ Remove an UDP port for VXLAN packet filter on a port::
 tx_vlan set
 ~~~~~~~~~~~
 
-Set hardware insertion of VLAN IDs in packets sent on a port::
+Set hardware insertion of VLAN TCI (Tag Control Information) in packets sent on a port::
 
-   testpmd> tx_vlan set (port_id) vlan_id[, vlan_id_outer]
+   testpmd> tx_vlan set (port_id) vlan_tci[, vlan_tci_outer]
+
+The ``vlan_tci`` parameter accepts the full 16-bit VLAN Tag Control Information (TCI):
+
+Bits 0-11
+   VLAN ID (0-4095).
+
+Bit 12
+   CFI (Canonical Format Indicator) / DEI (Drop Eligible Indicator).
+
+Bits 13-15
+   Priority (0-7, 802.1p Class of Service).
 
 For example, set a single VLAN ID (5) insertion on port 0::
 
-   tx_vlan set 0 5
+   testpmd> tx_vlan set 0 5
 
-Or, set double VLAN ID (inner: 2, outer: 3) insertion on port 1::
+Or, set a VLAN with priority 3 and VLAN ID 100 on port 0::
 
-   tx_vlan set 1 2 3
+   testpmd> tx_vlan set 0 0x6064
+
+Calculation: ``(priority << 13) | vlan_id``.
+Priority 3 in bits 13-15: ``(3 << 13) = 0x6000``.
+VLAN ID 100 in bits 0-11: ``100 = 0x0064``.
+Combined TCI: ``0x6000 | 0x0064 = 0x6064``.
+
+Or, set double VLAN with priority (inner: priority 2, ID 10; outer: priority 5, ID 20)::
+
+   testpmd> tx_vlan set 1 0x400A 0xA014
+
+Inner TCI calculation: ``(2 << 13) | 10 = 0x400A``.
+Outer TCI calculation: ``(5 << 13) | 20 = 0xA014``.
 
 
 tx_vlan set pvid
@@ -1586,6 +1608,13 @@ Set TX rate limitation for a queue on a port::
 
    testpmd> set port (port_id) queue (queue_id) rate (rate_value)
 
+get queue Tx rate
+~~~~~~~~~~~~~~~~~
+
+Get Tx rate limitation of a queue::
+
+   testpmd> show port (port_id) queue (queue_id) rate
+
 set port - tx_rate (for VF)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1706,7 +1735,7 @@ Map a Tx queue with an aggregated port of the DPDK port (specified with port_id)
 
 * ``affinity``: the number of the aggregated port.
                 When multiple ports are aggregated into a single one,
-                it allows to choose which port to use for Tx via a queue.
+                it allows choosing which port to use for Tx via a queue.
 
 This command should be run when the port is stopped, otherwise it fails.
 
@@ -1835,7 +1864,7 @@ To have a different decapsulation header, one of those commands must be called
 before the flow rule creation.
 
 Config Raw Encapsulation
-~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 Configure the raw data to be used when encapsulating a packet by
 rte_flow_action_raw_encap::
@@ -1922,7 +1951,7 @@ The following sections show functions for configuring ports.
 
    Port configuration changes only become active when forwarding is started/restarted.
 
-.. _port_attach:
+.. _testpmd_port_attach:
 
 port attach
 ~~~~~~~~~~~
@@ -2127,7 +2156,7 @@ Switch on/off deferred start of a specific port queue::
    testpmd> port (port_id) (rxq|txq) (queue_id) deferred_start (on|off)
 
 port setup queue
-~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
 Setup a rx/tx queue on a specific port::
 
@@ -2406,7 +2435,9 @@ Link Bonding Functions
 The Link Bonding functions make it possible to dynamically create and
 manage link bonding devices from within testpmd interactive prompt.
 
-See :doc:`../prog_guide/link_bonding_poll_mode_drv_lib` for more information.
+See :doc:`/prog_guide/link_bonding_poll_mode_drv_lib` for more information.
+
+.. _testpmd_traffic_metering_and_policing:
 
 Traffic Metering and Policing
 -----------------------------
@@ -2619,6 +2650,8 @@ where:
 
 * ``clear``: Flag that indicates whether the statistics counters should
   be cleared (i.e. set to zero) immediately after they have been read or not.
+
+.. _testpmd_traffic_management:
 
 Traffic Management
 ------------------
@@ -2921,7 +2954,7 @@ Suspend port traffic management hierarchy node
    testpmd> suspend port tm node (port_id) (node_id)
 
 Resume port traffic management hierarchy node
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
    testpmd> resume port tm node (port_id) (node_id)
 
@@ -4930,7 +4963,7 @@ Query indirect action having id 100::
    testpmd> flow indirect_action 0 query 100
 
 Enqueueing query of indirect actions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``flow queue indirect_action query`` adds query operation for an indirect
 action to a queue. It is bound to ``rte_flow_async_action_handle_query()``::
@@ -5328,7 +5361,7 @@ ESP rules can be created by the following commands::
         actions queue index 3 / end
 
 Sample AH rules
-~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~
 
 AH rules can be created by the following commands::
 
@@ -5536,7 +5569,7 @@ Match with comparison rule can be created as following using ``compare``.
 	     actions count / drop / end
 
 BPF Functions
---------------
+-------------
 
 The following sections show functions to load/unload eBPF based filters.
 
@@ -5717,5 +5750,5 @@ Some drivers provide specific features.
 See:
 
 - :ref:`net/bonding testpmd driver specific commands <bonding_testpmd_commands>`
-- :ref:`net/i40e testpmd driver specific commands <net_i40e_testpmd_commands>`
-- :ref:`net/ixgbe testpmd driver specific commands <net_ixgbe_testpmd_commands>`
+- :ref:`net/i40e testpmd driver specific commands <i40e_testpmd_commands>`
+- :ref:`net/ixgbe testpmd driver specific commands <ixgbe_testpmd_commands>`

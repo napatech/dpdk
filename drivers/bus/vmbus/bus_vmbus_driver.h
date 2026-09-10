@@ -37,9 +37,8 @@ enum hv_uio_map {
  * A structure describing a VMBUS device.
  */
 struct rte_vmbus_device {
-	RTE_TAILQ_ENTRY(rte_vmbus_device) next; /**< Next probed VMBUS device */
-	const struct rte_vmbus_driver *driver; /**< Associated driver */
 	struct rte_device device;              /**< Inherit core device */
+	char name[RTE_DEV_NAME_MAX_LEN];       /**< VMBUS device name */
 	rte_uuid_t device_id;		       /**< VMBUS device id */
 	rte_uuid_t class_id;		       /**< VMBUS device type */
 	uint32_t relid;			       /**< id for primary */
@@ -68,7 +67,6 @@ typedef int (vmbus_remove_t)(struct rte_vmbus_device *);
  * A structure describing a VMBUS driver.
  */
 struct rte_vmbus_driver {
-	RTE_TAILQ_ENTRY(rte_vmbus_driver) next; /**< Next in list. */
 	struct rte_driver driver;
 	vmbus_probe_t *probe;               /**< Device Probe function. */
 	vmbus_remove_t *remove;             /**< Device Remove function. */

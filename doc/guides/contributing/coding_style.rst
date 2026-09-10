@@ -1,16 +1,16 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright 2018 The DPDK contributors
 
-.. _coding_style:
-
 DPDK Coding Style
 =================
 
 Description
 -----------
 
-This document specifies the preferred style for source files in the DPDK source tree.
-It is based on the Linux Kernel coding guidelines and the FreeBSD 7.2 Kernel Developer's Manual (see man style(9)), but was heavily modified for the needs of the DPDK.
+This document specifies the preferred style for source files in the DPDK source tree,
+based on the Linux Kernel coding guidelines
+and the FreeBSD 7.2 Kernel Developer's Manual (see man style(9)),
+but was heavily modified for the needs of the DPDK.
 
 General Guidelines
 ------------------
@@ -36,7 +36,7 @@ Usual Comments
 ~~~~~~~~~~~~~~
 
 These comments should be used in normal cases.
-To document a public API, a doxygen-like format must be used: refer to :ref:`doxygen_guidelines`.
+To document a public API, a doxygen-like format must be used: refer to :ref:`style_doxygen_guidelines`.
 
 .. code-block:: c
 
@@ -95,7 +95,7 @@ Example:
 Header File Guards
 ~~~~~~~~~~~~~~~~~~
 
-Headers should be protected against multiple inclusion with the usual:
+Protect headers against multiple inclusion with the usual:
 
 .. code-block:: c
 
@@ -293,7 +293,7 @@ Structure Declarations
 * In general, when declaring variables in new structures, declare them sorted by use, then by size (largest to smallest), and then in alphabetical order.
   Sorting by use means that commonly used variables are used together and that the structure layout makes logical sense.
   Ordering by size then ensures that as little padding is added to the structure as possible.
-* For existing structures, additions to structures should be added to the end so for backward compatibility reasons.
+* For existing structures, add new members to the end for backward compatibility.
 * Each structure element gets its own line.
 * Try to make the structure readable by aligning the member names using spaces as shown below.
 * Names following extremely long types, which therefore cannot be easily aligned with the rest, should be separated by a single space.
@@ -308,18 +308,10 @@ Structure Declarations
  };
 
 
-* Major structures should be declared at the top of the file in which they are used, or in separate header files if they are used in multiple source files.
+* Declare major structures at the top of the file where they are used,
+  or in separate header files if they are used in multiple source files.
 * Use of the structures should be by separate variable declarations and those declarations must be extern if they are declared in a header file.
 * Externally visible structure definitions should have the structure name prefixed by ``rte_`` to avoid namespace collisions.
-
-.. note::
-
-    Uses of ``bool`` in structures are not preferred as is wastes space and
-    it's also not clear as to what type size the bool is. A preferred use of
-    ``bool`` is mainly as a return type from functions that return true/false,
-    and maybe local variable functions.
-
-    Ref: `LKML <https://lkml.org/lkml/2017/11/21/384>`_
 
 Queues
 ~~~~~~
@@ -579,18 +571,20 @@ Casts and sizeof
   The redundant parenthesis rules do not apply to sizeof(var) instances.
 
 C Function Definition, Declaration and Use
--------------------------------------------
+------------------------------------------
 
 Prototypes
 ~~~~~~~~~~
 
-* It is recommended (and generally required by the compiler) that all non-static functions are prototyped somewhere.
+* Prototype all non-static functions (the compiler generally requires this).
 * Functions local to one source module should be declared static, and should not be prototyped unless absolutely necessary.
 * Functions used from other parts of code (external API) must be prototyped in the relevant include file.
 * Function prototypes should be listed in a logical order, preferably alphabetical unless there is a compelling reason to use a different ordering.
 * Functions that are used locally in more than one module go into a separate header file, for example, "extern.h".
 * Do not use the ``__P`` macro.
-* Functions that are part of an external API should be documented using Doxygen-like comments above declarations. See :ref:`doxygen_guidelines` for details.
+* Functions that are part of an external API
+  should be documented using Doxygen-like comments above declarations.
+  See :ref:`style_doxygen_guidelines` for details.
 * Functions that are part of the external API must have an ``rte_`` prefix on the function name.
 * Do not use uppercase letters - either in the form of ALL_UPPERCASE, or CamelCase - in function names. Lower-case letters and underscores only.
 * When prototyping functions, associate names with parameter types, for example:
@@ -747,15 +741,51 @@ Static Variables and Functions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 * All functions and variables that are local to a file must be declared as ``static`` because it can often help the compiler to do some optimizations (such as, inlining the code).
-* Functions that should be inlined should to be declared as ``static inline`` and can be defined in a .c or a .h file.
+* Declare functions that should be inlined as ``static inline``
+  and can be defined in a .c or a .h file.
 
 .. note::
 	Static functions defined in a header file must be declared as ``static inline`` in order to prevent compiler warnings about the function being unused.
 
+Inline Functions
+~~~~~~~~~~~~~~~~
+
+The ``__rte_always_inline`` attribute forces the compiler to inline a function
+regardless of its size or call-graph heuristics.
+Prefer plain ``inline`` (or no annotation at all for static functions)
+and let the compiler decide.
+Modern compilers at ``-O2`` make good inlining decisions
+for small ``static inline`` functions in headers,
+and forced inlining can hurt performance by inflating function bodies,
+increasing register pressure, and overriding profile-guided optimization.
+
+``__rte_always_inline`` should only be used when one of the following applies:
+
+* The function contains ``__rte_constant()`` checks that gate a constant-folded fast path,
+  and the optimization is lost if the function is not inlined into the caller.
+  Examples include byte-order helpers and length-dispatched copy/compare routines.
+
+* The function wraps inline assembly or a compiler intrinsic
+  whose correctness depends on being inlined into the caller's register context
+  (for example, intrinsics requiring a compile-time constant argument).
+
+* Measurement on a representative workload shows that
+  the annotation is required to retain performance,
+  and the reason is documented in the commit message that introduces it.
+
+Each use must be justified at the point it is introduced.
+Adding ``__rte_always_inline`` because nearby code uses it is not a justification;
+if the constant or intrinsic that requires inlining is several call levels up the call chain,
+restructure the code rather than annotating the entire chain.
+
+The complementary attribute ``__rte_noinline`` is useful for explicitly marking cold paths
+(error handling, initialization, slow-path fallbacks)
+where outlining the function can reduce instruction-cache pressure on the hot path.
+
 Const Attribute
 ~~~~~~~~~~~~~~~
 
-The ``const`` attribute should be used as often as possible when a variable is read-only.
+Use the ``const`` attribute as often as possible when a variable is read-only.
 
 Inline ASM in C code
 ~~~~~~~~~~~~~~~~~~~~
@@ -791,7 +821,7 @@ Control Statements
                  /* NOTREACHED */
          }
 
-.. _dynamic_logging:
+.. _style_dynamic_logging:
 
 Dynamic Logging
 ---------------

@@ -9,8 +9,6 @@
 
 #include "ip_frag_common.h"
 
-#define	PRIME_VALUE	0xeaad8405
-
 #define	IP_FRAG_TBL_POS(tbl, sig)	\
 	((tbl)->pkt + ((sig) & (tbl)->entry_mask))
 
@@ -38,7 +36,7 @@ ip_frag_tbl_reuse(struct rte_ip_frag_tbl *tbl, struct rte_ip_frag_death_row *dr,
 
 
 static inline void
-ipv4_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2)
+ipv4_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2, uint32_t seed)
 {
 	uint32_t v;
 	const uint32_t *p;
@@ -46,12 +44,12 @@ ipv4_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2)
 	p = (const uint32_t *)&key->src_dst;
 
 #if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
-	v = rte_hash_crc_4byte(p[0], PRIME_VALUE);
+	v = rte_hash_crc_4byte(p[0], seed);
 	v = rte_hash_crc_4byte(p[1], v);
 	v = rte_hash_crc_4byte(key->id, v);
 #else
 
-	v = rte_jhash_3words(p[0], p[1], key->id, PRIME_VALUE);
+	v = rte_jhash_3words(p[0], p[1], key->id, seed);
 #endif /* RTE_ARCH_X86 */
 
 	*v1 =  v;
@@ -59,7 +57,7 @@ ipv4_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2)
 }
 
 static inline void
-ipv6_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2)
+ipv6_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2, uint32_t seed)
 {
 	uint32_t v;
 	const uint32_t *p;
@@ -67,7 +65,7 @@ ipv6_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2)
 	p = (const uint32_t *) &key->src_dst;
 
 #if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
-	v = rte_hash_crc_4byte(p[0], PRIME_VALUE);
+	v = rte_hash_crc_4byte(p[0], seed);
 	v = rte_hash_crc_4byte(p[1], v);
 	v = rte_hash_crc_4byte(p[2], v);
 	v = rte_hash_crc_4byte(p[3], v);
@@ -78,7 +76,7 @@ ipv6_frag_hash(const struct ip_frag_key *key, uint32_t *v1, uint32_t *v2)
 	v = rte_hash_crc_4byte(key->id, v);
 #else
 
-	v = rte_jhash_3words(p[0], p[1], p[2], PRIME_VALUE);
+	v = rte_jhash_3words(p[0], p[1], p[2], seed);
 	v = rte_jhash_3words(p[3], p[4], p[5], v);
 	v = rte_jhash_3words(p[6], p[7], key->id, v);
 #endif /* RTE_ARCH_X86 */
@@ -91,7 +89,45 @@ struct rte_mbuf *
 ip_frag_process(struct ip_frag_pkt *fp, struct rte_ip_frag_death_row *dr,
 	struct rte_mbuf *mb, uint16_t ofs, uint16_t len, uint16_t more_frags)
 {
-	uint32_t idx;
+	uint32_t i, idx;
+
+	/*
+	 * Scan the fragments already collected for this datagram before
+	 * storing the new one. The stored set is kept free of duplicates and
+	 * overlaps, so a single pass is sufficient.
+	 */
+	for (i = 0; i != fp->last_idx; i++) {
+		if (fp->frags[i].mb == NULL)
+			continue;
+
+		/*
+		 * Exact duplicate: carries no new data. Reassembly tolerates
+		 * duplicates (RFC 791), so drop only this mbuf and keep the
+		 * entry.
+		 */
+		if (fp->frags[i].ofs == ofs && fp->frags[i].len == len) {
+			IP_FRAG_MBUF2DR(dr, mb);
+			return NULL;
+		}
+
+		/*
+		 * Overlap with an existing fragment. Per RFC 8200 section 4.5
+		 * (and RFC 5722) the datagram must be discarded; the same is
+		 * applied to IPv4. Free all collected fragments, drop this one,
+		 * and invalidate the entry.
+		 */
+		if (ofs < fp->frags[i].ofs + fp->frags[i].len && fp->frags[i].ofs < ofs + len) {
+			IP_FRAG_LOG(DEBUG,
+				    "%s:%d overlap ofs: %u len: %u\n"
+				    "fragment: %p ofs: %u len %u\n\n",
+				    __func__, __LINE__, ofs, len,
+				    fp, fp->frags[i].ofs, fp->frags[i].len);
+			ip_frag_free(fp, dr);
+			ip_frag_key_invalidate(&fp->key);
+			IP_FRAG_MBUF2DR(dr, mb);
+			return NULL;
+		}
+	}
 
 	fp->frag_size += len;
 
@@ -301,9 +337,9 @@ ip_frag_lookup(struct rte_ip_frag_tbl *tbl,
 
 	/* different hashing methods for IPv4 and IPv6 */
 	if (key->key_len == IPV4_KEYLEN)
-		ipv4_frag_hash(key, &sig1, &sig2);
+		ipv4_frag_hash(key, &sig1, &sig2, tbl->seed);
 	else
-		ipv6_frag_hash(key, &sig1, &sig2);
+		ipv6_frag_hash(key, &sig1, &sig2, tbl->seed);
 
 	p1 = IP_FRAG_TBL_POS(tbl, sig1);
 	p2 = IP_FRAG_TBL_POS(tbl, sig2);

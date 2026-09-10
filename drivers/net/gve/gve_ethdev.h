@@ -7,10 +7,13 @@
 
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
+#include <rte_alarm.h>
 #include <rte_ether.h>
 #include <rte_pci.h>
 #include <pthread.h>
 #include <rte_bitmap.h>
+#include <rte_memzone.h>
+#include <rte_thread.h>
 
 #include "base/gve.h"
 
@@ -18,6 +21,7 @@
 #define DQO_TX_MULTIPLIER 4
 
 #define GVE_DEFAULT_MAX_RING_SIZE	1024
+#define GVE_MAX_RING_SIZE_GQ_QPL	2048
 #define GVE_DEFAULT_MIN_RX_RING_SIZE	512
 #define GVE_DEFAULT_MIN_TX_RING_SIZE	256
 
@@ -38,6 +42,9 @@
 #define GVE_RSS_HASH_KEY_SIZE 40
 #define GVE_RSS_INDIR_SIZE 128
 
+#define GVE_NIC_CLOCK_READ_PERIOD_MS 250
+#define GVE_NIC_CLOCK_READ_MAX_FAILS 7
+
 #define GVE_TX_CKSUM_OFFLOAD_MASK (		\
 		RTE_MBUF_F_TX_L4_MASK  |	\
 		RTE_MBUF_F_TX_TCP_SEG)
@@ -56,6 +63,8 @@
 	RTE_ETH_RSS_NONFRAG_IPV4_UDP |	\
 	RTE_ETH_RSS_NONFRAG_IPV6_UDP |	\
 	RTE_ETH_RSS_IPV6_UDP_EX)
+
+#define GVE_DEV_POLL_INTERVAL_US (1 * 1000 * 1000) /* 1 second in microseconds */
 
 /* A list of pages registered with the device during setup and used by a queue
  * as buffers
@@ -250,8 +259,10 @@ struct gve_rx_queue {
 
 	/* Only valid for DQO_RDA queue format */
 	struct gve_rx_queue *bufq;
+	struct rte_mbuf **refill_bufs;
 
 	uint8_t is_gqi_qpl;
+	bool timestamp_enabled;
 };
 
 struct gve_flow {
@@ -324,6 +335,7 @@ struct gve_priv {
 	uint32_t adminq_get_ptype_map_cnt;
 	uint32_t adminq_verify_driver_compatibility_cnt;
 	uint32_t adminq_cfg_flow_rule_cnt;
+	uint32_t adminq_report_nic_timestamp_cnt;
 	volatile uint32_t state_flags;
 
 	/* Gvnic device link speed from hypervisor. */
@@ -335,6 +347,7 @@ struct gve_priv {
 	struct gve_tx_queue **txqs;
 	struct gve_rx_queue **rxqs;
 
+	pthread_mutex_t adminq_lock; /* Protects AdminQ command execution */
 	uint32_t stats_report_len;
 	const struct rte_memzone *stats_report_mem;
 	uint16_t stats_start_idx; /* start index of array of stats written by NIC */
@@ -350,7 +363,42 @@ struct gve_priv {
 	void *avail_flow_rule_bmp_mem; /* Backing memory for the bitmap */
 	pthread_mutex_t flow_rule_lock; /* Lock for bitmap and tailq access */
 	TAILQ_HEAD(, gve_flow) active_flows;
+
+	/* HW Timestamping Fields */
+	bool nic_timestamp_supported;
+	const struct rte_memzone *nic_ts_report_mz;
+	struct gve_nic_ts_report *nic_ts_report;
+	pthread_mutex_t nic_ts_lock;
+	RTE_ATOMIC(uint64_t) last_read_nic_timestamp;
+	RTE_ATOMIC(uint32_t) nic_ts_read_fails;
+	RTE_ATOMIC(uint8_t) nic_ts_stale;
+	rte_thread_t nic_ts_thread_id;
+	RTE_ATOMIC(uint8_t) nic_ts_thread_should_stop;
+
+	int mbuf_timestamp_offset;
+	uint64_t mbuf_timestamp_mask;
 };
+
+/* Expand the hardware timestamp to the full 64 bits of width.
+ *
+ * This algorithm works by using the passed hardware timestamp to generate a
+ * diff relative to the last read of the nic clock. This diff can be positive or
+ * negative, as it is possible that we have read the clock more recently than
+ * the hardware has received this packet. To detect this, we use the high bit of
+ * the diff, and assume that the read is more recent if the high bit is set. In
+ * this case we invert the process.
+ *
+ * Note that this means if the time delta between packet reception and the last
+ * clock read is greater than ~2 seconds, this will provide invalid results.
+ */
+static inline uint64_t
+gve_reconstruct_ts(uint64_t last_sync, uint32_t ts)
+{
+	uint32_t low = (uint32_t)last_sync;
+	int32_t diff = (int32_t)(ts - low);
+
+	return last_sync + diff;
+}
 
 static inline bool
 gve_is_gqi(struct gve_priv *priv)

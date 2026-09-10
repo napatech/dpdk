@@ -28,33 +28,33 @@ Also, if MAC address updating is enabled, the MAC addresses are affected as foll
 
 *   The destination MAC address is replaced by  02:00:00:00:00:TX_PORT_ID
 
-This application can be used to benchmark performance using a traffic-generator, as shown in the :numref:`figure_l2_fwd_benchmark_setup`,
-or in a virtualized environment as shown in :numref:`figure_l2_fwd_virtenv_benchmark_setup`.
+This application can be used to benchmark performance using a traffic-generator,
+as shown in the :numref:`l2_fwd_figure_benchmark_setup`,
+or in a virtualized environment as shown in :numref:`l2_fwd_figure_virtenv_benchmark_setup`.
 
-.. _figure_l2_fwd_benchmark_setup:
+.. _l2_fwd_figure_benchmark_setup:
 
 .. figure:: img/l2_fwd_benchmark_setup.*
 
    Performance Benchmark Setup (Basic Environment)
 
-.. _figure_l2_fwd_virtenv_benchmark_setup:
+.. _l2_fwd_figure_virtenv_benchmark_setup:
 
 .. figure:: img/l2_fwd_virtenv_benchmark_setup.*
 
    Performance Benchmark Setup (Virtualized Environment)
 
-This application may be used for basic VM to VM communication as shown in :numref:`figure_l2_fwd_vm2vm`,
+This application may be used for basic VM to VM communication
+as shown in :numref:`l2_fwd_figure_vm2vm`,
 when MAC addresses updating is disabled.
 
-.. _figure_l2_fwd_vm2vm:
+.. _l2_fwd_figure_vm2vm:
 
 .. figure:: img/l2_fwd_vm2vm.*
 
    Virtual Machine to Virtual Machine communication.
 
 The L2 Forwarding application can also be used as a starting point for developing a new application based on the DPDK.
-
-.. _l2_fwd_vf_setup:
 
 Virtual Function Setup Instructions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -191,8 +191,8 @@ Driver Initialization
 ~~~~~~~~~~~~~~~~~~~~~
 
 The main part of the code in the ``main()`` function relates to the initialization of the driver.
-To fully understand this code, it is recommended to study the chapters related to the Poll Mode Driver
-in the *DPDK Programmer's Guide* - Rel 1.4 EAR and the *DPDK API Reference*.
+To fully understand this code, it is recommended to study
+:doc:`/prog_guide/ethdev/ethdev` and the DPDK API Reference.
 
 .. literalinclude:: ../../../examples/l2fwd/main.c
     :language: c

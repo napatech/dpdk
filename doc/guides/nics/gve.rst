@@ -72,6 +72,7 @@ Supported features of the GVE PMD are:
 - Tx UDP/TCP/SCTP Checksum
 - RSS hash configuration
 - RSS redirection table query and update
+- Timestamp offload
 
 Currently, only GQI_QPL and GQI_RDA queue format are supported in PMD.
 Jumbo Frame is not supported in PMD for now.
@@ -132,8 +133,27 @@ Security Protocols
 - Flow priorities are not supported (must be 0).
 - Masking is limited to full matches i.e. ``0x00...0`` or ``0xFF...F``.
 
-Application-Initiated Reset
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Timestamp Offload
+^^^^^^^^^^^^^^^^^
+
+The driver supports hardware-based packet timestamping on supported devices
+via the standard ``RTE_ETH_RX_OFFLOAD_TIMESTAMP`` offload capability.
+Both the ethdev ``.read_clock`` operation and per-packet Rx timestamp offloading
+require the DQO queue format.
+
+**Limitations**
+
+- If the driver fails to fetch the NIC hardware clock for 7 consecutive periods,
+  the cached timestamp is marked as stale,
+  and the reconstructed timestamps are no longer propagated to the mbuf.
+- The timestamp reconstruction is only accurate
+  if the time between a packet's reception
+  and the last hardware clock sync is less than approximately 2 seconds.
+  The driver's internal clock sync period is set to respect this limitation.
+
+
+Device Reset
+^^^^^^^^^^^^
 
 The driver allows an application to reset the gVNIC device.
 This function will tear down and reinitialize the device's resources,
@@ -141,3 +161,32 @@ including queues and administrative queues.
 
 It is the application's responsibility to reinitialize
 and restart the device after resetting it.
+
+In addition, the driver supports device-requested resets,
+which are triggered when the device encounters an unrecoverable error.
+The driver detects this via a device status register
+and raises an ``RTE_ETH_EVENT_INTR_RESET`` event.
+
+The application must register a callback to handle this event.
+The callback should handle the reset process (reset, reconfigure, restart).
+
+.. code-block:: c
+
+   static int
+   dev_rst_req_callback(uint16_t port_id, enum rte_eth_event_type type,
+                        void *param, void *ret_param)
+   {
+       RTE_SET_USED(param);
+       RTE_SET_USED(ret_param);
+
+       if (type == RTE_ETH_EVENT_INTR_RESET) {
+           printf("Device requested reset on port %u\n", port_id);
+           rte_eth_dev_reset(port_id);
+           /* Reconfigure and restart port ... */
+       }
+       return 0;
+   }
+
+   /* Register this callback in the main execution flow */
+   rte_eth_dev_callback_register(port_id, RTE_ETH_EVENT_INTR_RESET,
+                     dev_rst_req_callback, NULL);

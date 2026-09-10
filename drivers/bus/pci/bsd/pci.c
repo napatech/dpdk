@@ -233,7 +233,6 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 
 	memset(pdev, 0, sizeof(*pdev));
 	dev = &pdev->device;
-	dev->device.bus = &rte_pci_bus.bus;
 
 	dev->addr.domain = conf->pc_sel.pc_domain;
 	dev->addr.bus = conf->pc_sel.pc_bus;
@@ -299,18 +298,17 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 
 	/* device is valid, add in list (sorted) */
 	if (TAILQ_EMPTY(&rte_pci_bus.device_list)) {
-		rte_pci_add_device(dev);
-	}
-	else {
+		rte_bus_add_device(&rte_pci_bus, &dev->device);
+	} else {
 		struct rte_pci_device *dev2 = NULL;
 		int ret;
 
-		TAILQ_FOREACH(dev2, &rte_pci_bus.device_list, next) {
+		RTE_BUS_FOREACH_DEV(dev2, &rte_pci_bus) {
 			ret = rte_pci_addr_cmp(&dev->addr, &dev2->addr);
 			if (ret > 0)
 				continue;
 			else if (ret < 0) {
-				rte_pci_insert_device(dev2, dev);
+				rte_bus_insert_device(&rte_pci_bus, &dev2->device, &dev->device);
 			} else { /* already registered */
 				dev2->kdrv = dev->kdrv;
 				dev2->max_vfs = dev->max_vfs;
@@ -322,7 +320,7 @@ pci_scan_one(int dev_pci_fd, struct pci_conf *conf)
 			}
 			return 0;
 		}
-		rte_pci_add_device(dev);
+		rte_bus_add_device(&rte_pci_bus, &dev->device);
 	}
 
 	return 0;
@@ -370,12 +368,15 @@ rte_pci_scan(void)
 		}
 
 		for (i = 0; i < conf_io.num_matches; i++) {
+			char name[RTE_DEV_NAME_MAX_LEN];
+
 			pci_addr.domain = matches[i].pc_sel.pc_domain;
 			pci_addr.bus = matches[i].pc_sel.pc_bus;
 			pci_addr.devid = matches[i].pc_sel.pc_dev;
 			pci_addr.function = matches[i].pc_sel.pc_func;
+			rte_pci_device_name(&pci_addr, name, sizeof(name));
 
-			if (rte_pci_ignore_device(&pci_addr))
+			if (rte_bus_device_is_ignored(&rte_pci_bus, name))
 				continue;
 
 			if (pci_scan_one(fd, &matches[i]) < 0)

@@ -12,7 +12,7 @@ the most typical of which is IPv4/IPv6 forwarding.
 
    The API and implementation are very similar for IPv4 ``rte_fib`` API and IPv6 ``rte_fib6``
    API, therefore only the ``rte_fib`` API will be discussed here.
-   Everything within this document except for the size of the prefixes is applicable to  the
+   Everything within this document except for the size of the prefixes is applicable to the
    ``rte_fib6`` API.
 
 
@@ -21,7 +21,7 @@ FIB API Overview
 
 The main configuration struct contains:
 
-* Type of :ref:`dataplane algorithm <fib_dataplane_algorithms>`.
+* Type of :ref:`fib_dataplane_algorithms`.
 
 * Default next hop ID.
 
@@ -99,9 +99,9 @@ The main elements of the dataplane struct for the DIR-24-8 algorithm are:
 
 * TBL8: An array of ``num_tbl8`` tbl8 groups.
 
-The lookup algorithms logic can be seen in :numref:`figure_dir_24_8_alg`:
+The lookup algorithms logic can be seen in :numref:`fib_figure_dir_24_8_alg`:
 
-.. _figure_dir_24_8_alg:
+.. _fib_figure_dir_24_8_alg:
 
 .. figure:: img/dir_24_8_alg.*
 

@@ -40,16 +40,28 @@ RTE_EXPORT_SYMBOL(rte_mem_virt2phy)
 phys_addr_t
 rte_mem_virt2phy(const void *virtaddr)
 {
-	/* XXX not implemented. This function is only used by
-	 * rte_mempool_virt2iova() when hugepages are disabled. */
-	(void)virtaddr;
-	return RTE_BAD_IOVA;
+	/* not implemented for FreeBSD when not using contigmem memory */
+	if (virtaddr == NULL || rte_eal_iova_mode() != RTE_IOVA_PA)
+		return RTE_BAD_IOVA;
+	/* when IOVA == PA, return the IOVA */
+	return rte_mem_virt2iova(virtaddr);
 }
+
 RTE_EXPORT_SYMBOL(rte_mem_virt2iova)
 rte_iova_t
 rte_mem_virt2iova(const void *virtaddr)
 {
-	return rte_mem_virt2phy(virtaddr);
+	if (virtaddr == NULL)
+		return RTE_BAD_IOVA;
+
+	if (rte_eal_iova_mode() == RTE_IOVA_VA)
+		return (uintptr_t)virtaddr;
+
+	const struct rte_memseg *ms = rte_mem_virt2memseg(virtaddr, NULL);
+	if (ms != NULL && ms->iova != RTE_BAD_IOVA)
+		return ms->iova + RTE_PTR_DIFF(virtaddr, ms->addr);
+
+	return RTE_BAD_IOVA;
 }
 
 int
@@ -190,8 +202,8 @@ rte_eal_hugepage_init(void)
 				break;
 			}
 			if (msl_idx == RTE_MAX_MEMSEG_LISTS) {
-				EAL_LOG(ERR, "Could not find space for memseg. Please increase RTE_MAX_MEMSEG_PER_LIST "
-					"RTE_MAX_MEMSEG_PER_TYPE and/or RTE_MAX_MEM_MB_PER_TYPE in configuration.");
+				EAL_LOG(ERR,
+					"Could not find suitable space for memseg in existing memseg lists");
 				return -1;
 			}
 			arr = &msl->memseg_arr;
@@ -214,7 +226,10 @@ rte_eal_hugepage_init(void)
 			}
 
 			seg->addr = addr;
-			seg->iova = physaddr;
+			if (rte_eal_iova_mode() == RTE_IOVA_VA)
+				seg->iova = (uintptr_t)addr;
+			else
+				seg->iova = physaddr;
 			seg->hugepage_sz = page_sz;
 			seg->len = page_sz;
 			seg->nchannel = mcfg->nchannel;
@@ -320,23 +335,6 @@ rte_eal_using_phys_addrs(void)
 	return 0;
 }
 
-static uint64_t
-get_mem_amount(uint64_t page_sz, uint64_t max_mem)
-{
-	uint64_t area_sz, max_pages;
-
-	/* limit to RTE_MAX_MEMSEG_PER_LIST pages or RTE_MAX_MEM_MB_PER_LIST */
-	max_pages = RTE_MAX_MEMSEG_PER_LIST;
-	max_mem = RTE_MIN((uint64_t)RTE_MAX_MEM_MB_PER_LIST << 20, max_mem);
-
-	area_sz = RTE_MIN(page_sz * max_pages, max_mem);
-
-	/* make sure the list isn't smaller than the page size */
-	area_sz = RTE_MAX(area_sz, page_sz);
-
-	return RTE_ALIGN(area_sz, page_sz);
-}
-
 static int
 memseg_list_alloc(struct rte_memseg_list *msl)
 {
@@ -354,7 +352,6 @@ memseg_primary_init(void)
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
 	int hpi_idx, msl_idx = 0;
 	struct rte_memseg_list *msl;
-	uint64_t max_mem, total_mem;
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
@@ -363,40 +360,22 @@ memseg_primary_init(void)
 		return 0;
 
 	/* FreeBSD has an issue where core dump will dump the entire memory
-	 * contents, including anonymous zero-page memory. Therefore, while we
-	 * will be limiting total amount of memory to RTE_MAX_MEM_MB, we will
-	 * also be further limiting total memory amount to whatever memory is
-	 * available to us through contigmem driver (plus spacing blocks).
-	 *
-	 * so, at each stage, we will be checking how much memory we are
-	 * preallocating, and adjust all the values accordingly.
+	 * contents, including anonymous zero-page memory. To avoid reserving VA
+	 * space we are not going to use, size memseg lists according to
+	 * contigmem-provided page counts.
 	 */
-
-	max_mem = (uint64_t)RTE_MAX_MEM_MB << 20;
-	total_mem = 0;
 
 	/* create memseg lists */
 	for (hpi_idx = 0; hpi_idx < (int) internal_conf->num_hugepage_sizes;
 			hpi_idx++) {
-		uint64_t max_type_mem, total_type_mem = 0;
-		uint64_t avail_mem;
-		int type_msl_idx, max_segs, avail_segs, total_segs = 0;
 		struct hugepage_info *hpi;
 		uint64_t hugepage_sz;
+		unsigned int n_segs;
 
 		hpi = &internal_conf->hugepage_info[hpi_idx];
 		hugepage_sz = hpi->hugepage_sz;
 
 		/* no NUMA support on FreeBSD */
-
-		/* check if we've already exceeded total memory amount */
-		if (total_mem >= max_mem)
-			break;
-
-		/* first, calculate theoretical limits according to config */
-		max_type_mem = RTE_MIN(max_mem - total_mem,
-			(uint64_t)RTE_MAX_MEM_MB_PER_TYPE << 20);
-		max_segs = RTE_MAX_MEMSEG_PER_TYPE;
 
 		/* now, limit all of that to whatever will actually be
 		 * available to us, because without dynamic allocation support,
@@ -408,46 +387,25 @@ memseg_primary_init(void)
 		 * so we will allocate more and put spaces between segments
 		 * that are non-contiguous.
 		 */
-		avail_segs = (hpi->num_pages[0] * 2) - 1;
-		avail_mem = avail_segs * hugepage_sz;
+		n_segs = (hpi->num_pages[0] * 2) - 1;
+		if (n_segs == 0)
+			continue;
 
-		max_type_mem = RTE_MIN(avail_mem, max_type_mem);
-		max_segs = RTE_MIN(avail_segs, max_segs);
-
-		type_msl_idx = 0;
-		while (total_type_mem < max_type_mem &&
-				total_segs < max_segs) {
-			uint64_t cur_max_mem, cur_mem;
-			unsigned int n_segs;
-
-			if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
-				EAL_LOG(ERR,
-					"No more space in memseg lists, please increase RTE_MAX_MEMSEG_LISTS");
-				return -1;
-			}
-
-			msl = &mcfg->memsegs[msl_idx++];
-
-			cur_max_mem = max_type_mem - total_type_mem;
-
-			cur_mem = get_mem_amount(hugepage_sz,
-					cur_max_mem);
-			n_segs = cur_mem / hugepage_sz;
-
-			if (eal_memseg_list_init(msl, hugepage_sz, n_segs,
-					0, type_msl_idx, false))
-				return -1;
-
-			total_segs += msl->memseg_arr.len;
-			total_type_mem = total_segs * hugepage_sz;
-			type_msl_idx++;
-
-			if (memseg_list_alloc(msl)) {
-				EAL_LOG(ERR, "Cannot allocate VA space for memseg list");
-				return -1;
-			}
+		if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
+			EAL_LOG(ERR, "No more space in memseg lists, please increase RTE_MAX_MEMSEG_LISTS");
+			return -1;
 		}
-		total_mem += total_type_mem;
+
+		msl = &mcfg->memsegs[msl_idx];
+
+		if (eal_memseg_list_init(msl, hugepage_sz, n_segs, 0, msl_idx, false))
+			return -1;
+
+		if (memseg_list_alloc(msl)) {
+			EAL_LOG(ERR, "Cannot allocate VA space for memseg list");
+			return -1;
+		}
+		msl_idx++;
 	}
 	return 0;
 }

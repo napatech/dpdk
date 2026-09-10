@@ -312,12 +312,12 @@ s32 e1000_set_mac_type(struct e1000_hw *hw)
 	case E1000_DEV_ID_PCH_ADL_I219_V17:
 	case E1000_DEV_ID_PCH_RPL_I219_LM22:
 	case E1000_DEV_ID_PCH_RPL_I219_V22:
+	case E1000_DEV_ID_PCH_MTP_I219_LM19:
+	case E1000_DEV_ID_PCH_MTP_I219_V19:
 		mac->type = e1000_pch_adp;
 		break;
 	case E1000_DEV_ID_PCH_MTP_I219_LM18:
 	case E1000_DEV_ID_PCH_MTP_I219_V18:
-	case E1000_DEV_ID_PCH_MTP_I219_LM19:
-	case E1000_DEV_ID_PCH_MTP_I219_V19:
 	case E1000_DEV_ID_PCH_LNL_I219_LM20:
 	case E1000_DEV_ID_PCH_LNL_I219_V20:
 	case E1000_DEV_ID_PCH_ARL_I219_LM24:
@@ -1134,6 +1134,22 @@ s32 e1000_get_phy_info(struct e1000_hw *hw)
 {
 	if (hw->phy.ops.get_info)
 		return hw->phy.ops.get_info(hw);
+
+	return E1000_SUCCESS;
+}
+
+/**
+ *  e1000_get_an_status - Finds Auto-negotiation status based on PHY registers
+ *  @hw: pointer to the HW structure
+ *  @an_status: AN status
+ *
+ *  This function gets information from the PHY specific registers to determine
+ *  Auto-negotiation status.
+ **/
+s32 e1000_get_an_status(struct e1000_hw *hw, u8 *an_status)
+{
+	if (hw->phy.ops.get_an_status)
+		return hw->phy.ops.get_an_status(hw, an_status);
 
 	return E1000_SUCCESS;
 }

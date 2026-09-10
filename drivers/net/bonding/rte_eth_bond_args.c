@@ -26,7 +26,7 @@ const char *pmd_bond_init_valid_arguments[] = {
 static inline int
 bond_pci_addr_cmp(const struct rte_device *dev, const void *_pci_addr)
 {
-	const struct rte_pci_device *pdev = RTE_DEV_TO_PCI_CONST(dev);
+	const struct rte_pci_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
 	const struct rte_pci_addr *paddr = _pci_addr;
 
 	return rte_pci_addr_cmp(&pdev->addr, paddr);
@@ -45,7 +45,7 @@ find_port_id_by_pci_addr(const struct rte_pci_addr *pci_addr)
 		return -1;
 	}
 
-	dev = pci_bus->find_device(NULL, bond_pci_addr_cmp, pci_addr);
+	dev = pci_bus->find_device(pci_bus, NULL, bond_pci_addr_cmp, pci_addr);
 	if (dev == NULL) {
 		RTE_BOND_LOG(ERR, "unable to find PCI device");
 		return -1;

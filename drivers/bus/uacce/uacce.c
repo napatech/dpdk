@@ -15,7 +15,6 @@
 #include <sys/types.h>
 
 #include <eal_export.h>
-#include <rte_bitops.h>
 #include <rte_common.h>
 #include <rte_devargs.h>
 #include <rte_eal_paging.h>
@@ -28,37 +27,12 @@
 
 #define UACCE_BUS_CLASS_PATH	"/sys/class/uacce"
 
-/* UACCE device flag of SVA. */
-#define UACCE_DEV_FLGA_SVA	RTE_BIT32(0)
-
 /* Support -a uacce:device-name when start DPDK application. */
 #define UACCE_DEV_PREFIX	"uacce:"
 
-/*
- * Structure describing the UACCE bus.
- */
-struct rte_uacce_bus {
-	struct rte_bus bus;		            /* Inherit the generic class. */
-	TAILQ_HEAD(, rte_uacce_device) device_list; /* List of devices. */
-	TAILQ_HEAD(, rte_uacce_driver) driver_list; /* List of drivers. */
-};
-
 /* Forward declaration of UACCE bus. */
-static struct rte_uacce_bus uacce_bus;
+static struct rte_bus uacce_bus;
 
-enum uacce_params {
-	RTE_UACCE_PARAM_NAME,
-};
-
-static const char *const uacce_params_keys[] = {
-	[RTE_UACCE_PARAM_NAME] = "name",
-	NULL,
-};
-
-#define FOREACH_DEVICE_ON_UACCEBUS(p)	\
-		RTE_TAILQ_FOREACH(p, &uacce_bus.device_list, next)
-#define FOREACH_DRIVER_ON_UACCEBUS(p)	\
-		RTE_TAILQ_FOREACH(p, &uacce_bus.driver_list, next)
 
 extern int uacce_bus_logtype;
 #define RTE_LOGTYPE_UACCE_BUS uacce_bus_logtype
@@ -69,41 +43,6 @@ extern int uacce_bus_logtype;
 #define UACCE_BUS_INFO(fmt, ...) UACCE_BUS_LOG(INFO, fmt, ##__VA_ARGS__)
 #define UACCE_BUS_DEBUG(fmt, ...) UACCE_BUS_LOG(DEBUG, fmt, ##__VA_ARGS__)
 
-
-static struct rte_devargs *
-uacce_devargs_lookup(const char *dev_name)
-{
-	char name[RTE_UACCE_DEV_PATH_SIZE] = {0};
-	struct rte_devargs *devargs;
-
-	snprintf(name, sizeof(name), "%s%s", UACCE_DEV_PREFIX, dev_name);
-	RTE_EAL_DEVARGS_FOREACH("uacce", devargs) {
-		if (strcmp(devargs->name, name) == 0)
-			return devargs;
-	}
-
-	return NULL;
-}
-
-static bool
-uacce_ignore_device(const char *dev_name)
-{
-	struct rte_devargs *devargs = uacce_devargs_lookup(dev_name);
-
-	switch (uacce_bus.bus.conf.scan_mode) {
-	case RTE_BUS_SCAN_ALLOWLIST:
-		if (devargs && devargs->policy == RTE_DEV_ALLOWED)
-			return false;
-		break;
-	case RTE_BUS_SCAN_UNDEFINED:
-	case RTE_BUS_SCAN_BLOCKLIST:
-		if (devargs == NULL || devargs->policy != RTE_DEV_BLOCKED)
-			return false;
-		break;
-	}
-
-	return true;
-}
 
 /*
  * Returns the number of bytes read (removed last newline) on success.
@@ -183,12 +122,52 @@ uacce_read_attr_u32(const char *dev_root, const char *attr, uint32_t *val)
 	return 0;
 }
 
+static uint32_t
+uacce_calc_api_ver(const char *api, int *offset)
+{
+	int len = strlen(api);
+	int end = len - 1;
+	unsigned long ver;
+
+	while (end >= 0 && isdigit(api[end]))
+		end--;
+
+	if (end <= 0 || end == len - 1 || api[end] != 'v')
+		return 0;
+
+	ver = strtoul(api + end + 1, NULL, 10);
+	if (ver > UINT32_MAX)
+		return 0;
+
+	if (offset != NULL)
+		*offset = end + 1;
+	return (uint32_t)ver;
+}
+
 static int
 uacce_read_api(struct rte_uacce_device *dev)
 {
-	int ret = uacce_read_attr(dev->dev_root, "api", dev->api, sizeof(dev->api) - 1);
+#define NOIOMMU_SUFFIX		"_noiommu"
+	size_t api_len, sub_len;
+	int ret;
+
+	ret = uacce_read_attr(dev->dev_root, "api", dev->api, sizeof(dev->api) - 1);
 	if (ret < 0)
 		return ret;
+
+	/*
+	 * If the device is in no-iommu mode, the UACCE_DEV_FLAG_NOIOMMU flag
+	 * in its "flags" will be set, and its "api" will contain the suffix
+	 * _noiommu. To facilitate matching with the driver, the suffix is
+	 * removed here.
+	 */
+	api_len = strlen(dev->api);
+	sub_len = strlen(NOIOMMU_SUFFIX);
+	if (api_len > sub_len && strcmp(dev->api + api_len - sub_len, NOIOMMU_SUFFIX) == 0)
+		dev->api[api_len - sub_len] = 0;
+
+	dev->api_ver = uacce_calc_api_ver(dev->api, NULL);
+
 	return 0;
 }
 
@@ -231,8 +210,8 @@ uacce_read_qfrt_sz(struct rte_uacce_device *dev)
 static int
 uacce_verify(struct rte_uacce_device *dev)
 {
-	if (!(dev->flags & UACCE_DEV_FLGA_SVA)) {
-		UACCE_BUS_WARN("device %s don't support SVA, skip it!", dev->name);
+	if (!(dev->flags & (UACCE_DEV_FLAG_SVA | UACCE_DEV_FLAG_NOIOMMU))) {
+		UACCE_BUS_WARN("device %s don't support SVA or NOIOMMU, skip it!", dev->name);
 		return 1; /* >0 will skip this device. */
 	}
 
@@ -255,9 +234,8 @@ uacce_scan_one(const char *dev_name)
 	if (!dev)
 		return -ENOMEM;
 
-	dev->device.bus = &uacce_bus.bus;
 	dev->device.name = dev->name;
-	dev->device.devargs = uacce_devargs_lookup(dev_name);
+	dev->device.devargs = rte_bus_find_devargs(&uacce_bus, dev_name);
 	snprintf(dev->name, sizeof(dev->name), "%s", dev_name);
 	snprintf(dev->dev_root, sizeof(dev->dev_root), "%s/%s",
 		 UACCE_BUS_CLASS_PATH, dev_name);
@@ -281,7 +259,7 @@ uacce_scan_one(const char *dev_name)
 	if (ret != 0)
 		goto err;
 
-	TAILQ_INSERT_TAIL(&uacce_bus.device_list, dev, next);
+	rte_bus_add_device(&uacce_bus, &dev->device);
 	return 0;
 
 err:
@@ -311,7 +289,7 @@ uacce_scan(void)
 			continue;
 		}
 
-		if (uacce_ignore_device(e->d_name))
+		if (rte_bus_device_is_ignored(&uacce_bus, e->d_name))
 			continue;
 
 		if (uacce_scan_one(e->d_name) < 0)
@@ -323,28 +301,6 @@ uacce_scan(void)
 error:
 	closedir(dir);
 	return -1;
-}
-
-static uint32_t
-uacce_calc_api_ver(const char *api, int *offset)
-{
-	int len = strlen(api);
-	int end = len - 1;
-	unsigned long ver;
-
-	while (end >= 0 && isdigit(api[end]))
-		end--;
-
-	if (end <= 0 || end == len - 1 || api[end] != 'v')
-		return 0;
-
-	ver = strtoul(api + end + 1, NULL, 10);
-	if (ver > UINT32_MAX)
-		return 0;
-
-	if (offset != NULL)
-		*offset = end + 1;
-	return (uint32_t)ver;
 }
 
 static bool
@@ -365,38 +321,41 @@ uacce_match_api(const struct rte_uacce_device *dev, bool forward_compat,
 }
 
 static bool
-uacce_match(const struct rte_uacce_driver *dr, struct rte_uacce_device *dev)
+uacce_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
+	const struct rte_uacce_driver *dr = RTE_BUS_DRIVER(drv, *dr);
+	const struct rte_uacce_device *uacce_dev = RTE_BUS_DEVICE(dev, *uacce_dev);
 	bool forward_compat = !!(dr->drv_flags & RTE_UACCE_DRV_FORWARD_COMPATIBILITY_DEV);
-	uint32_t api_ver = uacce_calc_api_ver(dev->api, NULL);
+	bool drv_support_noiommu = !!(dr->drv_flags & RTE_UACCE_DRV_SUPPORT_NOIOMMU_MODE);
+	bool dev_in_noiommu = !!(uacce_dev->flags & UACCE_DEV_FLAG_NOIOMMU);
 	const struct rte_uacce_id *id_table;
 	const char *map;
 	uint32_t len;
 
+	if (dev_in_noiommu && !drv_support_noiommu)
+		return false;
+
 	for (id_table = dr->id_table; id_table->dev_api != NULL; id_table++) {
-		if (!uacce_match_api(dev, forward_compat, id_table))
+		if (!uacce_match_api(uacce_dev, forward_compat, id_table))
 			continue;
 
-		if (id_table->dev_alg == NULL) {
-			dev->api_ver = api_ver;
+		if (id_table->dev_alg == NULL)
 			return true;
-		}
 
 		/* The dev->algs's algrothims is separated by new line, for
 		 * example: dev->algs could be: aaa\nbbbb\ncc, which has three
 		 * algorithms: aaa, bbbb and cc.
 		 * The id_table->dev_alg should be a single algrithm, e.g. bbbb.
 		 */
-		map = strstr(dev->algs, id_table->dev_alg);
+		map = strstr(uacce_dev->algs, id_table->dev_alg);
 		if (map == NULL)
 			continue;
-		if (map != dev->algs && map[-1] != '\n')
+		if (map != uacce_dev->algs && map[-1] != '\n')
 			continue;
 		len = strlen(id_table->dev_alg);
 		if (map[len] != '\0' && map[len] != '\n')
 			continue;
 
-		dev->api_ver = api_ver;
 		return true;
 	}
 
@@ -404,174 +363,49 @@ uacce_match(const struct rte_uacce_driver *dr, struct rte_uacce_device *dev)
 }
 
 static int
-uacce_probe_one_driver(struct rte_uacce_driver *dr, struct rte_uacce_device *dev)
+uacce_probe_device(struct rte_driver *drv, struct rte_device *dev)
 {
-	const char *dev_name = dev->name;
-	bool already_probed;
+	struct rte_uacce_device *uacce_dev = RTE_BUS_DEVICE(dev, *uacce_dev);
+	struct rte_uacce_driver *uacce_drv = RTE_BUS_DRIVER(drv, *uacce_drv);
+	const char *dev_name = uacce_dev->name;
 	int ret;
 
-	if (!uacce_match(dr, dev))
-		/* Match of device and driver failed */
-		return 1;
+	UACCE_BUS_DEBUG("probe device %s using driver %s", dev_name, uacce_drv->driver.name);
 
-	already_probed = rte_dev_is_probed(&dev->device);
-	if (already_probed) {
-		UACCE_BUS_INFO("device %s is already probed", dev_name);
-		return -EEXIST;
-	}
-
-	UACCE_BUS_DEBUG("probe device %s using driver %s", dev_name, dr->driver.name);
-
-	ret = dr->probe(dr, dev);
+	ret = uacce_drv->probe(uacce_drv, uacce_dev);
 	if (ret != 0) {
 		UACCE_BUS_ERR("probe device %s with driver %s failed %d",
-			      dev_name, dr->driver.name, ret);
+			      dev_name, uacce_drv->driver.name, ret);
 	} else {
-		dev->device.driver = &dr->driver;
-		dev->driver = dr;
 		UACCE_BUS_DEBUG("probe device %s with driver %s success",
-				dev_name, dr->driver.name);
+				dev_name, uacce_drv->driver.name);
 	}
 
 	return ret;
 }
 
 static int
-uacce_probe_all_drivers(struct rte_uacce_device *dev)
+uacce_unplug_device(struct rte_device *rte_dev)
 {
-	struct rte_uacce_driver *dr;
-	int rc;
-
-	FOREACH_DRIVER_ON_UACCEBUS(dr) {
-		rc = uacce_probe_one_driver(dr, dev);
-		if (rc < 0)
-			/* negative value is an error */
-			return rc;
-		if (rc > 0)
-			/* positive value means driver doesn't support it */
-			continue;
-		return 0;
-	}
-
-	return 1;
-}
-
-static int
-uacce_probe(void)
-{
-	size_t probed = 0, failed = 0;
-	struct rte_uacce_device *dev;
-	int ret;
-
-	FOREACH_DEVICE_ON_UACCEBUS(dev) {
-		probed++;
-
-		ret = uacce_probe_all_drivers(dev);
-		if (ret < 0) {
-			UACCE_BUS_LOG(ERR, "Requested device %s cannot be used",
-				dev->name);
-			rte_errno = errno;
-			failed++;
-		}
-	}
-
-	return (probed && probed == failed) ? -1 : 0;
-}
-
-static int
-uacce_cleanup(void)
-{
-	struct rte_uacce_device *dev, *tmp_dev;
-	int error = 0;
-
-	RTE_TAILQ_FOREACH_SAFE(dev, &uacce_bus.device_list, next, tmp_dev) {
-		struct rte_uacce_driver *dr = dev->driver;
-		int ret = 0;
-
-		if (dr == NULL || dr->remove == NULL)
-			goto free;
-
-		ret = dr->remove(dev);
-		if (ret < 0) {
-			rte_errno = errno;
-			error = -1;
-		}
-		dev->driver = NULL;
-		dev->device.driver = NULL;
-
-free:
-		TAILQ_REMOVE(&uacce_bus.device_list, dev, next);
-		free(dev);
-	}
-
-	return error;
-}
-
-static int
-uacce_plug(struct rte_device *dev)
-{
-	return uacce_probe_all_drivers(RTE_DEV_TO_UACCE_DEV(dev));
-}
-
-static int
-uacce_detach_dev(struct rte_uacce_device *dev)
-{
-	struct rte_uacce_driver *dr;
+	const struct rte_uacce_driver *dr = RTE_BUS_DRIVER(rte_dev->driver, *dr);
+	struct rte_uacce_device *dev = RTE_BUS_DEVICE(rte_dev, *dev);
 	int ret = 0;
-
-	dr = dev->driver;
 
 	UACCE_BUS_DEBUG("detach device %s using driver: %s", dev->device.name, dr->driver.name);
 
-	if (dr->remove) {
+	if (dr->remove != NULL) {
 		ret = dr->remove(dev);
 		if (ret < 0)
 			return ret;
 	}
 
-	dev->driver = NULL;
-	dev->device.driver = NULL;
-
 	return 0;
 }
 
-static int
-uacce_unplug(struct rte_device *dev)
+static void
+uacce_free_device(struct rte_device *dev)
 {
-	struct rte_uacce_device *uacce_dev;
-	int ret;
-
-	uacce_dev = RTE_DEV_TO_UACCE_DEV(dev);
-	ret = uacce_detach_dev(uacce_dev);
-	if (ret == 0) {
-		TAILQ_REMOVE(&uacce_bus.device_list, uacce_dev, next);
-		rte_devargs_remove(dev->devargs);
-		free(uacce_dev);
-	}
-
-	return ret;
-}
-
-static struct rte_device *
-uacce_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,  const void *data)
-{
-	const struct rte_uacce_device *uacce_start;
-	struct rte_uacce_device *uacce_dev;
-
-	if (start != NULL) {
-		uacce_start = RTE_DEV_TO_UACCE_DEV_CONST(start);
-		uacce_dev = TAILQ_NEXT(uacce_start, next);
-	} else {
-		uacce_dev = TAILQ_FIRST(&uacce_bus.device_list);
-	}
-
-	while (uacce_dev != NULL) {
-		if (cmp(&uacce_dev->device, data) == 0)
-			return &uacce_dev->device;
-		uacce_dev = TAILQ_NEXT(uacce_dev, next);
-	}
-
-	return NULL;
+	free(RTE_BUS_DEVICE(dev, struct rte_uacce_device));
 }
 
 static int
@@ -586,46 +420,6 @@ uacce_parse(const char *name, void *addr)
 		*out = name;
 
 	return ret;
-}
-
-static int
-uacce_dev_match(const struct rte_device *dev, const void *_kvlist)
-{
-	const char *key = uacce_params_keys[RTE_UACCE_PARAM_NAME];
-	const struct rte_kvargs *kvlist = _kvlist;
-	const char *name;
-
-	/* no kvlist arg, all devices match. */
-	if (kvlist == NULL)
-		return 0;
-
-	/* if key is present in kvlist and does not match, filter device. */
-	name = rte_kvargs_get(kvlist, key);
-	if (name != NULL && strcmp(name, dev->name))
-		return -1;
-
-	return 0;
-}
-
-static void *
-uacce_dev_iterate(const void *start, const char *str,
-		  const struct rte_dev_iterator *it __rte_unused)
-{
-	rte_bus_find_device_t find_device;
-	struct rte_kvargs *kvargs = NULL;
-	struct rte_device *dev;
-
-	if (str != NULL) {
-		kvargs = rte_kvargs_parse(str, uacce_params_keys);
-		if (kvargs == NULL) {
-			UACCE_BUS_ERR("cannot parse argument list %s", str);
-			return NULL;
-		}
-	}
-	find_device = uacce_bus.bus.find_device;
-	dev = find_device(start, uacce_dev_match, kvargs);
-	rte_kvargs_free(kvargs);
-	return dev;
 }
 
 RTE_EXPORT_INTERNAL_SYMBOL(rte_uacce_avail_queues)
@@ -725,32 +519,28 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_uacce_register)
 void
 rte_uacce_register(struct rte_uacce_driver *driver)
 {
-	TAILQ_INSERT_TAIL(&uacce_bus.driver_list, driver, next);
-	driver->bus = &uacce_bus;
+	rte_bus_add_driver(&uacce_bus, &driver->driver);
 }
 
 RTE_EXPORT_INTERNAL_SYMBOL(rte_uacce_unregister)
 void
 rte_uacce_unregister(struct rte_uacce_driver *driver)
 {
-	TAILQ_REMOVE(&uacce_bus.driver_list, driver, next);
-	driver->bus = NULL;
+	rte_bus_remove_driver(&uacce_bus, &driver->driver);
 }
 
-static struct rte_uacce_bus uacce_bus = {
-	.bus = {
-		.scan = uacce_scan,
-		.probe = uacce_probe,
-		.cleanup = uacce_cleanup,
-		.plug = uacce_plug,
-		.unplug = uacce_unplug,
-		.find_device = uacce_find_device,
-		.parse = uacce_parse,
-		.dev_iterate = uacce_dev_iterate,
-	},
-	.device_list = TAILQ_HEAD_INITIALIZER(uacce_bus.device_list),
-	.driver_list = TAILQ_HEAD_INITIALIZER(uacce_bus.driver_list),
+static struct rte_bus uacce_bus = {
+	.scan = uacce_scan,
+	.probe = rte_bus_generic_probe,
+	.free_device = uacce_free_device,
+	.cleanup = rte_bus_generic_cleanup,
+	.match = uacce_bus_match,
+	.probe_device = uacce_probe_device,
+	.unplug_device = uacce_unplug_device,
+	.find_device = rte_bus_generic_find_device,
+	.parse = uacce_parse,
+	.dev_iterate = rte_bus_generic_dev_iterate,
 };
 
-RTE_REGISTER_BUS(uacce, uacce_bus.bus);
+RTE_REGISTER_BUS(uacce, uacce_bus);
 RTE_LOG_REGISTER_DEFAULT(uacce_bus_logtype, NOTICE);

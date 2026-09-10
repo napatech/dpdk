@@ -420,6 +420,16 @@ roc_npc_init(struct roc_npc *roc_npc)
 
 	roc_npc->flow_age.age_flow_refcnt = 0;
 
+	/* Create skip-size PKIND memzone if it doesn't exist */
+	if (!plt_memzone_lookup(SKIP_SIZE_PKIND_MEMZONE)) {
+		const struct plt_memzone *mz;
+
+		mz = plt_memzone_reserve_cache_align(SKIP_SIZE_PKIND_MEMZONE,
+						     sizeof(struct skip_size_pkind_cfg));
+		if (mz != NULL)
+			memset(mz->addr, 0, sizeof(struct skip_size_pkind_cfg));
+	}
+
 	return rc;
 
 done:
@@ -436,6 +446,9 @@ int
 roc_npc_fini(struct roc_npc *roc_npc)
 {
 	struct npc *npc = roc_npc_to_npc_priv(roc_npc);
+	struct skip_size_pkind_cfg *cfg;
+	const struct plt_memzone *mz;
+	uint16_t i, count = 0;
 	int rc;
 
 	if (!roc_npc->flow_age.aged_flows_get_thread_exit)
@@ -457,12 +470,47 @@ roc_npc_fini(struct roc_npc *roc_npc)
 		npc->prio_flow_list = NULL;
 	}
 
+	mz = plt_memzone_lookup(SKIP_SIZE_PKIND_MEMZONE);
+	if (mz) {
+		cfg = mz->addr;
+
+		for (i = 0; i < cfg->count; i++) {
+			if (cfg->entries[i].skip_size == 0)
+				count++;
+		}
+
+		if (count == cfg->count)
+			plt_memzone_free(mz);
+	}
+
 	return 0;
 }
 
 int
-roc_npc_validate_portid_action(struct roc_npc *roc_npc_src,
-			       struct roc_npc *roc_npc_dst)
+roc_npc_skip_size_pkind_get(struct roc_npc *roc_npc)
+{
+	struct skip_size_pkind_cfg *cfg;
+	const struct plt_memzone *mz;
+	int i;
+
+	if (roc_npc->switch_header_type != ROC_PRIV_FLAGS_SKIP_SIZE)
+		return -1;
+
+	mz = plt_memzone_lookup(SKIP_SIZE_PKIND_MEMZONE);
+	if (!mz)
+		return -1;
+	cfg = mz->addr;
+
+	for (i = 0; i < cfg->count; i++) {
+		if (cfg->entries[i].skip_size == roc_npc->skip_size)
+			return cfg->entries[i].pkind + NPC_SKIP_SIZE_PKIND_MAX;
+	}
+
+	return -1;
+}
+
+int
+roc_npc_validate_portid_action(struct roc_npc *roc_npc_src, struct roc_npc *roc_npc_dst)
 {
 	struct roc_nix *roc_nix_src = roc_npc_src->roc_nix;
 	struct nix *nix_src = roc_nix_to_nix_priv(roc_nix_src);
@@ -547,9 +595,13 @@ npc_parse_spi_to_sa_action(struct roc_npc *roc_npc, const struct roc_npc_action 
 		req->spi_index = plt_be_to_cpu_32(flow->spi_to_sa_info.spi);
 		req->match_id = flow->match_id;
 		req->valid = true;
-		if (roc_model_is_cn20k())
-			req->inline_profile_id =
-				roc_nix_inl_inb_ipsec_profile_id_get(roc_nix, true);
+		if (roc_model_is_cn20k()) {
+			if (sec_action->use_custom_profile)
+				req->inline_profile_id = sec_action->profile_id;
+			else
+				req->inline_profile_id =
+					roc_nix_inl_inb_ipsec_profile_id_get(roc_nix, true);
+		}
 		rc = mbox_process_msg(mbox, (void *)&rsp);
 		if (rc)
 			return rc;
@@ -937,11 +989,18 @@ npc_parse_actions(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 		flow->npc_action = NIX_RX_ACTIONOP_UCAST;
 	} else if (req_act & ROC_NPC_ACTION_TYPE_SEC) {
 		if (roc_model_is_cn20k()) {
+			const struct roc_npc_sec_action *sa_action = NULL;
+			uint16_t profile_id;
+
 			flow->npc_action = NIX_RX_ACTIONOP_UCAST_CPT;
 			flow->npc_action |= (uint64_t)rq << 20;
-			flow->npc_action2 =
-				roc_nix_inl_inb_ipsec_profile_id_get(roc_nix, true) << 8;
-			flow->npc_action2 |= is_non_inp ? (1ULL << 15) : 0;
+			profile_id = roc_nix_inl_inb_ipsec_profile_id_get(roc_nix, true);
+			if (sec_action && sec_action->conf) {
+				sa_action = (const struct roc_npc_sec_action *)sec_action->conf;
+				if (sa_action->use_custom_profile)
+					profile_id = sa_action->profile_id;
+			}
+			flow->npc_action2 = (is_non_inp ? (1ULL << 15) : 0) | (profile_id << 8);
 		} else {
 			flow->npc_action = NIX_RX_ACTIONOP_UCAST_IPSEC;
 			flow->npc_action |= (uint64_t)rq << 20;

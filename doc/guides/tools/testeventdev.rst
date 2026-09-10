@@ -260,8 +260,6 @@ This is a functional test case that aims at testing the following:
 #. Verify the ingress order maintenance.
 #. Verify the exclusive(atomic) access to given atomic flow per eventdev port.
 
-.. _table_eventdev_order_queue_test:
-
 .. table:: Order queue test eventdev configuration.
 
    +---+--------------+----------------+------------------------+
@@ -281,8 +279,6 @@ This is a functional test case that aims at testing the following:
    |   |              | 1              | port n-1. Producer uses|
    |   |              |                | port n                 |
    +---+--------------+----------------+------------------------+
-
-.. _figure_eventdev_order_queue_test:
 
 .. figure:: img/eventdev_order_queue_test.*
 
@@ -343,8 +339,6 @@ but differs in two critical ways:
 #. Atomicity is verified using spinlocks
    for each combination of flow id and queue id.
 
-.. _table_eventdev_atomic_queue_test:
-
 .. table:: Atomic queue test eventdev configuration.
 
    +---+--------------+----------------+---------------------------+
@@ -364,8 +358,6 @@ but differs in two critical ways:
    |   |              |                | port n-1. Producer uses   |
    |   |              |                | port n.                   |
    +---+--------------+----------------+---------------------------+
-
-.. _figure_eventdev_atomic_queue_test:
 
 .. figure:: img/eventdev_atomic_queue_test.*
 
@@ -433,8 +425,6 @@ This test verifies the same aspects of ``order_queue`` test, the difference is
 the number of queues used, this test operates on a single ``all types queue(atq)``
 instead of two different queues for ordered and atomic.
 
-.. _table_eventdev_order_atq_test:
-
 .. table:: Order all types queue test eventdev configuration.
 
    +---+--------------+----------------+------------------------+
@@ -454,8 +444,6 @@ instead of two different queues for ordered and atomic.
    |   |              | 1              | port n-1.Producer uses |
    |   |              |                | port n.                |
    +---+--------------+----------------+------------------------+
-
-.. _figure_eventdev_order_atq_test:
 
 .. figure:: img/eventdev_order_atq_test.*
 
@@ -497,8 +485,6 @@ the difference is the number of queues used,
 this test operates on a single ``all types queue(atq)``
 instead of two different atomic queues.
 
-.. _table_eventdev_atomic_atq_test:
-
 .. table:: Order all types queue test eventdev configuration.
 
    +---+--------------+----------------+-------------------------+
@@ -518,8 +504,6 @@ instead of two different atomic queues.
    |   |              |                | port n-1. Producer uses |
    |   |              |                | port n.                 |
    +---+--------------+----------------+-------------------------+
-
-.. _figure_eventdev_atomic_atq_test:
 
 .. figure:: img/eventdev_atomic_atq_test.*
 
@@ -561,7 +545,7 @@ This is a performance test case that aims at testing the following:
 #. Measure the number of events can be processed in a second.
 #. Measure the latency to forward an event.
 
-.. _table_eventdev_perf_queue_test:
+.. _testeventdev_table_perf_queue_test:
 
 .. table:: Perf queue test eventdev configuration.
 
@@ -582,15 +566,13 @@ This is a performance test case that aims at testing the following:
    |   |              | nb_producers   | Producers use port n to port p          |
    +---+--------------+----------------+-----------------------------------------+
 
-.. _figure_eventdev_perf_queue_test:
-
 .. figure:: img/eventdev_perf_queue_test.*
 
    perf queue test operation.
 
 The perf queue test configures the eventdev with Q queues and P ports, where
 Q and P is a function of the number of workers, the number of producers and
-number of stages as mentioned in :numref:`table_eventdev_perf_queue_test`.
+number of stages as mentioned in :numref:`testeventdev_table_perf_queue_test`.
 
 The user can choose the number of workers, the number of producers and number of
 stages through the ``--wlcores``, ``--plcores`` and the ``--stlist`` application
@@ -691,7 +673,7 @@ Example command to run perf queue test with event DMA adapter:
                --prod_type_dmadev --dma_adptr_mode=1
 
 PERF_ATQ Test
-~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
 
 This is a performance test case that aims at testing the following with
 ``all types queue`` eventdev scheme.
@@ -699,7 +681,7 @@ This is a performance test case that aims at testing the following with
 #. Measure the number of events can be processed in a second.
 #. Measure the latency to forward an event.
 
-.. _table_eventdev_perf_atq_test:
+.. _testeventdev_table_perf_atq_test:
 
 .. table:: Perf all types queue test eventdev configuration.
 
@@ -720,8 +702,6 @@ This is a performance test case that aims at testing the following with
    |   |              | nb_producers   | Producers use port n to port p          |
    +---+--------------+----------------+-----------------------------------------+
 
-.. _figure_eventdev_perf_atq_test:
-
 .. figure:: img/eventdev_perf_atq_test.*
 
    perf all types queue test operation.
@@ -729,7 +709,7 @@ This is a performance test case that aims at testing the following with
 
 The ``all types queues(atq)`` perf test configures the eventdev with Q queues
 and P ports, where Q and P is a function of the number of workers and number of
-producers as mentioned in :numref:`table_eventdev_perf_atq_test`.
+producers as mentioned in :numref:`testeventdev_table_perf_atq_test`.
 
 
 The atq queue test functions as same as ``perf_queue`` test. The difference
@@ -804,7 +784,7 @@ This is a pipeline test case that aims at testing the following:
 #. Measure the end-to-end performance of an event dev with a ethernet dev.
 #. Maintain packet ordering from Rx to Tx.
 
-.. _table_eventdev_pipeline_queue_test:
+.. _testeventdev_table_pipeline_queue_test:
 
 .. table:: Pipeline queue test eventdev configuration.
 
@@ -833,11 +813,7 @@ This is a pipeline test case that aims at testing the following:
    |   |              |                | depending on the Tx adapter capability. |
    +---+--------------+----------------+-----------------------------------------+
 
-.. _figure_eventdev_pipeline_queue_test_generic:
-
 .. figure:: img/eventdev_pipeline_queue_test_generic.*
-
-.. _figure_eventdev_pipeline_queue_test_internal_port:
 
 .. figure:: img/eventdev_pipeline_queue_test_internal_port.*
 
@@ -845,7 +821,7 @@ This is a pipeline test case that aims at testing the following:
 
 The pipeline queue test configures the eventdev with Q queues and P ports,
 where Q and P is a function of the number of workers, the number of producers
-and number of stages as mentioned in :numref:`table_eventdev_pipeline_queue_test`.
+and number of stages as mentioned in :numref:`testeventdev_table_pipeline_queue_test`.
 
 The user can choose the number of workers and number of stages through the
 ``--wlcores`` and the ``--stlist`` application command line arguments
@@ -922,7 +898,7 @@ Example command to run pipeline atq test with vector events:
         --enable_vector  --vector_size 512
 
 PIPELINE_ATQ Test
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
 
 This is a pipeline test case that aims at testing the following with
 ``all types queue`` eventdev scheme.
@@ -930,7 +906,7 @@ This is a pipeline test case that aims at testing the following with
 #. Measure the end-to-end performance of an event dev with a ethernet dev.
 #. Maintain packet ordering from Rx to Tx.
 
-.. _table_eventdev_pipeline_atq_test:
+.. _testeventdev_table_pipeline_atq_test:
 
 .. table:: Pipeline atq test eventdev configuration.
 
@@ -962,11 +938,7 @@ This is a pipeline test case that aims at testing the following with
    |   |              |                | depending on the Tx adapter capability. |
    +---+--------------+----------------+-----------------------------------------+
 
-.. _figure_eventdev_pipeline_atq_test_generic:
-
 .. figure:: img/eventdev_pipeline_atq_test_generic.*
-
-.. _figure_eventdev_pipeline_atq_test_internal_port:
 
 .. figure:: img/eventdev_pipeline_atq_test_internal_port.*
 
@@ -974,7 +946,7 @@ This is a pipeline test case that aims at testing the following with
 
 The pipeline atq test configures the eventdev with Q queues and P ports,
 where Q and P is a function of the number of workers, the number of producers
-and number of stages as mentioned in :numref:`table_eventdev_pipeline_atq_test`.
+and number of stages as mentioned in :numref:`testeventdev_table_pipeline_atq_test`.
 
 The atq queue test functions as same as ``pipeline_queue`` test. The difference
 is, It uses, ``all type queue scheme`` instead of separate queues for each

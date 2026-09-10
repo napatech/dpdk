@@ -19,10 +19,10 @@ The block supports following modes of DMA transfers:
 Prerequisites and Compilation procedure
 ---------------------------------------
 
-See :doc:`../platform/cnxk` for setup information.
+See :doc:`/platform/cnxk` for setup information.
 
 Device Setup
--------------
+------------
 
 The ``dpdk-devbind.py`` script, included with DPDK,
 can be used to show the presence of supported hardware.
@@ -53,7 +53,7 @@ by calling the ``rte_dma_start()`` API.
 Performing Data Copies
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Refer to the :ref:`Enqueue / Dequeue APIs <dmadev_enqueue_dequeue>` section
+Refer to the :ref:`dmadev_enqueue_dequeue` section
 of the dmadev library documentation
 for details on operation enqueue and submission API usage.
 

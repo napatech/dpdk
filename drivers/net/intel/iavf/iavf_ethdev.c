@@ -21,6 +21,7 @@
 #include <rte_pci.h>
 #include <rte_alarm.h>
 #include <rte_atomic.h>
+#include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_ether.h>
 #include <ethdev_driver.h>
@@ -41,8 +42,10 @@
 #define IAVF_QUANTA_SIZE_ARG       "quanta_size"
 #define IAVF_RESET_WATCHDOG_ARG    "watchdog_period"
 #define IAVF_ENABLE_AUTO_RESET_ARG "auto_reset"
+#define IAVF_ENABLE_AUTO_RECONFIG_ARG "auto_reconfig"
 #define IAVF_NO_POLL_ON_LINK_DOWN_ARG "no-poll-on-link-down"
 #define IAVF_MBUF_CHECK_ARG       "mbuf_check"
+#define IAVF_ENABLE_PTYPE_LLDP_ARG "enable_ptype_lldp"
 uint64_t iavf_timestamp_dynflag;
 int iavf_timestamp_dynfield_offset = -1;
 int rte_pmd_iavf_tx_lldp_dynfield_offset = -1;
@@ -52,8 +55,10 @@ static const char * const iavf_valid_args[] = {
 	IAVF_QUANTA_SIZE_ARG,
 	IAVF_RESET_WATCHDOG_ARG,
 	IAVF_ENABLE_AUTO_RESET_ARG,
+	IAVF_ENABLE_AUTO_RECONFIG_ARG,
 	IAVF_NO_POLL_ON_LINK_DOWN_ARG,
 	IAVF_MBUF_CHECK_ARG,
+	IAVF_ENABLE_PTYPE_LLDP_ARG,
 	NULL
 };
 
@@ -101,6 +106,7 @@ static int iavf_dev_start(struct rte_eth_dev *dev);
 static int iavf_dev_stop(struct rte_eth_dev *dev);
 static int iavf_dev_close(struct rte_eth_dev *dev);
 static int iavf_dev_reset(struct rte_eth_dev *dev);
+static bool iavf_is_reset_detected(struct iavf_adapter *adapter);
 static int iavf_dev_info_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
 static const uint32_t *iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev,
@@ -125,6 +131,8 @@ static int iavf_dev_add_mac_addr(struct rte_eth_dev *dev,
 static void iavf_dev_del_mac_addr(struct rte_eth_dev *dev, uint32_t index);
 static int iavf_dev_vlan_filter_set(struct rte_eth_dev *dev,
 				   uint16_t vlan_id, int on);
+static int iavf_vlan_tpid_set(struct rte_eth_dev *dev,
+			     enum rte_vlan_type vlan_type, uint16_t tpid);
 static int iavf_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
 static int iavf_dev_rss_reta_update(struct rte_eth_dev *dev,
 				   struct rte_eth_rss_reta_entry64 *reta_conf,
@@ -145,6 +153,12 @@ static int iavf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev,
 					 uint16_t queue_id);
 static void iavf_dev_interrupt_handler(void *param);
 static void iavf_disable_irq0(struct iavf_hw *hw);
+static struct ci_rx_queue *iavf_phc_sync_rxq_get(struct rte_eth_dev *dev);
+static void iavf_phc_sync_update_all_rxq(struct rte_eth_dev *dev,
+					 uint64_t phc_time,
+					 uint64_t sw_cur_time);
+static bool iavf_phc_sync_alarm_needed(struct rte_eth_dev *dev);
+static void iavf_phc_sync_tick(struct rte_eth_dev *dev);
 static int iavf_dev_flow_ops_get(struct rte_eth_dev *dev,
 				 const struct rte_flow_ops **ops);
 static int iavf_set_mc_addr_list(struct rte_eth_dev *dev,
@@ -224,6 +238,7 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.mac_addr_remove            = iavf_dev_del_mac_addr,
 	.set_mc_addr_list			= iavf_set_mc_addr_list,
 	.vlan_filter_set            = iavf_dev_vlan_filter_set,
+	.vlan_tpid_set              = iavf_vlan_tpid_set,
 	.vlan_offload_set           = iavf_dev_vlan_offload_set,
 	.rx_queue_start             = iavf_dev_rx_queue_start,
 	.rx_queue_stop              = iavf_dev_rx_queue_stop,
@@ -553,7 +568,7 @@ iavf_init_rss(struct iavf_adapter *adapter)
 		for (i = 0; i < vf->vf_res->rss_key_size; i++)
 			vf->rss_key[i] = (uint8_t)rte_rand();
 	} else
-		rte_memcpy(vf->rss_key, rss_conf->rss_key,
+		memcpy(vf->rss_key, rss_conf->rss_key,
 			   RTE_MIN(rss_conf->rss_key_len,
 				   vf->vf_res->rss_key_size));
 
@@ -1014,6 +1029,26 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	/* Check Tx LLDP dynfield */
 	rte_pmd_iavf_tx_lldp_dynfield_offset =
 		rte_mbuf_dynfield_lookup(IAVF_TX_LLDP_DYNFIELD, NULL);
+	if (rte_pmd_iavf_tx_lldp_dynfield_offset > 0) {
+		PMD_DRV_LOG(WARNING,
+			"Using a dynamic mbuf field to identify LLDP packets is deprecated. "
+			"Set the 'enable_ptype_lldp' driver option and mbuf LLDP ptypes instead.");
+		if (adapter->devargs.enable_ptype_lldp)
+			PMD_DRV_LOG(WARNING,
+				"Both ptype and dynfield LLDP enabled; ptype takes precedence.");
+	}
+
+	for (uint16_t i = 0; i < dev->data->nb_tx_queues; i++) {
+		struct ci_tx_queue *txq = dev->data->tx_queues[i];
+		if (txq) {
+			if (adapter->devargs.enable_ptype_lldp)
+				txq->lldp_mode = IAVF_LLDP_PTYPE;
+			else if (rte_pmd_iavf_tx_lldp_dynfield_offset > 0)
+				txq->lldp_mode = IAVF_LLDP_DYNFIELD;
+			else
+				txq->lldp_mode = IAVF_LLDP_DISABLED;
+		}
+	}
 
 	if (iavf_init_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "failed to do Queue init");
@@ -1056,6 +1091,8 @@ iavf_dev_start(struct rte_eth_dev *dev)
 		goto error;
 	}
 
+	iavf_phc_sync_alarm_start(dev);
+
 	return 0;
 
 error:
@@ -1081,6 +1118,8 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 
 	if (adapter->stopped == 1)
 		return 0;
+
+	iavf_phc_sync_alarm_stop(dev);
 
 	/* Disable the interrupt for Rx */
 	rte_intr_efd_disable(intr_handle);
@@ -1364,6 +1403,36 @@ iavf_dev_del_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 }
 
 static int
+iavf_vlan_tpid_set(struct rte_eth_dev *dev, enum rte_vlan_type vlan_type, uint16_t tpid)
+{
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
+	int qinq = dev_conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_VLAN_EXTEND;
+
+	if (vlan_type != RTE_ETH_VLAN_TYPE_OUTER) {
+		PMD_DRV_LOG(ERR, "Unsupported vlan type.");
+		return -EINVAL;
+	} else if (!qinq) {
+		PMD_DRV_LOG(ERR, "VLAN-extend disabled.");
+		return -ENOSYS;
+	} else if (tpid != RTE_ETHER_TYPE_VLAN &&
+		   tpid != RTE_ETHER_TYPE_QINQ) {
+		PMD_DRV_LOG(ERR, "tpid supported 0x8100/0x88A8");
+		return -ENOTSUP;
+	}
+
+	/* This API only fills internal iavf_adapter structure
+	 * and does not send any signal to hardware.
+	 * Inner VLAN always 0x8100, so not set explicitly.
+	 */
+	if (qinq && vlan_type == RTE_ETH_VLAN_TYPE_OUTER)
+		adapter->tpid = tpid; /* Outer VLAN can be 0x88a8 or 0x8100 */
+
+	return 0;
+}
+
+static int
 iavf_disable_vlan_strip_ex(struct rte_eth_dev *dev, int on)
 {
 	/* For i40e kernel drivers which supports both vlan(v1 & v2) VIRTCHNL OP,
@@ -1451,6 +1520,8 @@ iavf_dev_vlan_offload_set_v2(struct rte_eth_dev *dev, int mask)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	bool enable;
+	int qinq = dev->data->dev_conf.rxmode.offloads &
+		RTE_ETH_RX_OFFLOAD_VLAN_EXTEND;
 	int err;
 
 	if (mask & RTE_ETH_VLAN_FILTER_MASK) {
@@ -1463,6 +1534,20 @@ iavf_dev_vlan_offload_set_v2(struct rte_eth_dev *dev, int mask)
 		enable = !!(rxmode->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP);
 
 		err = iavf_config_vlan_strip_v2(adapter, enable);
+		/* If not support, the stripping is already disabled by PF */
+		if (err == -ENOTSUP && !enable)
+			err = 0;
+		if (err)
+			return -EIO;
+	}
+
+	if (mask & RTE_ETH_QINQ_STRIP_MASK) {
+		if (!qinq) {
+			PMD_DRV_LOG(ERR, "VLAN-extend disabled");
+			return -ENOSYS;
+		}
+		enable = !!(rxmode->offloads & RTE_ETH_RX_OFFLOAD_QINQ_STRIP);
+		err = iavf_config_outer_vlan_strip_v2(adapter, enable);
 		/* If not support, the stripping is already disabled by PF */
 		if (err == -ENOTSUP && !enable)
 			err = 0;
@@ -1536,7 +1621,7 @@ iavf_dev_rss_reta_update(struct rte_eth_dev *dev,
 		return -ENOMEM;
 	}
 	/* store the old lut table temporarily */
-	rte_memcpy(lut, vf->rss_lut, reta_size);
+	memcpy(lut, vf->rss_lut, reta_size);
 
 	for (i = 0; i < reta_size; i++) {
 		idx = i / RTE_ETH_RETA_GROUP_SIZE;
@@ -1545,11 +1630,11 @@ iavf_dev_rss_reta_update(struct rte_eth_dev *dev,
 			lut[i] = reta_conf[idx].reta[shift];
 	}
 
-	rte_memcpy(vf->rss_lut, lut, reta_size);
+	memcpy(vf->rss_lut, lut, reta_size);
 	/* send virtchnl ops to configure RSS */
 	ret = iavf_configure_rss_lut(adapter);
 	if (ret) /* revert back */
-		rte_memcpy(vf->rss_lut, lut, reta_size);
+		memcpy(vf->rss_lut, lut, reta_size);
 	free(lut);
 
 	return ret;
@@ -1605,7 +1690,7 @@ iavf_set_rss_key(struct iavf_adapter *adapter, uint8_t *key, uint8_t key_len)
 		return -EINVAL;
 	}
 
-	rte_memcpy(vf->rss_key, key, key_len);
+	memcpy(vf->rss_key, key, key_len);
 
 	return iavf_configure_rss_key(adapter);
 }
@@ -1689,7 +1774,7 @@ iavf_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 		return 0;
 
 	rss_conf->rss_key_len = vf->vf_res->rss_key_size;
-	rte_memcpy(rss_conf->rss_key, vf->rss_key, rss_conf->rss_key_len);
+	memcpy(rss_conf->rss_key, vf->rss_key, rss_conf->rss_key_len);
 
 	return 0;
 }
@@ -1793,7 +1878,7 @@ iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_vsi *vsi = &vf->vsi;
-	struct virtchnl_eth_stats *pstats = NULL;
+	struct virtchnl_eth_stats pstats;
 	int ret;
 
 	ret = iavf_query_stats(adapter, &pstats);
@@ -1801,16 +1886,24 @@ iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
 		uint8_t crc_stats_len = (dev->data->dev_conf.rxmode.offloads &
 					 RTE_ETH_RX_OFFLOAD_KEEP_CRC) ? 0 :
 					 RTE_ETHER_CRC_LEN;
-		iavf_update_stats(vsi, pstats);
-		stats->ipackets = pstats->rx_unicast + pstats->rx_multicast +
-				pstats->rx_broadcast - pstats->rx_discards;
-		stats->opackets = pstats->tx_broadcast + pstats->tx_multicast +
-						pstats->tx_unicast;
-		stats->imissed = pstats->rx_discards;
-		stats->oerrors = pstats->tx_errors + pstats->tx_discards;
-		stats->ibytes = pstats->rx_bytes;
+		iavf_update_stats(vsi, &pstats);
+		stats->ipackets = pstats.rx_unicast + pstats.rx_multicast + pstats.rx_broadcast;
+		/*
+		 * Unicast/multicast/broadcast counters include discarded packets, so subtract
+		 * rx_discards to report only the packets delivered to the application. The
+		 * counters are sampled from separate sources and can be momentarily inconsistent
+		 * under load. If rx_discards exceeds their sum then essentially nothing was
+		 * delivered, so saturate at zero rather than underflow.
+		 */
+		stats->ipackets = stats->ipackets >= pstats.rx_discards ?
+					stats->ipackets - pstats.rx_discards : 0;
+		stats->opackets = pstats.tx_broadcast + pstats.tx_multicast +
+						pstats.tx_unicast;
+		stats->imissed = pstats.rx_discards;
+		stats->oerrors = pstats.tx_errors + pstats.tx_discards;
+		stats->ibytes = pstats.rx_bytes;
 		stats->ibytes -= stats->ipackets * crc_stats_len;
-		stats->obytes = pstats->tx_bytes;
+		stats->obytes = pstats.tx_bytes;
 	} else {
 		PMD_DRV_LOG(ERR, "Get statistics failed");
 	}
@@ -1825,15 +1918,15 @@ iavf_dev_stats_reset(struct rte_eth_dev *dev)
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_vsi *vsi = &vf->vsi;
-	struct virtchnl_eth_stats *pstats = NULL;
+	struct virtchnl_eth_stats stats;
 
 	/* read stat values to clear hardware registers */
-	ret = iavf_query_stats(adapter, &pstats);
+	ret = iavf_query_stats(adapter, &stats);
 	if (ret != 0)
 		return ret;
 
 	/* set stats offset base on current values */
-	vsi->eth_stats_offset.eth_stats = *pstats;
+	vsi->eth_stats_offset.eth_stats = stats;
 
 	return 0;
 }
@@ -1909,21 +2002,21 @@ static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_vsi *vsi = &vf->vsi;
-	struct virtchnl_eth_stats *pstats = NULL;
+	struct virtchnl_eth_stats stats;
 	struct iavf_eth_xstats iavf_xtats = {{0}};
 
 	if (n < IAVF_NB_XSTATS)
 		return IAVF_NB_XSTATS;
 
-	ret = iavf_query_stats(adapter, &pstats);
+	ret = iavf_query_stats(adapter, &stats);
 	if (ret != 0)
 		return 0;
 
 	if (!xstats)
 		return 0;
 
-	iavf_update_stats(vsi, pstats);
-	iavf_xtats.eth_stats = *pstats;
+	iavf_update_stats(vsi, &stats);
+	iavf_xtats.eth_stats = stats;
 
 	if (iavf_ipsec_crypto_supported(adapter))
 		iavf_dev_update_ipsec_xstats(dev, &iavf_xtats.ips_stats);
@@ -1947,7 +2040,7 @@ iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	uint16_t msix_intr;
@@ -1983,7 +2076,7 @@ iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 static int
 iavf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint16_t msix_intr;
 
@@ -2373,6 +2466,10 @@ static int iavf_parse_devargs(struct rte_eth_dev *dev)
 	int ret;
 	int watchdog_period = -1;
 
+	ad->devargs.auto_reset = 1;
+	ad->devargs.no_poll_on_link_down = 1;
+	ad->devargs.auto_reconfig = 1;
+
 	if (!devargs)
 		return 0;
 
@@ -2428,8 +2525,21 @@ static int iavf_parse_devargs(struct rte_eth_dev *dev)
 	if (ret)
 		goto bail;
 
-	if (ad->devargs.auto_reset != 0)
+	if (ad->devargs.auto_reset != 0 && ad->devargs.no_poll_on_link_down == 0) {
+		PMD_INIT_LOG(WARNING,
+			"no-poll-on-link-down=0 is incompatible with auto_reset=1, ignoring");
 		ad->devargs.no_poll_on_link_down = 1;
+	}
+
+	ret = rte_kvargs_process(kvlist, IAVF_ENABLE_AUTO_RECONFIG_ARG,
+				 &parse_bool, &ad->devargs.auto_reconfig);
+	if (ret)
+		goto bail;
+
+	ret = rte_kvargs_process(kvlist, IAVF_ENABLE_PTYPE_LLDP_ARG,
+				 &parse_bool, &ad->devargs.enable_ptype_lldp);
+	if (ret)
+		goto bail;
 
 bail:
 	rte_kvargs_free(kvlist);
@@ -2553,11 +2663,6 @@ iavf_init_vf(struct rte_eth_dev *dev)
 		goto err;
 	}
 
-	vf->aq_resp = rte_zmalloc("vf_aq_resp", IAVF_AQ_BUF_SZ, 0);
-	if (!vf->aq_resp) {
-		PMD_INIT_LOG(ERR, "unable to allocate vf_aq_resp memory");
-		goto err_aq;
-	}
 	if (iavf_check_api_version(adapter) != 0) {
 		PMD_INIT_LOG(ERR, "check_api version failed");
 		goto err_api;
@@ -2631,8 +2736,6 @@ err_alloc:
 	rte_free(vf->vf_res);
 	vf->vsi_res = NULL;
 err_api:
-	rte_free(vf->aq_resp);
-err_aq:
 	iavf_shutdown_adminq(hw);
 err:
 	return -1;
@@ -2650,11 +2753,12 @@ iavf_uninit_vf(struct rte_eth_dev *dev)
 	vf->vsi_res = NULL;
 	vf->vf_res = NULL;
 
-	rte_free(vf->aq_resp);
-	vf->aq_resp = NULL;
-
 	rte_free(vf->qos_cap);
 	vf->qos_cap = NULL;
+	free(vf->qtc_map);
+	vf->qtc_map = NULL;
+	rte_free(vf->proto_xtr);
+	vf->proto_xtr = NULL;
 
 	rte_free(vf->rss_lut);
 	vf->rss_lut = NULL;
@@ -2701,30 +2805,158 @@ iavf_dev_interrupt_handler(void *param)
 	iavf_enable_irq0(hw);
 }
 
+static struct ci_rx_queue *
+iavf_phc_sync_rxq_get(struct rte_eth_dev *dev)
+{
+	struct ci_rx_queue *rxq;
+	uint16_t i;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+		if (rxq != NULL)
+			return rxq;
+	}
+
+	return NULL;
+}
+
+static void
+iavf_phc_sync_update_all_rxq(struct rte_eth_dev *dev,
+			     uint64_t phc_time,
+			     uint64_t sw_cur_time)
+{
+	struct ci_rx_queue *rxq;
+	uint16_t i;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+		if (rxq == NULL)
+			continue;
+
+		rxq->phc_time = phc_time;
+		rxq->hw_time_update = sw_cur_time;
+	}
+}
+
+static void
+iavf_phc_sync_tick(struct rte_eth_dev *dev)
+{
+	struct iavf_adapter *adapter;
+	const uint16_t phc_sync_ticks_max = RTE_MAX((uint16_t)1,
+		(uint16_t)(IAVF_PHC_SYNC_ALARM_INTERVAL_US / IAVF_ALARM_INTERVAL));
+	struct ci_rx_queue *sync_rxq;
+	uint64_t sw_cur_time;
+
+	adapter = IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+	rte_spinlock_lock(&adapter->phc_sync_lock);
+	if (adapter->phc_sync_paused || !iavf_phc_sync_alarm_needed(dev)) {
+		adapter->phc_sync_ticks = 0;
+		goto unlock;
+	}
+
+	if (++adapter->phc_sync_ticks < phc_sync_ticks_max)
+		goto unlock;
+
+	adapter->phc_sync_ticks = 0;
+	sync_rxq = iavf_phc_sync_rxq_get(dev);
+	if (sync_rxq == NULL)
+		goto unlock;
+
+	if (iavf_get_phc_time(sync_rxq) != 0) {
+		PMD_DRV_LOG(ERR, "get physical time failed");
+		goto unlock;
+	}
+
+	sw_cur_time = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
+	iavf_phc_sync_update_all_rxq(dev, sync_rxq->phc_time, sw_cur_time);
+
+unlock:
+	rte_spinlock_unlock(&adapter->phc_sync_lock);
+}
+
 void
 iavf_dev_alarm_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct iavf_info *vf;
 	if (dev == NULL || dev->data == NULL || dev->data->dev_private == NULL)
 		return;
 
+	vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t icr0;
 
-	iavf_disable_irq0(hw);
+	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR)) {
+		iavf_disable_irq0(hw);
 
-	/* read out interrupt causes */
-	icr0 = IAVF_READ_REG(hw, IAVF_VFINT_ICR01);
+		/* read out interrupt causes */
+		icr0 = IAVF_READ_REG(hw, IAVF_VFINT_ICR01);
 
-	if (icr0 & IAVF_VFINT_ICR01_ADMINQ_MASK) {
-		PMD_DRV_LOG(DEBUG, "ICR01_ADMINQ is reported");
-		iavf_handle_virtchnl_msg(dev);
+		if (icr0 & IAVF_VFINT_ICR01_ADMINQ_MASK) {
+			PMD_DRV_LOG(DEBUG, "ICR01_ADMINQ is reported");
+			iavf_handle_virtchnl_msg(dev);
+		}
+
+		iavf_enable_irq0(hw);
 	}
 
-	iavf_enable_irq0(hw);
+	iavf_phc_sync_tick(dev);
 
 	rte_eal_alarm_set(IAVF_ALARM_INTERVAL,
 			  iavf_dev_alarm_handler, dev);
+}
+
+static bool
+iavf_phc_sync_alarm_needed(struct rte_eth_dev *dev)
+{
+	struct iavf_adapter *adapter;
+
+	adapter = IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+	if (adapter->closed || adapter->stopped)
+		return false;
+
+	if (!(dev->data->dev_conf.rxmode.offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP))
+		return false;
+
+	if (dev->data->nb_rx_queues == 0)
+		return false;
+
+	if (iavf_phc_sync_rxq_get(dev) == NULL)
+		return false;
+
+	return true;
+}
+
+void
+iavf_phc_sync_alarm_start(struct rte_eth_dev *dev)
+{
+	struct iavf_adapter *adapter;
+
+	if (!iavf_phc_sync_alarm_needed(dev))
+		return;
+
+	adapter = IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	rte_spinlock_lock(&adapter->phc_sync_lock);
+	adapter->phc_sync_paused = false;
+	adapter->phc_sync_ticks = 0;
+	rte_spinlock_unlock(&adapter->phc_sync_lock);
+}
+
+void
+iavf_phc_sync_alarm_stop(struct rte_eth_dev *dev)
+{
+	struct iavf_adapter *adapter;
+
+	if (dev == NULL || dev->data == NULL || dev->data->dev_private == NULL)
+		return;
+
+	adapter = IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	rte_spinlock_lock(&adapter->phc_sync_lock);
+	adapter->phc_sync_paused = true;
+	adapter->phc_sync_ticks = 0;
+	rte_spinlock_unlock(&adapter->phc_sync_lock);
 }
 
 static int
@@ -2767,7 +2999,7 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 		IAVF_DEV_PRIVATE_TO_ADAPTER(eth_dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	int ret = 0;
 
 	PMD_INIT_FUNC_TRACE();
@@ -2808,8 +3040,10 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 	adapter->dev_data = eth_dev->data;
 	adapter->stopped = 1;
 	adapter->mac_primary_set = false;
+	adapter->tpid = RTE_ETHER_TYPE_VLAN; /* VLAN TPID set to 0x8100 by default */
+	rte_spinlock_init(&adapter->phc_sync_lock);
 
-	if (iavf_dev_event_handler_init())
+	if (!vf->in_reset_recovery && iavf_dev_event_handler_init())
 		goto init_vf_err;
 
 	if (iavf_init_vf(eth_dev) != 0) {
@@ -2847,12 +3081,13 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 
 		/* enable uio intr after callback register */
 		rte_intr_enable(pci_dev->intr_handle);
-	else
-		rte_eal_alarm_set(IAVF_ALARM_INTERVAL,
-				  iavf_dev_alarm_handler, eth_dev);
+
+	rte_eal_alarm_set(IAVF_ALARM_INTERVAL,
+			  iavf_dev_alarm_handler, eth_dev);
 
 	/* configure and enable device interrupt */
 	iavf_enable_irq0(hw);
+	vf->aq_intr_enabled = true;
 
 	ret = iavf_flow_init(adapter);
 	if (ret) {
@@ -2900,6 +3135,7 @@ security_init_err:
 	iavf_security_ctx_destroy(adapter);
 
 flow_init_err:
+	vf->aq_intr_enabled = false;
 	iavf_disable_irq0(hw);
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
@@ -2909,9 +3145,9 @@ flow_init_err:
 		/* unregister callback func from eal lib */
 		rte_intr_callback_unregister(pci_dev->intr_handle,
 					     iavf_dev_interrupt_handler, eth_dev);
-	} else {
-		rte_eal_alarm_cancel(iavf_dev_alarm_handler, eth_dev);
 	}
+	iavf_phc_sync_alarm_stop(eth_dev);
+	rte_eal_alarm_cancel(iavf_dev_alarm_handler, eth_dev);
 
 	rte_free(eth_dev->data->mac_addrs);
 	eth_dev->data->mac_addrs = NULL;
@@ -2926,7 +3162,7 @@ static int
 iavf_dev_close(struct rte_eth_dev *dev)
 {
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
@@ -2944,15 +3180,28 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	ret = iavf_dev_stop(dev);
 
 	/*
-	 * Release redundant queue resource when close the dev
-	 * so that other vfs can re-use the queues.
+	 * Prevent sending close-time virtchnl messages to the AdminQ
+	 * during PF-initiated reset recovery.
 	 */
-	if (vf->lv_enabled) {
-		ret = iavf_request_queues(dev, IAVF_MAX_NUM_QUEUES_DFLT);
-		if (ret)
-			PMD_DRV_LOG(ERR, "Reset the num of queues failed");
+	if (!vf->pf_reset_in_progress) {
 
-		vf->max_rss_qregion = IAVF_MAX_NUM_QUEUES_DFLT;
+		/*
+		 * Release redundant queue resource when close the dev
+		 * so that other vfs can re-use the queues.
+		 */
+		if (vf->lv_enabled) {
+			ret = iavf_request_queues(dev, IAVF_MAX_NUM_QUEUES_DFLT);
+			if (ret)
+				PMD_DRV_LOG(ERR, "Reset the num of queues failed");
+			vf->max_rss_qregion = IAVF_MAX_NUM_QUEUES_DFLT;
+		}
+
+		/*
+		 * Disable promiscuous mode before resetting the VF. This is to avoid
+		 * potential issues when the PF is bound to the kernel driver.
+		 */
+		if (vf->promisc_unicast_enabled || vf->promisc_multicast_enabled)
+			iavf_config_promisc(adapter, false, false);
 	}
 
 	adapter->closed = true;
@@ -2967,14 +3216,20 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	iavf_flow_uninit(adapter);
 
 	/*
-	 * disable promiscuous mode before reset vf
-	 * it is a workaround solution when work with kernel driver
-	 * and it is not the normal way
+	 * Prevent sending VIRTCHNL_OP_RESET_VF during PF-initiated
+	 * reset recovery.
 	 */
-	if (vf->promisc_unicast_enabled || vf->promisc_multicast_enabled)
-		iavf_config_promisc(adapter, false, false);
-
-	iavf_vf_reset(hw);
+	if (!vf->pf_reset_in_progress)
+		iavf_vf_reset(hw);
+	/*
+	 * If a reset is pending, wait for the PF to disable the VF's admin
+	 * receive queue (its first reset action) before we shut it down
+	 * ourselves.  This ensures iavf_check_vf_reset_done() does not see
+	 * a stale VFACTIVE value on the re-init path.
+	 */
+	if (vf->reset_pending)
+		iavf_is_reset_detected(adapter);
+	vf->aq_intr_enabled = false;
 	iavf_shutdown_adminq(hw);
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
 		/* disable uio intr before callback unregister */
@@ -2983,9 +3238,9 @@ iavf_dev_close(struct rte_eth_dev *dev)
 		/* unregister callback func from eal lib */
 		rte_intr_callback_unregister(intr_handle,
 					     iavf_dev_interrupt_handler, dev);
-	} else {
-		rte_eal_alarm_cancel(iavf_dev_alarm_handler, dev);
 	}
+	iavf_phc_sync_alarm_stop(dev);
+	rte_eal_alarm_cancel(iavf_dev_alarm_handler, dev);
 	iavf_disable_irq0(hw);
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_QOS)
@@ -3002,12 +3257,12 @@ iavf_dev_close(struct rte_eth_dev *dev)
 		}
 	}
 
+	rte_free(vf->proto_xtr);
+	vf->proto_xtr = NULL;
+
 	rte_free(vf->vf_res);
 	vf->vsi_res = NULL;
 	vf->vf_res = NULL;
-
-	rte_free(vf->aq_resp);
-	vf->aq_resp = NULL;
 
 	/*
 	 * If the VF is reset via VFLR, the device will be knocked out of bus
@@ -3054,6 +3309,7 @@ iavf_dev_reset(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	/*
 	 * Check whether the VF reset has been done and inform application,
 	 * to avoid calling the virtual channel command, which may cause
@@ -3066,8 +3322,10 @@ iavf_dev_reset(struct rte_eth_dev *dev)
 	}
 	iavf_set_no_poll(adapter, false);
 
+	vf->reset_pending = true;
 	PMD_DRV_LOG(DEBUG, "Start dev_reset ...");
 	ret = iavf_dev_uninit(dev);
+	vf->reset_pending = false;
 	if (ret)
 		return ret;
 
@@ -3097,6 +3355,34 @@ iavf_is_reset_detected(struct iavf_adapter *adapter)
 	return false;
 }
 
+static int
+iavf_post_reset_reconfig(struct rte_eth_dev *dev)
+{
+	int ret, status = 0;
+	bool allmulti = false, allunicast = false;
+	struct iavf_adapter *adapter = IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+	/* Restore pre-reset unicast promiscuous and multicast promiscuous states */
+	if (dev->data->promiscuous)
+		allunicast = true;
+	if (dev->data->all_multicast)
+		allmulti = true;
+	if (allmulti || allunicast) {
+		ret = iavf_config_promisc(adapter, allunicast, allmulti);
+		if (ret)
+			PMD_DRV_LOG(ERR, "Failed to restore unicast promiscuous mode (%s) "
+						"and multicast promiscuous mode (%s)",
+						allunicast ? "on" : "off", allmulti ? "on" : "off");
+		else
+			PMD_DRV_LOG(DEBUG, "Restored unicast promiscuous mode (%s) "
+						"and multicast promiscuous mode (%s)",
+						allunicast ? "on" : "off", allmulti ? "on" : "off");
+		status |= ret;
+	}
+
+	return status;
+}
+
 /*
  * Handle hardware reset
  */
@@ -3121,6 +3407,7 @@ iavf_handle_hw_reset(struct rte_eth_dev *dev, bool vf_initiated_reset)
 	}
 
 	vf->in_reset_recovery = true;
+	vf->pf_reset_in_progress = !vf_initiated_reset;
 	iavf_set_no_poll(adapter, false);
 
 	/* Call the pre reset callback */
@@ -3146,16 +3433,32 @@ iavf_handle_hw_reset(struct rte_eth_dev *dev, bool vf_initiated_reset)
 
 		dev->data->dev_started = 1;
 	}
+
+	/* Restore settings after the reset */
+	if (adapter->devargs.auto_reconfig) {
+		ret = iavf_post_reset_reconfig(dev);
+		if (ret) {
+			PMD_DRV_LOG(ERR, "Failed to restore VF settings after reset");
+			goto error;
+		}
+	} else {
+		dev->data->promiscuous = 0;
+		dev->data->all_multicast = 0;
+		vf->promisc_unicast_enabled = false;
+		vf->promisc_multicast_enabled = false;
+	}
+
 	goto exit;
 
 error:
-	PMD_DRV_LOG(DEBUG, "RESET recover with error code=%dn", ret);
+	PMD_DRV_LOG(DEBUG, "RESET recover with error code=%d", ret);
 exit:
 	/* Call the post reset callback */
 	if (vf->post_reset_cb != NULL)
 		vf->post_reset_cb(dev->data->port_id, ret, vf->post_reset_cb_arg);
 
 	vf->in_reset_recovery = false;
+	vf->pf_reset_in_progress = false;
 	iavf_set_no_poll(adapter, false);
 
 	return;

@@ -209,24 +209,9 @@ bond_mode_8023ad_setup(struct rte_eth_dev *dev,
  * @internal
  *
  * Enables 802.1AX mode and all active members on bonding interface.
- *
- * @param dev Bonding interface
- * @return
- *  0 on success, negative value otherwise.
  */
-int
+void
 bond_mode_8023ad_enable(struct rte_eth_dev *dev);
-
-/**
- * @internal
- *
- * Disables 802.1AX mode of the bonding interface and members.
- *
- * @param dev Bonding interface
- * @return
- *   0 on success, negative value otherwise.
- */
-int bond_mode_8023ad_disable(struct rte_eth_dev *dev);
 
 /**
  * @internal

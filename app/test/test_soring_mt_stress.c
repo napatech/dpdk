@@ -33,6 +33,79 @@ _st_ring_release(struct rte_soring *r, uint32_t stage, uint32_t token,
 	rte_soring_release(r, NULL, stage, num, token);
 }
 
+static const struct test_case tests[] = {
+	{
+		.name = "MT_DEQENQ-MT_STG1-PRCS",
+		.func = test_sym_mt1,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "MT_DEQENQ-MT_STG1-AVG",
+		.func = test_sym_mt1,
+		.wfunc = test_worker_avg,
+	},
+	{
+		.name = "MT_DEQENQ-MT_STG4-PRCS",
+		.func = test_sym_mt4,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "MT_DEQENQ-MT_STG4-AVG",
+		.func = test_sym_mt4,
+		.wfunc = test_worker_avg,
+	},
+	{
+		.name = "MTRTS_DEQENQ-MT_STG4-PRCS",
+		.func = test_sym_mt_rts4,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "MTRTS_DEQENQ-MT_STG4-AVG",
+		.func = test_sym_mt_rts4,
+		.wfunc = test_worker_avg,
+	},
+	{
+		.name = "MTHTS_DEQENQ-MT_STG4-PRCS",
+		.func = test_sym_mt_hts4,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "MTHTS_DEQENQ-MT_STG4-AVG",
+		.func = test_sym_mt_hts4,
+		.wfunc = test_worker_avg,
+	},
+	{
+		.name = "MT_DEQENQ-MT_STG5-1:1-PRCS",
+		.func = test_even_odd_mt5,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "MT_DEQENQ-MT_STG5-1:1-AVG",
+		.func = test_even_odd_mt5,
+		.wfunc = test_worker_avg,
+	},
+	{
+		.name = "MT_DEQENQ-MT_STG3-1:3-PRCS",
+		.func = test_div_mt3,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "MT_DEQENQ_MT_STG3-1:3-AVG",
+		.func = test_div_mt3,
+		.wfunc = test_worker_avg,
+	},
+	{
+		.name = "ST_DEQENQ-MT_STG4-PRCS",
+		.func = test_stdenq_stage4,
+		.wfunc = test_worker_prcs,
+	},
+	{
+		.name = "ST_DEQENQ-MT_STG4-AVG",
+		.func = test_stdenq_stage4,
+		.wfunc = test_worker_avg,
+	},
+};
+
 const struct test test_soring_mt_stress = {
 	.name = "MT",
 	.nb_case = RTE_DIM(tests),

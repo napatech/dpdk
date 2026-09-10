@@ -8,6 +8,7 @@
 
 #include <rte_bus_pci.h>
 #include <dev_driver.h>
+#include <bus_driver.h>
 #include <rte_compat.h>
 
 #ifdef __cplusplus
@@ -32,14 +33,12 @@ enum rte_pci_kernel_driver {
  * A structure describing a PCI device.
  */
 struct rte_pci_device {
-	RTE_TAILQ_ENTRY(rte_pci_device) next;   /**< Next probed PCI device. */
 	struct rte_device device;           /**< Inherit core device */
 	struct rte_pci_addr addr;           /**< PCI location. */
 	struct rte_pci_id id;               /**< PCI ID. */
 	struct rte_mem_resource mem_resource[PCI_MAX_RESOURCE];
 					    /**< PCI Memory Resource */
 	struct rte_intr_handle *intr_handle; /**< Interrupt handle */
-	struct rte_pci_driver *driver;      /**< PCI driver used in probing */
 	uint16_t max_vfs;                   /**< sriov enable if not zero */
 	enum rte_pci_kernel_driver kdrv;    /**< Kernel driver passthrough */
 	char name[PCI_PRI_STR_SIZE+1];      /**< PCI location (ASCII) */
@@ -47,17 +46,6 @@ struct rte_pci_device {
 	struct rte_intr_handle *vfio_req_intr_handle;
 				/**< Handler of VFIO request interrupt */
 };
-
-/**
- * @internal
- * Helper macro for drivers that need to convert to struct rte_pci_device.
- */
-#define RTE_DEV_TO_PCI(ptr) container_of(ptr, struct rte_pci_device, device)
-
-#define RTE_DEV_TO_PCI_CONST(ptr) \
-	container_of(ptr, const struct rte_pci_device, device)
-
-#define RTE_ETH_DEV_TO_PCI(eth_dev)	RTE_DEV_TO_PCI((eth_dev)->device)
 
 #ifdef __cplusplus
 /** C++ macro used to help building up tables of device IDs */
@@ -129,7 +117,6 @@ typedef int (pci_dma_unmap_t)(struct rte_pci_device *dev, void *addr,
  * A structure describing a PCI driver.
  */
 struct rte_pci_driver {
-	RTE_TAILQ_ENTRY(rte_pci_driver) next;  /**< Next in list. */
 	struct rte_driver driver;          /**< Inherit core driver. */
 	rte_pci_probe_t *probe;            /**< Device probe function. */
 	rte_pci_remove_t *remove;          /**< Device remove function. */

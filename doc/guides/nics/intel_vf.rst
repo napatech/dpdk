@@ -24,9 +24,9 @@ SR-IOV Mode Utilization in a DPDK Environment
 The DPDK uses the SR-IOV feature for hardware-based I/O sharing in IOV mode.
 Therefore, it is possible to partition SR-IOV capability on Ethernet controller NIC resources logically and
 expose them to a virtual machine as a separate PCI function called a "Virtual Function".
-Refer to :numref:`figure_single_port_nic`.
+Refer to :numref:`intel_vf_figure_single_port_nic`.
 
-Therefore, a NIC is logically distributed among multiple virtual machines (as shown in :numref:`figure_single_port_nic`),
+Therefore, a NIC is logically distributed among multiple virtual machines (as shown in :numref:`intel_vf_figure_single_port_nic`),
 while still having global data in common to share with the Physical Function and other Virtual Functions.
 The DPDK fm10kvf, iavf, igbvf or ixgbevf as a Poll Mode Driver (PMD) serves for the Intel® 82576 Gigabit Ethernet Controller,
 Intel® Ethernet Controller I350 family, Intel® 82599 10 Gigabit Ethernet Controller NIC,
@@ -47,7 +47,7 @@ For more detail on SR-IOV, please refer to the following documents:
 
 *   `Scalable I/O Virtualized Servers <http://www.intel.com/content/www/us/en/virtualization/server-virtualization/scalable-i-o-virtualized-servers-paper.html>`_
 
-.. _figure_single_port_nic:
+.. _intel_vf_figure_single_port_nic:
 
 .. figure:: img/single_port_nic.*
 
@@ -100,12 +100,23 @@ IAVF PMD parameters
     for example, ``-a 18:01.0,watchdog_period=5000`` or ``-a 18:01.0,watchdog_period=0``.
 
 ``auto_reset``
-    Enable VF auto-reset by setting the devargs parameter,
-    for example ``-a 18:01.0,auto_reset=1``,
+    VF auto-reset is enabled by default, meaning the driver will
+    attempt to bring the VF back up transparently after a reset event,
+    rather than relying on the application to do so.
+    To disable this functionality,
+    set the ``auto_reset`` devarg to zero: ``-a 18:01.0,auto_reset=0``
+
+``auto_reconfig``
+    Restore settings (unicast and multicast promiscuous states) on the VF after a reset event.
+    Enabled by default.
+    To disable it: ``-a 18:01.0,auto_reconfig=0``
 
 ``no-poll-on-link-down``
-    Stop polling Rx/Tx hardware queue when link is down
-    by setting the ``devargs`` parameter like ``-a 18:01.0,no-poll-on-link-down=1``.
+    Stop polling Rx/Tx hardware queue when link is down.
+    This is enabled by default because it is required when ``auto_reset`` is enabled
+    which it is by default.
+    To disable it, you must disable both ``auto_reset`` and ``no-poll-on-link-down``,
+    for example, ``-a 18:01.0,auto_reset=0,no-poll-on-link-down=0``.
 
 ``mbuf_check``
     Set the ``devargs`` parameter ``mbuf_check`` to enable Tx diagnostics.
@@ -574,9 +585,9 @@ The setup procedure is as follows:
         can also be used to bind and unbind devices to a virtual machine in Ubuntu.
         If this option is used, step 6 in the instructions provided will be different.
 
-    *   The Virtual Machine Monitor (see :numref:`figure_perf_benchmark`) is equivalent to a Host OS with KVM installed as described in the instructions.
+    *   The Virtual Machine Monitor (see :numref:`intel_vf_figure_perf_benchmark`) is equivalent to a Host OS with KVM installed as described in the instructions.
 
-.. _figure_perf_benchmark:
+.. _intel_vf_figure_perf_benchmark:
 
 .. figure:: img/perf_benchmark.*
 
@@ -596,10 +607,10 @@ the DPDK VF PMD performs the same throughput result as a non-VT native environme
 With such host instance fast packet processing, lots of services such as filtering, QoS,
 DPI can be offloaded on the host fast path.
 
-:numref:`figure_fast_pkt_proc` shows the scenario where some VMs directly communicate externally via a VFs,
+:numref:`intel_vf_figure_fast_pkt_proc` shows the scenario where some VMs directly communicate externally via a VFs,
 while others connect to a virtual switch and share the same uplink bandwidth.
 
-.. _figure_fast_pkt_proc:
+.. _intel_vf_figure_fast_pkt_proc:
 
 .. figure:: img/fast_pkt_proc.*
 
@@ -615,7 +626,7 @@ So VF-to-VF traffic within the same physical port (VM0<->VM1) have hardware acce
 However, when VF crosses physical ports (VM0<->VM2), there is no such hardware bridge.
 In this case, the DPDK PMD PF driver provides host forwarding between such VMs.
 
-:numref:`figure_inter_vm_comms` shows an example.
+:numref:`intel_vf_figure_inter_vm_comms` shows an example.
 In this case an update of the MAC address lookup tables in both the NIC and host DPDK application is required.
 
 In the NIC, writing the destination of a MAC address belongs to another cross device VM to the PF specific pool.
@@ -626,7 +637,7 @@ that is, the packet is forwarded to the correct PF pool.
 The SR-IOV NIC switch forwards the packet to a specific VM according to the MAC destination address
 which belongs to the destination VF on the VM.
 
-.. _figure_inter_vm_comms:
+.. _intel_vf_figure_inter_vm_comms:
 
 .. figure:: img/inter_vm_comms.*
 
@@ -668,18 +679,40 @@ Inline IPsec Support
 Diagnostic Utilities
 --------------------
 
-Register mbuf dynfield to test Tx LLDP
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Tx LLDP Testing
+~~~~~~~~~~~~~~~
 
-Register an mbuf dynfield ``IAVF_TX_LLDP_DYNFIELD`` on ``dev_start``
-to indicate the need to send LLDP packet.
-This dynfield needs to be set to 1 when preparing packet.
+There are two methods to trigger LLDP packet transmission from the VF.
 
-For ``dpdk-testpmd`` application, it needs to stop and restart Tx port to take effect.
+The first (and recommended) method is to set the ``packet_type`` of the mbuf
+to ``RTE_PTYPE_L2_ETHER_LLDP``.
+This, in conjunction with enabling the ``enable_ptype_lldp`` devarg
+will cause such packets to be transmitted::
+
+    -a 0000:xx:xx.x,enable_ptype_lldp=1
+
+An alternative method is to register an mbuf dynfield ``IAVF_TX_LLDP_DYNFIELD``
+before ``dev_start``.
+This dynfield needs to be set to 1 when preparing an LLDP packet intended for transmission.
+
+.. note::
+
+   The dynamic mbuf field method is deprecated and will be removed in a future release.
+   Users should migrate to the ``enable_ptype_lldp`` devarg and mbuf LLDP ptype method
+   described above.
+
+For ``dpdk-testpmd`` application, the dynamic mbuf field is registered
+when the following command is issued:
 
 Usage::
 
     testpmd> set tx lldp on
+
+One must then stop and restart the port for it to take effect.
+These requirements only apply for the dynamic mbuf field method;
+no special steps are needed for the ``enable_ptype_lldp`` devarg method.
+If both methods are enabled, the ptype based method will take precedence
+over the dynamic mbuf field method.
 
 
 Limitations or Knowing issues
@@ -764,3 +797,53 @@ the VLAN header tag length will be automatically added to MTU when configuring q
 As a consequence, when attempting to configure a VF port with MTU that,
 together with a VLAN tag header, exceeds maximum supported MTU,
 port configuration will fail if kernel driver has configured VLAN filtering on that VF.
+
+QinQ strip
+~~~~~~~~~~
+
+QinQ TPID is set as 0x8100 IEEE 802.1Q by default.
+For QinQ strip with TPID 0x88A8 IEEE 802.1ad,
+extend VLAN is enabled and VLAN outer TPID is set to 0x88A8.
+VLAN filter steps can be added before or after.
+
+To start ``testpmd``, and enable QinQ strip for TPID 0x88A8 on port 0:
+
+.. code-block:: console
+
+   ./<build_dir>/app/dpdk-testpmd -l 0-15 -- -i --forward-mode=mac
+   ...
+
+   testpmd> vlan set extend on 0
+   testpmd> vlan set outer tpid 0x88A8 0
+   testpmd> vlan set qinq_strip on 0
+
+For QinQ strip with TPID 0x8100, extend VLAN is enabled only.
+
+To start ``testpmd``, and enable QinQ strip for default TPID on port 0:
+
+.. code-block:: console
+
+   ./<build_dir>/app/dpdk-testpmd -l 0-15 -- -i --forward-mode=mac
+   ...
+
+   testpmd> vlan set extend on 0
+   testpmd> vlan set qinq_strip on 0
+
+QinQ Configuration
+~~~~~~~~~~~~~~~~~~
+
+When using QinQ Tx offload (``RTE_ETH_TX_OFFLOAD_QINQ_INSERT``),
+you must also enable ``RTE_ETH_RX_OFFLOAD_VLAN_EXTEND``
+to configure the hardware for double VLAN mode.
+Without this, only the inner VLAN tag will be inserted.
+
+Example::
+
+  struct rte_eth_conf port_conf = {
+      .rxmode = {
+          .offloads = RTE_ETH_RX_OFFLOAD_VLAN_EXTEND,
+      },
+      .txmode = {
+          .offloads = RTE_ETH_TX_OFFLOAD_QINQ_INSERT,
+      },
+  };

@@ -444,8 +444,9 @@ rdline_char_in(struct rdline *rdl, char c)
 				/* choice */
 				rdline_puts(rdl, "\r\n");
 				while (ret) {
+					tmp_size = strnlen(tmp_buf, sizeof(tmp_buf));
 					rdl->write_char(rdl, ' ');
-					for (i=0 ; tmp_buf[i] ; i++)
+					for (i = 0; i < tmp_size; i++)
 						rdl->write_char(rdl, tmp_buf[i]);
 					rdline_puts(rdl, "\r\n");
 					ret = rdl->complete(rdl, rdl->left_buf,
@@ -618,6 +619,9 @@ RTE_EXPORT_SYMBOL(rdline_get_history_buffer_size)
 size_t
 rdline_get_history_buffer_size(struct rdline *rdl)
 {
+	if (!rdl)
+		return 0;
+
 	return sizeof(rdl->history_buf);
 }
 

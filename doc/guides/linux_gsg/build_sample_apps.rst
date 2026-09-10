@@ -10,7 +10,8 @@ It also provides a pointer to where sample applications are stored.
 Compiling a Sample Application
 ------------------------------
 
-Please refer to :ref:`building_app_using_installed_dpdk` for details on compiling sample apps.
+Please refer to :ref:`linux_gsg_building_app_using_installed_dpdk`
+for details on compiling sample apps.
 
 Running a Sample Application
 ----------------------------
@@ -24,7 +25,7 @@ Running a Sample Application
     - In case needed, ports being used by the application should be
       bound to the corresponding kernel driver.
 
-    Refer to :ref:`linux_gsg_linux_drivers` for more details.
+    Refer to :doc:`linux_drivers` for more details.
 
 The application is linked with the DPDK target environment's Environmental Abstraction Layer (EAL) library,
 which provides some options that are generic to every DPDK application.
@@ -39,9 +40,9 @@ Copy the DPDK application binary to your target, then run the application as fol
 .. note::
 
     The ``--proc-type`` and ``--file-prefix`` EAL options are used for running
-    multiple DPDK processes. See the "Multi-process Sample Application"
-    chapter in the *DPDK Sample Applications User Guide* and the *DPDK
-    Programmers Guide* for more details.
+    multiple DPDK processes.
+    See :doc:`/sample_app_ug/multi_process`
+    and :doc:`/prog_guide/multi_proc_support` for more details.
 
 Logical Core Use by Applications
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -123,5 +124,36 @@ Additional Sample Applications
 
 Additional sample applications are included in the DPDK examples directory.
 These sample applications may be built and run in a manner similar to that described in earlier sections in this manual.
-In addition, see the *DPDK Sample Applications User Guide* for a description of the application,
+In addition, see :doc:`/sample_app_ug/index` for descriptions of the applications,
 specific instructions on compilation and execution and some explanation of the code.
+
+
+.. _linux_gsg_run_in_container:
+
+Running an Application in a Container
+-------------------------------------
+
+A DPDK application can be run inside a container
+using the image built in :ref:`linux_gsg_build_in_container`.
+
+.. warning::
+
+   Hugepages must be configured on the host before running a DPDK application in a container.
+   Refer to :ref:`linux_gsg_hugepages` for setup instructions.
+
+The following example runs testpmd in interactive mode with no physical NICs:
+
+.. code-block:: console
+
+   podman run -it --privileged \
+       -v /dev/hugepages:/dev/hugepages \
+       dpdk-builder \
+       ./build/app/dpdk-testpmd --no-pci -- -i
+
+.. note::
+
+   The ``--privileged`` flag grants access to hugepages and hardware resources.
+   For production deployments, consider using more fine-grained capabilities
+   and device access instead.
+
+   These instructions also work with Docker by replacing ``podman`` with ``docker``.

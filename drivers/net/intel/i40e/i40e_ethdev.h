@@ -1191,6 +1191,10 @@ struct i40e_pf {
 
 	/* When firmware > 8.3, the enable flag for outer VLAN processing */
 	bool fw8_3gt;
+	/* MAC config needs re-applying when link first comes up */
+	bool mac_config_on_link_up;
+	/* true when interrupt path unavailable */
+	bool use_aq_polling;
 
 	struct i40e_vf_msg_cfg vf_msg_cfg;
 	uint64_t prev_rx_bytes;
@@ -1315,7 +1319,6 @@ struct i40e_filter_ctx {
 };
 
 typedef int (*parse_filter_t)(struct rte_eth_dev *dev,
-			      const struct rte_flow_attr *attr,
 			      const struct rte_flow_item pattern[],
 			      const struct rte_flow_action actions[],
 			      struct rte_flow_error *error,
@@ -1467,7 +1470,7 @@ int i40e_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params);
 int i40e_vf_representor_uninit(struct rte_eth_dev *ethdev);
 
 #define I40E_DEV_TO_PCI(eth_dev) \
-	RTE_DEV_TO_PCI((eth_dev)->device)
+	RTE_CLASS_TO_BUS_DEVICE(eth_dev, struct rte_pci_device)
 
 /* I40E_DEV_PRIVATE_TO */
 #define I40E_DEV_PRIVATE_TO_PF(adapter) \

@@ -272,13 +272,11 @@ extension file generated above.  For example:
 Building DPDK
 -------------
 
-See the :ref:`DPDK Getting Started Guide for Linux <linux_gsg>` for
-instructions on how to build DPDK.
+See :doc:`/linux_gsg/build_dpdk` for instructions.
 
 By default the ARK PMD library will be built into the DPDK library.
 
-For configuring and using UIO and VFIO frameworks, please also refer :ref:`the
-documentation that comes with DPDK suite <linux_gsg>`.
+For configuring and using UIO and VFIO frameworks, please also refer :doc:`the documentation that comes with DPDK suite </linux_gsg/index>`.
 
 To build with a non-zero minimum tx packet length, set the above macro in your
 CFLAGS environment prior to the meson build step. I.e.,
@@ -354,9 +352,9 @@ are required, please contact Atomic Rules support.
 Supported Operating Systems
 ---------------------------
 
-Any Linux distribution fulfilling the conditions described in ``System Requirements``
-section of :ref:`the DPDK documentation <linux_gsg>` or refer to *DPDK
-Release Notes*.  ARM and PowerPC architectures are not supported at this time.
+Any Linux distribution fulfilling the conditions described in
+:doc:`/linux_gsg/sys_reqs` or refer to :doc:`/rel_notes/index`.
+ARM and PowerPC architectures are not supported at this time.
 
 
 Supported Features
@@ -396,8 +394,7 @@ application runs to completion, the ARK PMD can be detached from igb_uio if nece
 Usage Example
 -------------
 
-Follow instructions available in the document
-:ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>` to launch
+Follow instructions available in the document :doc:`build_and_test` to launch
 **testpmd** with Atomic Rules ARK devices managed by librte_net_ark.
 
 Example output:

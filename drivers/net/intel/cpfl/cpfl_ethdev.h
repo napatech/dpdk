@@ -188,7 +188,7 @@ struct cpfl_vport {
 	uint16_t nb_p2p_txq;
 
 	struct idpf_rx_queue *p2p_rx_bufq;
-	struct ci_tx_queue *p2p_tx_complq;
+	struct idpf_complq *p2p_tx_complq;
 	bool p2p_manual_bind;
 };
 
@@ -298,7 +298,7 @@ int vcpf_add_queues(struct cpfl_adapter_ext *adapter);
 int vcpf_del_queues(struct cpfl_adapter_ext *adapter);
 
 #define CPFL_DEV_TO_PCI(eth_dev)		\
-	RTE_DEV_TO_PCI((eth_dev)->device)
+	RTE_CLASS_TO_BUS_DEVICE(eth_dev, struct rte_pci_device)
 #define CPFL_ADAPTER_TO_EXT(p)					\
 	container_of((p), struct cpfl_adapter_ext, base)
 #define CPFL_DEV_TO_VPORT(dev)					\

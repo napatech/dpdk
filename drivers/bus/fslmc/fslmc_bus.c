@@ -26,9 +26,9 @@
 #include <dpaax_iova_table.h>
 
 #define VFIO_IOMMU_GROUP_PATH "/sys/kernel/iommu_groups"
-#define FSLMC_BUS_NAME	fslmc
 
-struct rte_fslmc_bus rte_fslmc_bus;
+struct rte_bus rte_fslmc_bus;
+static int fslmc_bus_device_count[DPAA2_DEVTYPE_MAX];
 
 #define DPAA2_SEQN_DYNFIELD_NAME "dpaa2_seqn_dynfield"
 RTE_EXPORT_INTERNAL_SYMBOL(dpaa2_seqn_dynfield_offset)
@@ -40,17 +40,16 @@ rte_fslmc_get_device_count(enum rte_dpaa2_dev_type device_type)
 {
 	if (device_type >= DPAA2_DEVTYPE_MAX)
 		return 0;
-	return rte_fslmc_bus.device_count[device_type];
+	return fslmc_bus_device_count[device_type];
 }
 
 static void
 cleanup_fslmc_device_list(void)
 {
 	struct rte_dpaa2_device *dev;
-	struct rte_dpaa2_device *t_dev;
 
-	RTE_TAILQ_FOREACH_SAFE(dev, &rte_fslmc_bus.device_list, next, t_dev) {
-		TAILQ_REMOVE(&rte_fslmc_bus.device_list, dev, next);
+	RTE_BUS_FOREACH_DEV(dev, &rte_fslmc_bus) {
+		rte_bus_remove_device(&rte_fslmc_bus, &dev->device);
 		rte_intr_instance_free(dev->intr_handle);
 		free(dev);
 		dev = NULL;
@@ -85,35 +84,18 @@ insert_in_device_list(struct rte_dpaa2_device *newdev)
 {
 	int comp, inserted = 0;
 	struct rte_dpaa2_device *dev = NULL;
-	struct rte_dpaa2_device *tdev = NULL;
 
-	RTE_TAILQ_FOREACH_SAFE(dev, &rte_fslmc_bus.device_list, next, tdev) {
+	RTE_BUS_FOREACH_DEV(dev, &rte_fslmc_bus) {
 		comp = compare_dpaa2_devname(newdev, dev);
 		if (comp < 0) {
-			TAILQ_INSERT_BEFORE(dev, newdev, next);
+			rte_bus_insert_device(&rte_fslmc_bus, &dev->device, &newdev->device);
 			inserted = 1;
 			break;
 		}
 	}
 
 	if (!inserted)
-		TAILQ_INSERT_TAIL(&rte_fslmc_bus.device_list, newdev, next);
-}
-
-static struct rte_devargs *
-fslmc_devargs_lookup(struct rte_dpaa2_device *dev)
-{
-	struct rte_devargs *devargs;
-	char dev_name[32];
-
-	RTE_EAL_DEVARGS_FOREACH("fslmc", devargs) {
-		devargs->bus->parse(devargs->name, &dev_name);
-		if (strcmp(dev_name, dev->device.name) == 0) {
-			DPAA2_BUS_INFO("**Devargs matched %s", dev_name);
-			return devargs;
-		}
-	}
-	return NULL;
+		rte_bus_add_device(&rte_fslmc_bus, &newdev->device);
 }
 
 static void
@@ -124,7 +106,7 @@ dump_device_list(void)
 	/* Only if the log level has been set to Debugging, print list */
 	if (rte_log_can_log(dpaa2_logtype_bus, RTE_LOG_DEBUG)) {
 		DPAA2_BUS_LOG(DEBUG, "List of devices scanned on bus:");
-		TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
+		RTE_BUS_FOREACH_DEV(dev, &rte_fslmc_bus) {
 			DPAA2_BUS_LOG(DEBUG, "\t\t%s", dev->device.name);
 		}
 	}
@@ -159,7 +141,6 @@ scan_one_fslmc_device(char *dev_name)
 		return -ENOMEM;
 	}
 
-	dev->device.bus = &rte_fslmc_bus.bus;
 	dev->device.numa_node = SOCKET_ID_ANY;
 
 	/* Allocate interrupt instance */
@@ -217,10 +198,10 @@ scan_one_fslmc_device(char *dev_name)
 		ret = -ENOMEM;
 		goto cleanup;
 	}
-	dev->device.devargs = fslmc_devargs_lookup(dev);
+	dev->device.devargs = rte_bus_find_devargs(&rte_fslmc_bus, dev_name);
 
 	/* Update the device found into the device_count table */
-	rte_fslmc_bus.device_count[dev->dev_type]++;
+	fslmc_bus_device_count[dev->dev_type]++;
 
 	/* Add device in the fslmc device list */
 	insert_in_device_list(dev);
@@ -266,8 +247,7 @@ rte_fslmc_parse(const char *name, void *addr)
 	 */
 	if (sep_exists) {
 		/* If either of "fslmc" or "name" are starting part */
-		if (!strncmp(name, RTE_STR(FSLMC_BUS_NAME),
-			     strlen(RTE_STR(FSLMC_BUS_NAME))) ||
+		if (!strncmp(name, rte_fslmc_bus.name, strlen(rte_fslmc_bus.name)) ||
 		   (!strncmp(name, "name", strlen("name")))) {
 			goto jump_out;
 		} else {
@@ -311,6 +291,18 @@ err_out:
 }
 
 static int
+fslmc_dev_compare(const char *name1, const char *name2)
+{
+	char devname1[32], devname2[32];
+
+	if (rte_fslmc_parse(name1, devname1) != 0 ||
+			rte_fslmc_parse(name2, devname2) != 0)
+		return 1;
+
+	return strncmp(devname1, devname2, sizeof(devname1));
+}
+
+static int
 rte_fslmc_scan(void)
 {
 	int ret;
@@ -325,11 +317,12 @@ rte_fslmc_scan(void)
 		struct rte_dpaa2_device *dev;
 
 		DPAA2_BUS_DEBUG("Fslmc bus already scanned. Not rescanning");
-		TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next)
-			dev->device.devargs = fslmc_devargs_lookup(dev);
+		RTE_BUS_FOREACH_DEV(dev, &rte_fslmc_bus) {
+			dev->device.devargs = rte_bus_find_devargs(&rte_fslmc_bus,
+				dev->device.name);
+		}
 		return 0;
 	}
-	process_once = 1;
 
 	/* Now we only support single group per process.*/
 	group_name = getenv("DPRC");
@@ -375,6 +368,48 @@ rte_fslmc_scan(void)
 	/* If debugging is enabled, device list is dumped to log output */
 	dump_device_list();
 
+	/* Bus initialization - only if devices were found */
+	if (!TAILQ_EMPTY(&rte_fslmc_bus.device_list)) {
+		static const struct rte_mbuf_dynfield dpaa2_seqn_dynfield_desc = {
+			.name = DPAA2_SEQN_DYNFIELD_NAME,
+			.size = sizeof(dpaa2_seqn_t),
+			.align = alignof(dpaa2_seqn_t),
+		};
+
+		dpaa2_seqn_dynfield_offset =
+			rte_mbuf_dynfield_register(&dpaa2_seqn_dynfield_desc);
+		if (dpaa2_seqn_dynfield_offset < 0) {
+			DPAA2_BUS_ERR("Failed to register mbuf field for dpaa sequence number");
+			return 0;
+		}
+
+		ret = fslmc_vfio_setup_group();
+		if (ret) {
+			DPAA2_BUS_ERR("Unable to setup VFIO %d", ret);
+			return 0;
+		}
+
+		/* Map existing segments as well as, in case of hotpluggable memory,
+		 * install callback handler.
+		 */
+		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+			ret = fslmc_vfio_dmamap();
+			if (ret) {
+				DPAA2_BUS_ERR("Unable to DMA map existing VAs: (%d)", ret);
+				DPAA2_BUS_ERR("FSLMC VFIO Mapping failed");
+				return 0;
+			}
+		}
+
+		ret = fslmc_vfio_process_group();
+		if (ret) {
+			DPAA2_BUS_ERR("Unable to setup devices %d", ret);
+			return 0;
+		}
+	}
+
+	process_once = 1;
+
 	return 0;
 
 scan_fail_cleanup:
@@ -388,18 +423,20 @@ scan_fail:
 	return 0;
 }
 
-static int
-rte_fslmc_match(struct rte_dpaa2_driver *dpaa2_drv,
-		struct rte_dpaa2_device *dpaa2_dev)
+static bool
+fslmc_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
-	if (dpaa2_drv->drv_type == dpaa2_dev->dev_type)
-		return 0;
+	const struct rte_dpaa2_driver *dpaa2_drv = RTE_BUS_DRIVER(drv, *dpaa2_drv);
+	const struct rte_dpaa2_device *dpaa2_dev = RTE_BUS_DEVICE(dev, *dpaa2_dev);
 
-	return 1;
+	if (dpaa2_drv->drv_type == dpaa2_dev->dev_type)
+		return true;
+
+	return false;
 }
 
 static int
-rte_fslmc_close(void)
+rte_fslmc_close(struct rte_bus *bus __rte_unused)
 {
 	int ret = 0;
 
@@ -410,136 +447,15 @@ rte_fslmc_close(void)
 	return 0;
 }
 
-static int
-rte_fslmc_probe(void)
-{
-	int ret = 0;
-	int probe_all;
-
-	struct rte_dpaa2_device *dev;
-	struct rte_dpaa2_driver *drv;
-
-	static const struct rte_mbuf_dynfield dpaa2_seqn_dynfield_desc = {
-		.name = DPAA2_SEQN_DYNFIELD_NAME,
-		.size = sizeof(dpaa2_seqn_t),
-		.align = alignof(dpaa2_seqn_t),
-	};
-
-	if (TAILQ_EMPTY(&rte_fslmc_bus.device_list))
-		return 0;
-
-	dpaa2_seqn_dynfield_offset =
-		rte_mbuf_dynfield_register(&dpaa2_seqn_dynfield_desc);
-	if (dpaa2_seqn_dynfield_offset < 0) {
-		DPAA2_BUS_ERR("Failed to register mbuf field for dpaa sequence number");
-		return 0;
-	}
-
-	ret = fslmc_vfio_setup_group();
-	if (ret) {
-		DPAA2_BUS_ERR("Unable to setup VFIO %d", ret);
-		return 0;
-	}
-
-	/* Map existing segments as well as, in case of hotpluggable memory,
-	 * install callback handler.
-	 */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		ret = fslmc_vfio_dmamap();
-		if (ret) {
-			DPAA2_BUS_ERR("Unable to DMA map existing VAs: (%d)",
-				      ret);
-			/* Not continuing ahead */
-			DPAA2_BUS_ERR("FSLMC VFIO Mapping failed");
-			return 0;
-		}
-	}
-
-	ret = fslmc_vfio_process_group();
-	if (ret) {
-		DPAA2_BUS_ERR("Unable to setup devices %d", ret);
-		return 0;
-	}
-
-	probe_all = rte_fslmc_bus.bus.conf.scan_mode != RTE_BUS_SCAN_ALLOWLIST;
-
-	TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
-		TAILQ_FOREACH(drv, &rte_fslmc_bus.driver_list, next) {
-			ret = rte_fslmc_match(drv, dev);
-			if (ret)
-				continue;
-
-			if (!drv->probe)
-				continue;
-
-			if (rte_dev_is_probed(&dev->device))
-				continue;
-
-			if (dev->device.devargs &&
-			    dev->device.devargs->policy == RTE_DEV_BLOCKED) {
-				DPAA2_BUS_LOG(DEBUG, "%s Blocked, skipping",
-					      dev->device.name);
-				continue;
-			}
-
-			if (probe_all ||
-			   (dev->device.devargs &&
-			    dev->device.devargs->policy == RTE_DEV_ALLOWED)) {
-				ret = drv->probe(drv, dev);
-				if (ret) {
-					DPAA2_BUS_ERR("Unable to probe");
-				} else {
-					dev->driver = drv;
-					dev->device.driver = &drv->driver;
-				}
-			}
-			break;
-		}
-	}
-
-	return 0;
-}
-
-static struct rte_device *
-rte_fslmc_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
-		      const void *data)
-{
-	const struct rte_dpaa2_device *dstart;
-	struct rte_dpaa2_device *dev;
-
-	DPAA2_BUS_DEBUG("Finding a device named %s", (const char *)data);
-
-	/* find_device is always called with an opaque object which should be
-	 * passed along to the 'cmp' function iterating over all device obj
-	 * on the bus.
-	 */
-
-	if (start != NULL) {
-		dstart = RTE_DEV_TO_FSLMC_CONST(start);
-		dev = TAILQ_NEXT(dstart, next);
-	} else {
-		dev = TAILQ_FIRST(&rte_fslmc_bus.device_list);
-	}
-	while (dev != NULL) {
-		if (cmp(&dev->device, data) == 0) {
-			DPAA2_BUS_DEBUG("Found device (%s)",
-					dev->device.name);
-			return &dev->device;
-		}
-		dev = TAILQ_NEXT(dev, next);
-	}
-
-	return NULL;
-}
-
 /*register a fslmc bus based dpaa2 driver */
 RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_driver_register)
 void
 rte_fslmc_driver_register(struct rte_dpaa2_driver *driver)
 {
 	RTE_VERIFY(driver);
+	RTE_VERIFY(driver->probe != NULL);
 
-	TAILQ_INSERT_TAIL(&rte_fslmc_bus.driver_list, driver, next);
+	rte_bus_add_driver(&rte_fslmc_bus, &driver->driver);
 }
 
 /*un-register a fslmc bus based dpaa2 driver */
@@ -547,7 +463,7 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_driver_unregister)
 void
 rte_fslmc_driver_unregister(struct rte_dpaa2_driver *driver)
 {
-	TAILQ_REMOVE(&rte_fslmc_bus.driver_list, driver, next);
+	rte_bus_remove_driver(&rte_fslmc_bus, &driver->driver);
 }
 
 /*
@@ -556,14 +472,12 @@ rte_fslmc_driver_unregister(struct rte_dpaa2_driver *driver)
 static inline int
 fslmc_all_device_support_iova(void)
 {
-	int ret = 0;
 	struct rte_dpaa2_device *dev;
 	struct rte_dpaa2_driver *drv;
 
-	TAILQ_FOREACH(dev, &rte_fslmc_bus.device_list, next) {
-		TAILQ_FOREACH(drv, &rte_fslmc_bus.driver_list, next) {
-			ret = rte_fslmc_match(drv, dev);
-			if (ret)
+	RTE_BUS_FOREACH_DEV(dev, &rte_fslmc_bus) {
+		RTE_BUS_FOREACH_DRV(drv, &rte_fslmc_bus) {
+			if (!fslmc_bus_match(&drv->driver, &dev->device))
 				continue;
 			/* if the driver is not supporting IOVA */
 			if (!(drv->drv_flags & RTE_DPAA2_DRV_IOVA_AS_VA))
@@ -593,56 +507,34 @@ rte_dpaa2_get_iommu_class(void)
 }
 
 static int
-fslmc_bus_plug(struct rte_device *rte_dev)
+fslmc_bus_probe_device(struct rte_driver *driver, struct rte_device *rte_dev)
 {
+	struct rte_dpaa2_device *dev = RTE_BUS_DEVICE(rte_dev, *dev);
+	struct rte_dpaa2_driver *drv = RTE_BUS_DRIVER(driver, *drv);
 	int ret = 0;
-	struct rte_dpaa2_device *dev = container_of(rte_dev,
-			struct rte_dpaa2_device, device);
-	struct rte_dpaa2_driver *drv;
 
-	TAILQ_FOREACH(drv, &rte_fslmc_bus.driver_list, next) {
-		ret = rte_fslmc_match(drv, dev);
-		if (ret)
-			continue;
-
-		if (!drv->probe)
-			continue;
-
-		if (rte_dev_is_probed(&dev->device))
-			continue;
-
-		if (dev->device.devargs &&
-		    dev->device.devargs->policy == RTE_DEV_BLOCKED) {
-			DPAA2_BUS_DEBUG("%s Blocked, skipping",
-				      dev->device.name);
-			continue;
-		}
-
-		ret = drv->probe(drv, dev);
-		if (ret) {
-			DPAA2_BUS_ERR("Unable to probe");
-		} else {
-			dev->driver = drv;
-			dev->device.driver = &drv->driver;
-			DPAA2_BUS_INFO("%s Plugged",  dev->device.name);
-		}
-		break;
+	/* FIXME: probe_device should allocate intr_handle */
+	ret = drv->probe(drv, dev);
+	if (ret != 0) {
+		DPAA2_BUS_ERR("Unable to probe");
+	} else {
+		DPAA2_BUS_INFO("%s Plugged",  dev->device.name);
 	}
 
 	return ret;
 }
 
 static int
-fslmc_bus_unplug(struct rte_device *rte_dev)
+fslmc_bus_unplug_device(struct rte_device *rte_dev)
 {
-	struct rte_dpaa2_device *dev = container_of(rte_dev,
-			struct rte_dpaa2_device, device);
-	struct rte_dpaa2_driver *drv = dev->driver;
+	struct rte_dpaa2_device *dev = RTE_BUS_DEVICE(rte_dev, *dev);
+	const struct rte_dpaa2_driver *drv = RTE_BUS_DRIVER(rte_dev->driver, *drv);
 
-	if (drv && drv->remove) {
-		drv->remove(dev);
-		dev->driver = NULL;
-		dev->device.driver = NULL;
+	if (drv->remove != NULL) {
+		int ret = drv->remove(dev);
+		if (ret != 0)
+			return ret;
+		/* FIXME: unplug_device should free intr_handle */
 		DPAA2_BUS_INFO("%s Un-Plugged",  dev->device.name);
 		return 0;
 	}
@@ -650,68 +542,19 @@ fslmc_bus_unplug(struct rte_device *rte_dev)
 	return -ENODEV;
 }
 
-static void *
-fslmc_bus_dev_iterate(const void *start, const char *str,
-		      const struct rte_dev_iterator *it __rte_unused)
-{
-	const struct rte_dpaa2_device *dstart;
-	struct rte_dpaa2_device *dev;
-	char *dup, *dev_name = NULL;
-
-	if (str == NULL) {
-		DPAA2_BUS_DEBUG("No device string");
-		return NULL;
-	}
-
-	/* Expectation is that device would be name=device_name */
-	if (strncmp(str, "name=", 5) != 0) {
-		DPAA2_BUS_DEBUG("Invalid device string (%s)", str);
-		return NULL;
-	}
-
-	/* Now that name=device_name format is available, split */
-	dup = strdup(str);
-	if (dup == NULL) {
-		DPAA2_BUS_DEBUG("Dup string (%s) failed!", str);
-		return NULL;
-	}
-	dev_name = dup + strlen("name=");
-
-	if (start != NULL) {
-		dstart = RTE_DEV_TO_FSLMC_CONST(start);
-		dev = TAILQ_NEXT(dstart, next);
-	} else {
-		dev = TAILQ_FIRST(&rte_fslmc_bus.device_list);
-	}
-
-	while (dev != NULL) {
-		if (strcmp(dev->device.name, dev_name) == 0) {
-			free(dup);
-			return &dev->device;
-		}
-		dev = TAILQ_NEXT(dev, next);
-	}
-
-	free(dup);
-	return NULL;
-}
-
-struct rte_fslmc_bus rte_fslmc_bus = {
-	.bus = {
-		.scan = rte_fslmc_scan,
-		.probe = rte_fslmc_probe,
-		.cleanup = rte_fslmc_close,
-		.parse = rte_fslmc_parse,
-		.find_device = rte_fslmc_find_device,
-		.get_iommu_class = rte_dpaa2_get_iommu_class,
-		.plug = fslmc_bus_plug,
-		.unplug = fslmc_bus_unplug,
-		.dev_iterate = fslmc_bus_dev_iterate,
-	},
-	.device_list = TAILQ_HEAD_INITIALIZER(rte_fslmc_bus.device_list),
-	.driver_list = TAILQ_HEAD_INITIALIZER(rte_fslmc_bus.driver_list),
-	.device_count = {0},
+struct rte_bus rte_fslmc_bus = {
+	.scan = rte_fslmc_scan,
+	.probe = rte_bus_generic_probe,
+	.cleanup = rte_fslmc_close,
+	.parse = rte_fslmc_parse,
+	.dev_compare = fslmc_dev_compare,
+	.find_device = rte_bus_generic_find_device,
+	.get_iommu_class = rte_dpaa2_get_iommu_class,
+	.match = fslmc_bus_match,
+	.probe_device = fslmc_bus_probe_device,
+	.unplug_device = fslmc_bus_unplug_device,
+	.dev_iterate = rte_bus_generic_dev_iterate,
 };
 
-RTE_REGISTER_BUS(FSLMC_BUS_NAME, rte_fslmc_bus.bus);
+RTE_REGISTER_BUS(fslmc, rte_fslmc_bus);
 RTE_LOG_REGISTER_DEFAULT(dpaa2_logtype_bus, NOTICE);

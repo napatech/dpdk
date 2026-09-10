@@ -28,8 +28,8 @@ Build:
       ninja
 
 For additional information on compiling see
-:ref:`Compiling DPDK on Linux <linux_gsg_compiling_dpdk>` or
-:ref:`Compiling DPDK on FreeBSD <building_from_source>`.
+:doc:`Compiling DPDK on Linux </linux_gsg/build_dpdk>` or
+:doc:`Compiling DPDK on FreeBSD </freebsd_gsg/build_dpdk>`.
 Applications are output to: ``dpdk/<build_dir>/examples``.
 
 
@@ -63,7 +63,7 @@ Using Make
 ~~~~~~~~~~
 
 Pkg-config is used when building an example app standalone using make, please
-see :ref:`building_app_using_installed_dpdk` for more information.
+see :ref:`linux_gsg_building_app_using_installed_dpdk` for more information.
 
 Go to the sample application directory. Unless otherwise specified the sample
 applications are located in ``dpdk/examples/``.

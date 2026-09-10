@@ -471,7 +471,7 @@ typedef int (*parse_pattern_action_t)(struct iavf_adapter *ad,
 		uint32_t array_len,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
-		uint32_t priority,
+		const struct rte_flow_attr *attr,
 		void **meta,
 		struct rte_flow_error *error);
 
@@ -495,7 +495,9 @@ struct iavf_flow_engine {
 	engine_destroy_t destroy;
 	engine_query_t query_count;
 	engine_free_t free;
+	const char *name;
 	enum iavf_flow_engine_type type;
+	size_t rule_size;
 };
 
 TAILQ_HEAD(iavf_engine_list, iavf_flow_engine);

@@ -719,9 +719,10 @@ mlx5_os_get_ibv_dev(const struct rte_device *dev)
 	struct ibv_device *ibv;
 
 	if (mlx5_dev_is_pci(dev))
-		ibv = mlx5_os_get_ibv_device(RTE_DEV_TO_PCI_CONST(dev));
+		ibv = mlx5_os_get_ibv_device(RTE_BUS_DEVICE(dev, const struct rte_pci_device));
 	else
-		ibv = mlx5_get_aux_ibv_device(RTE_DEV_TO_AUXILIARY_CONST(dev));
+		ibv = mlx5_get_aux_ibv_device(RTE_BUS_DEVICE(dev,
+			const struct rte_auxiliary_device));
 	if (ibv == NULL) {
 		rte_errno = ENODEV;
 		DRV_LOG(ERR, "Verbs device not found: %s", dev->name);
@@ -996,6 +997,7 @@ int
 mlx5_os_wrapped_mkey_create(void *ctx, void *pd, uint32_t pdn, void *addr,
 			    size_t length, struct mlx5_pmd_wrapped_mr *pmd_mr)
 {
+	struct mlx5_hca_attr hca_attr = { 0 };
 	struct mlx5_klm klm = {
 		.byte_count = length,
 		.address = (uintptr_t)addr,
@@ -1006,6 +1008,7 @@ mlx5_os_wrapped_mkey_create(void *ctx, void *pd, uint32_t pdn, void *addr,
 		.klm_num = 1,
 	};
 	struct mlx5_devx_obj *mkey;
+	int ret;
 	struct ibv_mr *ibv_mr = mlx5_glue->reg_mr(pd, addr, length,
 						  IBV_ACCESS_LOCAL_WRITE |
 						  (mlx5_haswell_broadwell_cpu ? 0 :
@@ -1018,6 +1021,14 @@ mlx5_os_wrapped_mkey_create(void *ctx, void *pd, uint32_t pdn, void *addr,
 	klm.mkey = ibv_mr->lkey;
 	mkey_attr.addr = (uintptr_t)addr;
 	mkey_attr.size = length;
+	ret = mlx5_devx_cmd_query_hca_attr(ctx, &hca_attr);
+	if (ret != 0) {
+		claim_zero(mlx5_glue->dereg_mr(ibv_mr));
+		return ret;
+	}
+	/* Apply MKC ordering when FW requires relaxed-order-only mode. */
+	if (hca_attr.mkc_order_write_after_write_ro_only)
+		mlx5_devx_mkey_attr_set_ordering(&mkey_attr, &hca_attr);
 	mkey = mlx5_devx_cmd_mkey_create(ctx, &mkey_attr);
 	if (!mkey) {
 		claim_zero(mlx5_glue->dereg_mr(ibv_mr));

@@ -420,6 +420,80 @@ __rte_experimental
 int
 rte_pmd_mlx5_txq_dump_contexts(uint16_t port_id, uint16_t queue_id, const char *filename);
 
+/**
+ * Per-queue rate limit information.
+ */
+struct rte_pmd_mlx5_txq_rate_limit_info {
+	uint32_t rate_mbps;	/**< Configured rate in Mbps, 0 = disabled. */
+	uint16_t pp_index;	/**< PP index from driver state. */
+	uint16_t fw_pp_index;	/**< PP index read back from FW SQ context. */
+};
+
+/**
+ * Query per-queue rate limit state for a given Tx queue.
+ *
+ * @param[in] port_id
+ *   Port ID.
+ * @param[in] queue_id
+ *   Tx queue ID.
+ * @param[out] info
+ *   Rate limit information.
+ *
+ * @return
+ *   0 on success, negative errno on failure:
+ *   - -ENODEV: invalid port_id.
+ *   - -EINVAL: invalid queue_id.
+ *   - -EIO: FW query failed.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_txq_rate_limit_query(uint16_t port_id, uint16_t queue_id,
+		struct rte_pmd_mlx5_txq_rate_limit_info *info);
+
+/**
+ * Packet pacing rate table capacity information.
+ */
+struct rte_pmd_mlx5_pp_rate_table_info {
+	uint16_t total;     /**< Total HW rate table entries. */
+	uint16_t port_used; /**< Entries used by this port's Tx queues. */
+};
+
+/**
+ * Query packet pacing rate table capacity.
+ *
+ * The ``port_used`` count reflects only unique PP indices allocated
+ * by the queried port's Tx queues. It is a lower bound of actual HW
+ * usage because the rate table is a global shared resource:
+ * - Other DPDK ports on the same physical device may hold entries.
+ * - The kernel mlx5 driver and firmware may also consume entries.
+ * - Multiple DPDK application instances may share the device.
+ *
+ * When multiple queues on the same port are configured with identical
+ * rate parameters, the kernel shares a single rate table entry across
+ * them (with flags=0 allocation), so ``port_used`` counts unique
+ * entries, not the number of queues with rate limiting enabled.
+ *
+ * Applications that need device-wide visibility should query all
+ * ports on the same physical device and aggregate the results,
+ * similar to how the kernel mlx5 driver tracks usage internally.
+ *
+ * @param[in] port_id
+ *   Port ID.
+ * @param[out] info
+ *   Rate table capacity information.
+ *
+ * @return
+ *   0 on success, negative errno on failure:
+ *   - -ENODEV: invalid port_id.
+ *   - -EINVAL: info is NULL.
+ *   - -ENOTSUP: packet pacing not supported.
+ *   - -ENOMEM: allocation failure.
+ */
+__rte_experimental
+int
+rte_pmd_mlx5_pp_rate_table_query(uint16_t port_id,
+		struct rte_pmd_mlx5_pp_rate_table_info *info);
+
 /** Type of mlx5 driver event for which custom callback is called. */
 enum rte_pmd_mlx5_driver_event_cb_type {
 	/** Called after HW Rx queue is created. */
@@ -546,7 +620,6 @@ int rte_pmd_mlx5_external_sq_disable(uint16_t port_id, uint32_t sq_num);
  *   - (-EEXIST) if @p cb was already registered.
  *   - (-ENOMEM) if failed to allocate memory for callback entry.
  */
-__rte_experimental
 int
 rte_pmd_mlx5_driver_event_cb_register(rte_pmd_mlx5_driver_event_callback_t cb, void *opaque);
 
@@ -567,7 +640,6 @@ rte_pmd_mlx5_driver_event_cb_register(rte_pmd_mlx5_driver_event_callback_t cb, v
  *   - 0 if callback was successfully unregistered or if no such callback was registered.
  *   - (-EINVAL) if @p cb is NULL.
  */
-__rte_experimental
 int
 rte_pmd_mlx5_driver_event_cb_unregister(rte_pmd_mlx5_driver_event_callback_t cb);
 
@@ -605,7 +677,6 @@ rte_pmd_mlx5_driver_event_cb_unregister(rte_pmd_mlx5_driver_event_callback_t cb)
  * with other functions from ethdev API used to configure any of the mlx5 ports.
  * It is the responsibility of the application to enforce this.
  */
-__rte_experimental
 void
 rte_pmd_mlx5_disable_steering(void);
 
@@ -623,7 +694,6 @@ rte_pmd_mlx5_disable_steering(void);
  *   - 0 - Flow steering was successfully enabled or it flow steering was never disabled.
  *   - (-EBUSY) - There are mlx5 ports probed and re-enabling steering cannot be done safely.
  */
-__rte_experimental
 int
 rte_pmd_mlx5_enable_steering(void);
 

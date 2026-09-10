@@ -2112,7 +2112,7 @@ int vcpf_save_chunk_in_cfgq(struct cpfl_adapter_ext *adapter)
 		PMD_DRV_LOG(ERR, "Failed to allocate memory for add_q");
 		return -ENOMEM;
 	}
-	rte_memcpy(adapter->cfgq_in.cfgq_add, add_q, struct_size);
+	memcpy(adapter->cfgq_in.cfgq_add, add_q, struct_size);
 
 	num_chunks = add_q->chunks.num_chunks;
 	for (u16 i = 0; i < num_chunks; i++) {
@@ -2534,9 +2534,9 @@ cpfl_adapter_ext_init(struct rte_pci_device *pci_dev, struct cpfl_adapter_ext *a
 	hw->subsystem_vendor_id = pci_dev->id.subsystem_vendor_id;
 	adapter->host_id = get_running_host_id();
 
-	strncpy(adapter->name, pci_dev->device.name, PCI_PRI_STR_SIZE);
+	strlcpy(adapter->name, pci_dev->device.name, sizeof(adapter->name));
 
-	rte_memcpy(&base->caps, &req_caps, sizeof(struct virtchnl2_get_capabilities));
+	memcpy(&base->caps, &req_caps, sizeof(struct virtchnl2_get_capabilities));
 
 	ret = idpf_adapter_init(base);
 	if (ret != 0) {
@@ -2764,7 +2764,7 @@ cpfl_dev_vport_init(struct rte_eth_dev *dev, void *init_params)
 	uint8_t p2p_q_vc_out_info[IDPF_DFLT_MBX_BUF_SIZE] = {0};
 	struct cpfl_vport_id vi;
 	struct cpchnl2_vport_id v_id;
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	int ret = 0;
 
 	dev->dev_ops = &cpfl_eth_dev_ops;
@@ -2836,7 +2836,7 @@ cpfl_dev_vport_init(struct rte_eth_dev *dev, void *init_params)
 	}
 	/* get the vport info */
 	if (adapter->base.hw.device_id == IXD_DEV_ID_VCPF) {
-		pci_dev = RTE_DEV_TO_PCI(dev->device);
+		pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 		vi.func_type = VCPF_CPCHNL2_FTYPE_LAN_VF;
 		vi.pf_id = CPFL_HOST0_CPF_ID;
 		vi.vf_id = pci_dev->addr.function;

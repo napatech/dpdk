@@ -1073,6 +1073,7 @@ struct rte_eth_txmode {
  * - The first network buffer will be allocated from the memory pool,
  *   specified in the first array element, the second buffer, from the
  *   pool in the second element, and so on.
+ *   If the pool is NULL, the segment will be discarded, i.e. not received.
  *
  * - The proto_hdrs in the elements define the split position of
  *   received packets.
@@ -1090,7 +1091,8 @@ struct rte_eth_txmode {
  *
  * - If the length in the segment description element is zero
  *   the actual buffer size will be deduced from the appropriate
- *   memory pool properties.
+ *   memory pool properties, or from the remaining packet length
+ *   in case of no memory pool to discard the end of the packet.
  *
  * - If there is not enough elements to describe the buffer for entire
  *   packet of maximal length the following parameters will be used
@@ -1121,7 +1123,15 @@ struct rte_eth_txmode {
  *   The rest will be put into the last valid pool.
  */
 struct rte_eth_rxseg_split {
-	struct rte_mempool *mp; /**< Memory pool to allocate segment from. */
+	/**
+	 * Memory pool to allocate segment from.
+	 *
+	 * NULL means discarded segment.
+	 * Length of discarded segment is not reflected in mbuf packet length
+	 * and not accounted in ibytes statistics.
+	 * @see rte_eth_rxseg_capa::selective_rx
+	 */
+	struct rte_mempool *mp;
 	uint16_t length; /**< Segment data length, configures split point. */
 	uint16_t offset; /**< Data offset from beginning of mbuf data buffer. */
 	/**
@@ -1752,12 +1762,15 @@ struct rte_eth_switch_info {
  * @b EXPERIMENTAL: this structure may change without prior notice.
  *
  * Ethernet device Rx buffer segmentation capabilities.
+ *
+ * @see rte_eth_rxseg_split
  */
 struct rte_eth_rxseg_capa {
 	__extension__
 	uint32_t multi_pools:1; /**< Supports receiving to multiple pools.*/
 	uint32_t offset_allowed:1; /**< Supports buffer offsets. */
 	uint32_t offset_align_log2:4; /**< Required offset alignment. */
+	uint32_t selective_rx:1; /**< Supports discarding segment. */
 	uint16_t max_nseg; /**< Maximum amount of segments to split. */
 	uint16_t reserved; /**< Reserved field. */
 };
@@ -2737,7 +2750,7 @@ int rte_eth_dev_count_aggr_ports(uint16_t port_id);
  *
  *  Map a Tx queue with an aggregated port of the DPDK port (specified with port_id).
  *  When multiple ports are aggregated into a single one,
- *  it allows to choose which port to use for Tx via a queue.
+ *  it allows choosing which port to use for Tx via a queue.
  *
  *  The application should use rte_eth_dev_map_aggr_tx_affinity()
  *  after rte_eth_dev_configure(), rte_eth_tx_queue_setup(), and
@@ -4390,7 +4403,7 @@ int rte_eth_dev_rx_intr_disable(uint16_t port_id, uint16_t queue_id);
  *   The port identifier of the Ethernet device.
  * @param epfd
  *   Epoll instance fd which the intr vector associated to.
- *   Using RTE_EPOLL_PER_THREAD allows to use per thread epoll instance.
+ *   Using RTE_EPOLL_PER_THREAD allows using a per-thread epoll instance.
  * @param op
  *   The operation be performed for the vector.
  *   Operation type of {RTE_INTR_EVENT_ADD, RTE_INTR_EVENT_DEL}.
@@ -4413,7 +4426,7 @@ int rte_eth_dev_rx_intr_ctl(uint16_t port_id, int epfd, int op, void *data);
  *   to rte_eth_dev_configure().
  * @param epfd
  *   Epoll instance fd which the intr vector associated to.
- *   Using RTE_EPOLL_PER_THREAD allows to use per thread epoll instance.
+ *   Using RTE_EPOLL_PER_THREAD allows using a per-thread epoll instance.
  * @param op
  *   The operation be performed for the vector.
  *   Operation type of {RTE_INTR_EVENT_ADD, RTE_INTR_EVENT_DEL}.
@@ -4816,6 +4829,30 @@ int rte_eth_dev_uc_all_hash_table_set(uint16_t port_id, uint8_t on);
  */
 int rte_eth_set_queue_rate_limit(uint16_t port_id, uint16_t queue_idx,
 			uint32_t tx_rate);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice.
+ *
+ * Get the rate limitation for a queue on an Ethernet device.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_idx
+ *   The queue ID.
+ * @param[out] tx_rate
+ *   A pointer to retrieve the Tx rate in Mbps.
+ *   0 means rate limiting is disabled.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support this feature.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - (-EIO) if device is removed.
+ *   - (-EINVAL) if bad parameter.
+ */
+__rte_experimental
+int rte_eth_get_queue_rate_limit(uint16_t port_id, uint16_t queue_idx,
+		uint32_t *tx_rate);
 
 /**
  * Configuration of Receive Side Scaling hash computation of Ethernet device.

@@ -17,6 +17,7 @@
 
 #include "iavf.h"
 #include "iavf_generic_flow.h"
+#include "../common/flow_check.h"
 #include "virtchnl.h"
 #include "iavf_rxtx.h"
 
@@ -374,7 +375,7 @@ iavf_fdir_create(struct iavf_adapter *ad,
 	if (filter->mark_flag == 1)
 		iavf_fdir_rx_proc_enable(ad, 1);
 
-	rte_memcpy(rule, filter, sizeof(*rule));
+	memcpy(rule, filter, sizeof(*rule));
 	flow->rule = rule;
 
 	return 0;
@@ -437,206 +438,10 @@ static struct iavf_flow_engine iavf_fdir_engine = {
 	.create = iavf_fdir_create,
 	.destroy = iavf_fdir_destroy,
 	.validation = iavf_fdir_validation,
+	.name = "fdir",
 	.type = IAVF_FLOW_ENGINE_FDIR,
+	.rule_size = sizeof(struct iavf_fdir_conf),
 };
-
-static int
-iavf_fdir_parse_action_qregion(struct iavf_adapter *ad,
-			struct rte_flow_error *error,
-			const struct rte_flow_action *act,
-			struct virtchnl_filter_action *filter_action)
-{
-	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(ad);
-	const struct rte_flow_action_rss *rss = act->conf;
-	uint32_t i;
-
-	if (act->type != RTE_FLOW_ACTION_TYPE_RSS) {
-		rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ACTION, act,
-				"Invalid action.");
-		return -rte_errno;
-	}
-
-	if (rss->queue_num <= 1) {
-		rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ACTION, act,
-				"Queue region size can't be 0 or 1.");
-		return -rte_errno;
-	}
-
-	/* check if queue index for queue region is continuous */
-	for (i = 0; i < rss->queue_num - 1; i++) {
-		if (rss->queue[i + 1] != rss->queue[i] + 1) {
-			rte_flow_error_set(error, EINVAL,
-					RTE_FLOW_ERROR_TYPE_ACTION, act,
-					"Discontinuous queue region");
-			return -rte_errno;
-		}
-	}
-
-	if (rss->queue[rss->queue_num - 1] >= ad->dev_data->nb_rx_queues) {
-		rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ACTION, act,
-				"Invalid queue region indexes.");
-		return -rte_errno;
-	}
-
-	if (!(rte_is_power_of_2(rss->queue_num) &&
-		rss->queue_num <= IAVF_FDIR_MAX_QREGION_SIZE)) {
-		rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ACTION, act,
-				"The region size should be any of the following values:"
-				"1, 2, 4, 8, 16, 32, 64, 128 as long as the total number "
-				"of queues do not exceed the VSI allocation.");
-		return -rte_errno;
-	}
-
-	if (rss->queue_num > vf->max_rss_qregion) {
-		rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ACTION, act,
-				"The region size cannot be large than the supported max RSS queue region");
-		return -rte_errno;
-	}
-
-	filter_action->act_conf.queue.index = rss->queue[0];
-	filter_action->act_conf.queue.region = rte_fls_u32(rss->queue_num) - 1;
-
-	return 0;
-}
-
-static int
-iavf_fdir_parse_action(struct iavf_adapter *ad,
-			const struct rte_flow_action actions[],
-			struct rte_flow_error *error,
-			struct iavf_fdir_conf *filter)
-{
-	const struct rte_flow_action_queue *act_q;
-	const struct rte_flow_action_mark *mark_spec = NULL;
-	uint32_t dest_num = 0;
-	uint32_t mark_num = 0;
-	int ret;
-
-	int number = 0;
-	struct virtchnl_filter_action *filter_action;
-
-	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
-		switch (actions->type) {
-		case RTE_FLOW_ACTION_TYPE_VOID:
-			break;
-
-		case RTE_FLOW_ACTION_TYPE_PASSTHRU:
-			dest_num++;
-
-			filter_action = &filter->add_fltr.rule_cfg.action_set.actions[number];
-
-			filter_action->type = VIRTCHNL_ACTION_PASSTHRU;
-
-			filter->add_fltr.rule_cfg.action_set.count = ++number;
-			break;
-
-		case RTE_FLOW_ACTION_TYPE_DROP:
-			dest_num++;
-
-			filter_action = &filter->add_fltr.rule_cfg.action_set.actions[number];
-
-			filter_action->type = VIRTCHNL_ACTION_DROP;
-
-			filter->add_fltr.rule_cfg.action_set.count = ++number;
-			break;
-
-		case RTE_FLOW_ACTION_TYPE_QUEUE:
-			dest_num++;
-
-			act_q = actions->conf;
-			filter_action = &filter->add_fltr.rule_cfg.action_set.actions[number];
-
-			filter_action->type = VIRTCHNL_ACTION_QUEUE;
-			filter_action->act_conf.queue.index = act_q->index;
-
-			if (filter_action->act_conf.queue.index >=
-				ad->dev_data->nb_rx_queues) {
-				rte_flow_error_set(error, EINVAL,
-					RTE_FLOW_ERROR_TYPE_ACTION,
-					actions, "Invalid queue for FDIR.");
-				return -rte_errno;
-			}
-
-			filter->add_fltr.rule_cfg.action_set.count = ++number;
-			break;
-
-		case RTE_FLOW_ACTION_TYPE_RSS:
-			dest_num++;
-
-			filter_action = &filter->add_fltr.rule_cfg.action_set.actions[number];
-
-			filter_action->type = VIRTCHNL_ACTION_Q_REGION;
-
-			ret = iavf_fdir_parse_action_qregion(ad,
-						error, actions, filter_action);
-			if (ret)
-				return ret;
-
-			filter->add_fltr.rule_cfg.action_set.count = ++number;
-			break;
-
-		case RTE_FLOW_ACTION_TYPE_MARK:
-			mark_num++;
-
-			filter->mark_flag = 1;
-			mark_spec = actions->conf;
-			filter_action = &filter->add_fltr.rule_cfg.action_set.actions[number];
-
-			filter_action->type = VIRTCHNL_ACTION_MARK;
-			filter_action->act_conf.mark_id = mark_spec->id;
-
-			filter->add_fltr.rule_cfg.action_set.count = ++number;
-			break;
-
-		default:
-			rte_flow_error_set(error, EINVAL,
-					RTE_FLOW_ERROR_TYPE_ACTION, actions,
-					"Invalid action.");
-			return -rte_errno;
-		}
-	}
-
-	if (number > VIRTCHNL_MAX_NUM_ACTIONS) {
-		rte_flow_error_set(error, EINVAL,
-			RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			"Action numbers exceed the maximum value");
-		return -rte_errno;
-	}
-
-	if (dest_num >= 2) {
-		rte_flow_error_set(error, EINVAL,
-			RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			"Unsupported action combination");
-		return -rte_errno;
-	}
-
-	if (mark_num >= 2) {
-		rte_flow_error_set(error, EINVAL,
-			RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			"Too many mark actions");
-		return -rte_errno;
-	}
-
-	if (dest_num + mark_num == 0) {
-		rte_flow_error_set(error, EINVAL,
-			RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			"Empty action");
-		return -rte_errno;
-	}
-
-	/* Mark only is equal to mark + passthru. */
-	if (dest_num == 0) {
-		filter_action = &filter->add_fltr.rule_cfg.action_set.actions[number];
-		filter_action->type = VIRTCHNL_ACTION_PASSTHRU;
-		filter->add_fltr.rule_cfg.action_set.count = ++number;
-	}
-
-	return 0;
-}
 
 static bool
 iavf_fdir_refine_input_set(const uint64_t input_set,
@@ -672,14 +477,14 @@ iavf_fdir_refine_input_set(const uint64_t input_set,
 		VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, IPV4, PROT);
 		memset(&ipv4_spec, 0, sizeof(ipv4_spec));
 		ipv4_spec.hdr.next_proto_id = proto_id;
-		rte_memcpy(hdr->buffer, &ipv4_spec.hdr,
+		memcpy(hdr->buffer, &ipv4_spec.hdr,
 			   sizeof(ipv4_spec.hdr));
 		return true;
 	case VIRTCHNL_PROTO_HDR_IPV6:
 		VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, IPV6, PROT);
 		memset(&ipv6_spec, 0, sizeof(ipv6_spec));
 		ipv6_spec.hdr.proto = proto_id;
-		rte_memcpy(hdr->buffer, &ipv6_spec.hdr,
+		memcpy(hdr->buffer, &ipv6_spec.hdr,
 			   sizeof(ipv6_spec.hdr));
 		return true;
 	default:
@@ -894,7 +699,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 									ETHERTYPE);
 				}
 
-				rte_memcpy(hdr1->buffer, eth_spec,
+				memcpy(hdr1->buffer, eth_spec,
 					   sizeof(struct rte_ether_hdr));
 			}
 
@@ -985,7 +790,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				input_set |= IAVF_PROT_IPV4_INNER;
 			}
 
-			rte_memcpy(hdr->buffer, &ipv4_spec->hdr,
+			memcpy(hdr->buffer, &ipv4_spec->hdr,
 				   sizeof(ipv4_spec->hdr));
 
 			hdrs->count = ++layer;
@@ -1001,6 +806,14 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				 * ethertype, if the spec and mask is valid,
 				 * set ethertype into input set.
 				 */
+				/* ETH should be present via pattern pre-validation. */
+				if (hdr1 == NULL) {
+					rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Missing ETH header before IPv4 fragment.");
+					return -rte_errno;
+				}
 				input_set |= IAVF_INSET_ETHERTYPE;
 				VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr1, ETH,
 								 ETHERTYPE);
@@ -1075,7 +888,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				input_set |= IAVF_PROT_IPV6_INNER;
 			}
 
-			rte_memcpy(hdr->buffer, &ipv6_spec->hdr,
+			memcpy(hdr->buffer, &ipv6_spec->hdr,
 				   sizeof(ipv6_spec->hdr));
 
 			hdrs->count = ++layer;
@@ -1106,11 +919,19 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				 * ethertype, if the spec and mask is valid,
 				 * set ethertype into input set.
 				 */
+				/* ETH should be present via pattern pre-validation. */
+				if (hdr1 == NULL) {
+					rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ITEM,
+						   item,
+						   "Missing ETH header before IPv6 fragment.");
+					return -rte_errno;
+				}
 				input_set |= IAVF_INSET_ETHERTYPE;
 				VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr1, ETH,
 								 ETHERTYPE);
 
-				rte_memcpy(hdr->buffer, &ipv6_frag_spec->hdr,
+				memcpy(hdr->buffer, &ipv6_frag_spec->hdr,
 					   sizeof(ipv6_frag_spec->hdr));
 			} else if (ipv6_frag_mask->hdr.id == UINT32_MAX) {
 				rte_flow_error_set(error, EINVAL,
@@ -1162,11 +983,11 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				}
 
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
-					rte_memcpy(hdr->buffer,
+					memcpy(hdr->buffer,
 						&udp_spec->hdr,
 						sizeof(udp_spec->hdr));
 				else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
-					rte_memcpy(hdr->buffer,
+					memcpy(hdr->buffer,
 						&udp_spec->hdr,
 						sizeof(udp_spec->hdr));
 			}
@@ -1219,11 +1040,11 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				}
 
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
-					rte_memcpy(hdr->buffer,
+					memcpy(hdr->buffer,
 						&tcp_spec->hdr,
 						sizeof(tcp_spec->hdr));
 				else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
-					rte_memcpy(hdr->buffer,
+					memcpy(hdr->buffer,
 						&tcp_spec->hdr,
 						sizeof(tcp_spec->hdr));
 			}
@@ -1265,11 +1086,11 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				}
 
 				if (l3 == RTE_FLOW_ITEM_TYPE_IPV4)
-					rte_memcpy(hdr->buffer,
+					memcpy(hdr->buffer,
 						&sctp_spec->hdr,
 						sizeof(sctp_spec->hdr));
 				else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6)
-					rte_memcpy(hdr->buffer,
+					memcpy(hdr->buffer,
 						&sctp_spec->hdr,
 						sizeof(sctp_spec->hdr));
 			}
@@ -1300,7 +1121,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 					VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, GTPU_IP, TEID);
 				}
 
-				rte_memcpy(hdr->buffer,
+				memcpy(hdr->buffer,
 					gtp_spec, sizeof(*gtp_spec));
 			}
 
@@ -1355,7 +1176,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 				psc.qfi = gtp_psc_spec->hdr.qfi;
 				psc.type = gtp_psc_spec->hdr.type;
 				psc.next = 0;
-				rte_memcpy(hdr->buffer, &psc,
+				memcpy(hdr->buffer, &psc,
 					sizeof(struct iavf_gtp_psc_spec_hdr));
 			}
 
@@ -1376,7 +1197,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 					VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, L2TPV3, SESS_ID);
 				}
 
-				rte_memcpy(hdr->buffer, l2tpv3oip_spec,
+				memcpy(hdr->buffer, l2tpv3oip_spec,
 					sizeof(*l2tpv3oip_spec));
 			}
 
@@ -1397,7 +1218,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 					VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, ESP, SPI);
 				}
 
-				rte_memcpy(hdr->buffer, &esp_spec->hdr,
+				memcpy(hdr->buffer, &esp_spec->hdr,
 					sizeof(esp_spec->hdr));
 			}
 
@@ -1418,7 +1239,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 					VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, AH, SPI);
 				}
 
-				rte_memcpy(hdr->buffer, ah_spec,
+				memcpy(hdr->buffer, ah_spec,
 					sizeof(*ah_spec));
 			}
 
@@ -1439,7 +1260,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 					VIRTCHNL_ADD_PROTO_HDR_FIELD_BIT(hdr, PFCP, S_FIELD);
 				}
 
-				rte_memcpy(hdr->buffer, pfcp_spec,
+				memcpy(hdr->buffer, pfcp_spec,
 					sizeof(*pfcp_spec));
 			}
 
@@ -1464,7 +1285,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 									 PC_RTC_ID);
 				}
 
-				rte_memcpy(hdr->buffer, ecpri_spec,
+				memcpy(hdr->buffer, ecpri_spec,
 					sizeof(*ecpri_spec));
 			}
 
@@ -1480,7 +1301,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 			VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, GRE);
 
 			if (gre_spec && gre_mask) {
-				rte_memcpy(hdr->buffer, gre_spec,
+				memcpy(hdr->buffer, gre_spec,
 					   sizeof(*gre_spec));
 			}
 
@@ -1529,7 +1350,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 								SESS_ID);
 				}
 
-				rte_memcpy(hdr->buffer, l2tpv2_spec,
+				memcpy(hdr->buffer, l2tpv2_spec,
 					   sizeof(*l2tpv2_spec));
 			}
 
@@ -1547,7 +1368,7 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 			VIRTCHNL_SET_PROTO_HDR_TYPE(hdr, PPP);
 
 			if (ppp_spec && ppp_mask) {
-				rte_memcpy(hdr->buffer, ppp_spec,
+				memcpy(hdr->buffer, ppp_spec,
 					   sizeof(*ppp_spec));
 			}
 
@@ -1587,15 +1408,169 @@ iavf_fdir_parse_pattern(__rte_unused struct iavf_adapter *ad,
 }
 
 static int
+iavf_fdir_action_check_qregion(struct iavf_adapter *ad,
+		const struct rte_flow_action_rss *rss,
+		struct rte_flow_error *error)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(ad);
+
+	if (rss->queue_num <= 1) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"Queue region size can't be 0 or 1.");
+	}
+
+	if (rss->queue[rss->queue_num - 1] >= ad->dev_data->nb_rx_queues) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"Invalid queue region indexes.");
+	}
+
+	if (!(rte_is_power_of_2(rss->queue_num) &&
+		rss->queue_num <= IAVF_FDIR_MAX_QREGION_SIZE)) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"The region size should be any of the following values:"
+				"1, 2, 4, 8, 16, 32, 64, 128 as long as the total number "
+				"of queues do not exceed the VSI allocation.");
+	}
+
+	if (rss->queue_num > vf->max_rss_qregion) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"The region size cannot be large than the supported max RSS queue region");
+	}
+
+	return 0;
+}
+
+static int
+iavf_fdir_parse_action_check(const struct ci_flow_actions *actions,
+		const struct ci_flow_actions_check_param *param,
+		struct rte_flow_error *error)
+{
+	struct iavf_adapter *ad = param->driver_ctx;
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(ad);
+	struct iavf_fdir_conf *filter = &vf->fdir.conf;
+	uint32_t dest_num = 0, mark_num = 0;
+	size_t i, number = 0;
+	bool has_drop = false;
+	int ret;
+
+	for (i = 0; i < actions->count; i++) {
+		const struct rte_flow_action *act = actions->actions[i];
+		struct virtchnl_filter_action *filter_action =
+				&filter->add_fltr.rule_cfg.action_set.actions[number];
+
+		switch (act->type) {
+		case RTE_FLOW_ACTION_TYPE_PASSTHRU:
+			dest_num++;
+
+			filter_action->type = VIRTCHNL_ACTION_PASSTHRU;
+			break;
+		case RTE_FLOW_ACTION_TYPE_DROP:
+			dest_num++;
+			has_drop = true;
+
+			filter_action->type = VIRTCHNL_ACTION_DROP;
+			break;
+		case RTE_FLOW_ACTION_TYPE_QUEUE:
+		{
+			const struct rte_flow_action_queue *act_q;
+			dest_num++;
+
+			act_q = act->conf;
+
+			filter_action->type = VIRTCHNL_ACTION_QUEUE;
+
+			if (act_q->index >= ad->dev_data->nb_rx_queues) {
+				return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION, actions,
+						"Invalid queue index.");
+			}
+			filter_action->act_conf.queue.index = act_q->index;
+
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_RSS:
+		{
+			const struct rte_flow_action_rss *rss = act->conf;
+			dest_num++;
+
+			filter_action->type = VIRTCHNL_ACTION_Q_REGION;
+
+			ret = iavf_fdir_action_check_qregion(ad, rss, error);
+			if (ret)
+				return ret;
+
+			filter_action->act_conf.queue.index = rss->queue[0];
+			filter_action->act_conf.queue.region = rte_fls_u32(rss->queue_num) - 1;
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_MARK:
+		{
+			const struct rte_flow_action_mark *mark_spec;
+			mark_num++;
+
+			filter->mark_flag = 1;
+			mark_spec = act->conf;
+
+			filter_action->type = VIRTCHNL_ACTION_MARK;
+			filter_action->act_conf.mark_id = mark_spec->id;
+
+			break;
+		}
+		default:
+			/* cannot happen */
+			return rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ACTION, actions,
+					"Invalid action.");
+		}
+		filter->add_fltr.rule_cfg.action_set.count = ++number;
+	}
+
+	if (dest_num > 1 || mark_num > 1 || (has_drop && mark_num > 1)) {
+		return rte_flow_error_set(error, EINVAL,
+			RTE_FLOW_ERROR_TYPE_ACTION, actions,
+			"Unsupported action combination");
+	}
+
+	/* Mark only is equal to mark + passthru. */
+	if (dest_num == 0) {
+		struct virtchnl_filter_action *filter_action =
+				&filter->add_fltr.rule_cfg.action_set.actions[number];
+		filter_action->type = VIRTCHNL_ACTION_PASSTHRU;
+		filter->add_fltr.rule_cfg.action_set.count = ++number;
+	}
+
+	return 0;
+}
+
+static int
 iavf_fdir_parse(struct iavf_adapter *ad,
 		struct iavf_pattern_match_item *array,
 		uint32_t array_len,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
-		uint32_t priority,
+		const struct rte_flow_attr *attr,
 		void **meta,
 		struct rte_flow_error *error)
 {
+	struct ci_flow_actions parsed_actions = {0};
+	struct ci_flow_actions_check_param param = {
+		.allowed_types = (enum rte_flow_action_type[]){
+			RTE_FLOW_ACTION_TYPE_PASSTHRU,
+			RTE_FLOW_ACTION_TYPE_DROP,
+			RTE_FLOW_ACTION_TYPE_QUEUE,
+			RTE_FLOW_ACTION_TYPE_RSS,
+			RTE_FLOW_ACTION_TYPE_MARK,
+			RTE_FLOW_ACTION_TYPE_END
+		},
+		.max_actions = 2,
+		.check = iavf_fdir_parse_action_check,
+		.driver_ctx = ad,
+		.rss_queues_contig = true,
+	};
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(ad);
 	struct iavf_fdir_conf *filter = &vf->fdir.conf;
 	struct iavf_pattern_match_item *item = NULL;
@@ -1603,8 +1578,13 @@ iavf_fdir_parse(struct iavf_adapter *ad,
 
 	memset(filter, 0, sizeof(*filter));
 
-	if (priority >= 1)
-		return -rte_errno;
+	ret = ci_flow_check_attr(attr, NULL, error);
+	if (ret)
+		return ret;
+
+	ret = ci_flow_check_actions(actions, &param, &parsed_actions, error);
+	if (ret)
+		return ret;
 
 	item = iavf_search_pattern_match_item(pattern, array, array_len, error);
 	if (!item)
@@ -1612,10 +1592,6 @@ iavf_fdir_parse(struct iavf_adapter *ad,
 
 	ret = iavf_fdir_parse_pattern(ad, pattern, item->input_set_mask,
 				      error, filter);
-	if (ret)
-		goto error;
-
-	ret = iavf_fdir_parse_action(ad, actions, error, filter);
 	if (ret)
 		goto error;
 

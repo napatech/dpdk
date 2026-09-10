@@ -89,8 +89,14 @@ struct netvsc_mp_param {
 #define NETVSC_ARG_TXBREAK "tx_copybreak"
 #define NETVSC_ARG_RX_EXTMBUF_ENABLE "rx_extmbuf_enable"
 
-/* The max number of retry when hot adding a VF device */
-#define NETVSC_MAX_HOTADD_RETRY 10
+/* Retry interval for hot-add VF device (microseconds) */
+#define NETVSC_HOTADD_RETRY_INTERVAL 1000000
+
+/* Max retries when net/ directory exists but no matching MAC found.
+ * On multi-NIC PCI devices, a second VF may register later.
+ * 120 retries = ~2 minutes.
+ */
+#define NETVSC_MAX_MAC_RETRY 120
 
 struct hn_xstats_name_off {
 	char name[RTE_ETH_XSTATS_NAME_SIZE];
@@ -622,19 +628,39 @@ static void netvsc_hotplug_retry(void *args)
 	PMD_DRV_LOG(DEBUG, "%s: retry count %d",
 		    __func__, hot_ctx->eal_hot_plug_retry);
 
-	if (hot_ctx->eal_hot_plug_retry++ > NETVSC_MAX_HOTADD_RETRY) {
-		PMD_DRV_LOG(NOTICE, "Failed to parse PCI device retry=%d",
-			    hot_ctx->eal_hot_plug_retry);
+	hot_ctx->eal_hot_plug_retry++;
+
+	/* Check if PCI device still exists — if it disappeared, give up.
+	 * Otherwise keep retrying indefinitely until the net directory
+	 * appears.  This is safe because:
+	 * - MANA driver probe can take >100s after PCI rescan
+	 * - The retry uses rte_eal_alarm callbacks serialized on the
+	 *   EAL interrupt thread, preventing races with device close
+	 * - Device close cancels pending alarms and frees the context
+	 * - If the PCI device is removed, the access() check below
+	 *   detects the missing sysfs path and stops immediately
+	 */
+	snprintf(buf, sizeof(buf), "/sys/bus/pci/devices/%s", d->name);
+	if (access(buf, F_OK) != 0) {
+		PMD_DRV_LOG(NOTICE,
+			    "PCI device %s no longer exists, giving up after %d retries",
+			    d->name, hot_ctx->eal_hot_plug_retry);
 		goto free_hotadd_ctx;
 	}
 
 	snprintf(buf, sizeof(buf), "/sys/bus/pci/devices/%s/net", d->name);
 	di = opendir(buf);
 	if (!di) {
-		PMD_DRV_LOG(DEBUG, "%s: can't open directory %s, "
-			    "retrying in 1 second", __func__, buf);
-		/* The device is still being initialized, retry after 1 second */
-		rte_eal_alarm_set(1000000, netvsc_hotplug_retry, hot_ctx);
+		if (hot_ctx->eal_hot_plug_retry % 30 == 0)
+			PMD_DRV_LOG(NOTICE,
+				    "%s: waiting for %s (retry %d, %ds elapsed)",
+				    __func__, buf, hot_ctx->eal_hot_plug_retry,
+				    hot_ctx->eal_hot_plug_retry);
+		else
+			PMD_DRV_LOG(DEBUG, "%s: can't open directory %s, "
+				    "retrying in 1 second", __func__, buf);
+		rte_eal_alarm_set(NETVSC_HOTADD_RETRY_INTERVAL,
+				  netvsc_hotplug_retry, hot_ctx);
 		return;
 	}
 
@@ -642,6 +668,11 @@ static void netvsc_hotplug_retry(void *args)
 		/* Skip . and .. directories */
 		if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, ".."))
 			continue;
+
+		PMD_DRV_LOG(DEBUG,
+			    "%s: checking interface %s in %s (retry %d)",
+			    __func__, dir->d_name, buf,
+			    hot_ctx->eal_hot_plug_retry);
 
 		/* trying to get mac address if this is a network device*/
 		s = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
@@ -654,13 +685,25 @@ static void netvsc_hotplug_retry(void *args)
 		ret = ioctl(s, SIOCGIFHWADDR, &req);
 		close(s);
 		if (ret == -1) {
-			PMD_DRV_LOG(ERR,
-				    "Failed to send SIOCGIFHWADDR for device %s",
+			/* Interface may be renamed by udev (e.g. eth1 → ens1).
+			 * Retry from the top — the PCI device check above
+			 * ensures we stop if the device disappears.
+			 */
+			PMD_DRV_LOG(DEBUG,
+				    "Failed to send SIOCGIFHWADDR for device %s, "
+				    "interface may be renaming, retrying",
 				    dir->d_name);
-			break;
+			closedir(di);
+			rte_eal_alarm_set(NETVSC_HOTADD_RETRY_INTERVAL,
+					  netvsc_hotplug_retry, hot_ctx);
+			return;
 		}
-		if (req.ifr_hwaddr.sa_family != ARPHRD_ETHER)
+		if (req.ifr_hwaddr.sa_family != ARPHRD_ETHER) {
+			PMD_DRV_LOG(DEBUG,
+				    "%s: device %s sa_family=%d not ARPHRD_ETHER, skipping",
+				    __func__, dir->d_name, req.ifr_hwaddr.sa_family);
 			continue;
+		}
 
 		memcpy(eth_addr.addr_bytes, req.ifr_hwaddr.sa_data,
 		       RTE_DIM(eth_addr.addr_bytes));
@@ -689,24 +732,82 @@ static void netvsc_hotplug_retry(void *args)
 			 * parent device, restore its args.
 			 */
 			ret = rte_eal_hotplug_add(d->bus->name, d->name, drv_str ? drv_str : "");
-			if (ret) {
-				PMD_DRV_LOG(ERR,
-					    "Failed to add PCI device %s",
+			free(drv_str);
+
+			if (ret == -ENODEV) {
+				/* IB device not ready yet (mana_ib not probed).
+				 * Restart the full retry from the PCI device
+				 * check so we re-verify the device exists and
+				 * get fresh interface names after any renames.
+				 * This retries indefinitely — the PCI sysfs
+				 * check at the top of this function ensures
+				 * we stop if the device disappears.
+				 */
+				PMD_DRV_LOG(NOTICE,
+					    "IB device not ready for %s, "
+					    "restarting probe in 1 second",
 					    d->name);
+				closedir(di);
+				rte_eal_alarm_set(NETVSC_HOTADD_RETRY_INTERVAL,
+						  netvsc_hotplug_retry,
+						  hot_ctx);
+				return;
 			}
 
-			free(drv_str);
+			if (ret && ret != -EEXIST)
+				PMD_DRV_LOG(ERR,
+					    "Failed to add PCI device %s (ret=%d)",
+					    d->name, ret);
 
 			ret = hn_vf_add(dev, hv);
 			if (ret)
-				PMD_DRV_LOG(ERR, "Failed to add VF in hotplug retry: %d", ret);
+				PMD_DRV_LOG(ERR, "Failed to add VF: %d", ret);
 			break;
+		}
+
+		PMD_DRV_LOG(DEBUG,
+			    "%s: MAC mismatch for %s: got "
+			    RTE_ETHER_ADDR_PRT_FMT
+			    " expected " RTE_ETHER_ADDR_PRT_FMT,
+			    __func__, dir->d_name,
+			    RTE_ETHER_ADDR_BYTES(&eth_addr),
+			    RTE_ETHER_ADDR_BYTES(dev->data->mac_addrs));
+	}
+
+	/* If we opened the net directory but didn't find a matching MAC,
+	 * the VF interface may not have appeared yet (e.g. on a multi-NIC
+	 * PCI device, the second VF registers later). Retry.
+	 */
+	if (di != NULL) {
+		closedir(di);
+		di = NULL;
+		if (dir == NULL) {
+			/* readdir returned NULL — loop ended without match */
+			hot_ctx->mac_retry++;
+			if (hot_ctx->mac_retry < NETVSC_MAX_MAC_RETRY) {
+				PMD_DRV_LOG(DEBUG,
+					    "%s: no matching MAC found in %s, "
+					    "retrying in 1 second (mac_retry %d/%d)",
+					    __func__, buf,
+					    hot_ctx->mac_retry,
+					    NETVSC_MAX_MAC_RETRY);
+				rte_eal_alarm_set(NETVSC_HOTADD_RETRY_INTERVAL,
+						  netvsc_hotplug_retry,
+						  hot_ctx);
+				return;
+			}
+			PMD_DRV_LOG(NOTICE,
+				    "%s: no matching MAC found after %d retries, giving up",
+				    __func__, hot_ctx->mac_retry);
 		}
 	}
 
 free_hotadd_ctx:
-	if (di)
+	if (di != NULL)
 		closedir(di);
+
+	PMD_DRV_LOG(DEBUG, "%s: retry loop exiting for device %s (retry %d)",
+		    __func__, d->name, hot_ctx->eal_hot_plug_retry);
 
 	rte_spinlock_lock(&hv->hotadd_lock);
 	LIST_REMOVE(hot_ctx, list);
@@ -758,7 +859,8 @@ netvsc_hotadd_callback(const char *device_name, enum rte_dev_event_type type,
 			rte_spinlock_lock(&hv->hotadd_lock);
 			LIST_INSERT_HEAD(&hv->hotadd_list, hot_ctx, list);
 			rte_spinlock_unlock(&hv->hotadd_lock);
-			rte_eal_alarm_set(1000000, netvsc_hotplug_retry, hot_ctx);
+			rte_eal_alarm_set(NETVSC_HOTADD_RETRY_INTERVAL,
+					  netvsc_hotplug_retry, hot_ctx);
 			return;
 		}
 
@@ -1525,7 +1627,6 @@ static int
 eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 {
 	struct hn_data *hv = eth_dev->data->dev_private;
-	struct rte_device *device = eth_dev->device;
 	struct rte_vmbus_device *vmbus;
 	uint32_t mtu;
 	unsigned int rxr_cnt;
@@ -1536,7 +1637,7 @@ eth_hn_dev_init(struct rte_eth_dev *eth_dev)
 	rte_spinlock_init(&hv->hotadd_lock);
 	LIST_INIT(&hv->hotadd_list);
 
-	vmbus = container_of(device, struct rte_vmbus_device, device);
+	vmbus = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *vmbus);
 	eth_dev->dev_ops = &hn_eth_dev_ops;
 	eth_dev->rx_queue_count = hn_dev_rx_queue_count;
 	eth_dev->rx_descriptor_status = hn_dev_rx_queue_status;

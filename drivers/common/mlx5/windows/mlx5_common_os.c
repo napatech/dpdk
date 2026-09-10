@@ -180,7 +180,7 @@ mlx5_os_get_devx_device(struct rte_device *dev,
 			struct devx_device_bdf *devx_list, int n)
 {
 	struct devx_device_bdf *devx_match = NULL;
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_BUS_DEVICE(dev, *pci_dev);
 	struct rte_pci_addr *addr = &pci_dev->addr;
 
 	while (n-- > 0) {
@@ -377,13 +377,14 @@ mlx5_os_umem_dereg(void *pumem)
  * @return
  *   0 on successful registration, -1 otherwise
  */
-static int
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_reg_mr)
+int
 mlx5_os_reg_mr(void *pd,
 	       void *addr, size_t length, struct mlx5_pmd_mr *pmd_mr)
 {
 	struct mlx5_devx_mkey_attr mkey_attr;
 	struct mlx5_pd *mlx5_pd = (struct mlx5_pd *)pd;
-	struct mlx5_hca_attr attr;
+	struct mlx5_hca_attr attr = { 0 };
 	struct mlx5_devx_obj *mkey;
 	void *obj;
 
@@ -402,10 +403,8 @@ mlx5_os_reg_mr(void *pd,
 	mkey_attr.size = length;
 	mkey_attr.umem_id = ((struct mlx5_devx_umem *)(obj))->umem_id;
 	mkey_attr.pd = mlx5_pd->pdn;
-	if (!mlx5_haswell_broadwell_cpu) {
-		mkey_attr.relaxed_ordering_write = attr.relaxed_ordering_write;
-		mkey_attr.relaxed_ordering_read = attr.relaxed_ordering_read;
-	}
+	if (!mlx5_haswell_broadwell_cpu)
+		mlx5_devx_mkey_attr_set_ordering(&mkey_attr, &attr);
 	mkey = mlx5_devx_cmd_mkey_create(mlx5_pd->devx_ctx, &mkey_attr);
 	if (!mkey) {
 		claim_zero(mlx5_os_umem_dereg(obj));
@@ -425,7 +424,8 @@ mlx5_os_reg_mr(void *pd,
  * @param[in] pmd_mr
  *  Pointer to PMD mr object
  */
-static void
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_dereg_mr)
+void
 mlx5_os_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
 {
 	if (!pmd_mr)
@@ -437,21 +437,20 @@ mlx5_os_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
 	memset(pmd_mr, 0, sizeof(*pmd_mr));
 }
 
-/**
- * Set the reg_mr and dereg_mr callbacks.
- *
- * @param[out] reg_mr_cb
- *   Pointer to reg_mr func
- * @param[out] dereg_mr_cb
- *   Pointer to dereg_mr func
- *
- */
-RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_set_reg_mr_cb)
-void
-mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb, mlx5_dereg_mr_t *dereg_mr_cb)
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_alloc_null_mr)
+struct mlx5_pmd_mr *
+mlx5_os_alloc_null_mr(struct rte_device *dev, void *pd)
 {
-	*reg_mr_cb = mlx5_os_reg_mr;
-	*dereg_mr_cb = mlx5_os_dereg_mr;
+	RTE_SET_USED(dev);
+	RTE_SET_USED(pd);
+	return NULL;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_free_null_mr)
+void
+mlx5_os_free_null_mr(struct mlx5_pmd_mr *null_mr)
+{
+	RTE_SET_USED(null_mr);
 }
 
 /*

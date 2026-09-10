@@ -434,7 +434,7 @@ static int set_surprise_link_check_aer(
 	uint32_t aer_new0, aer_new1;
 
 	if (!ifpga_rdev || !ifpga_rdev->rawdev) {
-		printf("\n device does not exist\n");
+		IFPGA_RAWDEV_PMD_ERR("device does not exist");
 		return -EFAULT;
 	}
 
@@ -491,7 +491,7 @@ static int set_surprise_link_check_aer(
 		if (fd != -1)
 			close(fd);
 
-		printf(">>>>>>Set AER %x,%x %x,%x\n",
+		IFPGA_RAWDEV_PMD_DEBUG(">>>>>>Set AER %x,%x %x,%x",
 			ifpga_rdev->aer_old[0], ifpga_rdev->aer_old[1],
 			aer_new0, aer_new1);
 
@@ -527,7 +527,7 @@ ifpga_rawdev_gsd_handle(__rte_unused void *param)
 		}
 
 		if (gsd_enable)
-			printf(">>>>>>Pls Shutdown APP\n");
+			IFPGA_RAWDEV_PMD_WARN(">>>>>>Pls Shutdown APP");
 
 		rte_delay_us(100 * MS);
 	}
@@ -1602,7 +1602,7 @@ ifpga_rawdev_create(struct rte_pci_device *pci_dev,
 
 	rawdev->dev_ops = &ifpga_rawdev_ops;
 	rawdev->device = &pci_dev->device;
-	rawdev->driver_name = pci_dev->driver->driver.name;
+	rawdev->driver_name = pci_dev->device.driver->name;
 
 	/* must enumerate the adapter before use it */
 	ret = opae_adapter_enumerate(adapter);
@@ -1874,7 +1874,7 @@ ifpga_cfg_remove(struct rte_vdev_device *vdev)
 		args.port, args.bdf);
 	bus = rte_bus_find_by_name(RTE_STR(IFPGA_BUS_NAME));
 	if (bus) {
-		if (bus->find_device(NULL, cmp_dev_name, dev_name)) {
+		if (bus->find_device(bus, NULL, cmp_dev_name, dev_name)) {
 			ret = rte_eal_hotplug_remove(RTE_STR(IFPGA_BUS_NAME),
 				dev_name);
 		}

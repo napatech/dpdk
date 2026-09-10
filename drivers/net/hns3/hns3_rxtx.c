@@ -1093,7 +1093,7 @@ hns3_dev_all_rx_queue_intr_enable(struct hns3_hw *hw, bool en)
 int
 hns3_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct hns3_hw *hw = HNS3_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -3066,7 +3066,7 @@ hns3_tx_push_get_queue_tail_reg(struct rte_eth_dev *dev, uint16_t queue_id)
 #define HNS3_TX_PUSH_QUICK_DOORBELL_OFFSET	64
 #define HNS3_TX_PUSH_PCI_BAR_INDEX		4
 
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	uint8_t bar_id = HNS3_TX_PUSH_PCI_BAR_INDEX;
 
 	/*
@@ -4003,9 +4003,13 @@ hns3_handle_simple_bd(struct hns3_tx_queue *txq, struct hns3_desc *desc,
 	    ((m->ol_flags & RTE_MBUF_F_TX_L4_MASK) == RTE_MBUF_F_TX_TCP_CKSUM ||
 	     (m->ol_flags & RTE_MBUF_F_TX_L4_MASK) == RTE_MBUF_F_TX_UDP_CKSUM)) {
 		/* set checksum start and offset, defined in 2 Bytes */
+		uint32_t l4_start = m->l2_len + m->l3_len;
+		if (m->ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK)
+			l4_start += m->outer_l2_len + m->outer_l3_len;
+
 		hns3_set_field(desc->tx.type_cs_vlan_tso_len,
 			       HNS3_TXD_L4_START_M, HNS3_TXD_L4_START_S,
-			       (m->l2_len + m->l3_len) >> HNS3_SIMPLE_BD_UNIT);
+			       l4_start >> HNS3_SIMPLE_BD_UNIT);
 		hns3_set_field(desc->tx.ol_type_vlan_len_msec,
 			   HNS3_TXD_L4_CKS_OFFSET_M, HNS3_TXD_L4_CKS_OFFSET_S,
 			   (m->ol_flags & RTE_MBUF_F_TX_L4_MASK) ==

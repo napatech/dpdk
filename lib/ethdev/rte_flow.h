@@ -3279,7 +3279,7 @@ enum rte_flow_action_type {
 	 *
 	 * Using rte_eth_cman_config_set(), the application
 	 * can configure ethdev Rx queue's congestion mechanism.
-	 * This flow action allows to skip the congestion configuration
+	 * This flow action allows skipping the congestion configuration
 	 * applied to the given ethdev Rx queue.
 	 */
 	RTE_FLOW_ACTION_TYPE_SKIP_CMAN,
@@ -4324,14 +4324,12 @@ extern uint64_t rte_flow_dynf_metadata_mask;
 #define RTE_MBUF_DYNFLAG_RX_METADATA (rte_flow_dynf_metadata_mask)
 #define RTE_MBUF_DYNFLAG_TX_METADATA (rte_flow_dynf_metadata_mask)
 
-__rte_experimental
 static inline uint32_t
 rte_flow_dynf_metadata_get(struct rte_mbuf *m)
 {
 	return *RTE_FLOW_DYNF_METADATA(m);
 }
 
-__rte_experimental
 static inline void
 rte_flow_dynf_metadata_set(struct rte_mbuf *m, uint32_t v)
 {
@@ -4661,7 +4659,6 @@ rte_flow_dev_dump(uint16_t port_id, struct rte_flow *flow,
  * @return
  *   True if registered, false otherwise.
  */
-__rte_experimental
 static inline int
 rte_flow_dynf_metadata_avail(void)
 {
@@ -4678,7 +4675,6 @@ rte_flow_dynf_metadata_avail(void)
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
-__rte_experimental
 int
 rte_flow_dynf_metadata_register(void);
 

@@ -66,7 +66,7 @@ T: git://dpdk.org/next/dpdk-next-baseband
 
 Next-dts Tree
 M: Luca Vizzarro <luca.vizzarro@arm.com>
-M: Patrick Robb <probb@iol.unh.edu>
+M: Patrick Robb <patrickrobb1997@gmail.com>
 T: git://dpdk.org/next/dpdk-next-dts
 
 Stable Branches
@@ -108,6 +108,12 @@ F: devtools/words-case.txt
 F: license/
 F: .editorconfig
 F: .mailmap
+
+AI review tools
+M: Stephen Hemminger <stephen@networkplumber.org>
+M: Aaron Conole <aconole@redhat.com>
+F: AGENTS.md
+F: devtools/ai/
 
 Linux kernel uAPI headers
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
@@ -334,11 +340,10 @@ F: examples/*/*_altivec.*
 F: examples/common/altivec/
 
 RISC-V
-M: Stanisław Kardach <stanislaw.kardach@gmail.com>
+M: Sun Yuechi <sunyuechi@iscas.ac.cn>
 F: config/riscv/
 F: doc/guides/linux_gsg/cross_build_dpdk_for_riscv.rst
 F: lib/eal/riscv/
-M: Sun Yuechi <sunyuechi@iscas.ac.cn>
 F: lib/**/*rvv*
 
 Intel x86
@@ -540,6 +545,7 @@ F: lib/eventdev/
 F: doc/guides/prog_guide/eventdev/eventdev.rst
 F: drivers/event/skeleton/
 F: app/test/test_eventdev.c
+F: app/test/test_event_ring.c
 F: examples/l3fwd/l3fwd_event*
 
 Eventdev Ethdev Rx Adapter API
@@ -671,9 +677,10 @@ F: app/test/test_link_bonding*
 F: examples/bond/
 
 Linux AF_PACKET
-M: John W. Linville <linville@tuxdriver.com>
+M: Stephen Hemminger <stephen@networkplumber.org>
 F: drivers/net/af_packet/
 F: doc/guides/nics/features/afpacket.ini
+F: app/test/test_pmd_af_packet.c
 
 Linux AF_XDP
 M: Ciara Loftus <ciara.loftus@intel.com>
@@ -685,7 +692,6 @@ F: doc/guides/nics/features/af_xdp.ini
 Amazon ENA
 M: Shai Brandes <shaibran@amazon.com>
 M: Evgeny Schemeilin <evgenys@amazon.com>
-M: Ron Beider <rbeider@amazon.com>
 M: Amit Bernstein <amitbern@amazon.com>
 M: Wajeeh Atrash <atrwajee@amazon.com>
 F: drivers/net/ena/
@@ -857,6 +863,13 @@ T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/net/intel/ipn3ke/
 F: doc/guides/nics/ipn3ke.rst
 F: doc/guides/nics/features/ipn3ke.ini
+
+LinkData sxe2
+M: Jie Liu <liujie5@linkdatatechnology.com>
+F: drivers/common/sxe2/
+F: drivers/net/sxe2/
+F: doc/guides/nics/sxe2.rst
+F: doc/guides/nics/features/sxe2.ini
 
 Marvell cnxk
 M: Nithin Dabilpuram <ndabilpuram@marvell.com>
@@ -1110,15 +1123,17 @@ F: doc/guides/nics/features/avp.ini
 
 ZTE zxdh
 M: Junlong Wang <wang.junlong1@zte.com.cn>
-M: Lijie Shan <shan.lijie@zte.com.cn>
+M: Ming Ran <ran.ming@zte.com.cn>
 F: drivers/net/zxdh/
 F: doc/guides/nics/zxdh.rst
 F: doc/guides/nics/features/zxdh.ini
 
 PCAP PMD
+M: Stephen Hemminger <stephen@networkplumber.org>
 F: drivers/net/pcap/
 F: doc/guides/nics/pcap.rst
 F: doc/guides/nics/features/pcap.ini
+F: app/test/test_pmd_pcap.c
 
 Tap PMD
 M: Stephen Hemminger <stephen@networkplumber.org>
@@ -1201,7 +1216,7 @@ F: drivers/crypto/scheduler/
 F: doc/guides/cryptodevs/scheduler.rst
 
 HiSilicon UADK crypto
-M: Zhangfei Gao <zhangfei.gao@linaro.org>
+M: Zongyu Wu <wuzongyu1@huawei.com>
 F: drivers/crypto/uadk/
 F: doc/guides/cryptodevs/uadk.rst
 F: doc/guides/cryptodevs/features/uadk.ini
@@ -1219,14 +1234,10 @@ M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 F: drivers/crypto/ipsec_mb/
 F: doc/guides/cryptodevs/aesni_gcm.rst
 F: doc/guides/cryptodevs/aesni_mb.rst
-F: doc/guides/cryptodevs/chacha20_poly1305.rst
-F: doc/guides/cryptodevs/kasumi.rst
 F: doc/guides/cryptodevs/snow3g.rst
 F: doc/guides/cryptodevs/zuc.rst
 F: doc/guides/cryptodevs/features/aesni_gcm.ini
 F: doc/guides/cryptodevs/features/aesni_mb.ini
-F: doc/guides/cryptodevs/features/chacha20_poly1305.ini
-F: doc/guides/cryptodevs/features/kasumi.ini
 F: doc/guides/cryptodevs/features/snow3g.ini
 F: doc/guides/cryptodevs/features/zuc.ini
 
@@ -1300,7 +1311,8 @@ F: doc/guides/cryptodevs/virtio.rst
 F: doc/guides/cryptodevs/features/virtio.ini
 
 ZTE Storage Data Accelerator (ZSDA)
-M: Hanxiao Li <li.hanxiao@zte.com.cn>
+M: Chengfei Han <han.chengfei@zte.com.cn>
+M: Ming Ran <ran.ming@zte.com.cn>
 F: drivers/crypto/zsda/
 F: doc/guides/cryptodevs/zsda.rst
 F: doc/guides/cryptodevs/features/zsda.ini
@@ -1318,7 +1330,7 @@ F: doc/guides/compressdevs/octeontx.rst
 F: doc/guides/compressdevs/features/octeontx.ini
 
 HiSilicon UADK compress
-M: Zhangfei Gao <zhangfei.gao@linaro.org>
+M: Zongyu Wu <wuzongyu1@huawei.com>
 F: drivers/compress/uadk/
 F: doc/guides/compressdevs/uadk.rst
 F: doc/guides/compressdevs/features/uadk.ini
@@ -1352,7 +1364,8 @@ F: doc/guides/compressdevs/zlib.rst
 F: doc/guides/compressdevs/features/zlib.ini
 
 ZTE Storage Data Accelerator (ZSDA)
-M: Hanxiao Li <li.hanxiao@zte.com.cn>
+M: Chengfei Han <han.chengfei@zte.com.cn>
+M: Ming Ran <ran.ming@zte.com.cn>
 F: drivers/common/zsda/
 F: drivers/compress/zsda/
 F: doc/guides/compressdevs/zsda.rst
@@ -1575,7 +1588,6 @@ Rawdev Drivers
 
 Intel FPGA
 M: Rosen Xu <rosen.xu@altera.com>
-T: git://dpdk.org/next/dpdk-next-net-intel
 F: drivers/raw/ifpga/
 F: doc/guides/rawdevs/ifpga.rst
 
@@ -1612,7 +1624,7 @@ F: drivers/raw/dpaa2_cmdif/
 F: doc/guides/rawdevs/dpaa2_cmdif.rst
 
 ZTE GDTC
-M: Yong Zhang <zhang.yong25@zte.com.cn>
+M: Wenqiang Chen <chen.wenqiang2@zte.com.cn>
 F: drivers/raw/gdtc/
 F: doc/guides/rawdevs/gdtc.rst
 
@@ -1635,11 +1647,18 @@ F: lib/net/net_crc_avx512.c
 F: lib/net/net_crc_sse.c
 F: app/test/test_crc.c
 
+PTP (IEEE 1588 Precision Time Protocol)
+M: Rajesh Kumar <rajesh3.kumar@intel.com>
+F: lib/net/rte_ptp.h
+F: examples/ptp_tap_relay_sw/
+F: doc/guides/sample_app_ug/ptp_tap_relay_sw.rst
+
 IP fragmentation & reassembly
 M: Konstantin Ananyev <konstantin.v.ananyev@yandex.ru>
 F: lib/ip_frag/
 F: doc/guides/prog_guide/ip_fragment_reassembly_lib.rst
 F: app/test/test_ipfrag.c
+F: app/test/test_reassembly.c
 F: app/test/test_reassembly_perf.c
 F: examples/ip_fragmentation/
 F: doc/guides/sample_app_ug/ip_frag.rst
@@ -1754,7 +1773,8 @@ M: Vladimir Medvedkin <vladimir.medvedkin@intel.com>
 F: lib/hash/
 F: doc/guides/prog_guide/hash_lib.rst
 F: doc/guides/prog_guide/toeplitz_hash_lib.rst
-F: app/test/test_*hash*
+F: app/test/test_hash*
+F: app/test/test_thash*
 F: app/test/test_func_reentrancy.c
 
 LPM
@@ -1901,7 +1921,7 @@ M: Konstantin Ananyev <konstantin.v.ananyev@yandex.ru>
 M: Marat Khalili <marat.khalili@huawei.com>
 F: lib/bpf/
 F: examples/bpf/
-F: app/test/test_bpf.c
+F: app/test/test_bpf*
 F: app/test/bpf/
 F: app/test-pmd/bpf_cmd.*
 F: doc/guides/prog_guide/bpf_lib.rst
@@ -1985,7 +2005,6 @@ T: git://dpdk.org/next/dpdk-next-eventdev
 F: app/test-eventdev/
 F: doc/guides/tools/testeventdev.rst
 F: doc/guides/tools/img/eventdev_*
-F: app/test/test_event_ring.c
 
 Graph application
 M: Sunil Kumar Kori <skori@marvell.com>
@@ -2001,7 +2020,7 @@ F: doc/guides/tools/proc_info.rst
 
 DTS
 M: Luca Vizzarro <luca.vizzarro@arm.com>
-M: Patrick Robb <probb@iol.unh.edu>
+M: Patrick Robb <patrickrobb1997@gmail.com>
 T: git://dpdk.org/next/dpdk-next-dts
 F: dts/
 F: buildtools/check-dts-requirements.py

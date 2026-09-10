@@ -82,33 +82,9 @@
 #include "cdx_logs.h"
 #include "private.h"
 
-#define CDX_BUS_NAME	cdx
 #define CDX_DEV_PREFIX	"cdx-"
 
-/* CDX Bus iterators */
-#define FOREACH_DEVICE_ON_CDXBUS(p)	\
-		RTE_TAILQ_FOREACH(p, &rte_cdx_bus.device_list, next)
-
-#define FOREACH_DRIVER_ON_CDXBUS(p)	\
-		RTE_TAILQ_FOREACH(p, &rte_cdx_bus.driver_list, next)
-
-struct rte_cdx_bus rte_cdx_bus;
-
-enum cdx_params {
-	RTE_CDX_PARAM_NAME,
-};
-
-static const char * const cdx_params_keys[] = {
-	[RTE_CDX_PARAM_NAME] = "name",
-	NULL,
-};
-
-/* Add a device to CDX bus */
-static void
-cdx_add_device(struct rte_cdx_device *cdx_dev)
-{
-	TAILQ_INSERT_TAIL(&rte_cdx_bus.device_list, cdx_dev, next);
-}
+static struct rte_bus rte_cdx_bus;
 
 static int
 cdx_get_kernel_driver_by_path(const char *filename, char *driver_name,
@@ -152,37 +128,6 @@ void rte_cdx_unmap_device(struct rte_cdx_device *dev)
 	cdx_vfio_unmap_resource(dev);
 }
 
-static struct rte_devargs *
-cdx_devargs_lookup(const char *dev_name)
-{
-	struct rte_devargs *devargs;
-
-	RTE_EAL_DEVARGS_FOREACH("cdx", devargs) {
-		if (strcmp(devargs->name, dev_name) == 0)
-			return devargs;
-	}
-	return NULL;
-}
-
-static bool
-cdx_ignore_device(const char *dev_name)
-{
-	struct rte_devargs *devargs = cdx_devargs_lookup(dev_name);
-
-	switch (rte_cdx_bus.bus.conf.scan_mode) {
-	case RTE_BUS_SCAN_ALLOWLIST:
-		if (devargs && devargs->policy == RTE_DEV_ALLOWED)
-			return false;
-		break;
-	case RTE_BUS_SCAN_UNDEFINED:
-	case RTE_BUS_SCAN_BLOCKLIST:
-		if (devargs == NULL || devargs->policy != RTE_DEV_BLOCKED)
-			return false;
-		break;
-	}
-	return true;
-}
-
 /*
  * Scan one cdx sysfs entry, and fill the devices list from it.
  * It checks if the CDX device is bound to vfio-cdx driver. In case
@@ -202,7 +147,6 @@ cdx_scan_one(const char *dirname, const char *dev_name)
 	if (!dev)
 		return -ENOMEM;
 
-	dev->device.bus = &rte_cdx_bus.bus;
 	memcpy(dev->name, dev_name, RTE_DEV_NAME_MAX_LEN);
 	dev->device.name = dev->name;
 
@@ -250,7 +194,7 @@ cdx_scan_one(const char *dirname, const char *dev_name)
 	}
 	dev->id.device_id = (uint16_t)tmp;
 
-	cdx_add_device(dev);
+	rte_bus_add_device(&rte_cdx_bus, &dev->device);
 
 	return 0;
 
@@ -282,7 +226,7 @@ cdx_scan(void)
 		if (e->d_name[0] == '.')
 			continue;
 
-		if (cdx_ignore_device(e->d_name))
+		if (rte_bus_device_is_ignored(&rte_cdx_bus, e->d_name))
 			continue;
 
 		snprintf(dirname, sizeof(dirname), "%s/%s",
@@ -335,13 +279,12 @@ cdx_unmap_resource(void *requested_addr, size_t size)
 			requested_addr, size, rte_strerror(rte_errno));
 	}
 }
-/*
- * Match the CDX Driver and Device using device id and vendor id.
- */
+
 static bool
-cdx_match(const struct rte_cdx_driver *cdx_drv,
-		const struct rte_cdx_device *cdx_dev)
+cdx_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
+	const struct rte_cdx_driver *cdx_drv = RTE_BUS_DRIVER(drv, *cdx_drv);
+	const struct rte_cdx_device *cdx_dev = RTE_BUS_DEVICE(dev, *cdx_dev);
 	const struct rte_cdx_id *id_table;
 
 	for (id_table = cdx_drv->id_table; id_table->vendor_id != 0;
@@ -354,10 +297,10 @@ cdx_match(const struct rte_cdx_driver *cdx_drv,
 				id_table->device_id != RTE_CDX_ANY_ID)
 			continue;
 
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
 /*
@@ -365,29 +308,18 @@ cdx_match(const struct rte_cdx_driver *cdx_drv,
  * driver.
  */
 static int
-cdx_probe_one_driver(struct rte_cdx_driver *dr,
-		struct rte_cdx_device *dev)
+cdx_probe_device(struct rte_driver *drv, struct rte_device *dev)
 {
-	const char *dev_name = dev->name;
-	bool already_probed;
+	struct rte_cdx_device *cdx_dev = RTE_BUS_DEVICE(dev, *cdx_dev);
+	struct rte_cdx_driver *cdx_drv = RTE_BUS_DRIVER(drv, *cdx_drv);
+	const char *dev_name = cdx_dev->name;
 	int ret;
 
-	/* The device is not blocked; Check if driver supports it */
-	if (!cdx_match(dr, dev))
-		/* Match of device and driver failed */
-		return 1;
-
-	already_probed = rte_dev_is_probed(&dev->device);
-	if (already_probed) {
-		CDX_BUS_INFO("Device %s is already probed", dev_name);
-		return -EEXIST;
-	}
-
 	CDX_BUS_DEBUG("  probe device %s using driver: %s", dev_name,
-		dr->driver.name);
+		cdx_drv->driver.name);
 
-	if (dr->drv_flags & RTE_CDX_DRV_NEED_MAPPING) {
-		ret = cdx_vfio_map_resource(dev);
+	if (cdx_drv->drv_flags & RTE_CDX_DRV_NEED_MAPPING) {
+		ret = cdx_vfio_map_resource(cdx_dev);
 		if (ret != 0) {
 			CDX_BUS_ERR("CDX map device failed: %d", ret);
 			goto error_map_device;
@@ -395,75 +327,21 @@ cdx_probe_one_driver(struct rte_cdx_driver *dr,
 	}
 
 	/* call the driver probe() function */
-	ret = dr->probe(dr, dev);
+	ret = cdx_drv->probe(cdx_drv, cdx_dev);
 	if (ret) {
 		CDX_BUS_ERR("Probe CDX driver: %s device: %s failed: %d",
-			dr->driver.name, dev_name, ret);
+			cdx_drv->driver.name, dev_name, ret);
 		goto error_probe;
-	} else {
-		dev->device.driver = &dr->driver;
 	}
-	dev->driver = dr;
 
 	return ret;
 
 error_probe:
-	cdx_vfio_unmap_resource(dev);
-	rte_intr_instance_free(dev->intr_handle);
-	dev->intr_handle = NULL;
+	cdx_vfio_unmap_resource(cdx_dev);
+	rte_intr_instance_free(cdx_dev->intr_handle);
+	cdx_dev->intr_handle = NULL;
 error_map_device:
 	return ret;
-}
-
-/*
- * If vendor/device ID match, call the probe() function of all
- * registered driver for the given device. Return < 0 if initialization
- * failed, return 1 if no driver is found for this device.
- */
-static int
-cdx_probe_all_drivers(struct rte_cdx_device *dev)
-{
-	struct rte_cdx_driver *dr = NULL;
-	int rc = 0;
-
-	FOREACH_DRIVER_ON_CDXBUS(dr) {
-		rc = cdx_probe_one_driver(dr, dev);
-		if (rc < 0)
-			/* negative value is an error */
-			return rc;
-		if (rc > 0)
-			/* positive value means driver doesn't support it */
-			continue;
-		return 0;
-	}
-	return 1;
-}
-
-/*
- * Scan the content of the CDX bus, and call the probe() function for
- * all registered drivers that have a matching entry in its id_table
- * for discovered devices.
- */
-static int
-cdx_probe(void)
-{
-	struct rte_cdx_device *dev = NULL;
-	size_t probed = 0, failed = 0;
-	int ret = 0;
-
-	FOREACH_DEVICE_ON_CDXBUS(dev) {
-		probed++;
-
-		ret = cdx_probe_all_drivers(dev);
-		if (ret < 0) {
-			CDX_BUS_ERR("Requested device %s cannot be used",
-				dev->name);
-			rte_errno = errno;
-			failed++;
-		}
-	}
-
-	return (probed && probed == failed) ? -1 : 0;
 }
 
 static int
@@ -485,8 +363,7 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_cdx_register)
 void
 rte_cdx_register(struct rte_cdx_driver *driver)
 {
-	TAILQ_INSERT_TAIL(&rte_cdx_bus.driver_list, driver, next);
-	driver->bus = &rte_cdx_bus;
+	rte_bus_add_driver(&rte_cdx_bus, &driver->driver);
 }
 
 /* unregister a driver */
@@ -494,65 +371,24 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_cdx_unregister)
 void
 rte_cdx_unregister(struct rte_cdx_driver *driver)
 {
-	TAILQ_REMOVE(&rte_cdx_bus.driver_list, driver, next);
-	driver->bus = NULL;
+	rte_bus_remove_driver(&rte_cdx_bus, &driver->driver);
 }
 
-static struct rte_device *
-cdx_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
-		const void *data)
-{
-	const struct rte_cdx_device *cdx_start;
-	struct rte_cdx_device *cdx_dev;
-
-	if (start != NULL) {
-		cdx_start = RTE_DEV_TO_CDX_DEV_CONST(start);
-		cdx_dev = TAILQ_NEXT(cdx_start, next);
-	} else {
-		cdx_dev = TAILQ_FIRST(&rte_cdx_bus.device_list);
-	}
-	while (cdx_dev != NULL) {
-		if (cmp(&cdx_dev->device, data) == 0)
-			return &cdx_dev->device;
-		cdx_dev = TAILQ_NEXT(cdx_dev, next);
-	}
-	return NULL;
-}
-
-/* Remove a device from CDX bus */
-static void
-cdx_remove_device(struct rte_cdx_device *cdx_dev)
-{
-	TAILQ_REMOVE(&rte_cdx_bus.device_list, cdx_dev, next);
-}
-
-/*
- * If vendor/device ID match, call the remove() function of the
- * driver.
- */
 static int
-cdx_detach_dev(struct rte_cdx_device *dev)
+cdx_unplug_device(struct rte_device *rte_dev)
 {
-	struct rte_cdx_driver *dr;
+	const struct rte_cdx_driver *dr = RTE_BUS_DRIVER(rte_dev->driver, *dr);
+	struct rte_cdx_device *dev = RTE_BUS_DEVICE(rte_dev, *dev);
 	int ret = 0;
-
-	if (dev == NULL)
-		return -EINVAL;
-
-	dr = dev->driver;
 
 	CDX_BUS_DEBUG("detach device %s using driver: %s",
 		dev->device.name, dr->driver.name);
 
-	if (dr->remove) {
+	if (dr->remove != NULL) {
 		ret = dr->remove(dev);
 		if (ret < 0)
 			return ret;
 	}
-
-	/* clear driver structure */
-	dev->driver = NULL;
-	dev->device.driver = NULL;
 
 	rte_cdx_unmap_device(dev);
 
@@ -560,28 +396,6 @@ cdx_detach_dev(struct rte_cdx_device *dev)
 	dev->intr_handle = NULL;
 
 	return 0;
-}
-
-static int
-cdx_plug(struct rte_device *dev)
-{
-	return cdx_probe_all_drivers(RTE_DEV_TO_CDX_DEV(dev));
-}
-
-static int
-cdx_unplug(struct rte_device *dev)
-{
-	struct rte_cdx_device *cdx_dev;
-	int ret;
-
-	cdx_dev = RTE_DEV_TO_CDX_DEV(dev);
-	ret = cdx_detach_dev(cdx_dev);
-	if (ret == 0) {
-		cdx_remove_device(cdx_dev);
-		rte_devargs_remove(dev->devargs);
-		free(cdx_dev);
-	}
-	return ret;
 }
 
 static int
@@ -611,65 +425,19 @@ cdx_get_iommu_class(void)
 	return RTE_IOVA_VA;
 }
 
-static int
-cdx_dev_match(const struct rte_device *dev,
-		const void *_kvlist)
-{
-	const struct rte_kvargs *kvlist = _kvlist;
-	const char *key = cdx_params_keys[RTE_CDX_PARAM_NAME];
-	const char *name;
-
-	/* no kvlist arg, all devices match */
-	if (kvlist == NULL)
-		return 0;
-
-	/* if key is present in kvlist and does not match, filter device */
-	name = rte_kvargs_get(kvlist, key);
-	if (name != NULL && strcmp(name, dev->name))
-		return -1;
-
-	return 0;
-}
-
-static void *
-cdx_dev_iterate(const void *start,
-		const char *str,
-		const struct rte_dev_iterator *it __rte_unused)
-{
-	rte_bus_find_device_t find_device;
-	struct rte_kvargs *kvargs = NULL;
-	struct rte_device *dev;
-
-	if (str != NULL) {
-		kvargs = rte_kvargs_parse(str, cdx_params_keys);
-		if (kvargs == NULL) {
-			CDX_BUS_ERR("cannot parse argument list %s", str);
-			rte_errno = EINVAL;
-			return NULL;
-		}
-	}
-	find_device = rte_cdx_bus.bus.find_device;
-	dev = find_device(start, cdx_dev_match, kvargs);
-	rte_kvargs_free(kvargs);
-	return dev;
-}
-
-struct rte_cdx_bus rte_cdx_bus = {
-	.bus = {
-		.scan = cdx_scan,
-		.probe = cdx_probe,
-		.find_device = cdx_find_device,
-		.plug = cdx_plug,
-		.unplug = cdx_unplug,
-		.parse = cdx_parse,
-		.dma_map = cdx_dma_map,
-		.dma_unmap = cdx_dma_unmap,
-		.get_iommu_class = cdx_get_iommu_class,
-		.dev_iterate = cdx_dev_iterate,
-	},
-	.device_list = TAILQ_HEAD_INITIALIZER(rte_cdx_bus.device_list),
-	.driver_list = TAILQ_HEAD_INITIALIZER(rte_cdx_bus.driver_list),
+static struct rte_bus rte_cdx_bus = {
+	.scan = cdx_scan,
+	.probe = rte_bus_generic_probe,
+	.find_device = rte_bus_generic_find_device,
+	.match = cdx_bus_match,
+	.probe_device = cdx_probe_device,
+	.unplug_device = cdx_unplug_device,
+	.parse = cdx_parse,
+	.dma_map = cdx_dma_map,
+	.dma_unmap = cdx_dma_unmap,
+	.get_iommu_class = cdx_get_iommu_class,
+	.dev_iterate = rte_bus_generic_dev_iterate,
 };
 
-RTE_REGISTER_BUS(cdx, rte_cdx_bus.bus);
+RTE_REGISTER_BUS(cdx, rte_cdx_bus);
 RTE_LOG_REGISTER_DEFAULT(cdx_logtype_bus, NOTICE);

@@ -35,8 +35,16 @@
  */
 static rte_hash_function hashtest_funcs[] = {rte_jhash, rte_hash_crc};
 static uint32_t hashtest_initvals[] = {0};
-static uint32_t hashtest_key_lens[] = {0, 2, 4, 5, 6, 7, 8, 10, 11, 15, 16, 21, 31, 32, 33, 63, 64};
-#define MAX_KEYSIZE 64
+
+/*
+ * Test common hash key lengths. Make sure and cover all the special cases
+ * in the cmp_jump_table.
+ */
+static uint32_t hashtest_key_lens[] = {
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 20,
+	21, 31, 32, 33, 36, 48, 63, 64, 80, 96, 112, 128, 254
+};
+#define MAX_KEYSIZE 256
 /******************************************************************************/
 #define LOCAL_FBK_HASH_ENTRIES_MAX (1 << 15)
 
@@ -1507,6 +1515,83 @@ test_hash_creation_with_good_parameters(void)
 	return 0;
 }
 
+/*
+ * Test hash creation and key operations with various key lengths.
+ * This exercises the key compare functions for different sizes.
+ */
+static int
+test_hash_creation_with_key_lengths(void)
+{
+	struct rte_hash *handle;
+	struct rte_hash_parameters params;
+	uint8_t key[MAX_KEYSIZE];
+	unsigned int i, j;
+	int pos, expected_pos;
+
+	for (i = 0; i < RTE_DIM(hashtest_key_lens); i++) {
+		uint32_t key_len = hashtest_key_lens[i];
+
+		/* key_len of 0 is invalid */
+		if (key_len == 0)
+			continue;
+
+		memcpy(&params, &ut_params, sizeof(params));
+		params.name = "key_len_test";
+		params.key_len = key_len;
+
+		handle = rte_hash_create(&params);
+		if (handle == NULL) {
+			printf("Creating hash with key_len %u failed\n", key_len);
+			return -1;
+		}
+
+		/* initialize key with pattern */
+		for (j = 0; j < key_len; j++)
+			key[j] = (uint8_t)j;
+
+		/* add the key */
+		pos = rte_hash_add_key(handle, key);
+		if (pos < 0) {
+			printf("Adding key with key_len %u failed\n", key_len);
+			rte_hash_free(handle);
+			return -1;
+		}
+		expected_pos = pos;
+
+		/* lookup should find same key */
+		pos = rte_hash_lookup(handle, key);
+		if (pos != expected_pos) {
+			printf("Lookup key with key_len %u failed: expected %d got %d\n",
+			       key_len, expected_pos, pos);
+			rte_hash_free(handle);
+			return -1;
+		}
+
+		/* modify one byte and lookup should fail */
+		key[key_len - 1] ^= 0xff;
+		pos = rte_hash_lookup(handle, key);
+		if (pos != -ENOENT) {
+			printf("Lookup modified key with key_len %u should have failed\n",
+			       key_len);
+			rte_hash_free(handle);
+			return -1;
+		}
+
+		/* restore key and delete */
+		key[key_len - 1] ^= 0xff;
+		pos = rte_hash_del_key(handle, key);
+		if (pos != expected_pos) {
+			printf("Delete key with key_len %u failed\n", key_len);
+			rte_hash_free(handle);
+			return -1;
+		}
+
+		rte_hash_free(handle);
+	}
+
+	return 0;
+}
+
 #define ITERATIONS 3
 /*
  * Test to see the average table utilization (entries added/max entries)
@@ -2474,90 +2559,112 @@ end:
 }
 
 /*
+ * Wrapper functions for tests that take parameters.
+ */
+static int
+test_average_table_utilization_no_ext(void)
+{
+	return test_average_table_utilization(0);
+}
+
+static int
+test_average_table_utilization_ext(void)
+{
+	return test_average_table_utilization(1);
+}
+
+static int
+test_hash_iteration_no_ext(void)
+{
+	return test_hash_iteration(0);
+}
+
+static int
+test_hash_iteration_ext(void)
+{
+	return test_hash_iteration(1);
+}
+
+static int
+test_hash_rcu_qsbr_dq_mode_no_ext(void)
+{
+	return test_hash_rcu_qsbr_dq_mode(0);
+}
+
+static int
+test_hash_rcu_qsbr_dq_mode_ext(void)
+{
+	return test_hash_rcu_qsbr_dq_mode(1);
+}
+
+static int
+test_hash_rcu_qsbr_sync_mode_no_ext(void)
+{
+	return test_hash_rcu_qsbr_sync_mode(0);
+}
+
+static int
+test_hash_rcu_qsbr_sync_mode_ext(void)
+{
+	return test_hash_rcu_qsbr_sync_mode(1);
+}
+
+static int
+test_hash_func_tests(void)
+{
+	run_hash_func_tests();
+	return TEST_SUCCESS;
+}
+
+static_assert(sizeof(struct flow_key) % sizeof(uint32_t) == 0,
+	     "flow_key size must be a multiple of 4 bytes");
+
+static struct unit_test_suite hash_test_suite = {
+	.suite_name = "Hash Unit Test Suite",
+	.unit_test_cases = {
+		TEST_CASE(test_add_delete),
+		TEST_CASE(test_hash_add_delete_jhash2),
+		TEST_CASE(test_hash_add_delete_2_jhash2),
+		TEST_CASE(test_hash_add_delete_jhash_1word),
+		TEST_CASE(test_hash_add_delete_jhash_2word),
+		TEST_CASE(test_hash_add_delete_jhash_3word),
+		TEST_CASE(test_hash_get_key_with_position),
+		TEST_CASE(test_hash_find_existing),
+		TEST_CASE(test_add_update_delete),
+		TEST_CASE(test_add_update_delete_free),
+		TEST_CASE(test_add_delete_free_lf),
+		TEST_CASE(test_five_keys),
+		TEST_CASE(test_full_bucket),
+		TEST_CASE(test_extendable_bucket),
+		TEST_CASE(test_fbk_hash_find_existing),
+		TEST_CASE(fbk_hash_unit_test),
+		TEST_CASE(test_hash_creation_with_bad_parameters),
+		TEST_CASE(test_hash_creation_with_good_parameters),
+		TEST_CASE(test_hash_creation_with_key_lengths),
+		TEST_CASE(test_average_table_utilization_no_ext),
+		TEST_CASE(test_hash_iteration_no_ext),
+		TEST_CASE(test_average_table_utilization_ext),
+		TEST_CASE(test_hash_iteration_ext),
+		TEST_CASE(test_hash_func_tests),
+		TEST_CASE(test_crc32_hash_alg_equiv),
+		TEST_CASE(test_hash_rcu_qsbr_add),
+		TEST_CASE(test_hash_rcu_qsbr_dq_mode_no_ext),
+		TEST_CASE(test_hash_rcu_qsbr_dq_mode_ext),
+		TEST_CASE(test_hash_rcu_qsbr_sync_mode_no_ext),
+		TEST_CASE(test_hash_rcu_qsbr_sync_mode_ext),
+		TEST_CASE(test_hash_rcu_qsbr_dq_reclaim),
+		TEST_CASE(test_hash_rcu_qsbr_replace_auto_free),
+		TEST_CASES_END()
+	}
+};
+
+/*
  * Do all unit and performance tests.
  */
 static int
 test_hash(void)
 {
-	RTE_BUILD_BUG_ON(sizeof(struct flow_key) % sizeof(uint32_t) != 0);
-
-	if (test_add_delete() < 0)
-		return -1;
-	if (test_hash_add_delete_jhash2() < 0)
-		return -1;
-	if (test_hash_add_delete_2_jhash2() < 0)
-		return -1;
-	if (test_hash_add_delete_jhash_1word() < 0)
-		return -1;
-	if (test_hash_add_delete_jhash_2word() < 0)
-		return -1;
-	if (test_hash_add_delete_jhash_3word() < 0)
-		return -1;
-	if (test_hash_get_key_with_position() < 0)
-		return -1;
-	if (test_hash_find_existing() < 0)
-		return -1;
-	if (test_add_update_delete() < 0)
-		return -1;
-	if (test_add_update_delete_free() < 0)
-		return -1;
-	if (test_add_delete_free_lf() < 0)
-		return -1;
-	if (test_five_keys() < 0)
-		return -1;
-	if (test_full_bucket() < 0)
-		return -1;
-	if (test_extendable_bucket() < 0)
-		return -1;
-
-	if (test_fbk_hash_find_existing() < 0)
-		return -1;
-	if (fbk_hash_unit_test() < 0)
-		return -1;
-	if (test_hash_creation_with_bad_parameters() < 0)
-		return -1;
-	if (test_hash_creation_with_good_parameters() < 0)
-		return -1;
-
-	/* ext table disabled */
-	if (test_average_table_utilization(0) < 0)
-		return -1;
-	if (test_hash_iteration(0) < 0)
-		return -1;
-
-	/* ext table enabled */
-	if (test_average_table_utilization(1) < 0)
-		return -1;
-	if (test_hash_iteration(1) < 0)
-		return -1;
-
-	run_hash_func_tests();
-
-	if (test_crc32_hash_alg_equiv() < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_add() < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_dq_mode(0) < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_dq_mode(1) < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_sync_mode(0) < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_sync_mode(1) < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_dq_reclaim() < 0)
-		return -1;
-
-	if (test_hash_rcu_qsbr_replace_auto_free() < 0)
-		return -1;
-
-	return 0;
+	return unit_test_suite_runner(&hash_test_suite);
 }
 
 REGISTER_FAST_TEST(hash_autotest, NOHUGE_OK, ASAN_OK, test_hash);

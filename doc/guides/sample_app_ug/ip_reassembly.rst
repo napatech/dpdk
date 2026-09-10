@@ -124,7 +124,7 @@ The following sections describe aspects that are specific to the IP reassemble s
 IPv4 Fragment Table Initialization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This application uses the :doc:`../prog_guide/ip_fragment_reassembly_lib` library.
+This application uses the :doc:`/prog_guide/ip_fragment_reassembly_lib` library.
 The fragment table maintains information about already received fragments of the packet.
 Each IP packet is uniquely identified by triple <Source IP address>, <Destination IP address>, <ID>.
 To avoid lock contention, each Rx queue has its own fragment table.
@@ -156,7 +156,7 @@ each Rx queue uses its own mempool.
     :dedent: 1
 
 Packet Reassembly and Forwarding
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For each input packet, the packet forwarding operation is done by the l3fwd_simple_forward() function.
 If the packet is an IPv4 or IPv6 fragment, then it calls ``rte_ipv4_reassemble_packet()`` for IPv4 packets,

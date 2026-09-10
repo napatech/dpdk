@@ -315,7 +315,7 @@ ark_dev_init(struct rte_eth_dev *dev)
 	if (ret)
 		return ret;
 
-	pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	rte_eth_copy_pci_info(dev, pci_dev);
 	dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
@@ -445,6 +445,10 @@ ark_dev_init(struct rte_eth_dev *dev)
 					   sizeof(struct ark_adapter),
 					   RTE_CACHE_LINE_SIZE,
 					   rte_socket_id());
+		if (eth_dev->data->dev_private == NULL) {
+			ARK_PMD_LOG(ERR, "Memory allocation for dev_private failed\n");
+			goto error;
+		}
 
 		memcpy(eth_dev->data->dev_private, ark,
 		       sizeof(struct ark_adapter));

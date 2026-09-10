@@ -131,16 +131,6 @@ set_policy_mac(struct rte_power_channel_packet *pkt, int idx, char *mac)
 	return 0;
 }
 
-static char*
-get_resource_name_from_chn_path(const char *channel_path)
-{
-	char *substr = NULL;
-
-	substr = strstr(channel_path, CHANNEL_MGR_FIFO_PATTERN_NAME);
-
-	return substr;
-}
-
 static int
 get_resource_id_from_vmname(const char *vm_name)
 {
@@ -888,7 +878,7 @@ process_request(struct rte_power_channel_packet *pkt,
 	if (pkt->command == RTE_POWER_PKT_POLICY) {
 		RTE_LOG(INFO, CHANNEL_MONITOR, "Processing policy request %s\n",
 				pkt->vm_name);
-		int ret = send_ack_for_received_cmd(pkt,
+		ret = send_ack_for_received_cmd(pkt,
 				chan_info,
 				RTE_POWER_CMD_ACK);
 		if (ret < 0)
@@ -912,7 +902,7 @@ process_request(struct rte_power_channel_packet *pkt,
 
 		RTE_LOG(INFO, CHANNEL_MONITOR,
 			"Frequency for %s requested.\n", pkt->vm_name);
-		int ret = send_freq(pkt,
+		ret = send_freq(pkt,
 				chan_info,
 				pkt->command == RTE_POWER_QUERY_FREQ_LIST);
 		if (ret < 0)
@@ -924,7 +914,7 @@ process_request(struct rte_power_channel_packet *pkt,
 
 		RTE_LOG(INFO, CHANNEL_MONITOR,
 			"Capabilities for %s requested.\n", pkt->vm_name);
-		int ret = send_capabilities(pkt,
+		ret = send_capabilities(pkt,
 				chan_info,
 				pkt->command == RTE_POWER_QUERY_CAPS_LIST);
 		if (ret < 0)
@@ -1066,8 +1056,8 @@ read_json_packet(struct channel_info *chan_info)
 		root = json_loads(json_data, 0, &error);
 
 		if (root) {
-			resource_name = get_resource_name_from_chn_path(
-				chan_info->channel_path);
+			resource_name = strstr(chan_info->channel_path,
+					CHANNEL_MGR_FIFO_PATTERN_NAME);
 			/*
 			 * Because our data is now in the json
 			 * object, we can overwrite the pkt

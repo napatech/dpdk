@@ -14,8 +14,7 @@ BIOS Setting Prerequisite on x86
 For the majority of platforms, no special BIOS settings are needed to use basic DPDK functionality.
 However, for additional HPET timer and power management functionality,
 and high performance of small packets, BIOS setting changes may be needed.
-Consult the section on :ref:`Enabling Additional Functionality <Enabling_Additional_Functionality>`
-for more information on the required changes.
+Consult the section on :doc:`enable_func` for more information on the required changes.
 
 Compilation of the DPDK
 -----------------------
@@ -88,7 +87,9 @@ For libraries the additional dependencies include:
 
 For poll-mode drivers, the additional dependencies for each driver can be
 found in that driver's documentation in the relevant DPDK guide document,
-e.g. :doc:`../nics/index`
+e.g. :doc:`/nics/index`
+
+.. _linux_gsg_running_apps:
 
 Running DPDK Applications
 -------------------------
@@ -130,7 +131,7 @@ System Software
     *   PROC_PAGE_MONITOR support
 
     *   HPET and HPET_MMAP configuration options should also be enabled if HPET support is required.
-        See the section on :ref:`High Precision Event Timer (HPET) Functionality <High_Precision_Event_Timer>` for more details.
+        See the section on :ref:`linux_gsg_high_precision_event_timer` for more details.
 
 .. _linux_gsg_hugepages:
 

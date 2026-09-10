@@ -8,6 +8,8 @@
 
 #include <bus_driver.h>
 #include <rte_debug.h>
+#include <rte_devargs.h>
+#include <rte_kvargs.h>
 #include <rte_string_fns.h>
 #include <rte_errno.h>
 
@@ -34,9 +36,12 @@ rte_bus_register(struct rte_bus *bus)
 	RTE_VERIFY(bus->scan);
 	RTE_VERIFY(bus->probe);
 	RTE_VERIFY(bus->find_device);
-	/* Buses supporting driver plug also require unplug. */
-	RTE_VERIFY(!bus->plug || bus->unplug);
 
+	/* A bus providing probe_device requires match. */
+	RTE_VERIFY(!bus->probe_device || bus->match);
+
+	TAILQ_INIT(&bus->device_list);
+	TAILQ_INIT(&bus->driver_list);
 	TAILQ_INSERT_TAIL(&rte_bus_list, bus, next);
 	EAL_LOG(DEBUG, "Registered [%s] bus.", rte_bus_name(bus));
 }
@@ -67,6 +72,89 @@ rte_bus_scan(void)
 	return 0;
 }
 
+/*
+ * Generic probe function for buses.
+ * Iterates through all devices on the bus, finds matching drivers,
+ * and calls bus->probe_device() for each device.
+ */
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_generic_probe)
+int
+rte_bus_generic_probe(struct rte_bus *bus)
+{
+	size_t probed = 0, failed = 0;
+	struct rte_device *dev;
+
+	TAILQ_FOREACH(dev, &bus->device_list, next) {
+		struct rte_driver *drv = NULL;
+		bool was_probed;
+		int ret;
+
+		if (rte_bus_device_is_ignored(bus, dev->name))
+			continue;
+
+		if (rte_dev_is_probed(dev) && !bus->allow_multi_probe) {
+			EAL_LOG(INFO, "Device %s is already probed", dev->name);
+			continue;
+		}
+
+		probed++;
+next_driver:
+		drv = rte_bus_find_driver(bus, drv, dev);
+		if (drv == NULL)
+			continue;
+
+		was_probed = rte_dev_is_probed(dev);
+		if (!was_probed)
+			dev->driver = drv;
+		ret = bus->probe_device(drv, dev);
+		if (!was_probed && ret != 0)
+			dev->driver = NULL;
+
+		if (ret > 0)
+			goto next_driver;
+
+		if (ret < 0) {
+			if (ret == -EEXIST)
+				continue;
+			EAL_LOG(ERR, "Failed to probe device %s", dev->name);
+			failed++;
+		}
+	}
+
+	return (probed && probed == failed) ? -1 : 0;
+}
+
+/*
+ * Generic cleanup function for buses.
+ * Iterates through all devices on the bus, unplugs probed devices,
+ * removes devargs, removes devices from the bus list, and frees device structures.
+ */
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_generic_cleanup)
+int
+rte_bus_generic_cleanup(struct rte_bus *bus)
+{
+	struct rte_device *dev;
+	int error = 0;
+
+	RTE_VERIFY(bus->free_device);
+	RTE_VERIFY(bus->unplug_device);
+
+	while ((dev = TAILQ_FIRST(&bus->device_list)) != NULL) {
+		if (rte_dev_is_probed(dev)) {
+			if (bus->unplug_device(dev) < 0) {
+				rte_errno = errno;
+				error = -1;
+			}
+		}
+
+		rte_devargs_remove(dev->devargs);
+		rte_bus_remove_device(bus, dev);
+		bus->free_device(dev);
+	}
+
+	return error;
+}
+
 /* Probe all devices of all buses */
 RTE_EXPORT_SYMBOL(rte_bus_probe)
 int
@@ -81,14 +169,14 @@ rte_bus_probe(void)
 			continue;
 		}
 
-		ret = bus->probe();
+		ret = bus->probe(bus);
 		if (ret)
 			EAL_LOG(ERR, "Bus (%s) probe failed.",
 				rte_bus_name(bus));
 	}
 
 	if (vbus) {
-		ret = vbus->probe();
+		ret = vbus->probe(vbus);
 		if (ret)
 			EAL_LOG(ERR, "Bus (%s) probe failed.",
 				rte_bus_name(vbus));
@@ -107,7 +195,7 @@ eal_bus_cleanup(void)
 	TAILQ_FOREACH(bus, &rte_bus_list, next) {
 		if (bus->cleanup == NULL)
 			continue;
-		if (bus->cleanup() != 0)
+		if (bus->cleanup(bus) != 0)
 			ret = -1;
 	}
 
@@ -179,7 +267,7 @@ bus_find_device(const struct rte_bus *bus, const void *_dev)
 {
 	struct rte_device *dev;
 
-	dev = bus->find_device(NULL, cmp_rte_device, _dev);
+	dev = bus->find_device(bus, NULL, cmp_rte_device, _dev);
 	return dev == NULL;
 }
 
@@ -205,6 +293,33 @@ rte_bus_find_by_name(const char *busname)
 	return rte_bus_find(NULL, cmp_bus_name, (const void *)busname);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_find_devargs)
+struct rte_devargs *
+rte_bus_find_devargs(const struct rte_bus *bus, const char *name)
+{
+	rte_bus_dev_compare_t cmp = bus->dev_compare;
+	const char *bus_name = rte_bus_name(bus);
+	struct rte_devargs *devargs;
+
+	if (cmp == NULL)
+		cmp = strcmp;
+
+	RTE_EAL_DEVARGS_FOREACH(bus_name, devargs) {
+		const char *devargs_name = devargs->name;
+
+		/* The name in the devargs is usually prefixed with <bus>: */
+		if (strncmp(devargs_name, bus_name, strlen(bus_name)) == 0)
+			devargs_name += strlen(bus_name) + 1;
+		if (cmp(name, devargs_name) != 0)
+			continue;
+		EAL_LOG(DEBUG, "found devargs for %s:%s", bus_name, name);
+		return devargs;
+	}
+
+	EAL_LOG(DEBUG, "no devargs for %s:%s", bus_name, name);
+	return NULL;
+}
+
 static int
 bus_can_parse(const struct rte_bus *bus, const void *_name)
 {
@@ -226,6 +341,32 @@ rte_bus_find_by_device_name(const char *str)
 	return rte_bus_find(NULL, bus_can_parse, name);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_device_is_ignored)
+bool
+rte_bus_device_is_ignored(const struct rte_bus *bus, const char *dev_name)
+{
+	const struct internal_config *internal_conf = eal_get_internal_configuration();
+	struct rte_devargs *devargs = rte_bus_find_devargs(bus, dev_name);
+	enum rte_bus_scan_mode scan_mode = bus->conf.scan_mode;
+
+	if (scan_mode == RTE_BUS_SCAN_UNDEFINED) {
+		if (internal_conf->no_auto_probing != 0)
+			scan_mode = RTE_BUS_SCAN_ALLOWLIST;
+		else
+			scan_mode = RTE_BUS_SCAN_BLOCKLIST;
+	}
+
+	if (scan_mode == RTE_BUS_SCAN_ALLOWLIST) {
+		if (devargs && devargs->policy == RTE_DEV_ALLOWED)
+			return false;
+	} else {
+		if (devargs == NULL || devargs->policy != RTE_DEV_BLOCKED)
+			return false;
+	}
+
+	EAL_LOG(DEBUG, "device %s:%s is ignored", rte_bus_name(bus), dev_name);
+	return true;
+}
 
 /*
  * Get iommu class of devices on the bus.
@@ -314,4 +455,124 @@ rte_bus_sigbus_handler(const void *failure_addr)
 	rte_errno = old_errno;
 
 	return ret;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_add_device)
+void
+rte_bus_add_device(struct rte_bus *bus, struct rte_device *dev)
+{
+	TAILQ_INSERT_TAIL(&bus->device_list, dev, next);
+	dev->bus = bus;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_remove_device)
+void
+rte_bus_remove_device(struct rte_bus *bus, struct rte_device *dev)
+{
+	TAILQ_REMOVE(&bus->device_list, dev, next);
+	dev->bus = NULL;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_insert_device)
+void
+rte_bus_insert_device(struct rte_bus *bus,
+		      struct rte_device *exist_dev,
+		      struct rte_device *new_dev)
+{
+	TAILQ_INSERT_BEFORE(exist_dev, new_dev, next);
+	new_dev->bus = bus;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_generic_find_device)
+struct rte_device *
+rte_bus_generic_find_device(const struct rte_bus *bus, const struct rte_device *start,
+		    rte_dev_cmp_t cmp, const void *data)
+{
+	struct rte_device *dev;
+
+	if (start != NULL)
+		dev = TAILQ_NEXT(start, next);
+	else
+		dev = TAILQ_FIRST(&bus->device_list);
+	while (dev != NULL) {
+		if (cmp(dev, data) == 0)
+			return dev;
+		dev = TAILQ_NEXT(dev, next);
+	}
+	return NULL;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_add_driver)
+void
+rte_bus_add_driver(struct rte_bus *bus, struct rte_driver *driver)
+{
+	TAILQ_INSERT_TAIL(&bus->driver_list, driver, next);
+	driver->bus = bus;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_remove_driver)
+void
+rte_bus_remove_driver(struct rte_bus *bus, struct rte_driver *driver)
+{
+	TAILQ_REMOVE(&bus->driver_list, driver, next);
+	driver->bus = NULL;
+}
+
+static int
+bus_dev_match_by_name(const struct rte_device *dev, const void *_kvlist)
+{
+	const struct rte_kvargs *kvlist = _kvlist;
+	const char *name;
+
+	if (kvlist == NULL)
+		return 0;
+
+	name = rte_kvargs_get(kvlist, "name");
+	if (name != NULL && strcmp(name, dev->name))
+		return -1;
+
+	return 0;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_generic_dev_iterate)
+void *
+rte_bus_generic_dev_iterate(const struct rte_bus *bus,
+			     const void *start,
+			     const char *str,
+			     const struct rte_dev_iterator *it __rte_unused)
+{
+	static const char * const params_keys[] = { "name", NULL };
+	struct rte_kvargs *kvargs = NULL;
+	struct rte_device *dev;
+
+	if (str != NULL) {
+		kvargs = rte_kvargs_parse(str, params_keys);
+		if (kvargs == NULL) {
+			rte_errno = EINVAL;
+			return NULL;
+		}
+	}
+
+	dev = rte_bus_generic_find_device(bus, start, bus_dev_match_by_name, kvargs);
+	rte_kvargs_free(kvargs);
+	return dev;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(rte_bus_find_driver)
+struct rte_driver *
+rte_bus_find_driver(const struct rte_bus *bus, const struct rte_driver *start,
+	const struct rte_device *dev)
+{
+	struct rte_driver *drv;
+
+	if (start != NULL)
+		drv = TAILQ_NEXT(start, next);
+	else
+		drv = TAILQ_FIRST(&bus->driver_list);
+	while (drv != NULL) {
+		if (bus->match(drv, dev))
+			break;
+		drv = TAILQ_NEXT(drv, next);
+	}
+	return drv;
 }

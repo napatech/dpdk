@@ -3,7 +3,7 @@
     Copyright(c) 2017 Cavium, Inc
 
 QEDE Poll Mode Driver
-======================
+=====================
 
 The QEDE poll mode driver library (**librte_net_qede**) implements support
 for **QLogic FastLinQ QL4xxxx 10G/25G/40G/50G/100G Intelligent Ethernet Adapters (IEA) and Converged Network Adapters (CNA)** family of adapters as well as SR-IOV virtual functions (VF). It is supported on
@@ -144,8 +144,7 @@ following error.
 Driver compilation and testing
 ------------------------------
 
-Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-for details.
+Refer to the document :doc:`build_and_test` for details.
 
 RTE Flow Support
 ----------------
@@ -154,8 +153,6 @@ QLogic FastLinQ QL4xxxx NICs has support for the following patterns and
 actions.
 
 Patterns:
-
-.. _table_qede_supported_flow_item_types:
 
 .. table:: Item types
 
@@ -172,8 +169,6 @@ Patterns:
    +----+--------------------------------+
 
 Actions:
-
-.. _table_qede_supported_ingress_action_types:
 
 .. table:: Ingress action types
 
@@ -264,9 +259,7 @@ This section provides instructions to configure SR-IOV with Linux OS.
 #. Running testpmd
    (Supply ``--log-level="pmd.net.qede.driver:info`` to view informational messages):
 
-   Refer to the document
-   :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>` to run
-   ``testpmd`` application.
+   Refer to the document :doc:`build_and_test` to run ``testpmd`` application.
 
    Example output:
 

@@ -8,6 +8,7 @@
 #include <rte_bus_vdev.h>
 #include <rte_compat.h>
 #include <dev_driver.h>
+#include <bus_driver.h>
 #include <rte_devargs.h>
 
 #ifdef __cplusplus
@@ -15,21 +16,8 @@ extern "C" {
 #endif
 
 struct rte_vdev_device {
-	RTE_TAILQ_ENTRY(rte_vdev_device) next;      /**< Next attached vdev */
 	struct rte_device device;               /**< Inherit core device */
 };
-
-/**
- * @internal
- * Helper macro for drivers that need to convert to struct rte_vdev_device.
- */
-#define RTE_DEV_TO_VDEV(ptr) \
-	container_of(ptr, struct rte_vdev_device, device)
-
-#define RTE_DEV_TO_VDEV_CONST(ptr) \
-	container_of(ptr, const struct rte_vdev_device, device)
-
-#define RTE_ETH_DEV_TO_VDEV(eth_dev)	RTE_DEV_TO_VDEV((eth_dev)->device)
 
 static inline const char *
 rte_vdev_device_name(const struct rte_vdev_device *dev)
@@ -99,7 +87,6 @@ typedef int (rte_vdev_dma_unmap_t)(struct rte_vdev_device *dev, void *addr,
  * A virtual device driver abstraction.
  */
 struct rte_vdev_driver {
-	RTE_TAILQ_ENTRY(rte_vdev_driver) next; /**< Next in list. */
 	struct rte_driver driver;        /**< Inherited general driver. */
 	rte_vdev_probe_t *probe;         /**< Virtual device probe function. */
 	rte_vdev_remove_t *remove;       /**< Virtual device remove function. */

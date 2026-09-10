@@ -175,19 +175,18 @@ ENA Configuration Parameters
 Building DPDK
 -------------
 
-See the :ref:`DPDK Getting Started Guide for Linux <linux_gsg>` for
-instructions on how to build DPDK.
+See :doc:`/linux_gsg/build_dpdk` for instructions.
 
 By default the ENA PMD library will be built into the DPDK library.
 
-For configuring and using UIO and VFIO frameworks, please also refer :ref:`the
-documentation that comes with DPDK suite <linux_gsg>`.
+For configuring and using UIO and VFIO frameworks,
+please also refer the :doc:`/linux_gsg/index`.
 
 Supported Operating Systems
 ---------------------------
 
-Any Linux distribution fulfilling the conditions described in ``System Requirements``
-section of :ref:`the DPDK documentation <linux_gsg>` or refer to *DPDK Release Notes*.
+Any Linux distribution fulfilling the conditions described in
+:doc:`/linux_gsg/sys_reqs` or refer to :doc:`/rel_notes/index`.
 
 Prerequisites
 -------------
@@ -293,8 +292,7 @@ Note that ``uio_pci_generic`` lacks IOMMU support and cannot be used for metal i
 Usage example
 -------------
 
-Follow instructions available in the document
-:ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>` to launch
+Follow instructions available in the document :doc:`build_and_test` to launch
 **testpmd** with Amazon ENA devices managed by librte_net_ena.
 
 Example output:

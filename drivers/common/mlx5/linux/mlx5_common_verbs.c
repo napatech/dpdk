@@ -106,10 +106,10 @@ mlx5_set_context_attr(struct rte_device *dev, struct ibv_context *ctx)
  * @return
  *   0 on successful registration, -1 otherwise
  */
-RTE_EXPORT_INTERNAL_SYMBOL(mlx5_common_verbs_reg_mr)
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_reg_mr)
 int
-mlx5_common_verbs_reg_mr(void *pd, void *addr, size_t length,
-			 struct mlx5_pmd_mr *pmd_mr)
+mlx5_os_reg_mr(void *pd, void *addr, size_t length,
+		struct mlx5_pmd_mr *pmd_mr)
 {
 	struct ibv_mr *ibv_mr;
 
@@ -136,9 +136,9 @@ mlx5_common_verbs_reg_mr(void *pd, void *addr, size_t length,
  *   pmd_mr struct set with lkey, address, length and pointer to mr object
  *
  */
-RTE_EXPORT_INTERNAL_SYMBOL(mlx5_common_verbs_dereg_mr)
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_dereg_mr)
 void
-mlx5_common_verbs_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
+mlx5_os_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
 {
 	if (pmd_mr && pmd_mr->obj != NULL) {
 		claim_zero(mlx5_glue->dereg_mr(pmd_mr->obj));
@@ -146,18 +146,37 @@ mlx5_common_verbs_dereg_mr(struct mlx5_pmd_mr *pmd_mr)
 	}
 }
 
-/**
- * Set the reg_mr and dereg_mr callbacks.
- *
- * @param[out] reg_mr_cb
- *   Pointer to reg_mr func
- * @param[out] dereg_mr_cb
- *   Pointer to dereg_mr func
- */
-RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_set_reg_mr_cb)
-void
-mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb, mlx5_dereg_mr_t *dereg_mr_cb)
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_alloc_null_mr)
+struct mlx5_pmd_mr *
+mlx5_os_alloc_null_mr(struct rte_device *dev, void *pd)
 {
-	*reg_mr_cb = mlx5_common_verbs_reg_mr;
-	*dereg_mr_cb = mlx5_common_verbs_dereg_mr;
+	struct ibv_mr *ibv_mr;
+	struct mlx5_pmd_mr *null_mr;
+
+	null_mr = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*null_mr), 0, dev->numa_node);
+	if (!null_mr)
+		return NULL;
+	ibv_mr = mlx5_glue->alloc_null_mr(pd);
+	if (!ibv_mr) {
+		mlx5_free(null_mr);
+		return NULL;
+	}
+	*null_mr = (struct mlx5_pmd_mr) {
+		.lkey = rte_cpu_to_be_32(ibv_mr->lkey),
+		.addr = ibv_mr->addr,
+		.len = ibv_mr->length,
+		.obj = (void *)ibv_mr,
+	};
+	return null_mr;
+}
+
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_os_free_null_mr)
+void
+mlx5_os_free_null_mr(struct mlx5_pmd_mr *null_mr)
+{
+	if (!null_mr)
+		return;
+	if (null_mr->obj)
+		claim_zero(mlx5_glue->dereg_mr(null_mr->obj));
+	mlx5_free(null_mr);
 }

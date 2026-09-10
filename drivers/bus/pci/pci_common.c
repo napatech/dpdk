@@ -79,32 +79,15 @@ pci_asprintf(char **buffer, const char *format, ...)
 }
 #endif /* RTE_EXEC_ENV_WINDOWS */
 
-static struct rte_devargs *
-pci_devargs_lookup(const struct rte_pci_addr *pci_addr)
-{
-	struct rte_devargs *devargs;
-	struct rte_pci_addr addr;
-
-	RTE_EAL_DEVARGS_FOREACH("pci", devargs) {
-		devargs->bus->parse(devargs->name, &addr);
-		if (!rte_pci_addr_cmp(pci_addr, &addr))
-			return devargs;
-	}
-	return NULL;
-}
-
 void
 pci_common_set(struct rte_pci_device *dev)
 {
-	struct rte_devargs *devargs;
-
 	/* Each device has its internal, canonical name set. */
 	rte_pci_device_name(&dev->addr,
 			dev->name, sizeof(dev->name));
 	dev->device.name = dev->name;
 
-	devargs = pci_devargs_lookup(&dev->addr);
-	dev->device.devargs = devargs;
+	dev->device.devargs = rte_bus_find_devargs(&rte_pci_bus, dev->name);
 
 	if (dev->bus_info != NULL ||
 			asprintf(&dev->bus_info, "vendor_id=%"PRIx16", device_id=%"PRIx16,
@@ -158,13 +141,12 @@ pci_unmap_resource(void *requested_addr, size_t size)
 	} else
 		PCI_LOG(DEBUG, "  PCI memory unmapped at %p", requested_addr);
 }
-/*
- * Match the PCI Driver and Device using the ID Table
- */
-int
-rte_pci_match(const struct rte_pci_driver *pci_drv,
-	      const struct rte_pci_device *pci_dev)
+
+static bool
+pci_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
+	const struct rte_pci_driver *pci_drv = RTE_BUS_DRIVER(drv, *pci_drv);
+	const struct rte_pci_device *pci_dev = RTE_BUS_DEVICE(dev, *pci_dev);
 	const struct rte_pci_id *id_table;
 
 	for (id_table = pci_drv->id_table; id_table->vendor_id != 0;
@@ -188,10 +170,10 @@ rte_pci_match(const struct rte_pci_driver *pci_drv,
 				id_table->class_id != RTE_CLASS_ANY_ID)
 			continue;
 
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
 /*
@@ -199,51 +181,35 @@ rte_pci_match(const struct rte_pci_driver *pci_drv,
  * driver.
  */
 static int
-rte_pci_probe_one_driver(struct rte_pci_driver *dr,
-			 struct rte_pci_device *dev)
+pci_probe_device(struct rte_driver *drv, struct rte_device *dev)
 {
-	int ret;
+	struct rte_pci_device *pci_dev = RTE_BUS_DEVICE(dev, *pci_dev);
+	struct rte_pci_driver *pci_drv = RTE_BUS_DRIVER(drv, *pci_drv);
+	struct rte_pci_addr *loc = &pci_dev->addr;
 	bool already_probed;
-	struct rte_pci_addr *loc;
-
-	if ((dr == NULL) || (dev == NULL))
-		return -EINVAL;
-
-	loc = &dev->addr;
-
-	/* The device is not blocked; Check if driver supports it */
-	if (!rte_pci_match(dr, dev))
-		/* Match of device and driver failed */
-		return 1;
+	int ret;
 
 	PCI_LOG(DEBUG, "PCI device "PCI_PRI_FMT" on NUMA socket %i",
 		loc->domain, loc->bus, loc->devid, loc->function,
-		dev->device.numa_node);
+		pci_dev->device.numa_node);
 
-	/* no initialization when marked as blocked, return without error */
-	if (dev->device.devargs != NULL &&
-		dev->device.devargs->policy == RTE_DEV_BLOCKED) {
-		PCI_LOG(INFO, "  Device is blocked, not initializing");
-		return 1;
-	}
+	if (pci_dev->device.numa_node < 0 && rte_socket_count() > 1)
+		PCI_LOG(INFO, "Device %s is not NUMA-aware", pci_dev->name);
 
-	if (dev->device.numa_node < 0 && rte_socket_count() > 1)
-		PCI_LOG(INFO, "Device %s is not NUMA-aware", dev->name);
-
-	already_probed = rte_dev_is_probed(&dev->device);
-	if (already_probed && !(dr->drv_flags & RTE_PCI_DRV_PROBE_AGAIN)) {
-		PCI_LOG(DEBUG, "Device %s is already probed", dev->device.name);
+	already_probed = (pci_dev->intr_handle != NULL);
+	if (already_probed && !(pci_drv->drv_flags & RTE_PCI_DRV_PROBE_AGAIN)) {
+		PCI_LOG(DEBUG, "Device %s is already probed", pci_dev->device.name);
 		return -EEXIST;
 	}
 
-	PCI_LOG(DEBUG, "  probe driver: %x:%x %s", dev->id.vendor_id,
-		dev->id.device_id, dr->driver.name);
+	PCI_LOG(DEBUG, "  probe driver: %x:%x %s", pci_dev->id.vendor_id,
+		pci_dev->id.device_id, pci_drv->driver.name);
 
 	if (!already_probed) {
 		enum rte_iova_mode dev_iova_mode;
 		enum rte_iova_mode iova_mode;
 
-		dev_iova_mode = pci_device_iova_mode(dr, dev);
+		dev_iova_mode = pci_device_iova_mode(pci_drv, pci_dev);
 		iova_mode = rte_eal_iova_mode();
 		if (dev_iova_mode != RTE_IOVA_DC &&
 		    dev_iova_mode != iova_mode) {
@@ -254,86 +220,69 @@ rte_pci_probe_one_driver(struct rte_pci_driver *dr,
 		}
 
 		/* Allocate interrupt instance for pci device */
-		dev->intr_handle =
+		pci_dev->intr_handle =
 			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
-		if (dev->intr_handle == NULL) {
+		if (pci_dev->intr_handle == NULL) {
 			PCI_LOG(ERR, "Failed to create interrupt instance for %s",
-				dev->device.name);
+				pci_dev->device.name);
 			return -ENOMEM;
 		}
 
-		dev->vfio_req_intr_handle =
+		pci_dev->vfio_req_intr_handle =
 			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
-		if (dev->vfio_req_intr_handle == NULL) {
-			rte_intr_instance_free(dev->intr_handle);
-			dev->intr_handle = NULL;
+		if (pci_dev->vfio_req_intr_handle == NULL) {
+			rte_intr_instance_free(pci_dev->intr_handle);
+			pci_dev->intr_handle = NULL;
 			PCI_LOG(ERR, "Failed to create vfio req interrupt instance for %s",
-				dev->device.name);
+				pci_dev->device.name);
 			return -ENOMEM;
 		}
 
-		/*
-		 * Reference driver structure.
-		 * This needs to be before rte_pci_map_device(), as it enables
-		 * to use driver flags for adjusting configuration.
-		 */
-		dev->driver = dr;
-		if (dev->driver->drv_flags & RTE_PCI_DRV_NEED_MAPPING) {
-			ret = rte_pci_map_device(dev);
+		if (pci_drv->drv_flags & RTE_PCI_DRV_NEED_MAPPING) {
+			ret = rte_pci_map_device(pci_dev);
 			if (ret != 0) {
-				dev->driver = NULL;
-				rte_intr_instance_free(dev->vfio_req_intr_handle);
-				dev->vfio_req_intr_handle = NULL;
-				rte_intr_instance_free(dev->intr_handle);
-				dev->intr_handle = NULL;
+				rte_intr_instance_free(pci_dev->vfio_req_intr_handle);
+				pci_dev->vfio_req_intr_handle = NULL;
+				rte_intr_instance_free(pci_dev->intr_handle);
+				pci_dev->intr_handle = NULL;
 				return ret;
 			}
 		}
 	}
 
 	PCI_LOG(INFO, "Probe PCI driver: %s (%x:%04x) device: "PCI_PRI_FMT" (socket %i)",
-		dr->driver.name, dev->id.vendor_id, dev->id.device_id,
+		pci_drv->driver.name, pci_dev->id.vendor_id, pci_dev->id.device_id,
 		loc->domain, loc->bus, loc->devid, loc->function,
-		dev->device.numa_node);
+		pci_dev->device.numa_node);
 	/* call the driver probe() function */
-	ret = dr->probe(dr, dev);
+	ret = pci_drv->probe(pci_drv, pci_dev);
 	if (already_probed)
 		return ret; /* no rollback if already succeeded earlier */
 	if (ret) {
-		dev->driver = NULL;
-		if ((dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING) &&
+		if ((pci_drv->drv_flags & RTE_PCI_DRV_NEED_MAPPING) &&
 			/* Don't unmap if device is unsupported and
 			 * driver needs mapped resources.
 			 */
 			!(ret > 0 &&
-				(dr->drv_flags & RTE_PCI_DRV_KEEP_MAPPED_RES)))
-			rte_pci_unmap_device(dev);
-		rte_intr_instance_free(dev->vfio_req_intr_handle);
-		dev->vfio_req_intr_handle = NULL;
-		rte_intr_instance_free(dev->intr_handle);
-		dev->intr_handle = NULL;
-	} else {
-		dev->device.driver = &dr->driver;
+				(pci_drv->drv_flags & RTE_PCI_DRV_KEEP_MAPPED_RES)))
+			rte_pci_unmap_device(pci_dev);
+		rte_intr_instance_free(pci_dev->vfio_req_intr_handle);
+		pci_dev->vfio_req_intr_handle = NULL;
+		rte_intr_instance_free(pci_dev->intr_handle);
+		pci_dev->intr_handle = NULL;
 	}
 
 	return ret;
 }
 
-/*
- * If vendor/device ID match, call the remove() function of the
- * driver.
- */
 static int
-rte_pci_detach_dev(struct rte_pci_device *dev)
+pci_unplug_device(struct rte_device *rte_dev)
 {
+	struct rte_pci_device *dev = RTE_BUS_DEVICE(rte_dev, *dev);
 	struct rte_pci_addr *loc;
-	struct rte_pci_driver *dr;
+	const struct rte_pci_driver *dr = RTE_BUS_DRIVER(dev->device.driver, *dr);
 	int ret = 0;
 
-	if (dev == NULL)
-		return -EINVAL;
-
-	dr = dev->driver;
 	loc = &dev->addr;
 
 	PCI_LOG(DEBUG, "PCI device "PCI_PRI_FMT" on NUMA socket %i",
@@ -349,10 +298,6 @@ rte_pci_detach_dev(struct rte_pci_device *dev)
 			return ret;
 	}
 
-	/* clear driver structure */
-	dev->driver = NULL;
-	dev->device.driver = NULL;
-
 	if (dr->drv_flags & RTE_PCI_DRV_NEED_MAPPING)
 		/* unmap resources for devices that use igb_uio */
 		rte_pci_unmap_device(dev);
@@ -365,97 +310,11 @@ rte_pci_detach_dev(struct rte_pci_device *dev)
 	return 0;
 }
 
-/*
- * If vendor/device ID match, call the probe() function of all
- * registered driver for the given device. Return < 0 if initialization
- * failed, return 1 if no driver is found for this device.
- */
-static int
-pci_probe_all_drivers(struct rte_pci_device *dev)
+static void
+pci_free_device(struct rte_device *dev)
 {
-	struct rte_pci_driver *dr = NULL;
-	int rc = 0;
-
-	if (dev == NULL)
-		return -EINVAL;
-
-	FOREACH_DRIVER_ON_PCIBUS(dr) {
-		rc = rte_pci_probe_one_driver(dr, dev);
-		if (rc < 0)
-			/* negative value is an error */
-			return rc;
-		if (rc > 0)
-			/* positive value means driver doesn't support it */
-			continue;
-		return 0;
-	}
-	return 1;
-}
-
-/*
- * Scan the content of the PCI bus, and call the probe() function for
- * all registered drivers that have a matching entry in its id_table
- * for discovered devices.
- */
-static int
-pci_probe(void)
-{
-	struct rte_pci_device *dev = NULL;
-	size_t probed = 0, failed = 0;
-	int ret = 0;
-
-	FOREACH_DEVICE_ON_PCIBUS(dev) {
-		probed++;
-
-		ret = pci_probe_all_drivers(dev);
-		if (ret < 0) {
-			if (ret != -EEXIST) {
-				PCI_LOG(ERR, "Requested device " PCI_PRI_FMT " cannot be used",
-					dev->addr.domain, dev->addr.bus,
-					dev->addr.devid, dev->addr.function);
-				rte_errno = errno;
-				failed++;
-			}
-			ret = 0;
-		}
-	}
-
-	return (probed && probed == failed) ? -1 : 0;
-}
-
-static int
-pci_cleanup(void)
-{
-	struct rte_pci_device *dev, *tmp_dev;
-	int error = 0;
-
-	RTE_TAILQ_FOREACH_SAFE(dev, &rte_pci_bus.device_list, next, tmp_dev) {
-		struct rte_pci_driver *drv = dev->driver;
-		int ret = 0;
-
-		if (drv == NULL || drv->remove == NULL)
-			goto free;
-
-		ret = drv->remove(dev);
-		if (ret < 0) {
-			rte_errno = errno;
-			error = -1;
-		}
-		dev->driver = NULL;
-		dev->device.driver = NULL;
-
-free:
-		/* free interrupt handles */
-		rte_intr_instance_free(dev->intr_handle);
-		dev->intr_handle = NULL;
-		rte_intr_instance_free(dev->vfio_req_intr_handle);
-		dev->vfio_req_intr_handle = NULL;
-
-		TAILQ_REMOVE(&rte_pci_bus.device_list, dev, next);
-		pci_free(RTE_PCI_DEVICE_INTERNAL(dev));
-	}
-
-	return error;
+	struct rte_pci_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
+	pci_free(RTE_PCI_DEVICE_INTERNAL(pdev));
 }
 
 /* dump one device */
@@ -485,7 +344,7 @@ rte_pci_dump(FILE *f)
 {
 	struct rte_pci_device *dev = NULL;
 
-	FOREACH_DEVICE_ON_PCIBUS(dev) {
+	RTE_BUS_FOREACH_DEV(dev, &rte_pci_bus) {
 		pci_dump_one_device(f, dev);
 	}
 }
@@ -503,12 +362,24 @@ pci_parse(const char *name, void *addr)
 	return parse == false;
 }
 
+static int
+pci_dev_compare(const char *name1, const char *name2)
+{
+	struct rte_pci_addr addr1, addr2;
+
+	if (rte_pci_addr_parse(name1, &addr1) != 0 ||
+			rte_pci_addr_parse(name2, &addr2) != 0)
+		return 1;
+
+	return rte_pci_addr_cmp(&addr1, &addr2);
+}
+
 /* register a driver */
 RTE_EXPORT_INTERNAL_SYMBOL(rte_pci_register)
 void
 rte_pci_register(struct rte_pci_driver *driver)
 {
-	TAILQ_INSERT_TAIL(&rte_pci_bus.driver_list, driver, next);
+	rte_bus_add_driver(&rte_pci_bus, &driver->driver);
 }
 
 /* unregister a driver */
@@ -516,50 +387,7 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_pci_unregister)
 void
 rte_pci_unregister(struct rte_pci_driver *driver)
 {
-	TAILQ_REMOVE(&rte_pci_bus.driver_list, driver, next);
-}
-
-/* Add a device to PCI bus */
-void
-rte_pci_add_device(struct rte_pci_device *pci_dev)
-{
-	TAILQ_INSERT_TAIL(&rte_pci_bus.device_list, pci_dev, next);
-}
-
-/* Insert a device into a predefined position in PCI bus */
-void
-rte_pci_insert_device(struct rte_pci_device *exist_pci_dev,
-		      struct rte_pci_device *new_pci_dev)
-{
-	TAILQ_INSERT_BEFORE(exist_pci_dev, new_pci_dev, next);
-}
-
-/* Remove a device from PCI bus */
-static void
-rte_pci_remove_device(struct rte_pci_device *pci_dev)
-{
-	TAILQ_REMOVE(&rte_pci_bus.device_list, pci_dev, next);
-}
-
-static struct rte_device *
-pci_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
-		const void *data)
-{
-	const struct rte_pci_device *pstart;
-	struct rte_pci_device *pdev;
-
-	if (start != NULL) {
-		pstart = RTE_DEV_TO_PCI_CONST(start);
-		pdev = TAILQ_NEXT(pstart, next);
-	} else {
-		pdev = TAILQ_FIRST(&rte_pci_bus.device_list);
-	}
-	while (pdev != NULL) {
-		if (cmp(&pdev->device, data) == 0)
-			return &pdev->device;
-		pdev = TAILQ_NEXT(pdev, next);
-	}
-	return NULL;
+	rte_bus_remove_driver(&rte_pci_bus, &driver->driver);
 }
 
 /*
@@ -576,7 +404,7 @@ pci_find_device_by_addr(const void *failure_addr)
 
 	check_point = (uint64_t)(uintptr_t)failure_addr;
 
-	FOREACH_DEVICE_ON_PCIBUS(pdev) {
+	RTE_BUS_FOREACH_DEV(pdev, &rte_pci_bus) {
 		for (i = 0; i != RTE_DIM(pdev->mem_resource); i++) {
 			start = (uint64_t)(uintptr_t)pdev->mem_resource[i].addr;
 			len = pdev->mem_resource[i].len;
@@ -595,12 +423,8 @@ pci_find_device_by_addr(const void *failure_addr)
 static int
 pci_hot_unplug_handler(struct rte_device *dev)
 {
-	struct rte_pci_device *pdev = NULL;
+	struct rte_pci_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
 	int ret = 0;
-
-	pdev = RTE_DEV_TO_PCI(dev);
-	if (!pdev)
-		return -1;
 
 	switch (pdev->kdrv) {
 	case RTE_PCI_KDRV_VFIO:
@@ -651,38 +475,13 @@ pci_sigbus_handler(const void *failure_addr)
 }
 
 static int
-pci_plug(struct rte_device *dev)
-{
-	return pci_probe_all_drivers(RTE_DEV_TO_PCI(dev));
-}
-
-static int
-pci_unplug(struct rte_device *dev)
-{
-	struct rte_pci_device *pdev;
-	int ret;
-
-	pdev = RTE_DEV_TO_PCI(dev);
-	ret = rte_pci_detach_dev(pdev);
-	if (ret == 0) {
-		rte_pci_remove_device(pdev);
-		rte_devargs_remove(dev->devargs);
-		pci_free(RTE_PCI_DEVICE_INTERNAL(pdev));
-	}
-	return ret;
-}
-
-static int
 pci_dma_map(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 {
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
+	const struct rte_pci_driver *pdrv = RTE_BUS_DRIVER(dev->driver, *pdrv);
 
-	if (!pdev || !pdev->driver) {
-		rte_errno = EINVAL;
-		return -1;
-	}
-	if (pdev->driver->dma_map)
-		return pdev->driver->dma_map(pdev, addr, iova, len);
+	if (pdrv->dma_map != NULL)
+		return pdrv->dma_map(pdev, addr, iova, len);
 	/**
 	 *  In case driver don't provides any specific mapping
 	 *  try fallback to VFIO.
@@ -698,14 +497,11 @@ pci_dma_map(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 static int
 pci_dma_unmap(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 {
-	struct rte_pci_device *pdev = RTE_DEV_TO_PCI(dev);
+	struct rte_pci_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
+	const struct rte_pci_driver *pdrv = RTE_BUS_DRIVER(dev->driver, *pdrv);
 
-	if (!pdev || !pdev->driver) {
-		rte_errno = EINVAL;
-		return -1;
-	}
-	if (pdev->driver->dma_unmap)
-		return pdev->driver->dma_unmap(pdev, addr, iova, len);
+	if (pdrv->dma_unmap != NULL)
+		return pdrv->dma_unmap(pdev, addr, iova, len);
 	/**
 	 *  In case driver don't provides any specific mapping
 	 *  try fallback to VFIO.
@@ -718,25 +514,6 @@ pci_dma_unmap(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 	return -1;
 }
 
-bool
-rte_pci_ignore_device(const struct rte_pci_addr *pci_addr)
-{
-	struct rte_devargs *devargs = pci_devargs_lookup(pci_addr);
-
-	switch (rte_pci_bus.bus.conf.scan_mode) {
-	case RTE_BUS_SCAN_ALLOWLIST:
-		if (devargs && devargs->policy == RTE_DEV_ALLOWED)
-			return false;
-		break;
-	case RTE_BUS_SCAN_UNDEFINED:
-	case RTE_BUS_SCAN_BLOCKLIST:
-		if (devargs == NULL || devargs->policy != RTE_DEV_BLOCKED)
-			return false;
-		break;
-	}
-	return true;
-}
-
 enum rte_iova_mode
 rte_pci_get_iommu_class(void)
 {
@@ -747,7 +524,7 @@ rte_pci_get_iommu_class(void)
 	bool devices_want_pa = false;
 	int iommu_no_va = -1;
 
-	FOREACH_DEVICE_ON_PCIBUS(dev) {
+	RTE_BUS_FOREACH_DEV(dev, &rte_pci_bus) {
 		/*
 		 * We can check this only once, because the IOMMU hardware is
 		 * the same for all of them.
@@ -759,10 +536,10 @@ rte_pci_get_iommu_class(void)
 		if (dev->kdrv == RTE_PCI_KDRV_UNKNOWN ||
 		    dev->kdrv == RTE_PCI_KDRV_NONE)
 			continue;
-		FOREACH_DRIVER_ON_PCIBUS(drv) {
+		RTE_BUS_FOREACH_DRV(drv, &rte_pci_bus) {
 			enum rte_iova_mode dev_iova_mode;
 
-			if (!rte_pci_match(drv, dev))
+			if (!pci_bus_match(&drv->driver, &dev->device))
 				continue;
 
 			dev_iova_mode = pci_device_iova_mode(drv, dev);
@@ -937,26 +714,26 @@ rte_pci_pasid_set_state(const struct rte_pci_device *dev,
 			offset + RTE_PCI_PASID_CTRL) != sizeof(pasid) ? -1 : 0;
 }
 
-struct rte_pci_bus rte_pci_bus = {
-	.bus = {
-		.scan = rte_pci_scan,
-		.probe = pci_probe,
-		.cleanup = pci_cleanup,
-		.find_device = pci_find_device,
-		.plug = pci_plug,
-		.unplug = pci_unplug,
-		.parse = pci_parse,
-		.devargs_parse = rte_pci_devargs_parse,
-		.dma_map = pci_dma_map,
-		.dma_unmap = pci_dma_unmap,
-		.get_iommu_class = rte_pci_get_iommu_class,
-		.dev_iterate = rte_pci_dev_iterate,
-		.hot_unplug_handler = pci_hot_unplug_handler,
-		.sigbus_handler = pci_sigbus_handler,
-	},
-	.device_list = TAILQ_HEAD_INITIALIZER(rte_pci_bus.device_list),
-	.driver_list = TAILQ_HEAD_INITIALIZER(rte_pci_bus.driver_list),
+struct rte_bus rte_pci_bus = {
+	.allow_multi_probe = true,
+	.scan = rte_pci_scan,
+	.probe = rte_bus_generic_probe,
+	.free_device = pci_free_device,
+	.cleanup = rte_bus_generic_cleanup,
+	.find_device = rte_bus_generic_find_device,
+	.match = pci_bus_match,
+	.probe_device = pci_probe_device,
+	.unplug_device = pci_unplug_device,
+	.parse = pci_parse,
+	.dev_compare = pci_dev_compare,
+	.devargs_parse = rte_pci_devargs_parse,
+	.dma_map = pci_dma_map,
+	.dma_unmap = pci_dma_unmap,
+	.get_iommu_class = rte_pci_get_iommu_class,
+	.dev_iterate = rte_pci_dev_iterate,
+	.hot_unplug_handler = pci_hot_unplug_handler,
+	.sigbus_handler = pci_sigbus_handler,
 };
 
-RTE_REGISTER_BUS(pci, rte_pci_bus.bus);
+RTE_REGISTER_BUS(pci, rte_pci_bus);
 RTE_LOG_REGISTER_DEFAULT(pci_bus_logtype, NOTICE);

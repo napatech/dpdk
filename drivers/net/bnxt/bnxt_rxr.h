@@ -165,6 +165,8 @@ int bnxt_rxq_vec_setup(struct bnxt_rx_queue *rxq);
 #if defined(RTE_ARCH_X86)
 uint16_t bnxt_recv_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
 				 uint16_t nb_pkts);
+uint16_t bnxt_recv_pkts_vec_avx2_v3(void *rx_queue, struct rte_mbuf **rx_pkts,
+				    uint16_t nb_pkts);
 uint16_t bnxt_crx_pkts_vec_avx2(void *rx_queue, struct rte_mbuf **rx_pkts,
 				uint16_t nb_pkts);
 #endif
@@ -274,12 +276,15 @@ static inline void bnxt_set_vlan(struct rx_pkt_cmpl_hi *rxcmp1,
 	  RX_PKT_V2_CMPL_HI_METADATA0_PRI_MASK))
 
 static inline void bnxt_rx_vlan_v2(struct rte_mbuf *mbuf,
+				   const struct bnxt *bp,
 				   struct rx_pkt_cmpl *rxcmp,
 				   struct rx_pkt_cmpl_hi *rxcmp1)
 {
 	if (RX_CMP_VLAN_VALID(rxcmp)) {
 		mbuf->vlan_tci = RX_CMP_METADATA0_VID(rxcmp1);
-		mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
+		mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN;
+		if (BNXT_RX_VLAN_STRIP_EN(bp))
+			mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN_STRIPPED;
 	}
 }
 
@@ -481,14 +486,13 @@ bnxt_parse_pkt_type_v2(struct rte_mbuf *mbuf,
 	  RX_PKT_V3_CMPL_HI_METADATA0_PRI_MASK))
 
 static inline void bnxt_rx_vlan_v3(struct rte_mbuf *mbuf,
-	struct rx_pkt_cmpl *rxcmp,
-	struct rx_pkt_cmpl_hi *rxcmp1,
-	bool stripped)
+				   struct rx_pkt_cmpl *rxcmp,
+				   struct rx_pkt_cmpl_hi *rxcmp1)
 {
 	if (RX_CMP_V3_VLAN_VALID(rxcmp)) {
 		mbuf->vlan_tci = RX_CMP_V3_METADATA0_VID(rxcmp1);
 		mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN;
-		if (stripped)
+		if (rxcmp1->flags2 & RX_PKT_V3_CMPL_HI_FLAGS2_META_FORMAT_MASK)
 			mbuf->ol_flags |= RTE_MBUF_F_RX_VLAN_STRIPPED;
 	}
 }

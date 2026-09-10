@@ -121,6 +121,7 @@ struct ci_tx_queue;
 struct ci_tx_entry {
 	struct rte_mbuf *mbuf; /* mbuf associated with TX desc, if any. */
 	uint16_t next_id; /* Index of next descriptor in ring. */
+	uint16_t first_id; /* Split-queue: first sw_id of packet at EOP entry. */
 };
 
 /**
@@ -196,11 +197,12 @@ struct ci_tx_queue {
 			uint8_t vlan_flag;
 			uint8_t tc;
 			bool use_ctx;  /* with ctx info, each pkt needs two descriptors */
+			uint8_t lldp_mode; /* ptype or dynfield */
 		};
 		struct { /* ixgbe specific values */
 			const struct ixgbe_txq_ops *ops;
 			struct ixgbe_advctx_info *ctx_cache;
-			uint32_t ctx_curr;
+			uint8_t ctx_curr;
 			uint8_t pthresh;   /**< Prefetch threshold register. */
 			uint8_t hthresh;   /**< Host threshold register. */
 			uint8_t wthresh;   /**< Write-back threshold reg. */
@@ -209,18 +211,12 @@ struct ci_tx_queue {
 			uint8_t vf_ctx_initialized; /**< VF context descriptors initialized */
 		};
 		struct { /* idpf specific values */
-				volatile union {
-						struct idpf_flex_tx_sched_desc *desc_ring;
-						struct idpf_splitq_tx_compl_desc *compl_ring;
-				};
-				struct ci_tx_queue *complq;
-				void **txqs;   /*only valid for split queue mode*/
-				uint32_t tx_start_qid;
+				struct idpf_flex_tx_sched_desc *desc_ring;
+				struct idpf_complq *complq;
 				uint32_t latch_idx; /* Tx timestamp latch index */
 				uint16_t sw_nb_desc;
 				uint16_t sw_tail;
 				uint16_t rs_compl_count;
-				uint8_t expected_gen_id;
 		};
 	};
 };
@@ -285,42 +281,12 @@ ci_tx_free_bufs_vec(struct ci_tx_queue *txq, ci_desc_done_fn desc_done, bool ctx
 			(txq->fast_free_mp = txep[0].mbuf->pool);
 
 	if (mp != NULL && (n & 31) == 0) {
-		void **cache_objs;
-		struct rte_mempool_cache *cache = rte_mempool_default_cache(mp, rte_lcore_id());
-
-		if (cache == NULL)
-			goto normal;
-
-		cache_objs = &cache->objs[cache->len];
-
-		if (n > RTE_MEMPOOL_CACHE_MAX_SIZE) {
-			rte_mempool_ops_enqueue_bulk(mp, (void *)txep, n);
-			goto done;
-		}
-
-		/* The cache follows the following algorithm
-		 *   1. Add the objects to the cache
-		 *   2. Anything greater than the cache min value (if it
-		 *   crosses the cache flush threshold) is flushed to the ring.
-		 */
-		/* Add elements back into the cache */
-		uint32_t copied = 0;
-		/* n is multiple of 32 */
-		while (copied < n) {
-			memcpy(&cache_objs[copied], &txep[copied], 32 * sizeof(void *));
-			copied += 32;
-		}
-		cache->len += n;
-
-		if (cache->len >= cache->flushthresh) {
-			rte_mempool_ops_enqueue_bulk(mp, &cache->objs[cache->size],
-					cache->len - cache->size);
-			cache->len = cache->size;
-		}
+		static_assert(sizeof(*txep) == sizeof(struct rte_mbuf *),
+				"txep array is not similar to an array of rte_mbuf pointers");
+		rte_mbuf_raw_free_bulk(mp, (void *)txep, n);
 		goto done;
 	}
 
-normal:
 	m = rte_pktmbuf_prefree_seg(txep[0].mbuf);
 	if (likely(m)) {
 		free[0] = m;
@@ -363,13 +329,22 @@ ci_txq_release_all_mbufs(struct ci_tx_queue *txq, bool use_ctx)
 		return;
 
 	if (!txq->use_vec_entry) {
-		/* Regular scalar path uses sw_ring with ci_tx_entry */
-		for (uint16_t i = 0; i < txq->nb_tx_desc; i++) {
-			if (txq->sw_ring[i].mbuf != NULL) {
-				rte_pktmbuf_free_seg(txq->sw_ring[i].mbuf);
-				txq->sw_ring[i].mbuf = NULL;
-			}
+		/* Free mbufs from (last_desc_cleaned + 1) to (tx_tail - 1). */
+		const uint16_t start = (txq->last_desc_cleaned + 1) % txq->nb_tx_desc;
+		const uint16_t nb_desc = txq->nb_tx_desc;
+		const uint16_t end = txq->tx_tail;
+
+		uint16_t i = start;
+		if (end < i) {
+			for (; i < nb_desc; i++)
+				if (txq->sw_ring[i].mbuf != NULL)
+					rte_pktmbuf_free_seg(txq->sw_ring[i].mbuf);
+			i = 0;
 		}
+		for (; i < end; i++)
+			if (txq->sw_ring[i].mbuf != NULL)
+				rte_pktmbuf_free_seg(txq->sw_ring[i].mbuf);
+		memset(txq->sw_ring, 0, sizeof(txq->sw_ring[0]) * nb_desc);
 		return;
 	}
 

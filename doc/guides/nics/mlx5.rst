@@ -84,6 +84,9 @@ The Rx / Tx data path use different techniques to offer the best performance.
   with :ref:`multi-packet Rx queues (MPRQ) <mlx5_mprq_params>`.
   This feature is disabled by default.
 
+- Some PCI bandwidth is saved by receiving partial packets
+  with :ref:`selective Rx <mlx5_selective_rx>`.
+
 More details about Rx implementations and their configurations are provided
 in the chapter about :ref:`mlx5_rx_functions`.
 
@@ -103,7 +106,7 @@ Flow Steering
 
 A major benefit of the mlx5 devices
 is the :ref:`bifurcated driver <mlx5_bifurcated>` capability.
-It allows to route some flows from the device to the kernel
+It allows routing some flows from the device to the kernel
 while other flows go directly to the userspace PMD.
 This capability allows the PMD to coexist with kernel network interfaces
 which remain functional, although they stop receiving unicast packets
@@ -121,12 +124,12 @@ This technology is named software steering (SWS).
 Later the performance was a lot more improved
 with :ref:`hardware steering (HWS) <mlx5_hws>`,
 a WQE-based high scaling and safer flow insertion/destruction.
-It allows to insert millions of rules per second.
+It allows inserting millions of rules per second.
 
-While using the :doc:`synchronous flow API <../prog_guide/ethdev/flow_offload>`
+While using the :doc:`synchronous flow API </prog_guide/ethdev/flow_offload>`
 is convenient and easy to manage,
 it is not efficient enough at a large scale.
-That's why mlx5 allows to offload many features asynchronously.
+That's why mlx5 allows offloading many features asynchronously.
 The :ref:`asynchronous flow API <flow_async_api>`
 makes use of :ref:`pre-configured templates <flow_template_api>`
 to insert new rules very fast with predictable performance.
@@ -151,7 +154,7 @@ All references to these flows held by the application
 should be discarded directly but neither destroyed nor flushed.
 The application should re-create the flows as required after the port restart.
 
-See :doc:`../../platform/mlx5` guide for more design details,
+See :doc:`/platform/mlx5` guide for more design details,
 including prerequisites installation.
 
 :ref:`All the features are detailed in a chapter below. <mlx5_net_features>`
@@ -210,7 +213,7 @@ for an additional list of options shared with other mlx5 drivers.
 - ``rxq_cqe_comp_en`` parameter [int]
 
   A nonzero value enables the compression of CQE on RX side. This feature
-  allows to save PCI bandwidth and improve performance. Enabled by default.
+  allows saving PCI bandwidth and improve performance. Enabled by default.
   Different compression formats are supported in order to achieve the best
   performance for different traffic patterns. Default format depends on
   Multi-Packet Rx queue configuration: Hash RSS format is used in case
@@ -553,27 +556,52 @@ for an additional list of options shared with other mlx5 drivers.
 
 - ``tx_pp`` parameter [int]
 
+  This parameter applies to **ConnectX-6 Dx** only.
   If a nonzero value is specified the driver creates all necessary internal
-  objects to provide accurate packet send scheduling on mbuf timestamps.
+  objects (Clock Queue and Rearm Queue)
+  to provide accurate packet send scheduling on mbuf timestamps
+  using a cross-channel approach.
   The positive value specifies the scheduling granularity in nanoseconds,
   the packet send will be accurate up to specified digits. The allowed range is
   from 500 to 1 million of nanoseconds. The negative value specifies the module
   of granularity and engages the special test mode the check the schedule rate.
   By default (if the ``tx_pp`` is not specified) send scheduling on timestamps
-  feature is disabled.
+  feature is disabled on ConnectX-6 Dx.
 
-  Starting with ConnectX-7 the capability to schedule traffic directly
-  on timestamp specified in descriptor is provided,
-  no extra objects are needed anymore and scheduling capability
-  is advertised and handled regardless ``tx_pp`` parameter presence.
+  Starting with **ConnectX-7** the hardware provides a native wait-on-time capability
+  that inserts the scheduling delay directly in the WQE descriptor.
+  No Clock Queue or Rearm Queue is needed
+  and the ``tx_pp`` parameter is not required.
+  The driver automatically advertises send scheduling support
+  when the HCA wait-on-time capability is detected.
+  The ``tx_skew`` parameter can still be used on ConnectX-7 and above
+  to compensate for wire delay.
 
 - ``tx_skew`` parameter [int]
 
   The parameter adjusts the send packet scheduling on timestamps and represents
   the average delay between beginning of the transmitting descriptor processing
   by the hardware and appearance of actual packet data on the wire. The value
-  should be provided in nanoseconds and is valid only if ``tx_pp`` parameter is
-  specified. The default value is zero.
+  should be provided in nanoseconds
+  and applies to both ConnectX-6 Dx (with ``tx_pp``)
+  and ConnectX-7+ (wait-on-time) scheduling modes.
+  The default value is zero.
+
+- ``tx_burst_bound`` parameter [int]
+
+  Specifies the burst upper bound in bytes for packet pacing rate evaluation.
+  The hardware considers this burst size when enforcing the configured rate limit.
+  Only effective when the HCA reports ``packet_pacing_burst_bound`` capability.
+  Applies to per-queue rate limiting (``rte_eth_set_queue_rate_limit()``).
+  The Clock Queue path (``tx_pp``) uses WQE rate pacing and does not use this parameter.
+  The default value is zero (hardware default).
+
+- ``tx_typical_pkt_sz`` parameter [int]
+
+  Specifies the typical packet size in bytes for packet pacing rate accuracy improvement.
+  Only effective when the HCA reports ``packet_pacing_typical_size`` capability.
+  Applies to per-queue rate limiting only.
+  The default value is zero (hardware default).
 
 - ``tx_vec_en`` parameter [int]
 
@@ -854,6 +882,8 @@ MLX5 supports various methods to report statistics:
 Basic port statistics can be queried using ``rte_eth_stats_get()``.
 The received and sent statistics are through SW only
 and counts the number of packets received or sent successfully by the PMD.
+In the case of :ref:`selective Rx <mlx5_selective_rx>`,
+the ``ibytes`` counter matches segments delivered, not the skipped ones.
 The ``imissed`` counter is the amount of packets that could not be delivered
 to SW because a queue was full.
 Packets not received due to congestion in the bus or on the NIC
@@ -863,7 +893,7 @@ Extended statistics can be queried using ``rte_eth_xstats_get()``.
 The extended statistics expose a wider set of counters counted by the device.
 The extended port statistics counts the number of packets
 received or sent successfully by the port.
-As NVIDIA NICs are using a :ref:`bifurcated Linux driver <bifurcated_driver>`,
+As NVIDIA NICs are using a :ref:`bifurcated Linux driver <linux_gsg_bifurcated_driver>`,
 those counters counts also packet received or sent by the Linux kernel.
 
 Finally per-flow statistics can by queried using ``rte_flow_query()``
@@ -883,9 +913,13 @@ Send Scheduling Counters
 
 The mlx5 PMD provides a comprehensive set of counters designed for
 debugging and diagnostics related to packet scheduling during transmission.
-These counters are applicable only if the port was configured with the ``tx_pp`` devarg
-and reflect the status of the PMD scheduling infrastructure
-based on Clock and Rearm Queues, used as a workaround on ConnectX-6 DX NICs.
+The first group of counters (prefixed ``tx_pp_``) reflects the status
+of the Clock Queue and Rearm Queue infrastructure used on ConnectX-6 Dx
+and is applicable only if the port was configured with the ``tx_pp`` devarg.
+The timestamp validation counters (``tx_pp_timestamp_past_errors``,
+``tx_pp_timestamp_future_errors``, ``tx_pp_timestamp_order_errors``)
+are also reported on ConnectX-7 and above in wait-on-time mode,
+without requiring ``tx_pp``.
 
 ``tx_pp_missed_interrupt_errors``
   Indicates that the Rearm Queue interrupt was not serviced on time.
@@ -963,25 +997,26 @@ These configurations may also have an impact on the behavior:
 
 .. table:: Rx burst functions
 
-   +-------------------+------------------------+---------+-----------------+------+-------+---------+
-   || Function Name    || Parameters to Enable  || Scatter|| Error Recovery || CQE || Large|| Shared |
-   |                   |                        |         |                 || comp|| MTU  |  RxQ    |
-   +===================+========================+=========+=================+======+=======+=========+
-   | rx_burst          | rx_vec_en=0            |   Yes   | Yes             |  Yes |  Yes  | No      |
-   +-------------------+------------------------+---------+-----------------+------+-------+---------+
-   | rx_burst_vec      | rx_vec_en=1 (default)  |   No    | if CQE comp off |  Yes |  No   | No      |
-   +-------------------+------------------------+---------+-----------------+------+-------+---------+
-   | rx_burst_mprq     || mprq_en=1             |   No    | Yes             |  Yes |  Yes  | No      |
-   |                   || RxQs >= rxqs_min_mprq |         |                 |      |       |         |
-   +-------------------+------------------------+---------+-----------------+------+-------+---------+
-   | rx_burst_mprq_vec || rx_vec_en=1 (default) |   No    | if CQE comp off |  Yes |  Yes  | No      |
-   |                   || mprq_en=1             |         |                 |      |       |         |
-   |                   || RxQs >= rxqs_min_mprq |         |                 |      |       |         |
-   +-------------------+------------------------+---------+-----------------+------+-------+---------+
-   | rx_burst          | at least one Rx queue  |   Yes   | Yes             |  Yes |  Yes  | Yes     |
-   |  (out of order)   | on the device          |         |                 |      |       |         |
-   |                   | is shared              |         |                 |      |       |         |
-   +-------------------+------------------------+---------+-----------------+------+-------+---------+
+   +----------+-----------------------+---------+--------+----------+------+-------+--------+
+   || Function|| Parameters to Enable || Scatter|| Selec-|| Error   || CQE || Large|| Shared|
+   || Name    |                       |         || tive  || Recovery|| comp|| MTU  || RxQ   |
+   +==========+=======================+=========+========+==========+======+=======+========+
+   | rx_burst | rx_vec_en=0           |   Yes   |   Yes  | Yes      |  Yes |  Yes  |   No   |
+   +----------+-----------------------+---------+--------+----------+------+-------+--------+
+   | _vec     | rx_vec_en=1 (default) |   No    |   No   || if CQE  |  Yes |  No   |   No   |
+   |          |                       |         |        || comp off|      |       |        |
+   +----------+-----------------------+---------+--------+----------+------+-------+--------+
+   | _mprq    || mprq_en=1            |   No    |   No   | Yes      |  Yes |  Yes  |   No   |
+   |          || RxQs >= rxqs_min_mprq|         |        |          |      |       |        |
+   +----------+-----------------------+---------+--------+----------+------+-------+--------+
+   | _mprq_vec|| rx_vec_en=1 (default)|   No    |   No   || if CQE  |  Yes |  Yes  |   No   |
+   |          || mprq_en=1            |         |        || comp off|      |       |        |
+   |          || RxQs >= rxqs_min_mprq|         |        |          |      |       |        |
+   +----------+-----------------------+---------+--------+----------+------+-------+--------+
+   || _out_of || at least one Rx queue|   Yes   |   No   | Yes      |  Yes |  Yes  |   Yes  |
+   || _order  || on the device        |         |        |          |      |       |        |
+   |          || is shared            |         |        |          |      |       |        |
+   +----------+-----------------------+---------+--------+----------+------+-------+--------+
 
 
 Rx/Tx Tuning
@@ -1076,12 +1111,14 @@ Rx interrupt                                X
 :ref:`Rx threshold <mlx5_rx_threshold>`     X        X
 :ref:`Rx drop delay <mlx5_drop>`            X        X
 :ref:`Rx timestamp <mlx5_rx_timstp>`        X        X
+:ref:`buffer split <mlx5_buf_split>`        X        X
+:ref:`selective Rx <mlx5_selective_rx>`     X
+:ref:`multi-segment <mlx5_multiseg>`        X        X
 :ref:`Tx scheduling <mlx5_tx_sched>`        X
+:ref:`Tx rate limit <mlx5_rate_limit>`      X
 :ref:`Tx inline <mlx5_tx_inline>`           X        X
 :ref:`Tx fast free <mlx5_tx_fast_free>`     X        X
 :ref:`Tx affinity <mlx5_aggregated>`        X
-:ref:`buffer split <mlx5_buf_split>`        X        X
-:ref:`multi-segment <mlx5_multiseg>`        X        X
 promiscuous                                 X        X
 multicast promiscuous                       X        X
 multiple MAC addresses                      X
@@ -1295,7 +1332,7 @@ Flow Rule Creation
 
 In mlx5 devices, the flow rules are inserted in HW tables.
 
-As explained in the :doc:`flow API documentation <../prog_guide/ethdev/flow_offload>`,
+As explained in the :doc:`flow API documentation </prog_guide/ethdev/flow_offload>`,
 a rule can be created synchronously (``rte_flow_create``)
 or asynchronously (``rte_flow_async_create``)
 with the help of a template table (``rte_flow_template_table_create``).
@@ -1462,7 +1499,7 @@ Limitations
 Bifurcated Driver
 ~~~~~~~~~~~~~~~~~
 
-The same device is managed by both :ref:`kernel <bifurcated_driver>` and DPDK drivers.
+The same device is managed by both :ref:`kernel <linux_gsg_bifurcated_driver>` and DPDK drivers.
 
 After enabling the :ref:`isolated mode <flow_isolated_mode>`,
 non-matched packets are routed directly from the hardware to the kernel.
@@ -1969,30 +2006,57 @@ Limitations
 Tx Scheduling
 ~~~~~~~~~~~~~
 
-When PMD sees the ``RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME`` set on the packet
-being sent it tries to synchronize the time of packet appearing on
-the wire with the specified packet timestamp. If the specified one
-is in the past it should be ignored, if one is in the distant future
-it should be capped with some reasonable value (in range of seconds).
-These specific cases ("too late" and "distant future") can be optionally
-reported via device xstats to assist applications to detect the
-time-related problems.
+When the PMD sees ``RTE_MBUF_DYNFLAG_TX_TIMESTAMP_NAME`` set
+on a packet being sent, it inserts a dedicated WAIT WQE
+to synchronize the time of the packet appearing on the wire
+with the specified timestamp.
+Every packet in a burst that carries the timestamp dynamic flag
+is individually scheduled -- there is no restriction to the first packet only.
 
-The timestamp upper "too-distant-future" limit
-at the moment of invoking the Tx burst routine
-can be estimated as ``tx_pp`` option (in nanoseconds) multiplied by 2^23.
+If the specified timestamp is in the past, the packet is sent immediately.
+If it is in the distant future, it should be capped
+with some reasonable value (in range of seconds).
+These specific cases ("too late" and "distant future")
+can be optionally reported via device xstats
+to assist applications to detect time-related problems.
+
+The eMPW (enhanced Multi-Packet Write) data path
+automatically breaks the batch
+when a timestamped packet is encountered,
+ensuring each scheduled packet gets its own WAIT WQE.
+
+Two hardware mechanisms are supported:
+
+ConnectX-6 Dx -- Clock Queue (cross-channel)
+   The driver creates a Clock Queue and a Rearm Queue
+   that together provide a time reference for scheduling.
+   This mode requires the :ref:`tx_pp <mlx5_tx_pp_param>` devarg.
+   The timestamp upper "too-distant-future" limit
+   at the moment of invoking the Tx burst routine
+   can be estimated as ``tx_pp`` (in nanoseconds) multiplied by 2^23.
+
+ConnectX-7 and above -- wait-on-time
+   The hardware supports placing the scheduling delay
+   directly inside the WQE descriptor.
+   No Clock Queue or Rearm Queue is needed
+   and the ``tx_pp`` devarg is not required.
+   The driver automatically advertises send scheduling support
+   when the HCA wait-on-time capability is detected.
+
 Please note, for the testpmd txonly mode,
 the limit is deduced from the expression::
 
    (n_tx_descriptors / burst_size + 1) * inter_burst_gap
 
-There is no any packet reordering according timestamps is supposed,
-neither within packet burst, nor between packets, it is an entirely
-application responsibility to generate packets and its timestamps
-in desired order.
+There is no packet reordering according to timestamps,
+neither within a packet burst, nor between packets.
+It is entirely the application's responsibility
+to generate packets and their timestamps in the desired order.
 
 Requirements
 ^^^^^^^^^^^^
+
+ConnectX-6 Dx (Clock Queue mode):
 
 =========  =============
 Minimum    Version
@@ -2005,20 +2069,97 @@ rdma-core
 DPDK       20.08
 =========  =============
 
+ConnectX-7 and above (wait-on-time mode):
+
+=========  =============
+Minimum    Version
+=========  =============
+hardware   ConnectX-7
+=========  =============
+
 Firmware configuration
 ^^^^^^^^^^^^^^^^^^^^^^
 
 Runtime configuration
 ^^^^^^^^^^^^^^^^^^^^^
 
-To provide the packet send scheduling on mbuf timestamps the ``tx_pp``
-parameter should be specified.
+* **ConnectX-6 Dx**: the :ref:`tx_pp <mlx5_tx_pp_param>` parameter
+  must be specified to enable send scheduling on mbuf timestamps.
+
+* **ConnectX-7+**: no devarg is required.
+  Send scheduling is automatically enabled
+  when the HCA reports the wait-on-time capability.
+
+On both hardware generations the ``tx_skew`` parameter can be used to
+compensate for the delay between descriptor processing and actual wire
+time.
 
 Limitations
 ^^^^^^^^^^^
 
-#. The timestamps can be put only in the first packet
-   in the burst providing the entire burst scheduling.
+#. On ConnectX-6 Dx (Clock Queue mode), timestamps too far in the future
+   are capped (see the ``tx_pp x 2^23`` limit above).
+
+
+.. _mlx5_rate_limit:
+
+Tx Rate Limiting
+~~~~~~~~~~~~~~~~
+
+The Tx rate can be limited per queue with the function ``rte_eth_set_queue_rate_limit()``.
+
+This feature uses the hardware packet pacing mechanism
+to enforce a data rate on individual Tx queues
+without tearing down the queue.
+
+The rate is specified in Mbps.
+
+Requirements
+^^^^^^^^^^^^
+
+=========  =============
+Minimum    Version
+=========  =============
+hardware   ConnectX-6 Dx
+DPDK       26.07
+=========  =============
+
+- On ConnectX-7 and above, rate limiting coexists with wait-on-time scheduling.
+- On ConnectX-6 Dx, there is per-SQ rate via HW rate table.
+- On ConnectX-5, the dynamic SQ modification may not work with some firmware versions.
+- ConnectX-4 Lx and earlier do not have ``packet_pacing`` capability.
+
+Runtime configuration
+^^^^^^^^^^^^^^^^^^^^^
+
+The DevX path must be used (default).
+The legacy Verbs path (``dv_flow_en=0``) does not support dynamic SQ modification.
+
+The queue must be started (SQ in RDY state) before setting a rate.
+
+Limitations
+^^^^^^^^^^^
+
+#. The hardware rate table has a limited number of entries
+   (typically 128 on ConnectX-6 Dx).
+   When multiple queues are configured with identical rate parameters,
+   the kernel mlx5 driver shares a single rate table entry across them.
+   Each queue still has its own independent SQ and enforces the rate independently —
+   queues are never merged.
+   The rate cap applies per-queue: if two queues share the same 1000 Mbps entry,
+   each can send up to 1000 Mbps independently, they do not share a combined budget.
+   This sharing is transparent and only affects table capacity:
+   128 entries can serve thousands of queues as long as many use the same rate.
+   Queues with different rates consume separate entries.
+
+Examples
+^^^^^^^^
+
+.. code-block:: console
+
+   testpmd> set port 0 queue 0 rate 1000
+   testpmd> show port 0 queue 0 rate
+   testpmd> set port 0 queue 0 rate 0
 
 
 .. _mlx5_tx_inline:
@@ -2114,10 +2255,47 @@ OFED       5.1-2
 DPDK       20.11
 =========  ==========
 
+Runtime configuration
+^^^^^^^^^^^^^^^^^^^^^
+
+The offload flag ``RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT`` is required.
+
+When calling ``rte_eth_rx_queue_setup()``,
+the input ``rte_eth_rxconf::rx_seg`` defines the configuration of the segments,
+mainly offset and length.
+
 Limitations
 ^^^^^^^^^^^
 
+#. Splitting per protocol header is not supported.
+
 #. Buffer split offload is supported with regular Rx burst routine only,
+   no MPRQ feature or vectorized code can be engaged.
+
+
+.. _mlx5_selective_rx:
+
+Selective Rx
+~~~~~~~~~~~~
+
+Some PCI bandwidth can be saved
+by :ref:`skipping some parts of Rx data <nic_features_selective_rx>`.
+It is enabled when using :ref:`buffer split <mlx5_buf_split>`
+and configuring no mempool in some segments to discard.
+
+Runtime configuration
+^^^^^^^^^^^^^^^^^^^^^
+
+The offload flag ``RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT`` is required.
+
+When calling ``rte_eth_rx_queue_setup()``,
+the segment to discard (``rte_eth_rxconf::rx_seg::split``)
+is marked by the absence of mempool (``mp = NULL``).
+
+Limitations
+^^^^^^^^^^^
+
+#. Selective Rx is supported with regular Rx burst routine only,
    no MPRQ feature or vectorized code can be engaged.
 
 
@@ -2275,7 +2453,7 @@ DPDK       17.11
 RSS
 ~~~
 
-Receive Side Scaling (RSS) allows to dispatch received packets to multiple queues.
+Receive Side Scaling (RSS) allows dispatching received packets to multiple queues.
 
 RSS can be configured at port level:
 
@@ -2493,6 +2671,16 @@ DPDK       24.11
 Limitations
 ^^^^^^^^^^^
 
+#. With the async template API,
+   a flow group's table type is fixed when the group is first used.
+   Jumping to a group implicitly creates the group's table (fixing its type)
+   if it does not exist yet.
+   A specialized table (transfer ``wire_orig`` / ``vf_orig``)
+   must therefore be created before any rule jumps to its group;
+   otherwise the implicit creation fixes the group to a different type
+   and creating the specialized table afterwards fails
+   with a group table type mismatch.
+
 #. With the async template API, jumping to a template table
    with ``RTE_FLOW_TABLE_SPECIALIZE_TRANSFER_WIRE_ORIG`` specialization
    from a template table with a different specialization
@@ -2580,7 +2768,7 @@ Runtime configuration
 ^^^^^^^^^^^^^^^^^^^^^
 
 The parameter :ref:`dv_xmeta_en <mlx5_meta_mark_param>`
-allows to configure the driver handling of META and MARK.
+allows configuring the driver handling of META and MARK.
 
 Limitations
 ^^^^^^^^^^^
@@ -4598,14 +4786,14 @@ Port Attach with Socket Path
 It is possible to allocate a port with ``libibverbs`` from external application.
 For importing the external port with extra device arguments,
 there is a specific testpmd command
-similar to :ref:`port attach command <port_attach>`::
+similar to :ref:`port attach command <testpmd_port_attach>`::
 
    testpmd> mlx5 port attach (identifier) socket=(path)
 
 where:
 
 * ``identifier``: device identifier with optional parameters
-  as same as :ref:`port attach command <port_attach>`.
+  as same as :ref:`port attach command <testpmd_port_attach>`.
 * ``path``: path to IPC server socket created by the external application.
 
 This command performs:

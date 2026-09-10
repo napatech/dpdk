@@ -373,6 +373,7 @@ pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 	struct rte_pci_device *dev = NULL;
 	int ret = -1;
 	char  pci_device_info[REGSTR_VAL_MAX_HCID_LEN];
+	char name[RTE_DEV_NAME_MAX_LEN];
 	struct rte_pci_addr addr;
 	struct rte_pci_id pci_id;
 
@@ -380,7 +381,8 @@ pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 	if (ret != 0)
 		goto end;
 
-	if (rte_pci_ignore_device(&addr)) {
+	rte_pci_device_name(&addr, name, sizeof(name));
+	if (rte_bus_device_is_ignored(&rte_pci_bus, name)) {
 		/*
 		 * We won't add this device, but we want to continue
 		 * looking for supported devices
@@ -413,7 +415,6 @@ pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 	memset(pdev, 0, sizeof(*pdev));
 	dev = &pdev->device;
 
-	dev->device.bus = &rte_pci_bus.bus;
 	dev->addr = addr;
 	dev->id = pci_id;
 	dev->max_vfs = 0; /* TODO: get max_vfs */
@@ -430,16 +431,16 @@ pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 
 	/* device is valid, add in list (sorted) */
 	if (TAILQ_EMPTY(&rte_pci_bus.device_list)) {
-		rte_pci_add_device(dev);
+		rte_bus_add_device(&rte_pci_bus, &dev->device);
 	} else {
 		struct rte_pci_device *dev2 = NULL;
 
-		TAILQ_FOREACH(dev2, &rte_pci_bus.device_list, next) {
+		RTE_BUS_FOREACH_DEV(dev2, &rte_pci_bus) {
 			ret = rte_pci_addr_cmp(&dev->addr, &dev2->addr);
 			if (ret > 0) {
 				continue;
 			} else if (ret < 0) {
-				rte_pci_insert_device(dev2, dev);
+				rte_bus_insert_device(&rte_pci_bus, &dev2->device, &dev->device);
 			} else { /* already registered */
 				dev2->kdrv = dev->kdrv;
 				dev2->max_vfs = dev->max_vfs;
@@ -449,7 +450,7 @@ pci_scan_one(HDEVINFO dev_info, PSP_DEVINFO_DATA device_info_data)
 			}
 			return 0;
 		}
-		rte_pci_add_device(dev);
+		rte_bus_add_device(&rte_pci_bus, &dev->device);
 	}
 
 	return 0;

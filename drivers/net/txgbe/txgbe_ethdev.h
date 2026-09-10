@@ -733,6 +733,10 @@ int txgbe_dev_rss_reta_query(struct rte_eth_dev *dev,
 			struct rte_eth_rss_reta_entry64 *reta_conf,
 			uint16_t reta_size);
 void txgbe_dev_setup_link_alarm_handler(void *param);
+void txgbe_dev_setup_link_alarm_handler_aml(void *param);
+s32 txgbe_setup_mac_link_aml(struct txgbe_hw *hw,
+				    u32 speed,
+				    bool autoneg_wait_to_complete);
 void txgbe_read_stats_registers(struct txgbe_hw *hw,
 			   struct txgbe_hw_stats *hw_stats);
 
@@ -743,5 +747,6 @@ void txgbe_vlan_hw_strip_bitmap_set(struct rte_eth_dev *dev,
 		uint16_t queue, bool on);
 void txgbe_config_vlan_strip_on_all_queues(struct rte_eth_dev *dev,
 						  int mask);
-
+void txgbe_dev_check_aml_temp_event(void *param);
+void txgbe_dev_e56_check_bp_event(void *param);
 #endif /* _TXGBE_ETHDEV_H_ */

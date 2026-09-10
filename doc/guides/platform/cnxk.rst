@@ -23,10 +23,10 @@ Supported OCTEON cnxk SoCs
 Resource Virtualization Unit architecture
 -----------------------------------------
 
-The :numref:`figure_cnxk_resource_virtualization` diagram depicts the
+The :numref:`cnxk_figure_resource_virtualization` diagram depicts the
 RVU architecture and a resource provisioning example.
 
-.. _figure_cnxk_resource_virtualization:
+.. _cnxk_figure_resource_virtualization:
 
 .. figure:: img/cnxk_resource_virtualization.*
 
@@ -41,11 +41,11 @@ Each functional block has multiple local functions (LFs) for
 provisioning to different PCIe devices. RVU supports multiple PCIe SRIOV
 physical functions (PFs) and virtual functions (VFs).
 
-The :numref:`table_cnxk_rvu_dpdk_mapping` shows the various local
+The :numref:`cnxk_table_rvu_dpdk_mapping` shows the various local
 functions (LFs) provided by the RVU and its functional mapping to
 DPDK subsystem.
 
-.. _table_cnxk_rvu_dpdk_mapping:
+.. _cnxk_table_rvu_dpdk_mapping:
 
 .. table:: RVU managed functional blocks and its mapping to DPDK subsystem
 
@@ -94,7 +94,7 @@ handle provisioning/configuration requests sent by any device from any domain.
 The AF driver does not receive or process any data.
 It is only a configuration driver used in control path.
 
-The :numref:`figure_cnxk_resource_virtualization` diagram also shows a
+The :numref:`cnxk_figure_resource_virtualization` diagram also shows a
 resource provisioning example where,
 
 #. PFx and PFx-VF0 bound to Linux netdev driver.
@@ -143,12 +143,12 @@ The primary use case for SDP is to enable the smart NIC use case. Typical usage 
    vice-versa.
 
 cnxk packet flow
-----------------------
+----------------
 
-The :numref:`figure_cnxk_packet_flow_hw_accelerators` diagram depicts
+The :numref:`cnxk_figure_packet_flow_hw_accelerators` diagram depicts
 the packet flow on cnxk SoC in conjunction with use of various HW accelerators.
 
-.. _figure_cnxk_packet_flow_hw_accelerators:
+.. _cnxk_figure_packet_flow_hw_accelerators:
 
 .. figure:: img/cnxk_packet_flow_hw_accelerators.*
 
@@ -160,25 +160,25 @@ HW Offload Drivers
 This section lists dataplane H/W block(s) available in cnxk SoC.
 
 #. **Ethdev Driver**
-   See :doc:`../nics/cnxk` for NIX Ethdev driver information.
+   See :doc:`/nics/cnxk` for NIX Ethdev driver information.
 
 #. **Mempool Driver**
-   See :doc:`../mempool/cnxk` for NPA mempool driver information.
+   See :doc:`/mempool/cnxk` for NPA mempool driver information.
 
 #. **Baseband PHY Driver**
-   See :doc:`../rawdevs/cnxk_bphy` for Baseband PHY driver information.
+   See :doc:`/rawdevs/cnxk_bphy` for Baseband PHY driver information.
 
 #. **Dmadev Driver**
-   See :doc:`../dmadevs/cnxk` for DPI Dmadev driver information.
+   See :doc:`/dmadevs/cnxk` for DPI Dmadev driver information.
 
 #. **Regex Device Driver**
-   See :doc:`../regexdevs/cn9k` for REE Regex device driver information.
+   See :doc:`/regexdevs/cn9k` for REE Regex device driver information.
 
 #. **ML Device Driver**
-   See :doc:`../mldevs/cnxk` for Machine Learning device driver information.
+   See :doc:`/mldevs/cnxk` for Machine Learning device driver information.
 
 #. **RVU LF Driver**
-   See :doc:`../rawdevs/cnxk_rvu_lf` for RVU LF driver information.
+   See :doc:`/rawdevs/cnxk_rvu_lf` for RVU LF driver information.
 
 Procedure to Setup Platform
 ---------------------------
@@ -242,13 +242,11 @@ compatible board:
    Alternatively, the Marvell SDK provides the buildroot based root filesystem.
    The SDK includes all the above prerequisites necessary to bring up the cnxk board.
 
-- Follow the DPDK :doc:`../linux_gsg/index` to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
 
 Debugging Options
 -----------------
-
-.. _table_cnxk_common_debug_options:
 
 .. table:: cnxk common debug options
 
@@ -599,7 +597,7 @@ Disabling the iova field in the mbuf frees it up to be used as a dynamic field.
 Native Compilation
 ~~~~~~~~~~~~~~~~~~
 
-Refer to :doc:`../linux_gsg/build_dpdk` for generic native builds.
+Refer to :doc:`/linux_gsg/build_dpdk` for generic native builds.
 
 CN9K:
 
@@ -618,7 +616,7 @@ CN10K:
 Cross Compilation
 ~~~~~~~~~~~~~~~~~
 
-Refer to :doc:`../linux_gsg/cross_build_dpdk_for_arm64` for generic arm64 details.
+Refer to :doc:`/linux_gsg/cross_build_dpdk_for_arm64` for generic arm64 details.
 
 CN9K:
 

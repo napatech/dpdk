@@ -50,9 +50,7 @@ Initialization and Core Launching
 Part of the initialization is done by the start function of glibc.
 A check is also performed at initialization time to ensure that the micro architecture type chosen in the config file is supported by the CPU.
 Then, the main() function is called. The core initialization and launch is done in rte_eal_init() (see the API documentation).
-It consist of calls to the pthread library (more specifically, pthread_self(), pthread_create(), and pthread_setaffinity_np()).
-
-.. _figure_linux_launch:
+It consists of calls to the pthread library (more specifically, pthread_self(), pthread_create(), and pthread_setaffinity_np()).
 
 .. figure:: img/linuxapp_launch.*
 
@@ -69,7 +67,7 @@ It consist of calls to the pthread library (more specifically, pthread_self(), p
 Shutdown and Cleanup
 ~~~~~~~~~~~~~~~~~~~~
 
-During the initialization of EAL resources such as hugepage backed memory can be
+During the initialization of EAL, resources such as hugepage backed memory can be
 allocated by core components.  The memory allocated during ``rte_eal_init()``
 can be released by calling the ``rte_eal_cleanup()`` function. Refer to the
 API documentation for details.
@@ -204,18 +202,37 @@ of virtual memory being preallocated at startup by editing the following config
 variables:
 
 * ``RTE_MAX_MEMSEG_LISTS`` controls how many segment lists can DPDK have
-* ``RTE_MAX_MEM_MB_PER_LIST`` controls how much megabytes of memory each
-  segment list can address
-* ``RTE_MAX_MEMSEG_PER_LIST`` controls how many segments each segment list
-  can have
-* ``RTE_MAX_MEMSEG_PER_TYPE`` controls how many segments each memory type
+* ``RTE_MAX_MEMSEG_PER_TYPE`` sets the default number of segments each memory type
   can have (where "type" is defined as "page size + NUMA node" combination)
-* ``RTE_MAX_MEM_MB_PER_TYPE`` controls how much megabytes of memory each
+* ``RTE_MAX_MEM_MB_PER_TYPE`` sets the default amount of memory each
   memory type can address
-* ``RTE_MAX_MEM_MB`` places a global maximum on the amount of memory
-  DPDK can reserve
 
 Normally, these options do not need to be changed.
+
+Runtime Override of Per-Page-Size Memory Limits
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+By default, DPDK uses compile-time configured limits
+for memory allocation per page size (as set by ``RTE_MAX_MEM_MB_PER_TYPE``).
+These limits apply uniformly across all NUMA nodes for a given page size.
+
+It is possible to override these defaults at runtime
+using the ``--pagesz-mem`` option,
+which allows specifying custom memory limits for each page size.
+This is useful when:
+
+* The default limits may be insufficient or excessive for your workload
+* You want to dedicate more memory to specific page sizes
+
+The ``--pagesz-mem`` option accepts exactly one ``<pagesz>:<limit>`` pair per occurrence,
+where ``pagesz`` is a page size (e.g., ``2M``, ``4M``, ``1G``)
+and ``limit`` is the maximum memory to reserve for that page size (e.g., ``64G``, ``512M``).
+Both values support standard binary suffixes (K, M, G, T).
+Memory limits must be aligned to their corresponding page size.
+
+Multiple page sizes can be specified by repeating the option::
+
+  --pagesz-mem 2M:64G --pagesz-mem 1G:512G
 
 .. note::
 
@@ -224,7 +241,7 @@ Normally, these options do not need to be changed.
     can later be mapped into that preallocated VA space (if dynamic memory mode
     is enabled), and can optionally be mapped into it at startup.
 
-.. _hugepage_mapping:
+.. _eal_hugepage_mapping:
 
 Hugepage Mapping
 ^^^^^^^^^^^^^^^^
@@ -242,7 +259,7 @@ so available amount depends on the system load.
 It uses ``virt2phys`` kernel module to obtain physical addresses,
 unless running in IOVA-as-VA mode (e.g. forced with ``--iova-mode=va``).
 
-Linux allows to select any combination of the following:
+Linux allows selecting any combination of the following:
 
 * use files in hugetlbfs (the default)
   or anonymous mappings (``--in-memory``);
@@ -260,7 +277,7 @@ that share a hugetlbfs mount point.
 Each backing file by default corresponds to one hugepage,
 it is opened and locked for the entire time the hugepage is used.
 This may exhaust the number of open files limit (``NOFILE``).
-See :ref:`segment-file-descriptors` section
+See :ref:`eal_segment_file_descriptors` section
 on how the number of open backing file descriptors can be reduced.
 
 In dynamic memory mode, EAL removes a backing hugepage file
@@ -274,7 +291,7 @@ if ``--huge-unlink`` is given to avoid polluting hugetlbfs.
 However, since it disables multi-process anyway,
 using anonymous mapping (``--in-memory``) is recommended instead.
 
-:ref:`EAL memory allocator <malloc>` relies on hugepages being zero-filled.
+:ref:`EAL memory allocator <eal_malloc>` relies on hugepages being zero-filled.
 Hugepages are cleared by the kernel when a file in hugetlbfs or its part
 is mapped for the first time system-wide
 to prevent data leaks from previous users of the same hugepage.
@@ -303,10 +320,10 @@ DPDK memory manager can provide file descriptors for memory segments,
 which are required for VirtIO with vhost-user backend.
 This can exhaust the number of open files limit (``NOFILE``)
 despite not creating any visible files.
-See :ref:`segment-file-descriptors` section
+See :ref:`eal_segment_file_descriptors` section
 on how the number of open file descriptors used by EAL can be reduced.
 
-.. _segment-file-descriptors:
+.. _eal_segment_file_descriptors:
 
 Segment File Descriptors
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -646,7 +663,7 @@ the desired addressing mode when virtual devices that are not directly attached 
 To facilitate forcing the IOVA mode to a specific value the EAL command line option ``--iova-mode`` can
 be used to select either physical addressing('pa') or virtual addressing('va').
 
-.. _max_simd_bitwidth:
+.. _eal_max_simd_bitwidth:
 
 
 Max SIMD bitwidth
@@ -765,7 +782,7 @@ There are two kinds of non-EAL pthreads:
 
 For non registered non-EAL pthread (with a LCORE_ID_ANY *_lcore_id*), some libraries will use an alternative unique ID (e.g. TID), some will not be impacted at all, and some will work but with limitations (e.g. timer and mempool libraries).
 
-All these impacts are mentioned in :ref:`known_issue_label` section.
+All these impacts are mentioned in :ref:`eal_known_issue_label` section.
 
 Public Thread API
 ~~~~~~~~~~~~~~~~~
@@ -802,7 +819,7 @@ controlled with tools like taskset (Linux) or cpuset (FreeBSD),
 - with affinity restricted to 2-3, the Control Threads will end up on
   CPU 2 (main lcore, which is the default when no CPU is available).
 
-.. _known_issue_label:
+.. _eal_known_issue_label:
 
 Known Issues
 ~~~~~~~~~~~~
@@ -960,7 +977,7 @@ We expect only 50% of CPU spend on packet IO.
     echo 100000 > pkt_io/cpu.cfs_period_us
     echo  50000 > pkt_io/cpu.cfs_quota_us
 
-.. _malloc:
+.. _eal_malloc:
 
 Malloc
 ------
@@ -1039,14 +1056,12 @@ The key fields of the heap structure and their function are described below
 
 *   last - this points to the last element in the heap.
 
-.. _figure_malloc_heap:
-
 .. figure:: img/malloc_heap.*
 
    Example of a malloc heap and malloc elements within the malloc library
 
 
-.. _malloc_elem:
+.. _eal_malloc_elem:
 
 Structure: malloc_elem
 """"""""""""""""""""""
@@ -1127,7 +1142,7 @@ Memory Allocation
 ^^^^^^^^^^^^^^^^^
 
 On EAL initialization, all preallocated memory segments are setup as part of the
-malloc heap. This setup involves placing an :ref:`element header<malloc_elem>`
+malloc heap. This setup involves placing an :ref:`element header <eal_malloc_elem>`
 with ``FREE`` at the start of each virtually contiguous segment of memory.
 The ``FREE`` element is then added to the ``free_list`` for the malloc heap.
 

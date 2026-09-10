@@ -125,7 +125,7 @@ device, if supported by the driver. Should be called before starting the device.
 Queues Configuration
 ~~~~~~~~~~~~~~~~~~~~
 
-Each bbdev devices queue is individually configured through the
+Each bbdev device's queue is individually configured through the
 ``rte_bbdev_queue_configure()`` API.
 Each queue resources may be allocated on a specified socket.
 
@@ -168,7 +168,7 @@ Logical Cores, Memory and Queues Relationships
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The bbdev poll mode device driver library supports NUMA architecture, in which
-a processor's logical cores and interfaces utilize it's local memory. Therefore
+a processor's logical cores and interfaces utilize its local memory. Therefore
 with baseband operations, the mbuf being operated on should be allocated from memory
 pools created in the local memory. The buffers should, if possible, remain on
 the local processor to obtain the best performance results and buffer
@@ -310,7 +310,7 @@ used for each window index when scaling back the size to a reference of 1024 FFT
 The actual shape size is effectively scaled up or down
 based on the dynamic size of the FFT operation being used.
 
-This allows to distinguish different version of the flexible pointwise windowing
+This allows distinguishing different version of the flexible pointwise windowing
 applied to the FFT and exposes this platform configuration to the application.
 
 Other optional capabilities exposed during device discovery
@@ -641,7 +641,7 @@ is 1. Therefore, it requires to get processed in TB-mode.
 The figure below visualizes the encoding of CBs using BBDEV interface in
 TB-mode. CB-mode is a reduced version, where only one CB exists:
 
-.. _figure_turbo_tb_encode:
+.. _bbdev_figure_turbo_tb_encode:
 
 .. figure:: img/turbo_tb_encode.*
 
@@ -733,14 +733,14 @@ with enough room for the output data.
 The figure below visualizes the decoding of CBs using BBDEV interface in
 TB-mode. CB-mode is a reduced version, where only one CB exists:
 
-.. _figure_turbo_tb_decode:
+.. _bbdev_figure_turbo_tb_decode:
 
 .. figure:: img/turbo_tb_decode.*
 
     Turbo decoding of Code Blocks in mbuf structure
 
 BBDEV LDPC Encode Operation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The operation flags that can be set for each LDPC encode operation are
 given below.
@@ -878,12 +878,12 @@ calculated by BBDEV before signalling to the driver.
 The number of CBs in the group should not be confused with ``c``, the
 total number of CBs in the full TB (``C`` as per 3GPP TS 38.212 section 5.2.2)
 
-Figure :numref:`figure_turbo_tb_encode` above
+Figure :numref:`bbdev_figure_turbo_tb_encode` above
 showing the Turbo encoding of CBs using BBDEV interface in TB-mode
 is also valid for LDPC encode.
 
 BBDEV LDPC Decode Operation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The operation flags that can be set for each LDPC decode operation are
 given below.
@@ -1112,14 +1112,14 @@ total number of CBs in the full TB (``C`` as per 3GPP TS 38.212 section 5.2.2)
 The ``length`` is total size of the CBs inclusive of any CRC24A and CRC24B in
 case they were appended by the application.
 
-Figure :numref:`figure_turbo_tb_decode` above
+Figure :numref:`bbdev_figure_turbo_tb_decode` above
 showing the Turbo decoding of CBs using BBDEV interface in TB-mode
 is also valid for LDPC decode.
 
 BBDEV FFT Operation
 ~~~~~~~~~~~~~~~~~~~
 
-This operation allows to run a combination of DFT and/or IDFT and/or time-domain windowing.
+This operation allows running a combination of DFT and/or IDFT and/or time-domain windowing.
 These can be used in a modular fashion (using bypass modes) or as a processing pipeline
 which can be used for FFT-based baseband signal processing.
 
@@ -1232,7 +1232,7 @@ The FFT parameters are set out in the table below.
 +-------------------------+--------------------------------------------------------------+
 |fp16_exp_adjust          |value added to FP16 exponent at conversion from INT16         |
 +-------------------------+--------------------------------------------------------------+
-|freq_resample_mode       |frequency ressampling mode (0:transparent, 1-2: resample)     |
+|freq_resample_mode       |frequency resampling mode (0:transparent, 1-2: resample)      |
 +-------------------------+--------------------------------------------------------------+
 | output_depadded_size    |output depadded size prior to frequency resampling            |
 +-------------------------+--------------------------------------------------------------+
@@ -1255,7 +1255,7 @@ first by cyclic shift then by antenna.
 BBDEV MLD-TS Operation
 ~~~~~~~~~~~~~~~~~~~~~~
 
-This operation allows to run the Tree Search (TS) portion of a Maximum Likelihood processing (MLD).
+This operation allows running the Tree Search (TS) portion of a Maximum Likelihood processing (MLD).
 
 This alternate equalization option accelerates the exploration of the best combination of
 transmitted symbols across layers minimizing the Euclidean distance between the received and

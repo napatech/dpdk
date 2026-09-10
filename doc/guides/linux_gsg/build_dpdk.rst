@@ -1,8 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2010-2015 Intel Corporation.
 
-.. _linux_gsg_compiling_dpdk:
-
 Compiling the DPDK Target from Source
 =====================================
 
@@ -81,8 +79,6 @@ and the last step causing the dynamic loader `ld.so` to update its cache to take
    not in the default paths for the loader. Therefore, on these
    distributions, `/usr/local/lib` and `/usr/local/lib64` should be added
    to a file in `/etc/ld.so.conf.d/` before running `ldconfig`.
-
-.. _adjusting_build_options:
 
 Adjusting Build Options
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -295,7 +291,7 @@ By adhering to these guidelines, you will ensure the most optimized build
 for ARM-based DPDK targets.
 
 
-.. _building_app_using_installed_dpdk:
+.. _linux_gsg_building_app_using_installed_dpdk:
 
 Building Applications Using Installed DPDK
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -337,3 +333,51 @@ build system is shown below:
    dpdk = dependency('libdpdk')
    sources = files('main.c')
    executable('dpdk-app', sources, dependencies: dpdk)
+
+
+.. _linux_gsg_build_in_container:
+
+Building DPDK in a Container
+----------------------------
+
+DPDK can be built inside a container to provide an isolated build environment.
+The following example uses Podman with a Fedora-based Containerfile.
+
+.. note::
+
+   These instructions also work with Docker by replacing ``podman`` with ``docker``.
+
+Create a ``Containerfile`` in the top-level DPDK source directory:
+
+.. code-block:: none
+
+   FROM fedora:latest
+
+   RUN dnf -y upgrade && dnf -y install \
+       libbsd-devel \
+       numactl-devel \
+       meson \
+       ninja-build \
+       python3-pyelftools \
+       && dnf group install -y development-tools \
+       && dnf clean all
+
+   COPY ./ /dpdk
+   WORKDIR /dpdk
+
+   RUN meson setup build -Dexamples=helloworld && ninja -C build install
+
+Build the container image from the DPDK source directory:
+
+.. code-block:: console
+
+   podman build -t dpdk-builder -f Containerfile .
+
+Once the build completes, verify that the helloworld example runs:
+
+.. code-block:: console
+
+   podman run --rm dpdk-builder /dpdk/build/examples/dpdk-helloworld --no-huge
+
+See :ref:`linux_gsg_run_in_container` for how to run DPDK applications
+from this container image.

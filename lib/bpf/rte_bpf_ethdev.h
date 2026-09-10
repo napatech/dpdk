@@ -12,7 +12,7 @@
  * Note that right now:
  * - it is not MT safe, i.e. it is not allowed to do load/unload for the
  *   same port/queue from different threads in parallel.
- * - though it allows to do load/unload at runtime
+ * - though it allows load/unload at runtime
  *   (while RX/TX is ongoing on given port/queue).
  * - allows only one BPF program per port/queue,
  * i.e. new load will replace previously loaded for that port/queue BPF program.
@@ -107,6 +107,60 @@ rte_bpf_eth_rx_elf_load(uint16_t port, uint16_t queue,
 int
 rte_bpf_eth_tx_elf_load(uint16_t port, uint16_t queue,
 	const struct rte_bpf_prm *prm, const char *fname, const char *sname,
+	uint32_t flags);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
+ *
+ * Install callback to execute specified BPF program on given Rx port/queue.
+ *
+ * On success the ownership of the program passes to the library,
+ * rte_bpf_eth_rx_unload must be used to unload it,
+ * and rte_bpf_destroy must no longer be called.
+ *
+ * @param port
+ *   The identifier of the ethernet port.
+ * @param queue
+ *   The identifier of the Rx queue on the given port.
+ * @param bpf
+ *   BPF program
+ * @param flags
+ *   Flags that define expected behavior of the loaded filter
+ *   (i.e. jited/non-jited version to use).
+ * @return
+ *   Zero on successful completion or negative error code otherwise.
+ */
+__rte_experimental
+int
+rte_bpf_eth_rx_install(uint16_t port, uint16_t queue, struct rte_bpf *bpf,
+	uint32_t flags);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
+ *
+ * Install callback to execute specified BPF program on given Tx port/queue.
+ *
+ * On success the ownership of the program passes to the library,
+ * rte_bpf_eth_tx_unload must be used to unload it,
+ * and rte_bpf_destroy must no longer be called.
+ *
+ * @param port
+ *   The identifier of the ethernet port.
+ * @param queue
+ *   The identifier of the Tx queue on the given port.
+ * @param bpf
+ *   BPF program.
+ * @param flags
+ *   Flags that define expected behavior of the loaded filter
+ *   (i.e. jited/non-jited version to use).
+ * @return
+ *   Zero on successful completion or negative error code otherwise.
+ */
+__rte_experimental
+int
+rte_bpf_eth_tx_install(uint16_t port, uint16_t queue, struct rte_bpf *bpf,
 	uint32_t flags);
 
 #ifdef __cplusplus

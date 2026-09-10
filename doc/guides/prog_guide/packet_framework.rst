@@ -34,14 +34,14 @@ as well as providing libraries of reusable templates for the commonly used pipel
 
 The pipeline is constructed by connecting the set of input ports with the set of output ports
 through the set of tables in a tree-like topology.
-As result of lookup operation for the current packet in the current table,
+As a result of lookup operation for the current packet in the current table,
 one of the table entries (on lookup hit) or the default table entry (on lookup miss)
 provides the set of actions to be applied on the current packet,
 as well as the next hop for the packet, which can be either another table, an output port or packet drop.
 
-An example of packet processing pipeline is presented in :numref:`figure_figure32`:
+An example of packet processing pipeline is presented in :numref:`packet_framework_figure_32`:
 
-.. _figure_figure32:
+.. _packet_framework_figure_32:
 
 .. figure:: img/figure32.*
 
@@ -55,9 +55,10 @@ Port Library Design
 Port Types
 ~~~~~~~~~~
 
-:numref:`table_qos_19` is a non-exhaustive list of ports that can be implemented with the Packet Framework.
+:numref:`packet_framework_table_qos_19` is a non-exhaustive list of ports
+that can be implemented with the Packet Framework.
 
-.. _table_qos_19:
+.. _packet_framework_table_qos_19:
 
 .. table:: Port Types
 
@@ -106,9 +107,7 @@ Port Interface
 Each port is unidirectional, i.e. either input port or output port.
 Each input/output port is required to implement an abstract interface that
 defines the initialization and run-time operation of the port.
-The port abstract interface is described in.
-
-.. _table_qos_20:
+The port abstract interface is described below.
 
 .. table:: 20 Port Abstract Interface
 
@@ -138,9 +137,10 @@ Table Library Design
 Table Types
 ~~~~~~~~~~~
 
-:numref:`table_qos_21` is a non-exhaustive list of types of tables that can be implemented with the Packet Framework.
+:numref:`packet_framework_table_qos_21` is a non-exhaustive list of types of tables
+that can be implemented with the Packet Framework.
 
-.. _table_qos_21:
+.. _packet_framework_table_qos_21:
 
 .. table:: Table Types
 
@@ -209,9 +209,9 @@ Table Interface
 
 Each table is required to implement an abstract interface that defines the initialization
 and run-time operation of the table.
-The table abstract interface is described in :numref:`table_qos_29_1`.
+The table abstract interface is described in :numref:`packet_framework_table_qos_29_1`.
 
-.. _table_qos_29_1:
+.. _packet_framework_table_qos_29_1:
 
 .. table:: Table Abstract Interface
 
@@ -318,9 +318,10 @@ considering *n_bits* as the number of bits set in *bucket_mask = n_buckets - 1*,
 this means that all the keys that end up in the same hash table bucket have the lower *n_bits* of their signature identical.
 In order to reduce the number of keys in the same bucket (collisions), the number of hash table buckets needs to be increased.
 
-In packet processing context, the sequence of operations involved in hash table operations is described in :numref:`figure_figure33`:
+In packet processing context, the sequence of operations involved in hash table operations
+is described in :numref:`packet_framework_figure_33`:
 
-.. _figure_figure33:
+.. _packet_framework_figure_33:
 
 .. figure:: img/figure33.*
 
@@ -365,9 +366,10 @@ The MAC address of the next hop station becomes the destination MAC address of t
 Hash Table Types
 ^^^^^^^^^^^^^^^^
 
-:numref:`table_qos_22` lists the hash table configuration parameters shared by all different hash table types.
+:numref:`packet_framework_table_qos_22` lists the hash table configuration parameters
+shared by all different hash table types.
 
-.. _table_qos_22:
+.. _packet_framework_table_qos_22:
 
 .. table:: Configuration Parameters Common for All Hash Table Types
 
@@ -426,8 +428,6 @@ The possible options are:
     the search continues beyond the first group of 4 keys, potentially until all keys in this bucket are examined.
     The extendable bucket logic requires maintaining specific data structures per table and per each bucket.
 
-.. _table_qos_23:
-
 .. table:: Configuration Parameters Specific to Extendable Bucket Hash Table
 
    +---+---------------------------+--------------------------------------------------+
@@ -454,8 +454,6 @@ The possible options for key signature computation are:
 #.  **Key signature computed on lookup ("do-sig" version).**
     The same CPU core reads the key from the packet meta-data, uses it to compute the key signature
     and also performs the bucket search step of the key lookup operation.
-
-.. _table_qos_24:
 
 .. table:: Configuration Parameters Specific to Pre-computed Key Signature Hash Table
 
@@ -528,17 +526,19 @@ This avoids the important cost associated with flushing the CPU core execution p
 Configurable Key Size Hash Table
 """"""""""""""""""""""""""""""""
 
-:numref:`figure_figure34`, :numref:`table_qos_25` and :numref:`table_qos_26` detail the main data structures used to implement configurable key size hash tables (either LRU or extendable bucket,
-either with pre-computed signature or "do-sig").
+:numref:`packet_framework_figure_34`, :numref:`packet_framework_table_qos_25`
+and :numref:`packet_framework_table_qos_26`
+detail the main data structures used to implement configurable key size hash tables
+(either LRU or extendable bucket, either with pre-computed signature or "do-sig").
 
-.. _figure_figure34:
+.. _packet_framework_figure_34:
 
 .. figure:: img/figure34.*
 
    Data Structures for Configurable Key Size Hash Tables
 
 
-.. _table_qos_25:
+.. _packet_framework_table_qos_25:
 
 .. table:: Main Large Data Structures (Arrays) used for Configurable Key Size Hash Tables
 
@@ -562,7 +562,7 @@ either with pre-computed signature or "do-sig").
    |   |                         |                              |                           |                               |
    +---+-------------------------+------------------------------+---------------------------+-------------------------------+
 
-.. _table_qos_26:
+.. _packet_framework_table_qos_26:
 
 .. table:: Field Description for Bucket Array Entry (Configurable Key Size Hash Tables)
 
@@ -601,11 +601,12 @@ either with pre-computed signature or "do-sig").
    +---+------------------+--------------------+------------------------------------------------------------------+
 
 
-:numref:`figure_figure35` and :numref:`table_qos_27` detail the bucket search pipeline stages (either LRU or extendable bucket,
-either with pre-computed signature or "do-sig").
+:numref:`packet_framework_figure_35` and :numref:`packet_framework_table_qos_27`
+detail the bucket search pipeline stages
+(either LRU or extendable bucket, either with pre-computed signature or "do-sig").
 For each pipeline stage, the described operations are applied to each of the two packets handled by that stage.
 
-.. _figure_figure35:
+.. _packet_framework_figure_35:
 
 .. figure:: img/figure35.*
 
@@ -613,7 +614,7 @@ For each pipeline stage, the described operations are applied to each of the two
    Tables)
 
 
-.. _table_qos_27:
+.. _packet_framework_table_qos_27:
 
 .. table:: Description of the Bucket Search Pipeline Stages (Configurable Key Size Hash Tables)
 
@@ -705,9 +706,9 @@ Additional notes:
 
 **Key Signature Comparison Logic**
 
-The key signature comparison logic is described in :numref:`table_qos_28`.
+The key signature comparison logic is described in :numref:`packet_framework_table_qos_28`.
 
-.. _table_qos_28:
+.. _packet_framework_table_qos_28:
 
 .. table:: Lookup Tables for Match, Match_Many and Match_Pos
 
@@ -767,12 +768,13 @@ The key signature comparison logic is described in :numref:`table_qos_28`.
 The input *mask* hash bit X (X = 0 .. 3) set to 1 if input signature is equal to bucket signature X and set to 0 otherwise.
 The outputs *match*, *match_many* and *match_pos* are 1 bit, 1 bit and 2 bits in size respectively and their meaning has been explained above.
 
-As displayed in :numref:`table_qos_29`, the lookup tables for *match* and *match_many* can be collapsed into a single 32-bit value and the lookup table for
-*match_pos* can be collapsed into a 64-bit value.
+As displayed in :numref:`packet_framework_table_qos_29`,
+the lookup tables for *match* and *match_many* can be collapsed into a single 32-bit value
+and the lookup table for *match_pos* can be collapsed into a 64-bit value.
 Given the input *mask*, the values for *match*, *match_many* and *match_pos* can be obtained by indexing their respective bit array to extract 1 bit,
 1 bit and 2 bits respectively with branchless logic.
 
-.. _table_qos_29:
+.. _packet_framework_table_qos_29:
 
 .. table:: Collapsed Lookup Tables for Match, Match_Many and Match_Pos
 
@@ -802,24 +804,26 @@ The pseudo-code for match, match_many and match_pos is::
 Single Key Size Hash Tables
 """""""""""""""""""""""""""
 
-:numref:`figure_figure37`, :numref:`figure_figure38`, :numref:`table_qos_30` and :numref:`table_qos_31` detail the main data structures used to implement 8-byte and 16-byte key hash tables
+:numref:`packet_framework_figure_37`, :numref:`packet_framework_figure_38`,
+:numref:`packet_framework_table_qos_30` and :numref:`packet_framework_table_qos_31`
+detail the main data structures used to implement 8-byte and 16-byte key hash tables
 (either LRU or extendable bucket, either with pre-computed signature or "do-sig").
 
-.. _figure_figure37:
+.. _packet_framework_figure_37:
 
 .. figure:: img/figure37.*
 
    Data Structures for 8-byte Key Hash Tables
 
 
-.. _figure_figure38:
+.. _packet_framework_figure_38:
 
 .. figure:: img/figure38.*
 
    Data Structures for 16-byte Key Hash Tables
 
 
-.. _table_qos_30:
+.. _packet_framework_table_qos_30:
 
 .. table:: Main Large Data Structures (Arrays) used for 8-byte and 16-byte Key Size Hash Tables
 
@@ -849,7 +853,7 @@ Single Key Size Hash Tables
    |   |                         |                              |                      |                                    |
    +---+-------------------------+------------------------------+----------------------+------------------------------------+
 
-.. _table_qos_31:
+.. _packet_framework_table_qos_31:
 
 .. table:: Field Description for Bucket Array Entry (8-byte and 16-byte Key Hash Tables)
 
@@ -885,15 +889,10 @@ and detail the bucket search pipeline used to implement 8-byte and 16-byte key h
 either with pre-computed signature or "do-sig").
 For each pipeline stage, the described operations are applied to each of the two packets handled by that stage.
 
-.. _figure_figure39:
-
 .. figure:: img/figure39.*
 
    Bucket Search Pipeline for Key Lookup Operation (Single Key Size Hash
    Tables)
-
-
-.. _table_qos_32:
 
 .. table:: Description of the Bucket Search Pipeline Stages (8-byte and 16-byte Key Hash Tables)
 
@@ -1015,9 +1014,9 @@ The reserved actions are handled directly by the Packet Framework without the us
 through the table action handler configuration.
 A special category of the reserved actions is represented by the next hop actions, which regulate the packet flow between input ports,
 tables and output ports through the pipeline.
-:numref:`table_qos_33` lists the next hop actions.
+:numref:`packet_framework_table_qos_33` lists the next hop actions.
 
-.. _table_qos_33:
+.. _packet_framework_table_qos_33:
 
 .. table:: Next Hop Actions (Reserved)
 
@@ -1046,9 +1045,9 @@ and their associated meta-data is private to each table.
 Within the same table, all the table entries (including the table default entry) share the same definition
 for the user actions and their associated meta-data,
 with each table entry having its own set of enabled user actions and its own copy of the action meta-data.
-:numref:`table_qos_34` contains a non-exhaustive list of user action examples.
+:numref:`packet_framework_table_qos_34` contains a non-exhaustive list of user action examples.
 
-.. _table_qos_34:
+.. _packet_framework_table_qos_34:
 
 .. table:: User Action Examples
 
@@ -1128,7 +1127,7 @@ Mechanisms to share the same table between multiple threads:
 
 #.  **Single writer thread performing table entry add/delete operations and multiple reader threads that perform table lookup operations with read-only access to the table entries.**
     The reader threads use the main table copy while the writer is updating the mirror copy.
-    Once the writer update is done, the writer can signal to the readers and busy wait until all readers swaps between the mirror copy (which now becomes the main copy) and
+    Once the writer update is done, the writer can signal to the readers and busy wait until all readers swap between the main copy (which now becomes the mirror copy) and
     the mirror copy (which now becomes the main copy).
 
 Interfacing with Accelerators

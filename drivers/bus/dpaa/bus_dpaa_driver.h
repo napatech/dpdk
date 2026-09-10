@@ -8,6 +8,7 @@
 
 #include <rte_compat.h>
 #include <dev_driver.h>
+#include <bus_driver.h>
 #include <rte_mbuf_dyn.h>
 #include <rte_mempool.h>
 
@@ -49,9 +50,6 @@ dpaa_seqn(struct rte_mbuf *mbuf)
 
 #define DPAA_MEMPOOL_OPS_NAME	"dpaa"
 
-#define DEV_TO_DPAA_DEVICE(ptr)	\
-		container_of(ptr, struct rte_dpaa_device, device)
-
 /* DPAA SoC identifier; If this is not available, it can be concluded
  * that board is non-DPAA. Single slot is currently supported.
  */
@@ -64,9 +62,6 @@ dpaa_seqn(struct rte_mbuf *mbuf)
 
 /** Number of supported QDMA devices */
 #define RTE_DPAA_QDMA_DEVICES  1
-
-#define RTE_DEV_TO_DPAA_CONST(ptr) \
-	container_of(ptr, const struct rte_dpaa_device, device)
 
 struct rte_dpaa_device;
 struct rte_dpaa_driver;
@@ -84,14 +79,7 @@ struct dpaa_device_id {
 };
 
 struct rte_dpaa_device {
-	TAILQ_ENTRY(rte_dpaa_device) next;
 	struct rte_device device;
-	union {
-		struct rte_eth_dev *eth_dev;
-		struct rte_cryptodev *crypto_dev;
-		struct rte_dma_dev *dmadev;
-	};
-	struct rte_dpaa_driver *driver;
 	struct dpaa_device_id id;
 	struct rte_intr_handle *intr_handle;
 	enum rte_dpaa_type device_type; /**< Ethernet or crypto type device */
@@ -103,7 +91,6 @@ typedef int (*rte_dpaa_probe_t)(struct rte_dpaa_driver *dpaa_drv,
 typedef int (*rte_dpaa_remove_t)(struct rte_dpaa_device *dpaa_dev);
 
 struct rte_dpaa_driver {
-	TAILQ_ENTRY(rte_dpaa_driver) next;
 	struct rte_driver driver;
 	enum rte_dpaa_type drv_type;
 	rte_dpaa_probe_t probe;

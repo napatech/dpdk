@@ -497,7 +497,7 @@ struct __rte_cache_aligned rte_ml_op {
  *
  * The rte_ml_enqueue_burst() function returns the number of inferences it
  * actually enqueued for processing. A return value equal to *nb_ops* means that
- * all packets have been enqueued.
+ * all inferences have been enqueued.
  *
  * @param dev_id
  *   The identifier of the device.
@@ -540,7 +540,7 @@ rte_ml_enqueue_burst(int16_t dev_id, uint16_t qp_id, struct rte_ml_op **ops, uin
  * @param dev_id
  *   The identifier of the device.
  * @param qp_id
- *   The index of the queue pair from which to retrieve processed packets.
+ *   The index of the queue pair from which to retrieve processed inferences.
  * The value must be in the range [0, nb_queue_pairs - 1] previously supplied to
  * rte_ml_dev_configure().
  * @param ops
@@ -569,7 +569,7 @@ struct rte_ml_op_error {
  * Get PMD specific error information for an ML op.
  *
  * When an ML operation completed with RTE_ML_OP_STATUS_ERROR as status,
- * This API allows to get PMD specific error details.
+ * This API allows getting PMD specific error details.
  *
  * @param[in] dev_id
  *   Device identifier
@@ -840,7 +840,7 @@ rte_ml_model_unload(int16_t dev_id, uint16_t model_id);
  *   Identifier of the model to be started.
  *
  * @return
- *   - 0: Success, Model loaded.
+ *   - 0: Success, Model started.
  *   - < 0: Failure, Error code of the model start driver function.
  */
 __rte_experimental
@@ -859,7 +859,7 @@ rte_ml_model_start(int16_t dev_id, uint16_t model_id);
  *   Identifier of the model to be stopped.
  *
  * @return
- *   - 0: Success, Model unloaded.
+ *   - 0: Success, Model stopped.
  *   - < 0: Failure, Error code of the model stop driver function.
  */
 __rte_experimental

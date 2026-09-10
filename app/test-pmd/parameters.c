@@ -1170,10 +1170,9 @@ launch_args_parse(int argc, char** argv)
 				rte_exit(EXIT_FAILURE,
 					"bad mbuf-size\n");
 			for (i = 0; i < nb_segs; i++) {
-				if (mb_sz[i] <= 0 || mb_sz[i] > 0xFFFF)
+				if (mb_sz[i] > 0xFFFF)
 					rte_exit(EXIT_FAILURE,
-						"mbuf-size should be "
-						"> 0 and < 65536\n");
+						"mbuf-size should be < 65536\n");
 				mbuf_data_size[i] = (uint16_t) mb_sz[i];
 			}
 			mbuf_data_size_n = nb_segs;
@@ -1287,10 +1286,10 @@ launch_args_parse(int argc, char** argv)
 			set_pkt_forwarding_mode(optarg);
 			break;
 		case TESTPMD_OPT_RSS_IP_NUM:
-			rss_hf = RTE_ETH_RSS_IP;
+			rss_hf |= RTE_ETH_RSS_IP;
 			break;
 		case TESTPMD_OPT_RSS_UDP_NUM:
-			rss_hf = RTE_ETH_RSS_UDP;
+			rss_hf |= RTE_ETH_RSS_IP | RTE_ETH_RSS_UDP;
 			break;
 		case TESTPMD_OPT_RSS_LEVEL_INNER_NUM:
 			rss_hf |= RTE_ETH_RSS_LEVEL_INNERMOST;

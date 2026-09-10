@@ -3949,19 +3949,15 @@ mlkem_keygen(const void *test_data)
 		rte_crypto_ml_kem_pubkey_size[vector->type],
 		"Incorrect Encapsulation key length\n");
 
-	/* If the seed is all zero, keys are deterministic */
-	if (memcmp(vector->d.data, (uint8_t [32]) {0},
-			vector->d.length) == 0) {
-		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->dk.data,
-			self->result_op->asym->mlkem.keygen.dk.data,
-			self->result_op->asym->mlkem.keygen.dk.length,
-			"Incorrect Decapsulation key\n");
-		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->ek.data,
-			self->result_op->asym->mlkem.keygen.ek.data,
-			self->result_op->asym->mlkem.keygen.ek.length,
-			"Incorrect Encapsulation key\n");
-		RTE_LOG(DEBUG, USER1, "Deterministic keygen test passed\n");
-	}
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->dk.data,
+		self->result_op->asym->mlkem.keygen.dk.data,
+		self->result_op->asym->mlkem.keygen.dk.length,
+		"Incorrect Decapsulation key\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->ek.data,
+		self->result_op->asym->mlkem.keygen.ek.data,
+		self->result_op->asym->mlkem.keygen.ek.length,
+		"Incorrect Encapsulation key\n");
+	RTE_LOG(DEBUG, USER1, "Deterministic keygen test passed\n");
 
 	rte_cryptodev_asym_session_free(dev_id, self->sess);
 	return TEST_SUCCESS;
@@ -4071,7 +4067,7 @@ mlkem_encap(const void *test_data)
 	self->op->asym->mlkem.decap.sk.data = sk;
 	self->op->asym->mlkem.decap.sk.length = 32;
 
-	TEST_ASSERT_SUCCESS(send_one(),
+	TEST_ASSERT_SUCCESS(send_one_no_status_check(),
 		"Failed to process crypto op (ML-KEM Decap)");
 
 	debug_hexdump(stdout, "Shared secret from negative test",
@@ -4149,7 +4145,7 @@ mlkem_decap(const void *test_data)
 	self->op->asym->mlkem.decap.sk.data = sk;
 	self->op->asym->mlkem.decap.sk.length = 32;
 
-	TEST_ASSERT_SUCCESS(send_one(),
+	TEST_ASSERT_SUCCESS(send_one_no_status_check(),
 		"Failed to process crypto op (ML-KEM Decap)");
 
 	debug_hexdump(stdout, "Shared secret from negative test",
@@ -4214,19 +4210,15 @@ mldsa_keygen(const void *test_data)
 		rte_crypto_ml_dsa_pubkey_size[vector->type],
 		"Incorrect Public key length\n");
 
-	/* If the seed is all zero, keys are deterministic */
-	if (memcmp(vector->seed.data, (uint8_t [32]) {0},
-			vector->seed.length) == 0) {
-		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->privkey.data,
-			self->result_op->asym->mldsa.keygen.privkey.data,
-			self->result_op->asym->mldsa.keygen.privkey.length,
-			"Incorrect Private key\n");
-		TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->pubkey.data,
-			self->result_op->asym->mldsa.keygen.pubkey.data,
-			self->result_op->asym->mldsa.keygen.pubkey.length,
-			"Incorrect Public key\n");
-		RTE_LOG(DEBUG, USER1, "Deterministic keygen test passed\n");
-	}
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->privkey.data,
+		self->result_op->asym->mldsa.keygen.privkey.data,
+		self->result_op->asym->mldsa.keygen.privkey.length,
+		"Incorrect Private key\n");
+	TEST_ASSERT_BUFFERS_ARE_EQUAL(vector->pubkey.data,
+		self->result_op->asym->mldsa.keygen.pubkey.data,
+		self->result_op->asym->mldsa.keygen.pubkey.length,
+		"Incorrect Public key\n");
+	RTE_LOG(DEBUG, USER1, "Deterministic keygen test passed\n");
 
 	rte_cryptodev_asym_session_free(dev_id, self->sess);
 	return TEST_SUCCESS;
@@ -4244,6 +4236,7 @@ mldsa_sign(const void *test_data)
 
 	xform.mldsa.type = vector->type;
 	xform.mldsa.sign_deterministic = vector->sign_deterministic;
+	xform.mldsa.sign_prehash = !!vector->hash;
 	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
 
 	rte_cryptodev_info_get(dev_id, &dev_info);
@@ -4318,6 +4311,7 @@ mldsa_sign(const void *test_data)
 	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
 	self->op->asym->mldsa.sigver.sign.data = sign;
 	self->op->asym->mldsa.sigver.sign.length = sign_len;
+	self->op->asym->mldsa.sigver.hash = vector->hash;
 
 	TEST_ASSERT_SUCCESS(send_one(),
 		"Failed to process crypto op (ML-DSA Verify)");
@@ -4340,6 +4334,7 @@ mldsa_sign(const void *test_data)
 	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
 	self->op->asym->mldsa.sigver.sign.data = sign;
 	self->op->asym->mldsa.sigver.sign.length = sign_len;
+	self->op->asym->mldsa.sigver.hash = vector->hash;
 
 	TEST_ASSERT_SUCCESS(send_one_no_status_check(),
 		"Failed to process crypto op (ML-DSA Verify)");
@@ -4360,12 +4355,26 @@ mldsa_verify(const void *test_data)
 	const struct crypto_testsuite_mldsa_params *vector = test_data;
 	const uint8_t dev_id = params->valid_devs[0];
 	struct rte_crypto_asym_xform xform = {0};
+	struct rte_cryptodev_info dev_info;
 	uint8_t sign[TEST_DATA_SIZE] = {0};
 	size_t sign_len;
 
 	xform.mldsa.type = vector->type;
 	xform.mldsa.sign_deterministic = vector->sign_deterministic;
+	xform.mldsa.sign_prehash = !!vector->hash;
 	xform.xform_type = RTE_CRYPTO_ASYM_XFORM_ML_DSA;
+
+	rte_cryptodev_info_get(dev_id, &dev_info);
+
+	/* Check if prehash is supported */
+	if (vector->hash) {
+		if (!(dev_info.feature_flags & RTE_CRYPTODEV_FF_MLDSA_SIGN_PREHASH)) {
+			RTE_LOG(DEBUG, USER1,
+				"Device doesn't support prehash in ML-DSA verify. Test skipped\n");
+			return TEST_SKIPPED;
+		}
+	}
+
 	if (rte_cryptodev_asym_session_create(dev_id, &xform,
 			params->session_mpool, &self->sess) < 0) {
 		RTE_LOG(ERR, USER1, "line %u FAILED: Session creation failed",
@@ -4387,6 +4396,7 @@ mldsa_verify(const void *test_data)
 	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
 	self->op->asym->mldsa.sigver.sign.data = vector->sign.data;
 	self->op->asym->mldsa.sigver.sign.length = vector->sign.length;
+	self->op->asym->mldsa.sigver.hash = vector->hash;
 
 	TEST_ASSERT_SUCCESS(send_one(),
 		"Failed to process crypto op (ML-DSA Verify)");
@@ -4411,6 +4421,7 @@ mldsa_verify(const void *test_data)
 	self->op->asym->mldsa.sigver.pubkey.length = vector->pubkey.length;
 	self->op->asym->mldsa.sigver.sign.data = sign;
 	self->op->asym->mldsa.sigver.sign.length = sign_len;
+	self->op->asym->mldsa.sigver.hash = vector->hash;
 
 	TEST_ASSERT_SUCCESS(send_one_no_status_check(),
 		"Failed to process crypto op (ML-DSA Verify)");
@@ -5490,6 +5501,12 @@ test_cryptodev_cn10k_asym(void)
 }
 
 static int
+test_cryptodev_cn20k_asym(void)
+{
+	return run_cryptodev_asym_testsuite(RTE_STR(CRYPTODEV_NAME_CN20K_PMD));
+}
+
+static int
 test_cryptodev_virtio_asym(void)
 {
 	return run_cryptodev_asym_testsuite(RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD));
@@ -5506,5 +5523,6 @@ REGISTER_DRIVER_TEST(cryptodev_qat_asym_autotest, test_cryptodev_qat_asym);
 REGISTER_DRIVER_TEST(cryptodev_octeontx_asym_autotest, test_cryptodev_octeontx_asym);
 REGISTER_DRIVER_TEST(cryptodev_cn9k_asym_autotest, test_cryptodev_cn9k_asym);
 REGISTER_DRIVER_TEST(cryptodev_cn10k_asym_autotest, test_cryptodev_cn10k_asym);
+REGISTER_DRIVER_TEST(cryptodev_cn20k_asym_autotest, test_cryptodev_cn20k_asym);
 REGISTER_DRIVER_TEST(cryptodev_virtio_asym_autotest, test_cryptodev_virtio_asym);
 REGISTER_DRIVER_TEST(cryptodev_virtio_user_asym_autotest, test_cryptodev_virtio_user_asym);

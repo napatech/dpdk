@@ -81,23 +81,14 @@ Limitations
 * RTE_CRYPTO_CIPHER_DES_DOCSISBPI is not supported for combined Crypto-CRC
   DOCSIS security protocol.
 
-AESNI MB PMD selection over SNOW3G/ZUC/KASUMI PMDs
---------------------------------------------------
+AESNI MB PMD selection over SNOW3G/ZUC PMDs
+-------------------------------------------
 
-This PMD supports wireless cipher suite (SNOW3G, ZUC and KASUMI).
+This PMD supports wireless cipher suite (SNOW3G and ZUC).
 On Intel processors, it is recommended to use this PMD
-instead of SNOW3G, ZUC and KASUMI PMDs, as it enables algorithm mixing
+instead of SNOW3G and ZUC PMDs, as it enables algorithm mixing
 (e.g. cipher algorithm SNOW3G-UEA2 with authentication algorithm AES-CMAC-128)
 and performance over IMIX (packet size mix) traffic is significantly higher.
-
-AESNI MB PMD selection over CHACHA20-POLY1305 PMD
--------------------------------------------------
-
-This PMD supports Chacha20-Poly1305 algorithm.
-On Intel processors, it is recommended to use this PMD instead of CHACHA20-POLY1305 PMD,
-as it delivers better performance on single segment buffers.
-For multi-segment buffers, it is still recommended to use CHACHA20-POLY1305 PMD,
-until the new SGL API is introduced in the AESNI MB PMD.
 
 Installation
 ------------
@@ -107,6 +98,10 @@ library from `here <https://github.com/01org/intel-ipsec-mb>`_
 and compile it on their user system before building DPDK.
 The latest version of the library supported by this PMD is v1.5, which
 can be downloaded from `<https://github.com/01org/intel-ipsec-mb/archive/v1.5.zip>`_.
+
+For Arm system, ARM64 port of the multi-buffer library can be downloaded from
+https://gitlab.arm.com/arm-reference-solutions/ipsec-mb/-/tree/main/.
+The latest version of the library supported by this PMD is tagged as SECLIB-IPSEC-2026.05.30.
 
 .. code-block:: console
 
@@ -129,8 +124,6 @@ Once it is downloaded, extract it and follow these steps:
 
 As a reference, the following table shows a mapping between the past DPDK versions
 and the Multi-Buffer library version supported by them:
-
-.. _table_aesni_mb_versions:
 
 .. table:: DPDK and Multi-Buffer library version compatibility
 

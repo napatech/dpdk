@@ -1,8 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2010-2014 Intel Corporation.
 
-.. _install_from_ports:
-
 Installing DPDK from the Ports Collection
 =========================================
 
@@ -28,8 +26,8 @@ DPDK can be installed on FreeBSD using the command::
 After the installation of the DPDK package, instructions will be printed on
 how to install the kernel modules required to use the DPDK. A more
 complete version of these instructions can be found in the sections
-:ref:`loading_contigmem` and :ref:`loading_nic_uio`. Normally, lines like
-those below would be added to the file ``/boot/loader.conf``.
+:ref:`freebsd_gsg_loading_contigmem` and :ref:`freebsd_gsg_loading_nic_uio`.
+Normally, lines like those below would be added to the file ``/boot/loader.conf``.
 
 .. code-block:: shell
 
@@ -61,7 +59,7 @@ Compiling and Running the Example Applications
 
 When the DPDK has been installed from the ports collection it installs
 its example applications in ``/usr/local/share/dpdk/examples``.
-These examples can be compiled and run as described in :ref:`compiling_sample_apps`.
+These examples can be compiled and run as described in :doc:`build_sample_apps`.
 
 .. note::
 
@@ -73,7 +71,7 @@ These examples can be compiled and run as described in :ref:`compiling_sample_ap
 
    To install a copy of the DPDK compiled using gcc, please download the
    official DPDK package from https://core.dpdk.org/download/ and install manually using
-   the instructions given in the next chapter, :ref:`building_from_source`
+   the instructions given in the next chapter, :doc:`build_dpdk`
 
 An example application can therefore be copied to a user's home directory and
 compiled and run as below, where we have 2 memory blocks of size 1G reserved
@@ -117,9 +115,9 @@ via the contigmem module, and 4 NIC ports bound to the nic_uio module::
 
    To run a DPDK process as a non-root user, adjust the permissions on
    the ``/dev/contigmem`` and ``/dev/uio device`` nodes as described in section
-   :ref:`running_non_root`
+   :ref:`freebsd_gsg_running_non_root`
 
 .. note::
 
    For an explanation of the command-line parameters that can be passed to an
-   DPDK application, see section :ref:`running_sample_app`.
+   DPDK application, see section :ref:`freebsd_gsg_running_sample_app`.

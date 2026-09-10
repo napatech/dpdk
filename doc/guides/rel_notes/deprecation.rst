@@ -4,8 +4,7 @@
 ABI and API Deprecation
 =======================
 
-See the guidelines document for details of the :doc:`ABI policy
-<../contributing/abi_policy>`.
+See the guidelines document for details of the :doc:`/contributing/abi_policy`.
 
 With DPDK 23.11, there will be a new major ABI version: 24.
 This means that during the development of 23.11,
@@ -54,6 +53,12 @@ Deprecation Notices
   operations and a new wrapper ``rte_atomic_thread_fence`` instead of
   ``__atomic_thread_fence`` must be used for patches that need to be merged in
   20.08 onwards. This change will not introduce any performance degradation.
+
+* mempool: The ``flushthresh`` field in ``struct rte_mempool_cache`` is obsolete,
+  and will be removed in DPDK 26.11.
+
+* mempool: The object array in ``struct rte_mempool_cache`` is oversize by factor two,
+  and will be reduced to ``RTE_MEMPOOL_CACHE_MAX_SIZE`` in DPDK 26.11.
 
 * lib: will fix extending some enum/define breaking the ABI. There are multiple
   samples in DPDK that enum/define terminated with a ``.*MAX.*`` value which is
@@ -131,10 +136,17 @@ Deprecation Notices
   The legacy actions should be removed
   once ``MODIFY_FIELD`` alternative is implemented in drivers.
 
-* cryptodev: Support for OpenSSL versions earlier than 3.0 is deprecated
-  and will be removed. OpenSSL 1.1.1 reached end-of-life in September 2023.
-  The minimum supported OpenSSL version will be 3.0,
-  and version checks for earlier OpenSSL versions will be removed from the PMD.
+* ethdev: Starting in 26.11, the function ``rte_eth_dev_get_name_by_port()``
+  will take a size parameter as well as the string buffer.
+  This will detect and prevent accidental overwriting of caller provided buffer.
+
+* graph: The internal scheduling mechanism of ``struct rte_graph``
+  will change in DPDK 26.11.
+  The circular buffer fields (``head``, ``tail``, ``cir_mask``, ``cir_start``)
+  will be replaced with a topological bitmap scheduler.
+  A new field will be added to ``struct rte_node`` for the scheduling order.
+  The graph walk functions will process nodes in topological order
+  using bitmap scanning instead of the circular buffer.
 
 * pipeline: The pipeline library legacy API (functions rte_pipeline_*)
   will be deprecated and subsequently removed in DPDK 24.11 release.
@@ -154,3 +166,14 @@ Deprecation Notices
 * bus/vmbus: Starting DPDK 25.11, all the vmbus API defined in
   ``drivers/bus/vmbus/rte_bus_vmbus.h`` will become internal to DPDK.
   Those API functions are used internally by DPDK core and netvsc PMD.
+
+* net/iavf: The dynamic mbuf field used to detect LLDP packets on the
+  transmit path in the iavf PMD will be removed in a future release.
+  After removal, only packet type-based detection will be supported.
+
+* net/iavf: The ``auto_reconfig`` devarg is deprecated
+  and will be removed in a future release.
+  It allows disabling the automatic restoration of device settings
+  after a VF reset, but this is of questionable value
+  since most applications expect their settings to be preserved
+  transparently across a reset.

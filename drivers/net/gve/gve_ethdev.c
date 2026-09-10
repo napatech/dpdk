@@ -13,6 +13,8 @@
 #include <ethdev_driver.h>
 
 static int gve_init_priv(struct gve_priv *priv, bool skip_describe_device);
+static void gve_start_dev_status_polling(struct rte_eth_dev *dev);
+static void gve_stop_dev_status_polling(struct rte_eth_dev *dev);
 
 static void
 gve_write_version(uint8_t *driver_version_register)
@@ -212,6 +214,7 @@ static int
 gve_dev_configure(struct rte_eth_dev *dev)
 {
 	struct gve_priv *priv = dev->data->dev_private;
+	int err;
 
 	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG) {
 		dev->data->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
@@ -221,13 +224,22 @@ gve_dev_configure(struct rte_eth_dev *dev)
 	if (dev->data->dev_conf.rxmode.offloads & RTE_ETH_RX_OFFLOAD_TCP_LRO)
 		priv->enable_rsc = 1;
 
+	if (dev->data->dev_conf.rxmode.offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
+		err = rte_mbuf_dyn_rx_timestamp_register(&priv->mbuf_timestamp_offset,
+							 &priv->mbuf_timestamp_mask);
+		if (err < 0) {
+			PMD_DRV_LOG(ERR, "Failed to register dynamic timestamp field");
+			return err;
+		}
+	}
+
 	/* Reset RSS RETA in case number of queues changed. */
 	if (priv->rss_config.indir) {
 		struct gve_rss_config update_reta_config;
 		gve_init_rss_config_from_priv(priv, &update_reta_config);
 		gve_generate_rss_reta(dev, &update_reta_config);
 
-		int err = gve_adminq_configure_rss(priv, &update_reta_config);
+		err = gve_adminq_configure_rss(priv, &update_reta_config);
 		if (err)
 			PMD_DRV_LOG(ERR,
 				"Could not reconfigure RSS redirection table.");
@@ -293,6 +305,8 @@ gve_alloc_stats_report(struct gve_priv *priv,
 
 	if (!priv->stats_report_mem)
 		return -ENOMEM;
+
+	memset(priv->stats_report_mem->addr, 0, priv->stats_report_mem->len);
 
 	/* offset by skipping stats written by gve. */
 	priv->stats_start_idx = (GVE_TX_STATS_REPORT_NUM * nb_tx_queues) +
@@ -411,6 +425,11 @@ gve_dev_start(struct rte_eth_dev *dev)
 	struct gve_priv *priv;
 	int ret;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		PMD_DRV_LOG(WARNING, "Cannot start device in secondary.");
+		return -EPERM;
+	}
+
 	ret = gve_start_queues(dev);
 	if (ret != 0) {
 		PMD_DRV_LOG(ERR, "Failed to start queues");
@@ -440,13 +459,117 @@ gve_dev_start(struct rte_eth_dev *dev)
 		}
 	}
 
+	gve_start_dev_status_polling(dev);
+
 	return 0;
+}
+
+static void
+gve_read_nic_clock(void *arg)
+{
+	struct gve_priv *priv = arg;
+	uint32_t fails;
+	uint64_t ts;
+	int err;
+
+	if (!priv || !priv->nic_ts_report_mz)
+		return;
+
+	pthread_mutex_lock(&priv->nic_ts_lock);
+	memset(priv->nic_ts_report, 0, sizeof(struct gve_nic_ts_report));
+
+	err = gve_adminq_report_nic_timestamp(priv, priv->nic_ts_report_mz->iova);
+	if (err == 0) {
+		ts = be64_to_cpu(priv->nic_ts_report->nic_timestamp);
+		pthread_mutex_unlock(&priv->nic_ts_lock);
+		rte_atomic_store_explicit(&priv->last_read_nic_timestamp, ts,
+					  rte_memory_order_relaxed);
+		PMD_DRV_LOG(DEBUG, "Fetched NIC Timestamp: %" PRIu64, ts);
+		rte_atomic_store_explicit(&priv->nic_ts_read_fails, 0,
+					  rte_memory_order_relaxed);
+		rte_atomic_store_explicit(&priv->nic_ts_stale, 0,
+					  rte_memory_order_release);
+	} else {
+		pthread_mutex_unlock(&priv->nic_ts_lock);
+		PMD_DRV_LOG(ERR, "Failed to read NIC clock, AQ err: %d", err);
+		fails = rte_atomic_fetch_add_explicit(&priv->nic_ts_read_fails, 1,
+						      rte_memory_order_relaxed) + 1;
+		if (fails >= GVE_NIC_CLOCK_READ_MAX_FAILS) {
+			if (!rte_atomic_load_explicit(&priv->nic_ts_stale,
+						      rte_memory_order_relaxed))
+				PMD_DRV_LOG(ERR,
+					"NIC timestamping marked as stale after %u consecutive failures",
+					GVE_NIC_CLOCK_READ_MAX_FAILS);
+			rte_atomic_store_explicit(&priv->nic_ts_stale, 1,
+						  rte_memory_order_release);
+		}
+	}
+}
+
+static uint32_t
+gve_nic_ts_thread(void *arg)
+{
+	struct gve_priv *priv = arg;
+	unsigned int sleep_cnt;
+
+	while (!rte_atomic_load_explicit(&priv->nic_ts_thread_should_stop,
+					 rte_memory_order_relaxed)) {
+		gve_read_nic_clock(priv);
+		for (sleep_cnt = 0; sleep_cnt < GVE_NIC_CLOCK_READ_PERIOD_MS / 10; sleep_cnt++) {
+			if (rte_atomic_load_explicit(&priv->nic_ts_thread_should_stop,
+						     rte_memory_order_relaxed))
+				break;
+			rte_delay_us_sleep(10000);
+		}
+	}
+	return 0;
+}
+
+static int
+gve_alloc_nic_ts_report(struct gve_priv *priv)
+{
+	char z_name[RTE_MEMZONE_NAMESIZE];
+
+	snprintf(z_name, sizeof(z_name), "gve_%s_nic_ts_report",
+		 priv->pci_dev->device.name);
+	priv->nic_ts_report_mz = rte_memzone_reserve_aligned(z_name,
+			sizeof(struct gve_nic_ts_report), rte_socket_id(),
+			RTE_MEMZONE_IOVA_CONTIG, PAGE_SIZE);
+
+	if (!priv->nic_ts_report_mz) {
+		PMD_DRV_LOG(ERR, "Failed to allocate memzone for NIC TS report");
+		return -ENOMEM;
+	}
+	priv->nic_ts_report = priv->nic_ts_report_mz->addr;
+	rte_atomic_store_explicit(&priv->nic_ts_read_fails, 0, rte_memory_order_relaxed);
+	return 0;
+}
+
+static void
+gve_free_nic_ts_report(struct gve_priv *priv)
+{
+	if (priv->nic_ts_report_mz) {
+		rte_memzone_free(priv->nic_ts_report_mz);
+		priv->nic_ts_report_mz = NULL;
+		priv->nic_ts_report = NULL;
+	}
 }
 
 static int
 gve_dev_stop(struct rte_eth_dev *dev)
 {
 	struct gve_priv *priv = dev->data->dev_private;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+		PMD_DRV_LOG(WARNING, "Cannot stop device in secondary.");
+		return -EPERM;
+	}
+
+	/*
+	 * Block until all polling callbacks have concluded before tearing down
+	 * any device resources.
+	 */
+	gve_stop_dev_status_polling(dev);
 
 	dev->data->dev_started = 0;
 	dev->data->dev_link.link_status = RTE_ETH_LINK_DOWN;
@@ -521,8 +644,7 @@ gve_setup_flow_subsystem(struct gve_priv *priv)
 			priv->flow_rule_bmp_size, 0);
 	if (!priv->avail_flow_rule_bmp_mem) {
 		PMD_DRV_LOG(ERR, "Failed to alloc bitmap for flow rules.");
-		err = -ENOMEM;
-		goto free_flow_rule_bmp;
+		return -ENOMEM;
 	}
 
 	err = gve_flow_init_bmp(priv);
@@ -567,6 +689,13 @@ gve_teardown_device_resources(struct gve_priv *priv)
 				err);
 	}
 
+	if (priv->nic_ts_report_mz) {
+		rte_atomic_store_explicit(&priv->nic_ts_thread_should_stop, 1,
+					  rte_memory_order_relaxed);
+		rte_thread_join(priv->nic_ts_thread_id, NULL);
+		gve_free_nic_ts_report(priv);
+	}
+
 	gve_free_ptype_lut_dqo(priv);
 	gve_free_counter_array(priv);
 	gve_free_irq_db(priv);
@@ -591,11 +720,12 @@ gve_dev_close(struct rte_eth_dev *dev)
 	if (gve_get_flow_subsystem_ok(priv))
 		gve_teardown_flow_subsystem(priv);
 
-	pthread_mutex_destroy(&priv->flow_rule_lock);
-
 	gve_free_queues(dev);
 	gve_teardown_device_resources(priv);
 	gve_adminq_free(priv);
+
+	pthread_mutex_destroy(&priv->flow_rule_lock);
+	pthread_mutex_destroy(&priv->nic_ts_lock);
 
 	dev->data->mac_addrs = NULL;
 
@@ -619,6 +749,11 @@ gve_dev_reset(struct rte_eth_dev *dev)
 	if (gve_get_flow_subsystem_ok(priv))
 		gve_teardown_flow_subsystem(priv);
 
+	/*
+	 * Note that gve_teardown_flow_subsystem does not destroy the
+	 * flow_rule_lock. The lock is preserved across device resets and only
+	 * destroyed on dev_close.
+	 */
 	gve_free_queues(dev);
 	gve_teardown_device_resources(priv);
 	gve_adminq_free(priv);
@@ -705,6 +840,8 @@ gve_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 
 	dev_info->rx_offload_capa = RTE_ETH_RX_OFFLOAD_RSS_HASH;
+	if (!gve_is_gqi(priv) && priv->nic_ts_report_mz)
+		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
 	dev_info->tx_offload_capa =
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS	|
 		RTE_ETH_TX_OFFLOAD_UDP_CKSUM	|
@@ -1159,6 +1296,38 @@ gve_flow_ops_get(struct rte_eth_dev *dev, const struct rte_flow_ops **ops)
 	return 0;
 }
 
+static int
+gve_read_clock(struct rte_eth_dev *dev, uint64_t *clock)
+{
+	struct gve_priv *priv = dev->data->dev_private;
+	uint64_t ts;
+	int err;
+
+	if (!priv->nic_timestamp_supported)
+		return -EOPNOTSUPP;
+
+	if (!priv->nic_ts_report_mz)
+		return -EIO;
+
+	pthread_mutex_lock(&priv->nic_ts_lock);
+	err = gve_adminq_report_nic_timestamp(priv, priv->nic_ts_report_mz->iova);
+	if (err != 0) {
+		pthread_mutex_unlock(&priv->nic_ts_lock);
+		return err;
+	}
+
+	ts = be64_to_cpu(priv->nic_ts_report->nic_timestamp);
+	pthread_mutex_unlock(&priv->nic_ts_lock);
+	*clock = ts;
+
+	/* Update the cached value */
+	rte_atomic_store_explicit(&priv->last_read_nic_timestamp, ts, rte_memory_order_relaxed);
+	rte_atomic_store_explicit(&priv->nic_ts_read_fails, 0, rte_memory_order_relaxed);
+	rte_atomic_store_explicit(&priv->nic_ts_stale, 0, rte_memory_order_release);
+
+	return 0;
+}
+
 static const struct eth_dev_ops gve_eth_dev_ops = {
 	.dev_configure        = gve_dev_configure,
 	.dev_start            = gve_dev_start,
@@ -1213,6 +1382,7 @@ static const struct eth_dev_ops gve_eth_dev_ops_dqo = {
 	.rss_hash_conf_get    = gve_rss_hash_conf_get,
 	.reta_update          = gve_rss_reta_update,
 	.reta_query           = gve_rss_reta_query,
+	.read_clock           = gve_read_clock,
 };
 
 static int
@@ -1226,6 +1396,32 @@ pci_dev_msix_vec_count(struct rte_pci_device *pdev)
 		return (control & RTE_PCI_MSIX_FLAGS_QSIZE) + 1;
 
 	return 0;
+}
+
+static void
+gve_setup_nic_timestamp(struct gve_priv *priv)
+{
+	int err;
+
+	if (!priv->nic_timestamp_supported)
+		return;
+
+	rte_atomic_store_explicit(&priv->nic_ts_read_fails, 0, rte_memory_order_relaxed);
+	rte_atomic_store_explicit(&priv->nic_ts_stale, 1, rte_memory_order_relaxed);
+	err = gve_alloc_nic_ts_report(priv);
+	if (err == 0) {
+		gve_read_nic_clock(priv);
+		rte_atomic_store_explicit(&priv->nic_ts_thread_should_stop, 0,
+					  rte_memory_order_relaxed);
+		err = rte_thread_create_internal_control(&priv->nic_ts_thread_id, "gve-ts",
+							 gve_nic_ts_thread, priv);
+		if (err != 0) {
+			PMD_DRV_LOG(ERR, "Failed to create NIC clock sync thread, err=%d", err);
+			gve_free_nic_ts_report(priv);
+		}
+	} else {
+		PMD_DRV_LOG(ERR, "Failed to allocate memory for NIC timestamping subsystem. Please reset device to retry.");
+	}
 }
 
 static int
@@ -1283,6 +1479,7 @@ gve_setup_device_resources(struct gve_priv *priv)
 			goto free_ptype_lut;
 		}
 	}
+	gve_setup_nic_timestamp(priv);
 
 	gve_set_device_resources_ok(priv);
 
@@ -1307,6 +1504,63 @@ gve_set_default_ring_size_bounds(struct gve_priv *priv)
 	priv->min_rx_desc_cnt = GVE_DEFAULT_MIN_RX_RING_SIZE;
 }
 
+static void
+gve_check_device_status(void *arg)
+{
+	struct rte_eth_dev *dev = arg;
+	struct gve_priv *priv = dev->data->dev_private;
+	uint32_t dev_status;
+	int ret;
+
+	dev_status = ioread32be(&priv->reg_bar0->device_status);
+
+	if (dev_status & GVE_DEVICE_STATUS_RESET_MASK) {
+		PMD_DRV_LOG(INFO,
+			"Device on port %u requests a reset. Stopping device status polling.",
+			dev->data->port_id);
+		rte_eth_dev_callback_process(dev, RTE_ETH_EVENT_INTR_RESET,
+			NULL);
+	} else {
+		ret = rte_eal_alarm_set(GVE_DEV_POLL_INTERVAL_US,
+					gve_check_device_status, dev);
+		if (ret != 0) {
+			PMD_DRV_LOG(ERR,
+				"Port %u: Failed to re-arm alarm poller!",
+				dev->data->port_id);
+		}
+	}
+}
+
+static void
+gve_start_dev_status_polling(struct rte_eth_dev *dev)
+{
+	int ret;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return;
+
+	ret = rte_eal_alarm_set(GVE_DEV_POLL_INTERVAL_US,
+				gve_check_device_status,
+				dev);
+
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR,
+			"Port %u: Failed to arm device reset polling alarm! Err=%d",
+			dev->data->port_id, ret);
+	} else {
+		PMD_DRV_LOG(INFO,
+			"Port %u: Armed device reset polling alarm.",
+			dev->data->port_id);
+	}
+}
+
+static void
+gve_stop_dev_status_polling(struct rte_eth_dev *dev)
+{
+	/* Blocks until all in-progress callbacks have completed. */
+	rte_eal_alarm_cancel(gve_check_device_status, dev);
+}
+
 static int
 gve_init_priv(struct gve_priv *priv, bool skip_describe_device)
 {
@@ -1325,11 +1579,11 @@ gve_init_priv(struct gve_priv *priv, bool skip_describe_device)
 		goto free_adminq;
 	}
 
-	/* Set default descriptor counts */
-	gve_set_default_ring_size_bounds(priv);
-
 	if (skip_describe_device)
 		goto setup_device;
+
+	/* Set default descriptor counts */
+	gve_set_default_ring_size_bounds(priv);
 
 	/* Get the initial information we need from the device */
 	err = gve_adminq_describe_device(priv);
@@ -1410,7 +1664,7 @@ gve_dev_init(struct rte_eth_dev *eth_dev)
 		return 0;
 	}
 
-	pci_dev = RTE_DEV_TO_PCI(eth_dev->device);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 
 	reg_bar = pci_dev->mem_resource[GVE_REG_BAR].addr;
 	if (!reg_bar) {
@@ -1437,9 +1691,19 @@ gve_dev_init(struct rte_eth_dev *eth_dev)
 	priv->max_nb_txq = max_tx_queues;
 	priv->max_nb_rxq = max_rx_queues;
 
+	pthread_mutexattr_init(&mutexattr);
+	pthread_mutexattr_setpshared(&mutexattr, PTHREAD_PROCESS_SHARED);
+	pthread_mutex_init(&priv->flow_rule_lock, &mutexattr);
+	pthread_mutex_init(&priv->nic_ts_lock, &mutexattr);
+	pthread_mutexattr_destroy(&mutexattr);
+
+	priv->mbuf_timestamp_offset = -1;
 	err = gve_init_priv(priv, false);
-	if (err)
+	if (err) {
+		pthread_mutex_destroy(&priv->flow_rule_lock);
+		pthread_mutex_destroy(&priv->nic_ts_lock);
 		return err;
+	}
 
 	if (gve_is_gqi(priv)) {
 		eth_dev->dev_ops = &gve_eth_dev_ops;
@@ -1452,11 +1716,6 @@ gve_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	eth_dev->data->mac_addrs = &priv->dev_addr;
-
-	pthread_mutexattr_init(&mutexattr);
-	pthread_mutexattr_setpshared(&mutexattr, PTHREAD_PROCESS_SHARED);
-	pthread_mutex_init(&priv->flow_rule_lock, &mutexattr);
-	pthread_mutexattr_destroy(&mutexattr);
 
 	return 0;
 }

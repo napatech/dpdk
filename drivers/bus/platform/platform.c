@@ -29,55 +29,20 @@
 
 #define PLATFORM_BUS_DEVICES_PATH "/sys/bus/platform/devices"
 
+static struct rte_bus platform_bus;
+
 RTE_EXPORT_INTERNAL_SYMBOL(rte_platform_register)
 void
 rte_platform_register(struct rte_platform_driver *pdrv)
 {
-	TAILQ_INSERT_TAIL(&platform_bus.driver_list, pdrv, next);
+	rte_bus_add_driver(&platform_bus, &pdrv->driver);
 }
 
 RTE_EXPORT_INTERNAL_SYMBOL(rte_platform_unregister)
 void
 rte_platform_unregister(struct rte_platform_driver *pdrv)
 {
-	TAILQ_REMOVE(&platform_bus.driver_list, pdrv, next);
-}
-
-static struct rte_devargs *
-dev_devargs(const char *dev_name)
-{
-	struct rte_devargs *devargs;
-
-	RTE_EAL_DEVARGS_FOREACH("platform", devargs) {
-		if (!strcmp(devargs->name, dev_name))
-			return devargs;
-	}
-
-	return NULL;
-}
-
-static bool
-dev_allowed(const char *dev_name)
-{
-	struct rte_devargs *devargs;
-
-	devargs = dev_devargs(dev_name);
-	if (devargs == NULL)
-		return true;
-
-	switch (platform_bus.bus.conf.scan_mode) {
-	case RTE_BUS_SCAN_UNDEFINED:
-	case RTE_BUS_SCAN_ALLOWLIST:
-		if (devargs->policy == RTE_DEV_ALLOWED)
-			return true;
-		break;
-	case RTE_BUS_SCAN_BLOCKLIST:
-		if (devargs->policy == RTE_DEV_BLOCKED)
-			return false;
-		break;
-	}
-
-	return true;
+	rte_bus_remove_driver(&platform_bus, &pdrv->driver);
 }
 
 static int
@@ -93,12 +58,11 @@ dev_add(const char *dev_name)
 
 	rte_strscpy(pdev->name, dev_name, sizeof(pdev->name));
 	pdev->device.name = pdev->name;
-	pdev->device.devargs = dev_devargs(dev_name);
-	pdev->device.bus = &platform_bus.bus;
+	pdev->device.devargs = rte_bus_find_devargs(&platform_bus, dev_name);
 	snprintf(path, sizeof(path), PLATFORM_BUS_DEVICES_PATH "/%s/numa_node", dev_name);
 	pdev->device.numa_node = eal_parse_sysfs_value(path, &val) ? rte_socket_id() : val;
 
-	FOREACH_DEVICE_ON_PLATFORM_BUS(tmp) {
+	RTE_BUS_FOREACH_DEV(tmp, &platform_bus) {
 		if (!strcmp(tmp->name, pdev->name)) {
 			PLATFORM_LOG_LINE(INFO, "device %s already added", pdev->name);
 
@@ -110,7 +74,7 @@ dev_add(const char *dev_name)
 		}
 	}
 
-	TAILQ_INSERT_HEAD(&platform_bus.device_list, pdev, next);
+	rte_bus_add_device(&platform_bus, &pdev->device);
 
 	PLATFORM_LOG_LINE(INFO, "adding device %s to the list", dev_name);
 
@@ -173,7 +137,7 @@ platform_bus_scan(void)
 		if (dev_name[0] == '.')
 			continue;
 
-		if (!dev_allowed(dev_name))
+		if (rte_bus_device_is_ignored(&platform_bus, dev_name))
 			continue;
 
 		if (!dev_is_bound_vfio_platform(dev_name))
@@ -367,19 +331,8 @@ out:
 static int
 driver_call_probe(struct rte_platform_driver *pdrv, struct rte_platform_device *pdev)
 {
-	int ret;
-
-	if (rte_dev_is_probed(&pdev->device))
-		return -EBUSY;
-
-	if (pdrv->probe != NULL) {
-		pdev->driver = pdrv;
-		ret = pdrv->probe(pdev);
-		if (ret)
-			return ret;
-	}
-
-	pdev->device.driver = &pdrv->driver;
+	if (pdrv->probe != NULL)
+		return pdrv->probe(pdev);
 
 	return 0;
 }
@@ -409,8 +362,10 @@ driver_probe_device(struct rte_platform_driver *pdrv, struct rte_platform_device
 }
 
 static bool
-driver_match_device(struct rte_platform_driver *pdrv, struct rte_platform_device *pdev)
+platform_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
+	const struct rte_platform_driver *pdrv = RTE_BUS_DRIVER(drv, *pdrv);
+	const struct rte_platform_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
 	bool match = false;
 	char *kdrv;
 
@@ -441,105 +396,35 @@ out:
 }
 
 static int
-device_attach(struct rte_platform_device *pdev)
+platform_bus_probe_device(struct rte_driver *drv, struct rte_device *dev)
 {
-	struct rte_platform_driver *pdrv;
-
-	FOREACH_DRIVER_ON_PLATFORM_BUS(pdrv) {
-		if (driver_match_device(pdrv, pdev))
-			break;
-	}
-
-	if (pdrv == NULL)
-		return -ENODEV;
-
-	return driver_probe_device(pdrv, pdev);
-}
-
-static int
-platform_bus_probe(void)
-{
-	struct rte_platform_device *pdev;
-	int ret;
-
-	FOREACH_DEVICE_ON_PLATFORM_BUS(pdev) {
-		ret = device_attach(pdev);
-		if (ret == -EBUSY) {
-			PLATFORM_LOG_LINE(DEBUG, "device %s already probed", pdev->name);
-			continue;
-		}
-		if (ret)
-			PLATFORM_LOG_LINE(ERR, "failed to probe %s", pdev->name);
-	}
-
-	return 0;
-}
-
-static struct rte_device *
-platform_bus_find_device(const struct rte_device *start, rte_dev_cmp_t cmp, const void *data)
-{
-	struct rte_platform_device *pdev;
-
-	pdev = start ? RTE_TAILQ_NEXT(RTE_DEV_TO_PLATFORM_DEV_CONST(start), next) :
-		       RTE_TAILQ_FIRST(&platform_bus.device_list);
-	while (pdev) {
-		if (cmp(&pdev->device, data) == 0)
-			return &pdev->device;
-
-		pdev = RTE_TAILQ_NEXT(pdev, next);
-	}
-
-	return NULL;
-}
-
-static int
-platform_bus_plug(struct rte_device *dev)
-{
-	struct rte_platform_device *pdev;
-
-	if (!dev_allowed(dev->name))
-		return -EPERM;
-
 	if (!dev_is_bound_vfio_platform(dev->name))
 		return -EPERM;
 
-	pdev = RTE_DEV_TO_PLATFORM_DEV(dev);
-	if (pdev == NULL)
-		return -EINVAL;
-
-	return device_attach(pdev);
+	return driver_probe_device(RTE_BUS_DRIVER(drv, struct rte_platform_driver),
+		RTE_BUS_DEVICE(dev, struct rte_platform_device));
 }
 
 static void
 device_release_driver(struct rte_platform_device *pdev)
 {
-	struct rte_platform_driver *pdrv;
+	const struct rte_platform_driver *pdrv = RTE_BUS_DRIVER(pdev->device.driver, *pdrv);
 	int ret;
 
-	pdrv = pdev->driver;
-	if (pdrv != NULL && pdrv->remove != NULL) {
+	if (pdrv->remove != NULL) {
 		ret = pdrv->remove(pdev);
 		if (ret)
 			PLATFORM_LOG_LINE(WARNING, "failed to remove %s", pdev->name);
 	}
-
-	pdev->device.driver = NULL;
-	pdev->driver = NULL;
 }
 
 static int
-platform_bus_unplug(struct rte_device *dev)
+platform_bus_unplug_device(struct rte_device *dev)
 {
-	struct rte_platform_device *pdev;
-
-	pdev = RTE_DEV_TO_PLATFORM_DEV(dev);
-	if (pdev == NULL)
-		return -EINVAL;
+	struct rte_platform_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
 
 	device_release_driver(pdev);
 	device_cleanup(pdev);
-	rte_devargs_remove(pdev->device.devargs);
-	free(pdev);
 
 	return 0;
 }
@@ -553,8 +438,8 @@ platform_bus_parse(const char *name, void *addr)
 
 	rte_strscpy(pdev.name, name, sizeof(pdev.name));
 
-	FOREACH_DRIVER_ON_PLATFORM_BUS(pdrv) {
-		if (driver_match_device(pdrv, &pdev))
+	RTE_BUS_FOREACH_DRV(pdrv, &platform_bus) {
+		if (platform_bus_match(&pdrv->driver, &pdev.device))
 			break;
 	}
 
@@ -567,16 +452,11 @@ platform_bus_parse(const char *name, void *addr)
 static int
 platform_bus_dma_map(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 {
-	struct rte_platform_device *pdev;
+	struct rte_platform_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
+	const struct rte_platform_driver *pdrv = RTE_BUS_DRIVER(dev->driver, *pdrv);
 
-	pdev = RTE_DEV_TO_PLATFORM_DEV(dev);
-	if (pdev == NULL || pdev->driver == NULL) {
-		rte_errno = EINVAL;
-		return -1;
-	}
-
-	if (pdev->driver->dma_map != NULL)
-		return pdev->driver->dma_map(pdev, addr, iova, len);
+	if (pdrv->dma_map != NULL)
+		return pdrv->dma_map(pdev, addr, iova, len);
 
 	return rte_vfio_container_dma_map(RTE_VFIO_DEFAULT_CONTAINER_FD, (uint64_t)addr, iova, len);
 }
@@ -584,16 +464,11 @@ platform_bus_dma_map(struct rte_device *dev, void *addr, uint64_t iova, size_t l
 static int
 platform_bus_dma_unmap(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 {
-	struct rte_platform_device *pdev;
+	struct rte_platform_device *pdev = RTE_BUS_DEVICE(dev, *pdev);
+	const struct rte_platform_driver *pdrv = RTE_BUS_DRIVER(dev->driver, *pdrv);
 
-	pdev = RTE_DEV_TO_PLATFORM_DEV(dev);
-	if (pdev == NULL || pdev->driver == NULL) {
-		rte_errno = EINVAL;
-		return -1;
-	}
-
-	if (pdev->driver->dma_unmap != NULL)
-		return pdev->driver->dma_unmap(pdev, addr, iova, len);
+	if (pdrv->dma_unmap != NULL)
+		return pdrv->dma_unmap(pdev, addr, iova, len);
 
 	return rte_vfio_container_dma_unmap(RTE_VFIO_DEFAULT_CONTAINER_FD, (uint64_t)addr, iova,
 					    len);
@@ -602,48 +477,41 @@ platform_bus_dma_unmap(struct rte_device *dev, void *addr, uint64_t iova, size_t
 static enum rte_iova_mode
 platform_bus_get_iommu_class(void)
 {
-	struct rte_platform_driver *pdrv;
+	const struct rte_platform_driver *pdrv;
 	struct rte_platform_device *pdev;
 
-	FOREACH_DEVICE_ON_PLATFORM_BUS(pdev) {
-		pdrv = pdev->driver;
-		if (pdrv != NULL && pdrv->drv_flags & RTE_PLATFORM_DRV_NEED_IOVA_AS_VA)
+	RTE_BUS_FOREACH_DEV(pdev, &platform_bus) {
+		if (!rte_dev_is_probed(&pdev->device))
+			continue;
+		pdrv = RTE_BUS_DRIVER(pdev->device.driver, *pdrv);
+		if (pdrv->drv_flags & RTE_PLATFORM_DRV_NEED_IOVA_AS_VA)
 			return RTE_IOVA_VA;
 	}
 
 	return RTE_IOVA_DC;
 }
 
-static int
-platform_bus_cleanup(void)
+static void
+platform_free_device(struct rte_device *dev)
 {
-	struct rte_platform_device *pdev, *tmp;
-
-	RTE_TAILQ_FOREACH_SAFE(pdev, &platform_bus.device_list, next, tmp) {
-		TAILQ_REMOVE(&platform_bus.device_list, pdev, next);
-		platform_bus_unplug(&pdev->device);
-	}
-
-	return 0;
+	free(RTE_BUS_DEVICE(dev, struct rte_platform_device));
 }
 
-struct rte_platform_bus platform_bus = {
-	.bus = {
-		.scan = platform_bus_scan,
-		.probe = platform_bus_probe,
-		.find_device = platform_bus_find_device,
-		.plug = platform_bus_plug,
-		.unplug = platform_bus_unplug,
-		.parse = platform_bus_parse,
-		.dma_map = platform_bus_dma_map,
-		.dma_unmap = platform_bus_dma_unmap,
-		.get_iommu_class = platform_bus_get_iommu_class,
-		.dev_iterate = platform_bus_dev_iterate,
-		.cleanup = platform_bus_cleanup,
-	},
-	.device_list = TAILQ_HEAD_INITIALIZER(platform_bus.device_list),
-	.driver_list = TAILQ_HEAD_INITIALIZER(platform_bus.driver_list),
+static struct rte_bus platform_bus = {
+	.scan = platform_bus_scan,
+	.probe = rte_bus_generic_probe,
+	.free_device = platform_free_device,
+	.cleanup = rte_bus_generic_cleanup,
+	.find_device = rte_bus_generic_find_device,
+	.match = platform_bus_match,
+	.probe_device = platform_bus_probe_device,
+	.unplug_device = platform_bus_unplug_device,
+	.parse = platform_bus_parse,
+	.dma_map = platform_bus_dma_map,
+	.dma_unmap = platform_bus_dma_unmap,
+	.get_iommu_class = platform_bus_get_iommu_class,
+	.dev_iterate = rte_bus_generic_dev_iterate,
 };
 
-RTE_REGISTER_BUS(platform, platform_bus.bus);
+RTE_REGISTER_BUS(platform, platform_bus);
 RTE_LOG_REGISTER_DEFAULT(platform_bus_logtype, NOTICE);

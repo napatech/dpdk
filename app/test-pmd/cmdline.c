@@ -447,9 +447,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"rx_vxlan_port rm (udp_port) (port_id)\n"
 			"    Remove an UDP port for VXLAN packet filter on a port\n\n"
 
-			"tx_vlan set (port_id) vlan_id[, vlan_id_outer]\n"
-			"    Set hardware insertion of VLAN IDs (single or double VLAN "
-			"depends on the number of VLAN IDs) in packets sent on a port.\n\n"
+			"tx_vlan set (port_id) vlan_tci[, vlan_tci_outer]\n"
+			"    Set hardware insertion of VLAN TCI (single or double VLAN "
+			"depends on the number of VLAN TCIs) in packets sent on a port.\n\n"
 
 			"tx_vlan set pvid port_id vlan_id (on|off)\n"
 			"    Set port based TX VLAN insertion.\n\n"
@@ -3076,11 +3076,13 @@ cmd_setup_rxtx_queue_parsed(
 		if (!numa_support || socket_id == NUMA_NO_CONFIG)
 			socket_id = port->socket_id;
 
-		mp = mbuf_pool_find(socket_id, 0);
+		mp = mbuf_pool_find_first(socket_id);
 		if (mp == NULL) {
+			char buf[16];
+
 			fprintf(stderr,
-				"Failed to setup RX queue: No mempool allocation on the socket %d\n",
-				rxring_numa[res->portid]);
+				"Failed to setup RX queue: No mempool allocation on the socket %s\n",
+				socket_id_str(socket_id, buf, sizeof(buf)));
 			return;
 		}
 		ret = rx_queue_setup(res->portid,
@@ -3090,7 +3092,8 @@ cmd_setup_rxtx_queue_parsed(
 				     &port->rxq[res->qid].conf,
 				     mp);
 		if (ret)
-			fprintf(stderr, "Failed to setup RX queue\n");
+			fprintf(stderr, "Failed to setup RX queue: %s\n",
+				rte_strerror(-ret));
 	} else {
 		socket_id = txring_numa[res->portid];
 		if (!numa_support || socket_id == NUMA_NO_CONFIG)
@@ -3107,7 +3110,8 @@ cmd_setup_rxtx_queue_parsed(
 					     socket_id,
 					     &port->txq[res->qid].conf);
 		if (ret)
-			fprintf(stderr, "Failed to setup TX queue\n");
+			fprintf(stderr, "Failed to setup TX queue: %s\n",
+				rte_strerror(-ret));
 	}
 }
 
@@ -4931,7 +4935,7 @@ struct cmd_tx_vlan_set_result {
 	cmdline_fixed_string_t tx_vlan;
 	cmdline_fixed_string_t set;
 	portid_t port_id;
-	uint16_t vlan_id;
+	uint16_t vlan_tci;
 };
 
 static void
@@ -4949,7 +4953,7 @@ cmd_tx_vlan_set_parsed(void *parsed_result,
 		return;
 	}
 
-	tx_vlan_set(res->port_id, res->vlan_id);
+	tx_vlan_set(res->port_id, res->vlan_tci);
 
 	cmd_reconfig_device_queue(res->port_id, 1, 1);
 }
@@ -4963,21 +4967,21 @@ static cmdline_parse_token_string_t cmd_tx_vlan_set_set =
 static cmdline_parse_token_num_t cmd_tx_vlan_set_portid =
 	TOKEN_NUM_INITIALIZER(struct cmd_tx_vlan_set_result,
 			      port_id, RTE_UINT16);
-static cmdline_parse_token_num_t cmd_tx_vlan_set_vlanid =
+static cmdline_parse_token_num_t cmd_tx_vlan_set_vlantci =
 	TOKEN_NUM_INITIALIZER(struct cmd_tx_vlan_set_result,
-			      vlan_id, RTE_UINT16);
+			      vlan_tci, RTE_UINT16);
 
 static cmdline_parse_inst_t cmd_tx_vlan_set = {
 	.f = cmd_tx_vlan_set_parsed,
 	.data = NULL,
-	.help_str = "tx_vlan set <port_id> <vlan_id>: "
+	.help_str = "tx_vlan set <port_id> <vlan_tci>: "
 		"Enable hardware insertion of a single VLAN header "
-		"with a given TAG Identifier in packets sent on a port",
+		"with a given TCI in packets sent on a port",
 	.tokens = {
 		(void *)&cmd_tx_vlan_set_tx_vlan,
 		(void *)&cmd_tx_vlan_set_set,
 		(void *)&cmd_tx_vlan_set_portid,
-		(void *)&cmd_tx_vlan_set_vlanid,
+		(void *)&cmd_tx_vlan_set_vlantci,
 		NULL,
 	},
 };
@@ -4987,8 +4991,8 @@ struct cmd_tx_vlan_set_qinq_result {
 	cmdline_fixed_string_t tx_vlan;
 	cmdline_fixed_string_t set;
 	portid_t port_id;
-	uint16_t vlan_id;
-	uint16_t vlan_id_outer;
+	uint16_t vlan_tci;
+	uint16_t vlan_tci_outer;
 };
 
 static void
@@ -5006,7 +5010,7 @@ cmd_tx_vlan_set_qinq_parsed(void *parsed_result,
 		return;
 	}
 
-	tx_qinq_set(res->port_id, res->vlan_id, res->vlan_id_outer);
+	tx_qinq_set(res->port_id, res->vlan_tci, res->vlan_tci_outer);
 
 	cmd_reconfig_device_queue(res->port_id, 1, 1);
 }
@@ -5020,25 +5024,25 @@ static cmdline_parse_token_string_t cmd_tx_vlan_set_qinq_set =
 static cmdline_parse_token_num_t cmd_tx_vlan_set_qinq_portid =
 	TOKEN_NUM_INITIALIZER(struct cmd_tx_vlan_set_qinq_result,
 		port_id, RTE_UINT16);
-static cmdline_parse_token_num_t cmd_tx_vlan_set_qinq_vlanid =
+static cmdline_parse_token_num_t cmd_tx_vlan_set_qinq_vlantci =
 	TOKEN_NUM_INITIALIZER(struct cmd_tx_vlan_set_qinq_result,
-		vlan_id, RTE_UINT16);
-static cmdline_parse_token_num_t cmd_tx_vlan_set_qinq_vlanid_outer =
+		vlan_tci, RTE_UINT16);
+static cmdline_parse_token_num_t cmd_tx_vlan_set_qinq_vlantci_outer =
 	TOKEN_NUM_INITIALIZER(struct cmd_tx_vlan_set_qinq_result,
-		vlan_id_outer, RTE_UINT16);
+		vlan_tci_outer, RTE_UINT16);
 
 static cmdline_parse_inst_t cmd_tx_vlan_set_qinq = {
 	.f = cmd_tx_vlan_set_qinq_parsed,
 	.data = NULL,
-	.help_str = "tx_vlan set <port_id> <vlan_id> <outer_vlan_id>: "
+	.help_str = "tx_vlan set <port_id> <vlan_tci> <vlan_tci_outer>: "
 		"Enable hardware insertion of double VLAN header "
-		"with given TAG Identifiers in packets sent on a port",
+		"with given TCIs in packets sent on a port",
 	.tokens = {
 		(void *)&cmd_tx_vlan_set_qinq_tx_vlan,
 		(void *)&cmd_tx_vlan_set_qinq_set,
 		(void *)&cmd_tx_vlan_set_qinq_portid,
-		(void *)&cmd_tx_vlan_set_qinq_vlanid,
-		(void *)&cmd_tx_vlan_set_qinq_vlanid_outer,
+		(void *)&cmd_tx_vlan_set_qinq_vlantci,
+		(void *)&cmd_tx_vlan_set_qinq_vlantci_outer,
 		NULL,
 	},
 };
@@ -8978,6 +8982,74 @@ static cmdline_parse_inst_t cmd_queue_rate_limit = {
 		(void *)&cmd_queue_rate_limit_queuenum,
 		(void *)&cmd_queue_rate_limit_rate,
 		(void *)&cmd_queue_rate_limit_ratenum,
+		NULL,
+	},
+};
+
+/* *** SHOW RATE LIMIT FOR A QUEUE OF A PORT *** */
+struct cmd_show_queue_rate_limit_result {
+	cmdline_fixed_string_t show;
+	cmdline_fixed_string_t port;
+	uint16_t port_num;
+	cmdline_fixed_string_t queue;
+	uint16_t queue_num;
+	cmdline_fixed_string_t rate;
+};
+
+static void cmd_show_queue_rate_limit_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_show_queue_rate_limit_result *res = parsed_result;
+	uint32_t tx_rate = 0;
+	int ret;
+
+	ret = rte_eth_get_queue_rate_limit(res->port_num, res->queue_num,
+					   &tx_rate);
+	if (ret) {
+		fprintf(stderr, "Get queue rate limit failed: %s\n",
+			rte_strerror(-ret));
+		return;
+	}
+	if (tx_rate)
+		printf("Port %u Queue %u rate limit: %u Mbps\n",
+		       res->port_num, res->queue_num, tx_rate);
+	else
+		printf("Port %u Queue %u rate limit: disabled\n",
+		       res->port_num, res->queue_num);
+}
+
+static cmdline_parse_token_string_t cmd_show_queue_rate_limit_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_queue_rate_limit_result,
+				show, "show");
+static cmdline_parse_token_string_t cmd_show_queue_rate_limit_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_queue_rate_limit_result,
+				port, "port");
+static cmdline_parse_token_num_t cmd_show_queue_rate_limit_portnum =
+	TOKEN_NUM_INITIALIZER(struct cmd_show_queue_rate_limit_result,
+				port_num, RTE_UINT16);
+static cmdline_parse_token_string_t cmd_show_queue_rate_limit_queue =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_queue_rate_limit_result,
+				queue, "queue");
+static cmdline_parse_token_num_t cmd_show_queue_rate_limit_queuenum =
+	TOKEN_NUM_INITIALIZER(struct cmd_show_queue_rate_limit_result,
+				queue_num, RTE_UINT16);
+static cmdline_parse_token_string_t cmd_show_queue_rate_limit_rate =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_queue_rate_limit_result,
+				rate, "rate");
+
+static cmdline_parse_inst_t cmd_show_queue_rate_limit = {
+	.f = cmd_show_queue_rate_limit_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> queue <queue_id> rate: "
+		"Show rate limit for a queue on port_id",
+	.tokens = {
+		(void *)&cmd_show_queue_rate_limit_show,
+		(void *)&cmd_show_queue_rate_limit_port,
+		(void *)&cmd_show_queue_rate_limit_portnum,
+		(void *)&cmd_show_queue_rate_limit_queue,
+		(void *)&cmd_show_queue_rate_limit_queuenum,
+		(void *)&cmd_show_queue_rate_limit_rate,
 		NULL,
 	},
 };
@@ -14270,6 +14342,7 @@ static cmdline_parse_ctx_t builtin_ctx[] = {
 	&cmd_set_uc_all_hash_filter,
 	&cmd_vf_mac_addr_filter,
 	&cmd_queue_rate_limit,
+	&cmd_show_queue_rate_limit,
 	&cmd_tunnel_udp_config,
 	&cmd_showport_rss_hash,
 	&cmd_showport_rss_hash_key,

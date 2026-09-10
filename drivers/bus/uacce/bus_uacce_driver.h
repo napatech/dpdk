@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <linux/types.h>
 
+#include <rte_bitops.h>
 #include <rte_compat.h>
 #include <rte_devargs.h>
 #include <dev_driver.h>
@@ -27,6 +28,11 @@ extern "C" {
 #define RTE_UACCE_API_NAME_SIZE		64
 #define RTE_UACCE_ALGS_NAME_SIZE	384
 #define RTE_UACCE_ATTR_MAX_SIZE		384
+
+/* UACCE device flag of SVA. */
+#define UACCE_DEV_FLAG_SVA	RTE_BIT32(0)
+/* UACCE device flag of NOIOMMU. */
+#define UACCE_DEV_FLAG_NOIOMMU	RTE_BIT32(1)
 
 /*
  * Definition for queue file region type.
@@ -43,9 +49,7 @@ struct rte_uacce_driver;
  * A structure describing a UACCE device.
  */
 struct rte_uacce_device {
-	RTE_TAILQ_ENTRY(rte_uacce_device) next;  /**< Next in device list. */
 	struct rte_device device;                /**< Inherit core device. */
-	struct rte_uacce_driver *driver;         /**< Driver used in probing. */
 	char name[RTE_DEV_NAME_MAX_LEN];         /**< Device name. */
 	char dev_root[RTE_UACCE_DEV_PATH_SIZE];  /**< Sysfs path with device name. */
 	char cdev_path[RTE_UACCE_DEV_PATH_SIZE]; /**< Device path in devfs. */
@@ -56,16 +60,6 @@ struct rte_uacce_device {
 	int numa_node;                           /**< NUMA node connection, -1 if unknown. */
 	uint32_t qfrt_sz[RTE_UACCE_QFRT_BUTT];   /**< Queue file region type's size. */
 };
-
-/**
- * @internal
- * Helper macro for drivers that need to convert to struct rte_uacce_device.
- */
-#define RTE_DEV_TO_UACCE_DEV(ptr) \
-	container_of(ptr, struct rte_uacce_device, device)
-
-#define RTE_DEV_TO_UACCE_DEV_CONST(ptr) \
-	container_of(ptr, const struct rte_uacce_device, device)
 
 /**
  * A structure describing an ID for a UACCE driver. Each driver provides a
@@ -95,9 +89,7 @@ typedef int (rte_uacce_remove_t)(struct rte_uacce_device *);
  * A structure describing a UACCE driver.
  */
 struct rte_uacce_driver {
-	RTE_TAILQ_ENTRY(rte_uacce_driver) next;	/**< Next in list. */
 	struct rte_driver driver;               /**< Inherit core driver. */
-	struct rte_uacce_bus *bus;              /**< UACCE bus reference. */
 	rte_uacce_probe_t *probe;               /**< Device probe function. */
 	rte_uacce_remove_t *remove;             /**< Device remove function. */
 	const struct rte_uacce_id *id_table;    /**< ID table, NULL terminated. */
@@ -106,6 +98,8 @@ struct rte_uacce_driver {
 
 /** Device driver supports forward compatibility device */
 #define RTE_UACCE_DRV_FORWARD_COMPATIBILITY_DEV	0x1
+/** Device driver supports NO-IOMMU mode */
+#define RTE_UACCE_DRV_SUPPORT_NOIOMMU_MODE	0x2
 
 /**
  * Get available queue number.

@@ -261,11 +261,6 @@ static const struct rte_txgbe_xstats_name_off rte_txgbe_stats_strings[] = {
 	HW_XSTAT(tx_size_1024_to_max_packets),
 
 	/* Flow Control */
-	HW_XSTAT(tx_xon_packets),
-	HW_XSTAT(rx_xon_packets),
-	HW_XSTAT(tx_xoff_packets),
-	HW_XSTAT(rx_xoff_packets),
-
 	HW_XSTAT_NAME(tx_xon_packets, "tx_flow_control_xon_packets"),
 	HW_XSTAT_NAME(rx_xon_packets, "rx_flow_control_xon_packets"),
 	HW_XSTAT_NAME(tx_xoff_packets, "tx_flow_control_xoff_packets"),
@@ -525,7 +520,7 @@ static void
 txgbe_parse_devargs(struct rte_eth_dev *dev)
 {
 	struct rte_eth_fdir_conf *fdir_conf = TXGBE_DEV_FDIR_CONF(dev);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_devargs *devargs = pci_dev->device.devargs;
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	struct rte_kvargs *kvlist;
@@ -597,11 +592,22 @@ null:
 	fdir_conf->drop_queue = drop_queue;
 }
 
+static void
+txgbe_override_mac_ops(struct txgbe_hw *hw)
+{
+	struct txgbe_mac_info *mac = &hw->mac;
+
+	if (hw->phy.multispeed_fiber)
+		mac->setup_mac_link = txgbe_setup_mac_link_aml;
+	else
+		mac->setup_link = txgbe_setup_mac_link_aml;
+}
+
 static int
 eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 {
 	struct txgbe_adapter *ad = eth_dev->data->dev_private;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(eth_dev);
 	struct txgbe_vfta *shadow_vfta = TXGBE_DEV_VFTA(eth_dev);
 	struct txgbe_hwstrip *hwstrip = TXGBE_DEV_HWSTRIP(eth_dev);
@@ -656,6 +662,7 @@ eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 
 	/* Vendor and Device ID need to be set before init of shared code */
 	hw->back = pci_dev;
+	hw->dev_back = eth_dev;
 	hw->port_id = eth_dev->data->port_id;
 	hw->device_id = pci_dev->id.device_id;
 	hw->vendor_id = pci_dev->id.vendor_id;
@@ -690,6 +697,9 @@ eth_txgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 		PMD_INIT_LOG(ERR, "Shared code init failed: %d", err);
 		return -EIO;
 	}
+
+	if (hw->mac.type == txgbe_mac_aml)
+		txgbe_override_mac_ops(hw);
 
 	/* Unlock any pending hardware semaphore */
 	txgbe_swfw_lock_reset(hw);
@@ -1397,7 +1407,7 @@ txgbe_vmdq_vlan_hw_filter_enable(struct rte_eth_dev *dev)
 static int
 txgbe_check_vf_rss_rxq_num(struct rte_eth_dev *dev, uint16_t nb_rx_q)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 
 	switch (nb_rx_q) {
 	case 1:
@@ -1664,7 +1674,7 @@ txgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
 	struct rte_pci_device *pci_dev;
 	int ret;
 
-	pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	ret = rte_eth_link_get_nowait(dev->data->port_id, &link);
 	if (ret < 0)
 		return ret;
@@ -1736,7 +1746,7 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	struct txgbe_hw_stats *hw_stats = TXGBE_DEV_STATS(dev);
 	struct txgbe_vf_info *vfinfo = *TXGBE_DEV_VFDATA(dev);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t intr_vector = 0;
 	int err;
@@ -2000,6 +2010,12 @@ skip_link_setup:
 	txgbe_l2_tunnel_conf(dev);
 	txgbe_filter_restore(dev);
 
+	hw->bp_event_interval = 100 * 1000;
+	if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40) {
+		rte_eal_alarm_set(hw->bp_event_interval, txgbe_dev_e56_check_bp_event, dev);
+		rte_eal_alarm_set(1000 * 1000 * 2, txgbe_dev_check_aml_temp_event, dev);
+	}
+
 	if (tm_conf->root && !tm_conf->committed)
 		PMD_DRV_LOG(WARNING,
 			    "please call hierarchy_commit() "
@@ -2034,7 +2050,7 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 	struct txgbe_adapter *adapter = TXGBE_DEV_ADAPTER(dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	struct txgbe_vf_info *vfinfo = *TXGBE_DEV_VFDATA(dev);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int vf;
 	struct txgbe_tm_conf *tm_conf = TXGBE_DEV_TM_CONF(dev);
@@ -2043,6 +2059,12 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 		goto out;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40) {
+		rte_eal_alarm_cancel(txgbe_dev_e56_check_bp_event, dev);
+		rte_eal_alarm_cancel(txgbe_dev_check_aml_temp_event, dev);
+		rte_eal_alarm_cancel(txgbe_dev_setup_link_alarm_handler_aml, hw);
+	}
 
 	rte_eal_alarm_cancel(txgbe_dev_detect_sfp, dev);
 	rte_eal_alarm_cancel(txgbe_tx_queue_clear_error, dev);
@@ -2163,7 +2185,7 @@ static int
 txgbe_dev_close(struct rte_eth_dev *dev)
 {
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int retries = 0;
 	int ret;
@@ -2269,16 +2291,18 @@ txgbe_dev_reset(struct rte_eth_dev *dev)
 	return ret;
 }
 
+#define TXGBE_UPDATE_COUNTER_32BIT_GENERIC(reg, last, count, reset)  \
+	do {                                                            \
+		uint32_t current = rd32(hw, reg);                       \
+		if ((current) < (last))                                 \
+			current += 0x100000000ULL;                      \
+		if (reset)                                           \
+			(last) = current;                               \
+		(count) = (uint32_t)((current) - (last));               \
+	} while (0)
+
 #define UPDATE_QP_COUNTER_32bit(reg, last_counter, counter)     \
-	{                                                       \
-		uint32_t current_counter = rd32(hw, reg);       \
-		if (current_counter < last_counter)             \
-			current_counter += 0x100000000LL;       \
-		if (!hw->offset_loaded)                         \
-			last_counter = current_counter;         \
-		counter = current_counter - last_counter;       \
-		counter &= 0xFFFFFFFFLL;                        \
-	}
+	TXGBE_UPDATE_COUNTER_32BIT_GENERIC(reg, last_counter, counter, !hw->offset_loaded)
 
 #define UPDATE_QP_COUNTER_36bit(reg_lsb, reg_msb, last_counter, counter) \
 	{                                                                \
@@ -2336,8 +2360,18 @@ txgbe_read_stats_registers(struct txgbe_hw *hw,
 		hw_stats->up[i].rx_up_dropped +=
 				rd32(hw, TXGBE_PBRXMISS(i));
 	}
-	hw_stats->rx_xon_packets += rd32(hw, TXGBE_PBRXLNKXON);
-	hw_stats->rx_xoff_packets += rd32(hw, TXGBE_PBRXLNKXOFF);
+
+	if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40) {
+		TXGBE_UPDATE_COUNTER_32BIT_GENERIC(TXGBE_PBRXLNKXON_AML,
+						   hw->last_stats.rx_xon_packets,
+						   hw_stats->rx_xon_packets, !hw->offset_loaded);
+		TXGBE_UPDATE_COUNTER_32BIT_GENERIC(TXGBE_PBRXLNKXOFF_AML,
+						   hw->last_stats.rx_xoff_packets,
+						   hw_stats->rx_xoff_packets, !hw->offset_loaded);
+	} else {
+		hw_stats->rx_xon_packets += rd32(hw, TXGBE_PBRXLNKXON);
+		hw_stats->rx_xoff_packets += rd32(hw, TXGBE_PBRXLNKXOFF);
+	}
 	hw_stats->tx_xon_packets += rd32(hw, TXGBE_PBTXLNKXON);
 	hw_stats->tx_xoff_packets += rd32(hw, TXGBE_PBTXLNKXOFF);
 
@@ -2822,7 +2856,7 @@ txgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 static int
 txgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 
 	dev_info->max_rx_queues = (uint16_t)hw->mac.max_rx_queues;
@@ -2899,6 +2933,146 @@ txgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 		return txgbe_get_supported_ptypes(no_of_elements);
 
 	return NULL;
+}
+
+void txgbe_dev_check_aml_temp_event(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	uint32_t link_speed = 0, val = 0;
+	s32 status = 0;
+	int temp;
+
+	if (hw == NULL)
+		return;
+
+	status = txgbe_e56_get_temp(hw, &temp);
+	if (status)
+		temp = DEFAULT_TEMP;
+
+	if (!(temp - hw->temperature > 4 ||
+		hw->temperature - temp > 4))
+		goto out;
+
+	hw->temperature = temp;
+	val = rd32(hw, TXGBE_PORT);
+	if (val & TXGBE_AMLITE_LED_LINK_40G)
+		link_speed = TXGBE_LINK_SPEED_40GB_FULL;
+	else if (val & TXGBE_AMLITE_LED_LINK_25G)
+		link_speed = TXGBE_LINK_SPEED_25GB_FULL;
+	else
+		link_speed = TXGBE_LINK_SPEED_10GB_FULL;
+
+	rte_spinlock_lock(&hw->phy_lock);
+	if (hw->mac.type == txgbe_mac_aml)
+		txgbe_temp_track_seq(hw, link_speed);
+	else if (hw->mac.type == txgbe_mac_aml40)
+		txgbe_temp_track_seq_40g(hw, link_speed);
+	rte_spinlock_unlock(&hw->phy_lock);
+
+out:
+	rte_eal_alarm_set(1000 * 1000 * 2, txgbe_dev_check_aml_temp_event, dev);
+}
+
+void txgbe_dev_e56_check_bp_event(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
+	u32 an_int1 = 0, value = 0, fsm = 0;
+	u32 __rte_unused an_int = 0;
+	int ret = 0;
+	bool need_link_update = false;
+
+	if (!hw)
+		return;
+
+	if (!(txgbe_xpcs_an_enabled(hw)))
+		return;
+
+	if (!hw->devarg.auto_neg)
+		return;
+
+	/* only continue if link is down */
+	if (dev->data->dev_link.link_status)
+		goto out;
+
+	value = rd32_epcs(hw, VR_AN_INTR);
+	an_int = value;
+	if (value & 0xF)
+		hw->bp_event_interval = 100 * 1000;
+
+	if (value & VR_AN_INTR_CMPLT) {
+		hw->an_done = true;
+		need_link_update = true;
+		value &= ~VR_AN_INTR_CMPLT;
+		wr32_epcs(hw, VR_AN_INTR, value);
+	}
+
+	if (value & VR_AN_INTR_LINK) {
+		value &= ~VR_AN_INTR_LINK;
+		wr32_epcs(hw, VR_AN_INTR, value);
+	}
+
+	if (value & TXGBE_E56_AN_TXDIS) {
+		value &= ~TXGBE_E56_AN_TXDIS;
+		wr32_epcs(hw, VR_AN_INTR, value);
+		rte_spinlock_lock(&hw->phy_lock);
+		txgbe_e56_set_phy_link_mode(hw, 10, hw->bypass_ctle);
+		rte_spinlock_unlock(&hw->phy_lock);
+		goto an_status;
+	}
+
+	if (value & VR_AN_INTR_PG_RCV) {
+		BP_LOG("%d Enter training\n", hw->port_id);
+		ret = txgbe_handle_e56_bkp_an73_flow(hw);
+		if (!AN_TRAINING_MODE) {
+			fsm = rd32_epcs(hw, 0x78010);
+			if (fsm & 0x8)
+				goto an_status;
+			if (ret) {
+				BP_LOG("Training FAILED, do reset\n");
+				rte_spinlock_lock(&hw->phy_lock);
+				txgbe_e56_set_phy_link_mode(hw, 10, hw->bypass_ctle);
+				rte_spinlock_unlock(&hw->phy_lock);
+			} else {
+				BP_LOG("ALL SUCCEEDED\n");
+			}
+		} else {
+			if (ret) {
+				BP_LOG("Training FAILED, do reset\n");
+				rte_spinlock_lock(&hw->phy_lock);
+				txgbe_e56_set_phy_link_mode(hw, 10, hw->bypass_ctle);
+				rte_spinlock_unlock(&hw->phy_lock);
+			} else {
+				hw->an_done = true;
+			}
+		}
+	}
+
+an_status:
+	an_int1 = rd32_epcs(hw, 0x78002);
+	if (an_int1 & VR_AN_INTR_CMPLT) {
+		hw->an_done = true;
+		need_link_update = true;
+	}
+
+	BP_LOG("%d RLU:%x MLU:%x INT:%x-%x CTL:%x fsm:%x pmd_cfg0:%x an_done:%d\n",
+		hw->port_id, rd32_epcs(hw, 0x30001), rd32(hw, 0x14404),
+		an_int, an_int1,
+		rd32_epcs(hw, 0x70000),
+		rd32_epcs(hw, 0x78010),
+		rd32_ephy(hw, 0x1400),
+		hw->an_done);
+
+	if (need_link_update)
+		txgbe_dev_link_update(dev, 0);
+
+	if (dev->data->dev_link.link_status)
+		hw->bp_event_interval = 2000 * 1000;
+
+out:
+	if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40)
+		rte_eal_alarm_set(hw->bp_event_interval, txgbe_dev_e56_check_bp_event, dev);
 }
 
 static void
@@ -3086,6 +3260,66 @@ txgbe_tx_ring_recovery(struct rte_eth_dev *dev)
 	}
 }
 
+void
+txgbe_dev_setup_link_alarm_handler_aml(void *param)
+{
+	struct txgbe_hw *hw = (struct txgbe_hw *)param;
+
+	if (!hw)
+		return;
+
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)hw->dev_back;
+	struct txgbe_interrupt *intr = TXGBE_DEV_INTR(dev);
+	u32 speed;
+	bool autoneg = false;
+	u32 gssr = hw->phy.phy_semaphore_mask;
+
+	speed = hw->phy.autoneg_advertised;
+	if (!speed)
+		hw->mac.get_link_capabilities(hw, &speed, &autoneg);
+
+	/* firmware is configuring phy now, delay host driver config action */
+	if (hw->mac.acquire_swfw_sync(hw, gssr) != 0) {
+		rte_eal_alarm_set(1000 * 1000 * 2,
+				  txgbe_dev_setup_link_alarm_handler_aml, hw);
+		PMD_DRV_LOG(DEBUG, "delay config ephy");
+		return;
+	}
+
+	hw->mac.setup_link(hw, speed, true);
+
+	u32 link_speed = TXGBE_LINK_SPEED_UNKNOWN;
+	bool link_up = false;
+
+	hw->mac.check_link(hw, &link_speed, &link_up, false);
+	if (link_up) {
+		PMD_DRV_LOG(DEBUG, "LINK UP IN HANDLER");
+		intr->flags &= ~TXGBE_FLAG_NEED_LINK_CONFIG;
+		txgbe_dev_link_update_share(dev, 0);
+	}
+
+	hw->mac.release_swfw_sync(hw, gssr);
+
+	intr->flags &= ~TXGBE_FLAG_NEED_LINK_CONFIG;
+}
+
+s32 txgbe_setup_mac_link_aml(struct txgbe_hw *hw,
+				    u32 speed,
+				    bool autoneg_wait_to_complete)
+{
+	bool need_reset = false;
+	s32 status = 0;
+
+	status = hw->phy.setup_link_core(hw, speed, autoneg_wait_to_complete, &need_reset);
+	if (status)
+		return status;
+
+	if (!hw->adapter_stopped && need_reset)
+		rte_eal_alarm_set(2000 * 1000, txgbe_dev_setup_link_alarm_handler_aml, hw);
+
+	return status;
+}
+
 /*
  * If @timeout_ms was 0, it means that it will not return until link complete.
  * It returns 1 on complete, return 0 on timeout.
@@ -3119,9 +3353,13 @@ txgbe_dev_setup_link_thread_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
 	struct txgbe_adapter *ad = TXGBE_DEV_ADAPTER(dev);
+	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 
 	rte_thread_detach(rte_thread_self());
-	txgbe_dev_setup_link_alarm_handler(dev);
+	if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40)
+		txgbe_dev_setup_link_alarm_handler_aml(hw);
+	else
+		txgbe_dev_setup_link_alarm_handler(dev);
 	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
 	return 0;
 }
@@ -3150,7 +3388,9 @@ txgbe_dev_link_update_share(struct rte_eth_dev *dev,
 
 	hw->mac.get_link_status = true;
 
-	if (intr->flags & TXGBE_FLAG_NEED_LINK_CONFIG)
+	if (intr->flags & TXGBE_FLAG_NEED_LINK_CONFIG ||
+	    (txgbe_is_vf(hw) && !rte_atomic_load_explicit(&hw->pf_running,
+						rte_memory_order_acquire)))
 		return rte_eth_linkstatus_set(dev, &link);
 
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
@@ -3500,7 +3740,7 @@ txgbe_dev_interrupt_get_status(struct rte_eth_dev *dev,
 static void
 txgbe_dev_link_status_print(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_eth_link link;
 
 	rte_eth_linkstatus_get(dev, &link);
@@ -3631,7 +3871,7 @@ static void
 txgbe_dev_interrupt_delayed_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct txgbe_interrupt *intr = TXGBE_DEV_INTR(dev);
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
@@ -3978,7 +4218,7 @@ txgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index)
 static int
 txgbe_set_default_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 
 	txgbe_remove_rar(dev, 0);
 	txgbe_add_rar(dev, addr, 0, pci_dev->max_vfs);
@@ -4149,7 +4389,7 @@ txgbe_convert_vm_rx_mask_to_val(uint16_t rx_mask, uint32_t orig_val)
 static int
 txgbe_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t mask;
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
@@ -4231,7 +4471,7 @@ txgbe_set_ivar_map(struct txgbe_hw *hw, int8_t direction,
 static void
 txgbe_configure_msix(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	uint32_t queue_id, base = TXGBE_MISC_VEC_ID;
@@ -4319,7 +4559,6 @@ txgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
 			u16 frac;
 
 			link_speed = dev->data->dev_link.link_speed;
-			tx_rate  = tx_rate * 105 / 100;
 			/* Calculate the rate factor values to set */
 			factor_int = link_speed / tx_rate;
 			frac = (link_speed % tx_rate) * 10000 / tx_rate;
@@ -4329,6 +4568,7 @@ txgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
 				factor_fra = 0;
 			}
 
+			wr32(hw, TXGBE_TDM_RL_ADJ, TXGBE_FRAME_OVERHEAD);
 			wr32(hw, TXGBE_TDM_RL_QUEUE_IDX, queue_idx);
 			wr32m(hw, TXGBE_TDM_RL_QUEUE_CFG,
 			      TXGBE_TDM_FACTOR_INT_MASK, factor_int << TXGBE_TDM_FACTOR_INT_SHIFT);
@@ -5153,41 +5393,109 @@ txgbe_get_module_info(struct rte_eth_dev *dev,
 	struct txgbe_hw *hw = TXGBE_DEV_HW(dev);
 	uint32_t status;
 	uint8_t sff8472_rev, addr_mode;
+	uint8_t identifier;
+	uint8_t sff8636_rev;
 	bool page_swap = false;
+	uint32_t value;
 
-	/* Check whether we support SFF-8472 or not */
-	status = hw->phy.read_i2c_eeprom(hw,
-					     TXGBE_SFF_SFF_8472_COMP,
-					     &sff8472_rev);
-	if (status != 0)
-		return -EIO;
-
-	/* addressing mode is not supported */
-	status = hw->phy.read_i2c_eeprom(hw,
-					     TXGBE_SFF_SFF_8472_SWAP,
-					     &addr_mode);
-	if (status != 0)
-		return -EIO;
-
-	if (addr_mode & TXGBE_SFF_ADDRESSING_MODE) {
-		PMD_DRV_LOG(ERR,
-			    "Address change required to access page 0xA2, "
-			    "but not supported. Please report the module "
-			    "type to the driver maintainers.");
-		page_swap = true;
+	if (hw->mac.type == txgbe_mac_aml40) {
+		value = rd32(hw, TXGBE_GPIOEXT);
+		if (value & TXGBE_SFP1_MOD_PRST_LS) {
+			PMD_DRV_LOG(WARNING, "QSFP module not present, cannot get module info.");
+			return -EINVAL;
+		}
 	}
 
-	if (sff8472_rev == TXGBE_SFF_SFF_8472_UNSUP || page_swap) {
-		/* We have a SFP, but it does not support SFF-8472 */
-		modinfo->type = RTE_ETH_MODULE_SFF_8079;
-		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8079_LEN;
+	if (hw->mac.type == txgbe_mac_aml) {
+		value = rd32(hw, TXGBE_GPIOEXT);
+		if (value & TXGBE_SFP1_MOD_ABS_LS) {
+			PMD_DRV_LOG(WARNING, "SFP module not present, cannot get module info.");
+			return -EINVAL;
+		}
+	}
+
+	status = hw->mac.acquire_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
+	if (status != 0)
+		return -EBUSY;
+
+	if (hw->mac.type == txgbe_mac_aml40) {
+		status = hw->phy.read_i2c_sff8636(hw, 0,
+						  TXGBE_SFF_IDENTIFIER,
+						  &identifier);
 	} else {
-		/* We have a SFP which supports a revision of SFF-8472. */
-		modinfo->type = RTE_ETH_MODULE_SFF_8472;
-		modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+		status = hw->phy.read_i2c_eeprom(hw,
+						 TXGBE_SFF_IDENTIFIER,
+						 &identifier);
 	}
 
+	if (status != 0)
+		goto ERROR_IO;
+
+	switch (identifier) {
+	case TXGBE_SFF_IDENTIFIER_SFP:
+		/* Check whether we support SFF-8472 or not */
+		status = hw->phy.read_i2c_eeprom(hw,
+						 TXGBE_SFF_SFF_8472_COMP,
+						 &sff8472_rev);
+		if (status != 0)
+			goto ERROR_IO;
+
+		/* addressing mode is not supported */
+		status = hw->phy.read_i2c_eeprom(hw,
+						 TXGBE_SFF_SFF_8472_SWAP,
+						 &addr_mode);
+		if (status != 0)
+			goto ERROR_IO;
+
+		if (addr_mode & TXGBE_SFF_ADDRESSING_MODE) {
+			PMD_DRV_LOG(ERR,
+				    "Address change required to access page 0xA2, "
+				    "but not supported. Please report the module "
+				    "type to the driver maintainers.");
+			page_swap = true;
+		}
+
+		if (sff8472_rev == TXGBE_SFF_SFF_8472_UNSUP || page_swap ||
+		    !(addr_mode & TXGBE_SFF_DDM_IMPLEMENTED)) {
+			/* We have a SFP, but it does not support SFF-8472 */
+			modinfo->type = RTE_ETH_MODULE_SFF_8079;
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8079_LEN;
+		} else {
+			/* We have a SFP which supports a revision of SFF-8472. */
+			modinfo->type = RTE_ETH_MODULE_SFF_8472;
+			modinfo->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+		}
+		break;
+	case TXGBE_SFF_IDENTIFIER_QSFP:
+	case TXGBE_SFF_IDENTIFIER_QSFP_PLUS:
+		status = hw->phy.read_i2c_sff8636(hw, 0,
+						  TXGBE_SFF_SFF_REVISION_ADDR,
+						  &sff8636_rev);
+		if (status != 0)
+			goto ERROR_IO;
+		/* Check revision compliance */
+		if (sff8636_rev > 0x02) {
+			/* Module is SFF-8636 compliant */
+			modinfo->type = RTE_ETH_MODULE_SFF_8636;
+			modinfo->eeprom_len = TXGBE_MODULE_QSFP_MAX_LEN;
+		} else {
+			modinfo->type = RTE_ETH_MODULE_SFF_8436;
+			modinfo->eeprom_len = TXGBE_MODULE_QSFP_MAX_LEN;
+		}
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "SFF Module Type not recognized, identifier=0x%x", identifier);
+		hw->mac.release_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
+		return -EINVAL;
+	}
+
+	hw->mac.release_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
 	return 0;
+
+ERROR_IO:
+	PMD_DRV_LOG(ERR, "I2C IO ERROR.");
+	hw->mac.release_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
+	return -EIO;
 }
 
 static int
@@ -5199,23 +5507,92 @@ txgbe_get_module_eeprom(struct rte_eth_dev *dev,
 	uint8_t databyte = 0xFF;
 	uint8_t *data = info->data;
 	uint32_t i = 0;
+	bool is_sfp = false;
+	uint32_t value;
+	uint8_t identifier = 0;
+	uint16_t offset;
+	uint8_t page = 0;
+	bool is_flat_mem = false;
+
+	if (hw->mac.type == txgbe_mac_aml40) {
+		value = rd32(hw, TXGBE_GPIOEXT);
+		if (value & TXGBE_SFP1_MOD_PRST_LS)
+			return -EIO;
+	}
+
+	if (hw->mac.type == txgbe_mac_aml) {
+		value = rd32(hw, TXGBE_GPIOEXT);
+		if (value & TXGBE_SFP1_MOD_ABS_LS)
+			return -EIO;
+	}
 
 	if (info->length == 0)
 		return -EINVAL;
 
-	for (i = info->offset; i < info->offset + info->length; i++) {
-		if (i < RTE_ETH_MODULE_SFF_8079_LEN)
-			status = hw->phy.read_i2c_eeprom(hw, i, &databyte);
-		else
-			status = hw->phy.read_i2c_sff8472(hw, i, &databyte);
+	status = hw->mac.acquire_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
+	if (status)
+		return -EBUSY;
 
+	status = hw->phy.read_i2c_eeprom(hw,
+					     TXGBE_SFF_IDENTIFIER,
+					     &identifier);
+	if (status != 0)
+		goto ERROR_IO;
+
+	if (identifier == TXGBE_SFF_IDENTIFIER_SFP) {
+		is_sfp = true;
+	} else {
+		uint8_t rdata = 0;
+
+		status = hw->phy.read_i2c_sff8636(hw, 0,
+						  TXGBE_SFF_8636_STATUS_OFFSET,
+						  &rdata);
 		if (status != 0)
-			return -EIO;
+			goto ERROR_IO;
 
+		if (rdata & 0x4)
+			is_flat_mem = true;
+	}
+
+	memset(data, 0, info->length);
+
+	for (i = info->offset; i < info->offset + info->length; i++) {
+		databyte = 0;
+
+		if (is_sfp) {
+			if (i < RTE_ETH_MODULE_SFF_8079_LEN)
+				status = hw->phy.read_i2c_eeprom(hw, i,
+					       &databyte);
+			else
+				status = hw->phy.read_i2c_sff8472(hw, i,
+					       &databyte);
+
+			if (status != 0)
+				goto ERROR_IO;
+		} else {
+			offset = i;
+			page = 0;
+			while (offset >= RTE_ETH_MODULE_SFF_8436_LEN) {
+				offset -= RTE_ETH_MODULE_SFF_8436_LEN / 2;
+				page++;
+			}
+			if (page == 0 || !is_flat_mem) {
+				status = hw->phy.read_i2c_sff8636(hw, page, offset,
+					       &databyte);
+				if (status != 0)
+					goto ERROR_IO;
+			}
+		}
 		data[i - info->offset] = databyte;
 	}
 
+	hw->mac.release_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
 	return 0;
+
+ERROR_IO:
+	PMD_DRV_LOG(ERR, "I2C IO ERROR.");
+	hw->mac.release_swfw_sync(hw, TXGBE_MNGSEM_SWPHY);
+	return -EIO;
 }
 
 bool
@@ -5227,6 +5604,7 @@ txgbe_rss_update(enum txgbe_mac_type mac_type)
 	case txgbe_mac_aml:
 	case txgbe_mac_aml40:
 	case txgbe_mac_aml_vf:
+	case txgbe_mac_aml40_vf:
 		return 1;
 	default:
 		return 0;

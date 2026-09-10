@@ -3,6 +3,7 @@
  */
 
 #include <rte_string_fns.h>
+#include <rte_alarm.h>
 #include <ethdev_pci.h>
 
 #include <ctype.h>
@@ -41,6 +42,7 @@
 #define ICE_DDP_FILENAME_ARG      "ddp_pkg_file"
 #define ICE_DDP_LOAD_SCHED_ARG    "ddp_load_sched_topo"
 #define ICE_TM_LEVELS_ARG         "tm_sched_levels"
+#define ICE_RL_BURST_SIZE_ARG     "rl_burst_size"
 #define ICE_SOURCE_PRUNE_ARG      "source-prune"
 #define ICE_LINK_STATE_ON_CLOSE   "link_state_on_close"
 
@@ -59,6 +61,7 @@ static const char * const ice_valid_args[] = {
 	ICE_DDP_FILENAME_ARG,
 	ICE_DDP_LOAD_SCHED_ARG,
 	ICE_TM_LEVELS_ARG,
+	ICE_RL_BURST_SIZE_ARG,
 	ICE_SOURCE_PRUNE_ARG,
 	ICE_LINK_STATE_ON_CLOSE,
 	NULL
@@ -108,7 +111,11 @@ enum ice_link_state_on_close {
 
 #define ICE_RSS_LUT_GLOBAL_QUEUE_NB	64
 
+/* Polling interval used when the interrupt path is unavailable */
+#define ICE_AQ_ALARM_INTERVAL 50000 /* us */
+
 static int ice_dev_configure(struct rte_eth_dev *dev);
+static void ice_aq_alarm_handler(void *param);
 static int ice_dev_start(struct rte_eth_dev *dev);
 static int ice_dev_stop(struct rte_eth_dev *dev);
 static int ice_dev_close(struct rte_eth_dev *dev);
@@ -1473,6 +1480,28 @@ ice_handle_aq_msg(struct rte_eth_dev *dev)
 	}
 }
 
+/*
+ * Alarm-based AdminQ polling handler that drains the AdminQ to process
+ * async events, then re-arms itself.
+ *
+ * @param param
+ *  The address of parameter (struct rte_eth_dev *) registered before.
+ *
+ * @return
+ *  void
+ */
+static void
+ice_aq_alarm_handler(void *param)
+{
+	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+
+	if (!pf->adapter_stopped) {
+		ice_handle_aq_msg(dev);
+		rte_eal_alarm_set(ICE_AQ_ALARM_INTERVAL, ice_aq_alarm_handler, dev);
+	}
+}
+
 /**
  * Interrupt handler triggered by NIC for handling
  * specific interrupt.
@@ -1897,7 +1926,7 @@ ice_send_driver_ver(struct ice_hw *hw)
 	dv.minor_ver = 0;
 	dv.build_ver = 0;
 	dv.subbuild_ver = 0;
-	strncpy((char *)dv.driver_string, "dpdk", sizeof(dv.driver_string));
+	strlcpy((char *)dv.driver_string, "dpdk", sizeof(dv.driver_string));
 
 	return ice_aq_send_driver_ver(hw, &dv, NULL);
 }
@@ -2003,6 +2032,17 @@ static int ice_read_customized_path(char *pkg_file, uint16_t buff_len)
 	return n;
 }
 
+static int
+ice_firmware_read(const char *file, void *buf, size_t *bufsz)
+{
+	int ret = rte_firmware_read(file, buf, bufsz);
+
+	if (ret < 0)
+		PMD_INIT_LOG(DEBUG, "Cannot read DDP file %s", file);
+
+	return ret;
+}
+
 int ice_load_pkg(struct ice_adapter *adapter, bool use_dsn, uint64_t dsn)
 {
 	struct ice_hw *hw = &adapter->hw;
@@ -2016,7 +2056,7 @@ int ice_load_pkg(struct ice_adapter *adapter, bool use_dsn, uint64_t dsn)
 	/* first read any explicitly referenced DDP file*/
 	if (adapter->devargs.ddp_filename != NULL) {
 		strlcpy(pkg_file, adapter->devargs.ddp_filename, sizeof(pkg_file));
-		if (rte_firmware_read(pkg_file, &buf, &bufsz) == 0) {
+		if (ice_firmware_read(pkg_file, &buf, &bufsz) == 0) {
 			goto load_fw;
 		} else {
 			PMD_INIT_LOG(ERR, "Cannot load DDP file: %s", pkg_file);
@@ -2032,37 +2072,35 @@ int ice_load_pkg(struct ice_adapter *adapter, bool use_dsn, uint64_t dsn)
 		if (use_dsn) {
 			snprintf(pkg_file, RTE_DIM(pkg_file), "%s/%s",
 					customized_path, opt_ddp_filename);
-			if (rte_firmware_read(pkg_file, &buf, &bufsz) == 0)
+			if (ice_firmware_read(pkg_file, &buf, &bufsz) == 0)
 				goto load_fw;
 		}
 		snprintf(pkg_file, RTE_DIM(pkg_file), "%s/%s", customized_path, "ice.pkg");
-		if (rte_firmware_read(pkg_file, &buf, &bufsz) == 0)
+		if (ice_firmware_read(pkg_file, &buf, &bufsz) == 0)
 			goto load_fw;
 	}
 
 	if (!use_dsn)
 		goto no_dsn;
 
-	strncpy(pkg_file, ICE_PKG_FILE_SEARCH_PATH_UPDATES,
-		ICE_MAX_PKG_FILENAME_SIZE);
-	strcat(pkg_file, opt_ddp_filename);
-	if (rte_firmware_read(pkg_file, &buf, &bufsz) == 0)
+	strlcpy(pkg_file, ICE_PKG_FILE_SEARCH_PATH_UPDATES, ICE_MAX_PKG_FILENAME_SIZE);
+	strlcat(pkg_file, opt_ddp_filename, ICE_MAX_PKG_FILENAME_SIZE);
+	if (ice_firmware_read(pkg_file, &buf, &bufsz) == 0)
 		goto load_fw;
 
-	strncpy(pkg_file, ICE_PKG_FILE_SEARCH_PATH_DEFAULT,
-		ICE_MAX_PKG_FILENAME_SIZE);
-	strcat(pkg_file, opt_ddp_filename);
-	if (rte_firmware_read(pkg_file, &buf, &bufsz) == 0)
+	strlcpy(pkg_file, ICE_PKG_FILE_SEARCH_PATH_DEFAULT, ICE_MAX_PKG_FILENAME_SIZE);
+	strlcat(pkg_file, opt_ddp_filename, ICE_MAX_PKG_FILENAME_SIZE);
+	if (ice_firmware_read(pkg_file, &buf, &bufsz) == 0)
 		goto load_fw;
 
 no_dsn:
-	strncpy(pkg_file, ICE_PKG_FILE_UPDATES, ICE_MAX_PKG_FILENAME_SIZE);
-	if (rte_firmware_read(pkg_file, &buf, &bufsz) == 0)
+	strlcpy(pkg_file, ICE_PKG_FILE_UPDATES, ICE_MAX_PKG_FILENAME_SIZE);
+	if (ice_firmware_read(pkg_file, &buf, &bufsz) == 0)
 		goto load_fw;
 
-	strncpy(pkg_file, ICE_PKG_FILE_DEFAULT, ICE_MAX_PKG_FILENAME_SIZE);
-	if (rte_firmware_read(pkg_file, &buf, &bufsz) < 0) {
-		PMD_INIT_LOG(ERR, "failed to search file path");
+	strlcpy(pkg_file, ICE_PKG_FILE_DEFAULT, ICE_MAX_PKG_FILENAME_SIZE);
+	if (ice_firmware_read(pkg_file, &buf, &bufsz) < 0) {
+		PMD_INIT_LOG(ERR, "Failed to load default DDP package " ICE_PKG_FILE_DEFAULT);
 		return -1;
 	}
 
@@ -2132,6 +2170,29 @@ parse_u64(const char *key, const char *value, void *args)
 	}
 
 	*num = tmp;
+
+	return 0;
+}
+
+static int
+parse_u32(const char *key, const char *value, void *args)
+{
+	uint32_t *num = args;
+	unsigned long tmp;
+	char *endptr;
+
+	errno = 0;
+	tmp = strtoul(value, &endptr, 0);
+	if (errno != 0 || endptr == value || *endptr != '\0') {
+		PMD_DRV_LOG(WARNING, "%s: \"%s\" is not a valid u32", key, value);
+		return -1;
+	}
+	if (tmp > UINT32_MAX) {
+		PMD_DRV_LOG(WARNING, "%s: value \"%s\" is out of range", key, value);
+		return -1;
+	}
+
+	*num = (uint32_t)tmp;
 
 	return 0;
 }
@@ -2437,6 +2498,11 @@ static int ice_parse_devargs(struct rte_eth_dev *dev)
 	if (ret)
 		goto bail;
 
+	ret = rte_kvargs_process(kvlist, ICE_RL_BURST_SIZE_ARG,
+				 &parse_u32, &ad->devargs.rl_burst_size);
+	if (ret)
+		goto bail;
+
 	ret = rte_kvargs_process(kvlist, ICE_SOURCE_PRUNE_ARG,
 				 &parse_bool, &ad->devargs.source_prune);
 	if (ret)
@@ -2623,7 +2689,7 @@ ice_dev_init(struct rte_eth_dev *dev)
 	}
 
 	ice_set_default_ptype_table(dev);
-	pci_dev = RTE_DEV_TO_PCI(dev->device);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	intr_handle = pci_dev->intr_handle;
 
 	pf->adapter = ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
@@ -2651,6 +2717,21 @@ ice_dev_init(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
+	/*
+	 * Override the hardware default scheduler rate-limiter burst size only
+	 * when the user explicitly requests it. A smaller burst reduces Tx
+	 * latency jitter for time-sensitive traffic at the cost of throughput,
+	 * so it must not change for every port. ice_cfg_rl_burst_size()
+	 * validates the value against the hardware-allowed range.
+	 */
+	if (ad->devargs.rl_burst_size != 0 &&
+	    ice_cfg_rl_burst_size(hw, ad->devargs.rl_burst_size) != 0) {
+		PMD_INIT_LOG(ERR, "Invalid rl_burst_size %u bytes",
+			     ad->devargs.rl_burst_size);
+		ice_deinit_hw(hw);
+		return -EINVAL;
+	}
+
 #ifndef RTE_EXEC_ENV_WINDOWS
 	use_dsn = false;
 	dsn = 0;
@@ -2658,13 +2739,13 @@ ice_dev_init(struct rte_eth_dev *dev)
 	if (pos) {
 		if (rte_pci_read_config(pci_dev, &dsn_low, 4, pos + 4) < 0 ||
 				rte_pci_read_config(pci_dev, &dsn_high, 4, pos + 8) < 0) {
-			PMD_INIT_LOG(ERR, "Failed to read pci config space");
+			PMD_INIT_LOG(WARNING, "Failed to read pci config space");
 		} else {
 			use_dsn = true;
 			dsn = (uint64_t)dsn_high << 32 | dsn_low;
 		}
 	} else {
-		PMD_INIT_LOG(ERR, "Failed to read device serial number");
+		PMD_INIT_LOG(INFO, "Failed to read device serial number");
 	}
 
 	ret = ice_load_pkg(pf->adapter, use_dsn, dsn);
@@ -2907,6 +2988,11 @@ ice_dev_stop(struct rte_eth_dev *dev)
 	pf->adapter_stopped = true;
 	dev->data->dev_started = 0;
 
+	if (pf->use_aq_polling) {
+		rte_eal_alarm_cancel(ice_aq_alarm_handler, dev);
+		pf->use_aq_polling = false;
+	}
+
 	return 0;
 }
 
@@ -2956,7 +3042,7 @@ ice_dev_close(struct rte_eth_dev *dev)
 {
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ice_adapter *ad =
 		ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
@@ -3697,7 +3783,7 @@ ice_get_default_rss_key(uint8_t *rss_key, uint32_t rss_key_size)
 			key[i] = (uint8_t)rte_rand();
 		default_key_done = true;
 	}
-	rte_memcpy(rss_key, key, RTE_MIN(rss_key_size, sizeof(default_key)));
+	memcpy(rss_key, key, RTE_MIN(rss_key_size, sizeof(default_key)));
 }
 
 static int ice_init_rss(struct ice_pf *pf)
@@ -3752,13 +3838,13 @@ static int ice_init_rss(struct ice_pf *pf)
 	if (!rss_conf->rss_key)
 		ice_get_default_rss_key(vsi->rss_key, vsi->rss_key_size);
 	else
-		rte_memcpy(vsi->rss_key, rss_conf->rss_key,
+		memcpy(vsi->rss_key, rss_conf->rss_key,
 			   RTE_MIN(rss_conf->rss_key_len,
 				   vsi->rss_key_size));
 
-	rte_memcpy(key.standard_rss_key, vsi->rss_key,
+	memcpy(key.standard_rss_key, vsi->rss_key,
 		ICE_AQC_GET_SET_RSS_KEY_DATA_RSS_KEY_SIZE);
-	rte_memcpy(key.extended_hash_key,
+	memcpy(key.extended_hash_key,
 		&vsi->rss_key[ICE_AQC_GET_SET_RSS_KEY_DATA_RSS_KEY_SIZE],
 		ICE_AQC_GET_SET_RSS_KEY_DATA_HASH_KEY_SIZE);
 	ret = ice_aq_set_rss_key(hw, vsi->idx, &key);
@@ -4425,7 +4511,15 @@ ice_dev_start(struct rte_eth_dev *dev)
 	if (ice_rxq_intr_setup(dev))
 		return -EIO;
 
-	rte_intr_enable(pci_dev->intr_handle);
+	/* Fall back to polling the AdminQ via an alarm on platforms where
+	 * interrupt delivery is unavailable.
+	 */
+	if (rte_intr_enable(pci_dev->intr_handle) != 0) {
+		if (rte_eal_alarm_set(ICE_AQ_ALARM_INTERVAL, ice_aq_alarm_handler, dev) != 0)
+			PMD_DRV_LOG(WARNING, "Failed to set alarm for AdminQ polling");
+		else
+			pf->use_aq_polling = true;
+	}
 
 	/* Enable receiving broadcast packets and transmitting packets */
 	ice_set_bit(ICE_PROMISC_BCAST_RX, pmask);
@@ -4453,7 +4547,7 @@ ice_dev_start(struct rte_eth_dev *dev)
 	ice_dev_set_link_up(dev);
 
 	/* Call get_link_info aq command to enable/disable LSE */
-	ice_link_update(dev, 1);
+	ice_link_update(dev, 0);
 
 	pf->adapter_stopped = false;
 
@@ -4488,6 +4582,8 @@ tx_err:
 	for (i = 0; i < nb_txq; i++)
 		ice_tx_queue_stop(dev, i);
 
+	pf->adapter_stopped = true;
+
 	return -EIO;
 }
 
@@ -4520,7 +4616,7 @@ ice_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ice_vsi *vsi = pf->main_vsi;
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(dev->device);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	bool is_safe_mode = pf->adapter->is_safe_mode;
 	u64 phy_type_low;
 	u64 phy_type_high;
@@ -4568,8 +4664,10 @@ ice_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 			RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
 			RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
 			RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |
-			RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
-			RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
+			RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO;
+		if (hw->phy_model == ICE_PHY_E830)
+			dev_info->tx_offload_capa |=
+				RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP;
 		dev_info->flow_type_rss_offloads |= ICE_RSS_OFFLOAD_ALL;
 	}
 
@@ -5038,7 +5136,8 @@ static int
 ice_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
-	struct ice_vlan vlan = ICE_VLAN(RTE_ETHER_TYPE_VLAN, vlan_id);
+	/* Use the configured outer_ethertype instead of hardcoded 0x8100 */
+	struct ice_vlan vlan = ICE_VLAN(pf->outer_ethertype, vlan_id);
 	struct ice_vsi *vsi = pf->main_vsi;
 	int ret;
 
@@ -5156,7 +5255,7 @@ ice_vsi_config_vlan_filter(struct ice_vsi *vsi, bool on)
 		vsi->info.sw_flags2 &= ~sw_flags2;
 
 	vsi->info.sw_id = hw->port_info->sw_id;
-	(void)rte_memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
+	(void)memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
 	ctxt.info.valid_sections =
 		rte_cpu_to_le_16(ICE_AQ_VSI_PROP_SW_VALID |
 				 ICE_AQ_VSI_PROP_SECURITY_VALID);
@@ -5911,7 +6010,7 @@ ice_vsi_vlan_pvid_set(struct ice_vsi *vsi, struct ice_vsi_vlan_pvid_info *info)
 				  ICE_AQ_VSI_INNER_VLAN_EMODE_M);
 	vsi->info.inner_vlan_flags |= vlan_flags;
 	memset(&ctxt, 0, sizeof(ctxt));
-	rte_memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
+	memcpy(&ctxt.info, &vsi->info, sizeof(vsi->info));
 	ctxt.info.valid_sections =
 		rte_cpu_to_le_16(ICE_AQ_VSI_PROP_VLAN_VALID);
 	ctxt.vsi_num = vsi->vsi_id;
@@ -6445,6 +6544,15 @@ ice_update_vsi_stats(struct ice_vsi *vsi)
 	struct ice_hw *hw = ICE_VSI_TO_HW(vsi);
 	int idx = rte_le_to_cpu_16(vsi->vsi_id);
 
+	/*
+	 * Unicast/multicast/broadcast counters include discarded packets. Received packets is
+	 * calculated by deducting discards from unicast/multicast/broadcast. To prevent a
+	 * potential underflow, read discards first to guarantee it is smaller than
+	 * unicast/multicast/broadcast.
+	 */
+	ice_stat_update_32(hw, GLV_RDPC(idx), vsi->offset_loaded,
+			   &oes->rx_discards, &nes->rx_discards);
+
 	ice_stat_update_40(hw, GLV_GORCH(idx), GLV_GORCL(idx),
 			   vsi->offset_loaded, &oes->rx_bytes,
 			   &nes->rx_bytes);
@@ -6471,8 +6579,6 @@ ice_update_vsi_stats(struct ice_vsi *vsi)
 	nes->rx_bytes -= (nes->rx_unicast + nes->rx_multicast +
 			  nes->rx_broadcast) * RTE_ETHER_CRC_LEN;
 
-	ice_stat_update_32(hw, GLV_RDPC(idx), vsi->offset_loaded,
-			   &oes->rx_discards, &nes->rx_discards);
 	/* GLV_REPC not supported */
 	/* GLV_RMPC not supported */
 	ice_stat_update_32(hw, GLSWID_RUPP(idx), vsi->offset_loaded,
@@ -7701,6 +7807,7 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ice,
 			      ICE_DDP_FILENAME_ARG "=</path/to/file>"
 			      ICE_DDP_LOAD_SCHED_ARG "=<0|1>"
 			      ICE_TM_LEVELS_ARG "=<N>"
+			      ICE_RL_BURST_SIZE_ARG "=<N>"
 			      ICE_SOURCE_PRUNE_ARG "=<0|1>"
 			      ICE_RX_LOW_LATENCY_ARG "=<0|1>"
 			      ICE_LINK_STATE_ON_CLOSE "=<down|up|initial>");

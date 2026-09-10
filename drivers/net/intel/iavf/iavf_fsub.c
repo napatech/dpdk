@@ -20,6 +20,7 @@
 #include <rte_flow.h>
 #include <iavf.h>
 #include "iavf_generic_flow.h"
+#include "../common/flow_check.h"
 
 #define MAX_QGRP_NUM_TYPE      7
 #define IAVF_IPV6_ADDR_LENGTH  16
@@ -57,7 +58,6 @@ static struct iavf_flow_parser iavf_fsub_parser;
 
 static struct
 iavf_pattern_match_item iavf_fsub_pattern_list[] = {
-	{iavf_pattern_raw,				IAVF_INSET_NONE,			IAVF_INSET_NONE},
 	{iavf_pattern_ethertype,			IAVF_SW_INSET_ETHER,			IAVF_INSET_NONE},
 	{iavf_pattern_eth_ipv4,				IAVF_SW_INSET_MAC_IPV4,			IAVF_INSET_NONE},
 	{iavf_pattern_eth_vlan_ipv4,			IAVF_SW_INSET_MAC_VLAN_IPV4,		IAVF_INSET_NONE},
@@ -92,7 +92,7 @@ iavf_fsub_create(struct iavf_adapter *ad, struct rte_flow *flow,
 		goto free_entry;
 	}
 
-	rte_memcpy(rule, filter, sizeof(*rule));
+	memcpy(rule, filter, sizeof(*rule));
 	flow->rule = rule;
 
 	rte_free(meta);
@@ -154,7 +154,6 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 {
 	struct virtchnl_proto_hdrs *hdrs = &filter->sub_fltr.proto_hdrs;
 	enum rte_flow_item_type item_type;
-	const struct rte_flow_item_raw *raw_spec, *raw_mask;
 	const struct rte_flow_item_eth *eth_spec, *eth_mask;
 	const struct rte_flow_item_ipv4 *ipv4_spec, *ipv4_mask;
 	const struct rte_flow_item_ipv6 *ipv6_spec, *ipv6_mask;
@@ -166,7 +165,6 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 	uint64_t outer_input_set = IAVF_INSET_NONE;
 	uint64_t *input = NULL;
 	uint16_t input_set_byte = 0;
-	uint8_t item_num = 0;
 	uint32_t layer = 0;
 
 	for (item = pattern; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
@@ -178,79 +176,7 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 		}
 
 		item_type = item->type;
-		item_num++;
-
 		switch (item_type) {
-		case RTE_FLOW_ITEM_TYPE_RAW: {
-			raw_spec = item->spec;
-			raw_mask = item->mask;
-
-			if (!raw_spec || !raw_mask) {
-				PMD_DRV_LOG(ERR, "NULL RAW spec/mask");
-				rte_flow_error_set(error, EINVAL,
-						RTE_FLOW_ERROR_TYPE_ITEM,
-						item, "NULL RAW spec/mask");
-				return -rte_errno;
-			}
-
-			if (item_num != 1)
-				return -rte_errno;
-
-			if (raw_spec->length != raw_mask->length)
-				return -rte_errno;
-
-			uint16_t pkt_len = 0;
-			uint16_t tmp_val = 0;
-			uint8_t tmp = 0;
-			int i, j;
-
-			pkt_len = raw_spec->length;
-
-			for (i = 0, j = 0; i < pkt_len; i += 2, j++) {
-				tmp = raw_spec->pattern[i];
-				if (tmp >= 'a' && tmp <= 'f')
-					tmp_val = tmp - 'a' + 10;
-				if (tmp >= 'A' && tmp <= 'F')
-					tmp_val = tmp - 'A' + 10;
-				if (tmp >= '0' && tmp <= '9')
-					tmp_val = tmp - '0';
-
-				tmp_val *= 16;
-				tmp = raw_spec->pattern[i + 1];
-				if (tmp >= 'a' && tmp <= 'f')
-					tmp_val += (tmp - 'a' + 10);
-				if (tmp >= 'A' && tmp <= 'F')
-					tmp_val += (tmp - 'A' + 10);
-				if (tmp >= '0' && tmp <= '9')
-					tmp_val += (tmp - '0');
-
-				hdrs->raw.spec[j] = tmp_val;
-
-				tmp = raw_mask->pattern[i];
-				if (tmp >= 'a' && tmp <= 'f')
-					tmp_val = tmp - 'a' + 10;
-				if (tmp >= 'A' && tmp <= 'F')
-					tmp_val = tmp - 'A' + 10;
-				if (tmp >= '0' && tmp <= '9')
-					tmp_val = tmp - '0';
-
-				tmp_val *= 16;
-				tmp = raw_mask->pattern[i + 1];
-				if (tmp >= 'a' && tmp <= 'f')
-					tmp_val += (tmp - 'a' + 10);
-				if (tmp >= 'A' && tmp <= 'F')
-					tmp_val += (tmp - 'A' + 10);
-				if (tmp >= '0' && tmp <= '9')
-					tmp_val += (tmp - '0');
-
-				hdrs->raw.mask[j] = tmp_val;
-			}
-
-			hdrs->raw.pkt_len = pkt_len / 2;
-			hdrs->tunnel_level = 0;
-			hdrs->count = 0;
-			return 0;
-		}
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			eth_spec = item->spec;
 			eth_mask = item->mask;
@@ -280,9 +206,9 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					input_set_byte += 2;
 				}
 
-				rte_memcpy(hdr1->buffer_spec, eth_spec,
+				memcpy(hdr1->buffer_spec, eth_spec,
 					   sizeof(struct rte_ether_hdr));
-				rte_memcpy(hdr1->buffer_mask, eth_mask,
+				memcpy(hdr1->buffer_mask, eth_mask,
 					   sizeof(struct rte_ether_hdr));
 			} else {
 				/* flow subscribe filter will add dst mac in kernel */
@@ -333,9 +259,9 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					input_set_byte++;
 				}
 
-				rte_memcpy(hdr->buffer_spec, &ipv4_spec->hdr,
+				memcpy(hdr->buffer_spec, &ipv4_spec->hdr,
 					   sizeof(ipv4_spec->hdr));
-				rte_memcpy(hdr->buffer_mask, &ipv4_mask->hdr,
+				memcpy(hdr->buffer_mask, &ipv4_mask->hdr,
 					   sizeof(ipv4_spec->hdr));
 			}
 
@@ -396,9 +322,9 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					input_set_byte += 4;
 				}
 
-				rte_memcpy(hdr->buffer_spec, &ipv6_spec->hdr,
+				memcpy(hdr->buffer_spec, &ipv6_spec->hdr,
 					   sizeof(ipv6_spec->hdr));
-				rte_memcpy(hdr->buffer_mask, &ipv6_mask->hdr,
+				memcpy(hdr->buffer_mask, &ipv6_mask->hdr,
 					   sizeof(ipv6_spec->hdr));
 			}
 
@@ -433,9 +359,9 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					input_set_byte += 2;
 				}
 
-				rte_memcpy(hdr->buffer_spec, &udp_spec->hdr,
+				memcpy(hdr->buffer_spec, &udp_spec->hdr,
 					   sizeof(udp_spec->hdr));
-				rte_memcpy(hdr->buffer_mask, &udp_mask->hdr,
+				memcpy(hdr->buffer_mask, &udp_mask->hdr,
 					   sizeof(udp_mask->hdr));
 			}
 
@@ -474,9 +400,9 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					input_set_byte += 2;
 				}
 
-				rte_memcpy(hdr->buffer_spec, &tcp_spec->hdr,
+				memcpy(hdr->buffer_spec, &tcp_spec->hdr,
 					   sizeof(tcp_spec->hdr));
-				rte_memcpy(hdr->buffer_mask, &tcp_mask->hdr,
+				memcpy(hdr->buffer_mask, &tcp_mask->hdr,
 					   sizeof(tcp_mask->hdr));
 			}
 
@@ -506,9 +432,9 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 					return -rte_errno;
 				}
 
-				rte_memcpy(hdr->buffer_spec, &vlan_spec->hdr,
+				memcpy(hdr->buffer_spec, &vlan_spec->hdr,
 					   sizeof(vlan_spec->hdr));
-				rte_memcpy(hdr->buffer_mask, &vlan_mask->hdr,
+				memcpy(hdr->buffer_mask, &vlan_mask->hdr,
 					   sizeof(vlan_mask->hdr));
 			}
 
@@ -539,89 +465,46 @@ iavf_fsub_parse_pattern(const struct rte_flow_item pattern[],
 }
 
 static int
-iavf_fsub_parse_action(struct iavf_adapter *ad,
-		       const struct rte_flow_action *actions,
+iavf_fsub_parse_action(const struct ci_flow_actions *actions,
 		       uint32_t priority,
 		       struct rte_flow_error *error,
 		       struct iavf_fsub_conf *filter)
 {
-	const struct rte_flow_action *action;
-	const struct rte_flow_action_ethdev *act_ethdev;
-	const struct rte_flow_action_queue *act_q;
-	const struct rte_flow_action_rss *act_qgrop;
-	struct virtchnl_filter_action *filter_action;
-	uint16_t valid_qgrop_number[MAX_QGRP_NUM_TYPE] = {
-		2, 4, 8, 16, 32, 64, 128};
-	uint16_t i, num = 0, dest_num = 0, vf_num = 0;
-	uint16_t rule_port_id;
+	uint16_t num_actions = 0;
+	size_t i;
 
-	for (action = actions; action->type !=
-				RTE_FLOW_ACTION_TYPE_END; action++) {
+	for (i = 0; i < actions->count; i++) {
+		const struct rte_flow_action *action = actions->actions[i];
+		struct virtchnl_filter_action *filter_action =
+				&filter->sub_fltr.actions.actions[num_actions];
+
 		switch (action->type) {
-		case RTE_FLOW_ACTION_TYPE_VOID:
-			break;
-
 		case RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR:
-			vf_num++;
-			filter_action = &filter->sub_fltr.actions.actions[num];
-
-			act_ethdev = action->conf;
-			rule_port_id = ad->dev_data->port_id;
-			if (rule_port_id != act_ethdev->port_id)
-				goto error1;
-
-			filter->sub_fltr.actions.count = ++num;
-			break;
+			/* nothing to be done, but skip the action */
+			continue;
 		case RTE_FLOW_ACTION_TYPE_QUEUE:
-			dest_num++;
-			filter_action = &filter->sub_fltr.actions.actions[num];
-
-			act_q = action->conf;
-			if (act_q->index >= ad->dev_data->nb_rx_queues)
-				goto error2;
-
+		{
+			const struct rte_flow_action_queue *act_q = action->conf;
 			filter_action->type = VIRTCHNL_ACTION_QUEUE;
 			filter_action->act_conf.queue.index = act_q->index;
-			filter->sub_fltr.actions.count = ++num;
 			break;
+		}
 		case RTE_FLOW_ACTION_TYPE_RSS:
-			dest_num++;
-			filter_action = &filter->sub_fltr.actions.actions[num];
-
-			act_qgrop = action->conf;
-			if (act_qgrop->queue_num <= 1)
-				goto error2;
+		{
+			const struct rte_flow_action_rss *act_qgrp = action->conf;
 
 			filter_action->type = VIRTCHNL_ACTION_Q_REGION;
-			filter_action->act_conf.queue.index =
-							act_qgrop->queue[0];
-			for (i = 0; i < MAX_QGRP_NUM_TYPE; i++) {
-				if (act_qgrop->queue_num ==
-				    valid_qgrop_number[i])
-					break;
-			}
-
-			if (i == MAX_QGRP_NUM_TYPE)
-				goto error2;
-
-			if ((act_qgrop->queue[0] + act_qgrop->queue_num) >
-			    ad->dev_data->nb_rx_queues)
-				goto error3;
-
-			for (i = 0; i < act_qgrop->queue_num - 1; i++)
-				if (act_qgrop->queue[i + 1] !=
-				    act_qgrop->queue[i] + 1)
-					goto error4;
-
-			filter_action->act_conf.queue.region = act_qgrop->queue_num;
-			filter->sub_fltr.actions.count = ++num;
+			filter_action->act_conf.queue.index = act_qgrp->queue[0];
+			filter_action->act_conf.queue.region = act_qgrp->queue_num;
 			break;
-		default:
-			rte_flow_error_set(error, EINVAL,
-					   RTE_FLOW_ERROR_TYPE_ACTION,
-					   actions, "Invalid action type");
-			return -rte_errno;
 		}
+		default:
+			/* cannot happen */
+			return rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ACTION, action,
+					"Invalid action type.");
+		}
+		filter->sub_fltr.actions.count = ++num_actions;
 	}
 
 	/* 0 denotes lowest priority of recipe and highest priority
@@ -629,91 +512,81 @@ iavf_fsub_parse_action(struct iavf_adapter *ad,
 	 */
 	filter->sub_fltr.priority = priority;
 
-	if (num > VIRTCHNL_MAX_NUM_ACTIONS) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-				   "Action numbers exceed the maximum value");
-		return -rte_errno;
-	}
-
-	if (vf_num == 0) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-				   "Invalid action, vf action must be added");
-		return -rte_errno;
-	}
-
-	if (dest_num >= 2) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-				   "Unsupported action combination");
-		return -rte_errno;
-	}
-
 	return 0;
-
-error1:
-	rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Invalid port id");
-	return -rte_errno;
-
-error2:
-	rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Invalid action type or queue number");
-	return -rte_errno;
-
-error3:
-	rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Invalid queue region indexes");
-	return -rte_errno;
-
-error4:
-	rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Discontinuous queue region");
-	return -rte_errno;
 }
 
 static int
-iavf_fsub_check_action(const struct rte_flow_action *actions,
+iavf_fsub_action_check(const struct ci_flow_actions *actions,
+		       const struct ci_flow_actions_check_param *param,
 		       struct rte_flow_error *error)
 {
-	const struct rte_flow_action *action;
-	enum rte_flow_action_type action_type;
-	uint16_t actions_num = 0;
-	bool vf_valid = false;
-	bool queue_valid = false;
+	const struct iavf_adapter *ad = param->driver_ctx;
+	bool vf = false;
+	size_t i;
 
-	for (action = actions; action->type !=
-				RTE_FLOW_ACTION_TYPE_END; action++) {
-		action_type = action->type;
-		switch (action_type) {
+	/*
+	 * allowed action types:
+	 * 1. PORT_REPRESENTOR only
+	 * 2. PORT_REPRESENTOR + QUEUE/RSS
+	 */
+
+	for (i = 0; i < actions->count; i++) {
+		const struct rte_flow_action *action = actions->actions[i];
+		switch (action->type) {
 		case RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR:
-			vf_valid = true;
-			actions_num++;
+		{
+			const struct rte_flow_action_ethdev *act_ethdev = action->conf;
+
+			if (act_ethdev->port_id != ad->dev_data->port_id) {
+				return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION_CONF, act_ethdev,
+						"Invalid port id");
+			}
+			vf = true;
 			break;
+		}
 		case RTE_FLOW_ACTION_TYPE_RSS:
+		{
+			const struct rte_flow_action_rss *act_qgrp = action->conf;
+
+			/* must be between 2 and 128 and be a power of 2 */
+			if (act_qgrp->queue_num < 2 || act_qgrp->queue_num > 128 ||
+					!rte_is_power_of_2(act_qgrp->queue_num)) {
+				return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION_CONF, act_qgrp,
+						"Invalid number of queues in RSS queue group");
+			}
+			/* last queue must not exceed total number of queues */
+			if (act_qgrp->queue[0] + act_qgrp->queue_num > ad->dev_data->nb_rx_queues) {
+				return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION_CONF, act_qgrp,
+						"Invalid queue index in RSS queue group");
+			}
+			break;
+		}
 		case RTE_FLOW_ACTION_TYPE_QUEUE:
-			queue_valid = true;
-			actions_num++;
+		{
+			const struct rte_flow_action_queue *act_q = action->conf;
+
+			if (act_q->index >= ad->dev_data->nb_rx_queues) {
+				return rte_flow_error_set(error, EINVAL,
+						RTE_FLOW_ERROR_TYPE_ACTION_CONF, act_q,
+						"Invalid queue index");
+			}
 			break;
-		case RTE_FLOW_ACTION_TYPE_DROP:
-			actions_num++;
-			break;
-		case RTE_FLOW_ACTION_TYPE_VOID:
-			continue;
+		}
 		default:
-			rte_flow_error_set(error, EINVAL,
-					   RTE_FLOW_ERROR_TYPE_ACTION,
-					   actions, "Invalid action type");
-			return -rte_errno;
+			/* shouldn't happen */
+			return rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ACTION, action,
+					"Invalid action type");
 		}
 	}
-
-	if (!((actions_num == 1 && !queue_valid) ||
-	      (actions_num == 2 && vf_valid && queue_valid))) {
-		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION,
-				   actions, "Invalid action number");
-		return -rte_errno;
+	/* QUEUE/RSS must be accompanied by PORT_REPRESENTOR */
+	if (!vf) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION, actions,
+				"Invalid action combination");
 	}
 
 	return 0;
@@ -725,12 +598,28 @@ iavf_fsub_parse(struct iavf_adapter *ad,
 		uint32_t array_len,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
-		uint32_t priority,
+		const struct rte_flow_attr *attr,
 		void **meta,
 		struct rte_flow_error *error)
 {
+	struct ci_flow_actions parsed_actions = {0};
+	struct ci_flow_actions_check_param param = {
+		.allowed_types = (enum rte_flow_action_type[]){
+			RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR,
+			RTE_FLOW_ACTION_TYPE_RSS,
+			RTE_FLOW_ACTION_TYPE_QUEUE,
+			RTE_FLOW_ACTION_TYPE_END
+		},
+		.max_actions = 2,
+		.check = iavf_fsub_action_check,
+		.driver_ctx = ad,
+		.rss_queues_contig = true,
+	};
 	struct iavf_fsub_conf *filter;
 	struct iavf_pattern_match_item *pattern_match_item = NULL;
+	struct ci_flow_attr_check_param attr_param = {
+		.allow_priority = true,
+	};
 	int ret = 0;
 
 	filter = rte_zmalloc(NULL, sizeof(*filter), 0);
@@ -739,6 +628,22 @@ iavf_fsub_parse(struct iavf_adapter *ad,
 				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 				   "No memory for iavf_fsub_conf_ptr");
 		return -ENOMEM;
+	}
+
+	ret = ci_flow_check_attr(attr, &attr_param, error);
+	if (ret)
+		goto error;
+
+	ret = ci_flow_check_actions(actions, &param, &parsed_actions, error);
+	if (ret)
+		goto error;
+
+	if (attr->priority > 1) {
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ATTR_PRIORITY,
+				   attr, "Only support priority 0 and 1.");
+		ret = -rte_errno;
+		goto error;
 	}
 
 	/* search flow subscribe pattern */
@@ -756,14 +661,8 @@ iavf_fsub_parse(struct iavf_adapter *ad,
 	if (ret)
 		goto error;
 
-	/* check flow subscribe pattern action */
-	ret = iavf_fsub_check_action(actions, error);
-	if (ret)
-		goto error;
-
 	/* parse flow subscribe pattern action */
-	ret = iavf_fsub_parse_action((void *)ad, actions, priority,
-				     error, filter);
+	ret = iavf_fsub_parse_action(&parsed_actions, attr->priority, error, filter);
 
 error:
 	if (!ret && meta)
@@ -805,7 +704,9 @@ iavf_flow_engine iavf_fsub_engine = {
 	.create = iavf_fsub_create,
 	.destroy = iavf_fsub_destroy,
 	.validation = iavf_fsub_validation,
+	.name = "fsub",
 	.type = IAVF_FLOW_ENGINE_FSUB,
+	.rule_size = sizeof(struct iavf_fsub_conf),
 };
 
 static struct

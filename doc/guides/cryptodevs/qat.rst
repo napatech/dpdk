@@ -7,10 +7,10 @@ Intel(R) QuickAssist (QAT) Crypto Poll Mode Driver
 QAT documentation consists of three parts:
 
 * Details of the symmetric and asymmetric crypto services below.
-* Details of the :doc:`compression service <../compressdevs/qat_comp>`
+* Details of the :doc:`compression service </compressdevs/qat_comp>`
   in the compressdev drivers section.
 * Details of building the common QAT infrastructure and the PMDs to support the
-  above services. See :ref:`building_qat` below.
+  above services. See :ref:`qat_building` below.
 
 
 Symmetric Crypto Service on QAT
@@ -203,7 +203,7 @@ Limitations
   in different threads.)
 * RSA-2560, RSA-3584 are not supported
 
-.. _building_qat:
+.. _qat_building:
 
 Building PMDs on QAT
 --------------------
@@ -225,9 +225,7 @@ Configuring and Building the DPDK QAT PMDs
 
 
 Further information on configuring, building and installing DPDK is described
-:doc:`here <../linux_gsg/build_dpdk>`.
-
-.. _building_qat_config:
+:doc:`here </linux_gsg/build_dpdk>`.
 
 Build Configuration
 ~~~~~~~~~~~~~~~~~~~
@@ -352,15 +350,26 @@ To use this feature the user must set the devarg on process start as a device ad
  -a 03:01.1,qat_sym_cipher_crc_enable=1
 
 
-Running QAT PMD with Intel IPsec MB library for symmetric precomputes function
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Running QAT PMD with Intel IPsec MB library
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The QAT PMD uses Intel IPsec MB library for partial hash calculation
-in symmetric precomputes function by default,
-the minimum required version of IPsec MB library is v1.4.
-If this version of IPsec is not met, it will fallback to use OpenSSL.
-ARM will always default to using OpenSSL
-as ARM IPsec MB does not support the necessary algorithms.
+The QAT PMD requires IPsec MB library
+for HMAC partial hash calculation in symmetric precomputes function.
+OpenSSL 3.0+ removed the low-level ``SHA*_Transform`` API
+that were previously used for HMAC precomputes.
+
+**On x86 platforms:**
+
+* Intel IPsec MB library (v1.4.0+) is required for HMAC precomputes.
+* OpenSSL (3.0+) is optional for DOCSIS BPI cipher fallback.
+
+**On ARM platforms:**
+
+* ARM IPsec MB library from ``gitlab.arm.com/arm-reference-solutions/ipsec-mb``
+  is required for HMAC precomputes.
+* OpenSSL (3.0+) is required for DOCSIS BPI cipher algorithms.
+  ARM IPsec MB does not implement CFB-one-byte cipher modes needed for DOCSIS.
+  Without OpenSSL, DOCSIS algorithms will not be available on ARM.
 
 
 Device and driver naming
@@ -432,9 +441,6 @@ Available kernel drivers
 
 Kernel drivers for each device for each service are listed in the following table. (Scroll right
 to see the full table)
-
-
-.. _table_qat_pmds_drivers:
 
 .. table:: QAT device generations, devices and drivers
 

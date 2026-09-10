@@ -740,8 +740,8 @@ remap_segment(struct hugepage_file *hugepages, int seg_start, int seg_end)
 		break;
 	}
 	if (msl_idx == RTE_MAX_MEMSEG_LISTS) {
-		EAL_LOG(ERR, "Could not find space for memseg. Please increase RTE_MAX_MEMSEG_PER_LIST "
-			"RTE_MAX_MEMSEG_PER_TYPE and/or RTE_MAX_MEM_MB_PER_TYPE in configuration.");
+		EAL_LOG(ERR,
+			"Could not find suitable space for memseg in existing memseg lists");
 		return -1;
 	}
 
@@ -820,23 +820,6 @@ remap_segment(struct hugepage_file *hugepages, int seg_start, int seg_end)
 	EAL_LOG(DEBUG, "Allocated %" PRIu64 "M on socket %i",
 			(seg_len * page_sz) >> 20, socket_id);
 	return seg_len;
-}
-
-static uint64_t
-get_mem_amount(uint64_t page_sz, uint64_t max_mem)
-{
-	uint64_t area_sz, max_pages;
-
-	/* limit to RTE_MAX_MEMSEG_PER_LIST pages or RTE_MAX_MEM_MB_PER_LIST */
-	max_pages = RTE_MAX_MEMSEG_PER_LIST;
-	max_mem = RTE_MIN((uint64_t)RTE_MAX_MEM_MB_PER_LIST << 20, max_mem);
-
-	area_sz = RTE_MIN(page_sz * max_pages, max_mem);
-
-	/* make sure the list isn't smaller than the page size */
-	area_sz = RTE_MAX(area_sz, page_sz);
-
-	return RTE_ALIGN(area_sz, page_sz);
 }
 
 static int
@@ -1712,12 +1695,13 @@ rte_eal_using_phys_addrs(void)
 static int __rte_unused
 memseg_primary_init_32(void)
 {
+	/* limit total amount of memory on 32-bit */
+	const uint64_t mem32_max_mem = 2ULL << 30;
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
 	int active_sockets, hpi_idx, msl_idx = 0;
 	unsigned int socket_id, i;
 	struct rte_memseg_list *msl;
 	uint64_t extra_mem_per_socket, total_extra_mem, total_requested_mem;
-	uint64_t max_mem;
 	struct internal_config *internal_conf =
 		eal_get_internal_configuration();
 
@@ -1760,13 +1744,12 @@ memseg_primary_init_32(void)
 	else
 		total_requested_mem = internal_conf->memory;
 
-	max_mem = (uint64_t)RTE_MAX_MEM_MB << 20;
-	if (total_requested_mem > max_mem) {
+	if (total_requested_mem > mem32_max_mem) {
 		EAL_LOG(ERR, "Invalid parameters: 32-bit process can at most use %uM of memory",
-				(unsigned int)(max_mem >> 20));
+				(unsigned int)(mem32_max_mem >> 20));
 		return -1;
 	}
-	total_extra_mem = max_mem - total_requested_mem;
+	total_extra_mem = mem32_max_mem - total_requested_mem;
 	extra_mem_per_socket = active_sockets == 0 ? total_extra_mem :
 			total_extra_mem / active_sockets;
 
@@ -1830,8 +1813,8 @@ memseg_primary_init_32(void)
 		for (hpi_idx = 0; hpi_idx < hp_sizes; hpi_idx++) {
 			uint64_t max_pagesz_mem, cur_pagesz_mem = 0;
 			uint64_t hugepage_sz;
+			uint64_t pagesz_mem_limit;
 			struct hugepage_info *hpi;
-			int type_msl_idx, max_segs, total_segs = 0;
 
 			hpi = &internal_conf->hugepage_info[hpi_idx];
 			hugepage_sz = hpi->hugepage_sz;
@@ -1840,62 +1823,62 @@ memseg_primary_init_32(void)
 			if (hpi->num_pages[socket_id] == 0)
 				continue;
 
-			max_segs = RTE_MAX_MEMSEG_PER_TYPE;
 			max_pagesz_mem = max_socket_mem - cur_socket_mem;
+			pagesz_mem_limit = internal_conf->hugepage_mem_sz_limits[hpi_idx];
+			max_pagesz_mem = RTE_MIN(max_pagesz_mem, pagesz_mem_limit);
 
 			/* make it multiple of page size */
 			max_pagesz_mem = RTE_ALIGN_FLOOR(max_pagesz_mem,
 					hugepage_sz);
 
+			if (max_pagesz_mem == 0)
+				continue;
+
 			EAL_LOG(DEBUG, "Attempting to preallocate "
 					"%" PRIu64 "M on socket %i",
 					max_pagesz_mem >> 20, socket_id);
 
-			type_msl_idx = 0;
-			while (cur_pagesz_mem < max_pagesz_mem &&
-					total_segs < max_segs) {
-				uint64_t cur_mem;
+			while (cur_pagesz_mem < max_pagesz_mem) {
+				uint64_t rem_mem;
 				unsigned int n_segs;
 
-				if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
-					EAL_LOG(ERR,
-						"No more space in memseg lists, please increase RTE_MAX_MEMSEG_LISTS");
-					return -1;
-				}
+				rem_mem = max_pagesz_mem - cur_pagesz_mem;
+				n_segs = rem_mem / hugepage_sz;
 
-				msl = &mcfg->memsegs[msl_idx];
+				while (n_segs > 0) {
+					if (msl_idx >= RTE_MAX_MEMSEG_LISTS) {
+						EAL_LOG(ERR,
+							"No more space in memseg lists, please increase RTE_MAX_MEMSEG_LISTS");
+						return -1;
+					}
 
-				cur_mem = get_mem_amount(hugepage_sz,
-						max_pagesz_mem);
-				n_segs = cur_mem / hugepage_sz;
+					msl = &mcfg->memsegs[msl_idx];
 
-				if (eal_memseg_list_init(msl, hugepage_sz,
-						n_segs, socket_id, type_msl_idx,
-						true)) {
-					/* failing to allocate a memseg list is
-					 * a serious error.
-					 */
-					EAL_LOG(ERR, "Cannot allocate memseg list");
-					return -1;
-				}
+					if (eal_memseg_list_init(msl, hugepage_sz,
+							n_segs, socket_id, msl_idx, true) < 0) {
+						/* failing to allocate a memseg list is a serious error. */
+						EAL_LOG(ERR, "Cannot allocate memseg list");
+						return -1;
+					}
 
-				if (eal_memseg_list_alloc(msl, 0)) {
-					/* if we couldn't allocate VA space, we
-					 * can try with smaller page sizes.
-					 */
-					EAL_LOG(ERR, "Cannot allocate VA space for memseg list, retrying with different page size");
-					/* deallocate memseg list */
+					if (eal_memseg_list_alloc(msl, 0) == 0)
+						break;
+
 					if (memseg_list_free(msl))
 						return -1;
-					break;
+
+					EAL_LOG(DEBUG,
+						"Cannot allocate VA space for memseg list, retrying with smaller chunk");
+					n_segs /= 2;
 				}
 
-				total_segs += msl->memseg_arr.len;
-				cur_pagesz_mem = total_segs * hugepage_sz;
-				type_msl_idx++;
+				if (n_segs == 0)
+					break;
+
+				cur_pagesz_mem += (uint64_t)n_segs * hugepage_sz;
+				cur_socket_mem += (uint64_t)n_segs * hugepage_sz;
 				msl_idx++;
 			}
-			cur_socket_mem += cur_pagesz_mem;
 		}
 		if (cur_socket_mem == 0) {
 			EAL_LOG(ERR, "Cannot allocate VA space on socket %u",
@@ -1913,8 +1896,59 @@ memseg_primary_init(void)
 	return eal_dynmem_memseg_lists_init();
 }
 
+static int __rte_unused
+memseg_secondary_init_dynmem(void)
+{
+	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
+	int msl_idx = 0;
+	struct rte_memseg_list *msl;
+	void *mem_va_addr;
+	size_t mem_va_len;
+
+	if (mcfg->mem_va_addr == 0 || mcfg->mem_va_len == 0 ||
+			mcfg->mem_va_page_sz == 0) {
+		EAL_LOG(ERR, "Missing shared dynamic memory VA range from primary process");
+		return -1;
+	}
+
+	mem_va_addr = (void *)(uintptr_t)mcfg->mem_va_addr;
+	mem_va_len = mcfg->mem_va_len;
+
+	if (eal_get_virtual_area(mem_va_addr, &mem_va_len,
+			mcfg->mem_va_page_sz, 0, 0) == NULL) {
+		EAL_LOG(ERR, "Cannot reserve VA space for hugepage memory");
+		return -1;
+	}
+
+	for (msl_idx = 0; msl_idx < RTE_MAX_MEMSEG_LISTS; msl_idx++) {
+
+		msl = &mcfg->memsegs[msl_idx];
+
+		/* skip empty and external memseg lists */
+		if (msl->memseg_arr.len == 0 || msl->external)
+			continue;
+
+		if (rte_fbarray_attach(&msl->memseg_arr)) {
+			EAL_LOG(ERR, "Cannot attach to primary process memseg lists");
+			eal_mem_free(mem_va_addr, mem_va_len);
+			return -1;
+		}
+
+		if (eal_memseg_list_assign(msl, msl->base_va)) {
+			EAL_LOG(ERR, "Cannot assign VA space for hugepage memory");
+			eal_mem_free(mem_va_addr, mem_va_len);
+			return -1;
+		}
+
+		EAL_LOG(DEBUG, "Attaching segment list: n_segs:%u socket_id:%d hugepage_sz:%" PRIu64,
+			msl->memseg_arr.len, msl->socket_id, msl->page_sz);
+	}
+
+	return 0;
+}
+
 static int
-memseg_secondary_init(void)
+memseg_secondary_init_legacy(void)
 {
 	struct rte_mem_config *mcfg = rte_eal_get_configuration()->mem_config;
 	int msl_idx = 0;
@@ -1941,6 +1975,21 @@ memseg_secondary_init(void)
 	}
 
 	return 0;
+}
+
+static int
+memseg_secondary_init(void)
+{
+#ifdef RTE_ARCH_64
+	const struct internal_config *internal_conf =
+		eal_get_internal_configuration();
+
+	/* for 32-bit dynmem init is same as legacy */
+	if (!internal_conf->legacy_mem)
+		return memseg_secondary_init_dynmem();
+#endif
+
+	return memseg_secondary_init_legacy();
 }
 
 int

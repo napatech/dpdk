@@ -9,7 +9,7 @@ based layerscape platform and information about common offload
 hw block drivers of **NXP QorIQ DPAA** SoC family.
 
 Supported DPAA SoCs
---------------------
+-------------------
 
 * LS1046A/LS1026A
 * LS1043A/LS1023A
@@ -24,15 +24,15 @@ Common Offload HW Block Drivers
 
 #. **Nics Driver**
 
-   See :doc:`../nics/dpaa` for NXP dpaa nic driver information.
+   See :doc:`/nics/dpaa` for NXP dpaa nic driver information.
 
 #. **Cryptodev Driver**
 
-   See :doc:`../cryptodevs/dpaa_sec` for NXP dpaa cryptodev driver information.
+   See :doc:`/cryptodevs/dpaa_sec` for NXP dpaa cryptodev driver information.
 
 #. **Eventdev Driver**
 
-   See :doc:`../eventdevs/dpaa` for NXP dpaa eventdev driver information.
+   See :doc:`/eventdevs/dpaa` for NXP dpaa eventdev driver information.
 
 
 Steps To Setup Platform
@@ -67,7 +67,7 @@ compatible board:
    This tool can be obtained from `NXP (Freescale) Public Git Repository <https://source.codeaurora.org/external/qoriq/qoriq-components/fmc>`_.
 
    This tool needs configuration files which are available in the
-   :ref:`DPDK Extra Scripts <extra_scripts>`, described below for DPDK usages.
+   :ref:`DPDK Extra Scripts <dpaa_extra_scripts>`, described below for DPDK usages.
 
    Note that DPAA PMD can also be executed using images provided
    as part of SDK from NXP. The SDK includes all the above prerequisites
@@ -96,7 +96,7 @@ separately:
   SDK and related information can be obtained from:  `NXP QorIQ SDK  <http://www.nxp.com/products/software-and-tools/run-time-software/linux-sdk/linux-sdk-for-qoriq-processors:SDKLINUX>`_.
 
 
-.. _extra_scripts:
+.. _dpaa_extra_scripts:
 
 - **DPDK Extra Scripts**
 
@@ -110,5 +110,4 @@ Currently supported by DPDK:
 - NXP SDK **2.0+** (preferred: LSDK 18.09).
 - Supported architectures:  **arm64 LE**.
 
-- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>`
-  to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.

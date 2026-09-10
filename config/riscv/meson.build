@@ -20,6 +20,11 @@ dpdk_conf.set('RTE_FORCE_INTRINSICS', 1)
 
 # common flags to all riscv builds, with lowest priority
 flags_common = [
+    # Accelerate rte_memcpy for copies smaller than 64 bytes. Be sure to run
+    # the unit test (memcpy_perf_autotest) to verify performance improvements.
+    # Refer to notes in source file (lib/eal/riscv/include/rte_memcpy.h)
+    # for more details.
+    ['RTE_ARCH_RISCV_MEMCPY', false],
     ['RTE_ARCH_RISCV', true],
     ['RTE_CACHE_LINE_SIZE', 64],
     # Manually set wall time clock frequency for the target. If 0, then it is
@@ -141,6 +146,7 @@ if (riscv_extension_macros and
                 int main(void) { size_t vl = __riscv_vsetvl_e32m1(1); }''', args: machine_args))
             message('Compiling with the V extension')
             machine_args += ['-DRTE_RISCV_FEATURE_V']
+            dpdk_flags += [['RTE_RISCV_FEATURE_V', 1],]
         endif
     else
         warning('Detected V extension but cannot use because intrinsics are not available (present in GCC 14.1.0+ and Clang 18.1.0+)')

@@ -9,7 +9,7 @@ to calculate the Toeplitz hash function and to use its properties.
 The Toeplitz hash function is commonly used in a wide range of NICs
 to calculate the RSS hash sum to spread the traffic among the queues.
 
-.. _figure_rss_queue_assign:
+.. _toeplitz_figure_rss_queue_assign:
 
 .. figure:: img/rss_queue_assign.*
 
@@ -40,7 +40,7 @@ The ``rte_softrss_be`` function is a faster implementation,
 but it expects ``rss_key`` to be converted to the host byte order.
 
 The last two functions are vectorized implementations using
-Galois Fields New Instructions. Could be used if ``rte_thash_gfni_supported`` is true.
+Galois Fields New Instructions. They can be used if ``rte_thash_gfni_supported`` is true.
 They expect the tuple to be in network byte order.
 
 ``rte_thash_gfni()`` calculates the hash value for a single tuple, and
@@ -72,7 +72,7 @@ Predictable RSS
 ---------------
 
 In some use cases it is useful to have a way to find partial collisions of the
-Toeplitz hash function. In figure :numref:`figure_rss_queue_assign` only a few
+Toeplitz hash function. In figure :numref:`toeplitz_figure_rss_queue_assign` only a few
 of the least significant bits (LSB) of the hash value are used to indicate an
 entry in the RSS Redirection Table (ReTa) and thus the index of the queue. So,
 in this case it would be useful to find another tuple whose hash has the same
@@ -186,7 +186,7 @@ same as in ``desired_hash``.
 
 
 Adjust tuple API
-~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~
 
 The ``rte_thash_get_complement()`` function is a user-friendly wrapper around
 a number of other functions. It alters a passed tuple to meet the above
@@ -216,9 +216,9 @@ tag allocation, etc. In the following we will consider a SNAT application.
 
 Packets of a single bidirectional flow belonging to different directions can
 end up being assigned to different queues and thus processed by different
-lcores, as shown in :numref:`figure_predictable_snat_1`:
+lcores, as shown in :numref:`toeplitz_figure_predictable_snat_1`:
 
-.. _figure_predictable_snat_1:
+.. _toeplitz_figure_predictable_snat_1:
 
 .. figure:: img/predictable_snat_1.*
 
@@ -241,9 +241,9 @@ penalties, for example:
 
 We can avoid all these penalties if it can be guaranteed that packets
 belonging to one bidirectional flow will be assigned to the same queue, as
-shown in :numref:`figure_predictable_snat_2`:
+shown in :numref:`toeplitz_figure_predictable_snat_2`:
 
-.. _figure_predictable_snat_2:
+.. _toeplitz_figure_predictable_snat_2:
 
 .. figure:: img/predictable_snat_2.*
 
@@ -306,7 +306,7 @@ collision. This is shown in the code below.
    uint32_t rev_hash = rte_softrss((uint32_t *)&rev_tuple, RTE_THASH_V4_L4_LEN, new_key);
 
    /* Get the adjustment bits for the src port to get a new port. */
-   uint32_t adj = rte_thash_get_compliment(h, rev_hash, orig_hash);
+   uint32_t adj = rte_thash_get_complement(h, rev_hash, orig_hash);
 
    /* Adjust the source port bits. */
    uint16_t new_sport = tuple.v4.sport ^ adj;

@@ -467,6 +467,9 @@ rtl_csi_other_fun_read(struct rtl_hw *hw, u8 multi_fun_sel_bit, u32 addr)
 	int i;
 	u32 value = 0xffffffff;
 
+	if (hw->mcfg == CFG_METHOD_60)
+		goto exit;
+
 	cmd = CSIAR_Read | CSIAR_ByteEn << CSIAR_ByteEn_shift |
 	      (addr & CSIAR_Addr_Mask);
 
@@ -505,6 +508,9 @@ rtl_csi_other_fun_write(struct rtl_hw *hw, u8 multi_fun_sel_bit, u32 addr,
 {
 	u32 cmd;
 	int i;
+
+	if (hw->mcfg == CFG_METHOD_60)
+		return;
 
 	RTL_W32(hw, CSIDR, value);
 	cmd = CSIAR_Write | CSIAR_ByteEn << CSIAR_ByteEn_shift |
@@ -912,6 +918,29 @@ rtl8125_set_rx_desc_type(struct rtl_hw *hw)
 }
 
 static void
+rtl8125_set_rx_crc_drop(struct rtl_hw *hw, bool enable)
+{
+	switch (hw->mcfg) {
+	case CFG_METHOD_54:
+	case CFG_METHOD_55:
+	case CFG_METHOD_56:
+	case CFG_METHOD_57:
+	case CFG_METHOD_58:
+	case CFG_METHOD_59:
+	case CFG_METHOD_60:
+	case CFG_METHOD_61:
+	case CFG_METHOD_70:
+	case CFG_METHOD_71:
+	case CFG_METHOD_91:
+		if (enable)
+			RTL_W8(hw, 0xD8, RTL_R8(hw, 0xD8) | RX_CRC_DROP_EN);
+		else
+			RTL_W8(hw, 0xD8, RTL_R8(hw, 0xD8) & ~RX_CRC_DROP_EN);
+		break;
+	}
+}
+
+static void
 rtl8125_hw_config(struct rtl_hw *hw)
 {
 	u32 mac_ocp_data;
@@ -966,6 +995,8 @@ rtl8125_hw_config(struct rtl_hw *hw)
 	}
 
 	rtl8125_set_rx_desc_type(hw);
+
+	rtl8125_set_rx_crc_drop(hw, false);
 
 	if (hw->mcfg == CFG_METHOD_58 || hw->mcfg == CFG_METHOD_91) {
 		rtl_clear_mac_ocp_bit(hw, 0xE00C, BIT_12);
@@ -1954,6 +1985,66 @@ rtl8168_switch_to_sgmii_mode(struct rtl_hw *hw)
 	rtl8168_set_mcu_ocp_bit(hw, 0xEB16, BIT_1);
 }
 
+static u16
+rtl8125_get_fifo_nf(struct rtl_hw *hw)
+{
+	u32 magic = 0;
+	u32 mtu;
+
+	mtu = hw->mtu;
+
+	if (hw->mcfg >= CFG_METHOD_48 && hw->mcfg <= CFG_METHOD_61) {
+		if (mtu < 9500)
+			magic = 14215 + mtu;
+		else
+			return 0x5CA;
+	} else if (hw->mcfg >= CFG_METHOD_70 && hw->mcfg <= CFG_METHOD_71) {
+		if (mtu < 9500)
+			magic = 14447;
+		else
+			magic = 4947;
+
+		magic += mtu * (mtu < 9500 ? 1 : 2);
+	} else if (hw->mcfg >= CFG_METHOD_91) {
+		if (mtu < 9500)
+			magic = 17171;
+		else
+			magic = 7671;
+
+		magic += mtu * (mtu < 9500 ? 1 : 2);
+	}
+
+	return (u16)(magic >> 4);
+}
+
+static u16
+rtl8125_get_fifo_ne(struct rtl_hw *hw)
+{
+	u32 magic = 0;
+	u32 mtu;
+
+	mtu = hw->mtu;
+
+	if (hw->mcfg >= CFG_METHOD_48 && hw->mcfg <= CFG_METHOD_61) {
+		return 0x6BE;
+	} else if (hw->mcfg >= CFG_METHOD_70 && hw->mcfg <= CFG_METHOD_71) {
+		if (mtu < 9500)
+			return 0x107C;
+
+		magic = 77033;
+	} else if (hw->mcfg >= CFG_METHOD_91) {
+		if (mtu < 9500)
+			return 0x2C4A;
+
+		magic = 190910;
+	}
+
+	if (magic > mtu)
+		return (u16)((magic - mtu) >> 4);
+	else
+		return 0;
+}
+
 static void
 rtl_exit_oob(struct rtl_hw *hw)
 {
@@ -1982,12 +2073,9 @@ rtl_exit_oob(struct rtl_hw *hw)
 	rtl_wait_ll_share_fifo_ready(hw);
 
 	if (rtl_is_8125(hw)) {
-		rtl_mac_ocp_write(hw, 0xC0AA, 0x07D0);
-
-		rtl_mac_ocp_write(hw, 0xC0A6, 0x01B5);
-
+		rtl_mac_ocp_write(hw, 0xC0A6, rtl8125_get_fifo_nf(hw));
+		rtl_mac_ocp_write(hw, 0xC0AA, rtl8125_get_fifo_ne(hw));
 		rtl_mac_ocp_write(hw, 0xC01E, 0x5555);
-
 	} else {
 		data16 = rtl_mac_ocp_read(hw, 0xE8DE) | BIT_15;
 		rtl_mac_ocp_write(hw, 0xE8DE, data16);

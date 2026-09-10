@@ -267,7 +267,10 @@ enum index {
 	DUMP_ALL,
 	DUMP_ONE,
 	DUMP_IS_USER_ID,
+	DUMP_FILE_PATH,
 
+	DUMP_WRITE,
+	DUMP_APPEND,
 	/* Configure arguments */
 	CONFIG_QUEUES_NUMBER,
 	CONFIG_QUEUES_SIZE,
@@ -1263,8 +1266,9 @@ struct buffer {
 		} destroy; /**< Destroy arguments. */
 		struct {
 			char file[128];
-			bool mode;
+			bool dump_all;
 			uint64_t rule;
+			bool append_to_file;
 			bool is_user_id;
 		} dump; /**< Dump arguments. */
 		struct {
@@ -1550,8 +1554,7 @@ static const enum index next_destroy_attr[] = {
 };
 
 static const enum index next_dump_attr[] = {
-	COMMON_FILE_PATH,
-	END,
+	DUMP_FILE_PATH,
 	ZERO,
 };
 
@@ -4296,6 +4299,27 @@ static const struct token token_list[] = {
 		.next = NEXT(next_dump_subcmd),
 		.call = parse_dump,
 	},
+	[DUMP_FILE_PATH] = {
+		.name = "{file path}",
+		.type = "STRING",
+		.help = "file path",
+		.next = NEXT(NEXT_ENTRY(DUMP_WRITE, DUMP_APPEND, END)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.dump.file)),
+		.call = parse_string0,
+		.comp = comp_none,
+	},
+	[DUMP_WRITE] = {
+		.name = "write",
+		.help = "open file in write mode (default)",
+		.next = NEXT(NEXT_ENTRY(END)),
+		.call = parse_dump,
+	},
+	[DUMP_APPEND] = {
+		.name = "append",
+		.help = "open file in append mode",
+		.next = NEXT(NEXT_ENTRY(END)),
+		.call = parse_dump,
+	},
 	/* Query arguments. */
 	[QUERY_ACTION] = {
 		.name = "{action}",
@@ -4586,7 +4610,8 @@ static const struct token token_list[] = {
 		.help = "tag control information",
 		.next = NEXT(item_vlan, NEXT_ENTRY(COMMON_UNSIGNED),
 			     item_param),
-		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_vlan, hdr.vlan_tci)),
+		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_vlan,
+					  hdr.vlan_tci, "\xff\xff")),
 	},
 	[ITEM_VLAN_PCP] = {
 		.name = "pcp",
@@ -4617,8 +4642,8 @@ static const struct token token_list[] = {
 		.help = "inner EtherType",
 		.next = NEXT(item_vlan, NEXT_ENTRY(COMMON_UNSIGNED),
 			     item_param),
-		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_vlan,
-					     hdr.eth_proto)),
+		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_vlan,
+						  hdr.eth_proto, "\xff\xff")),
 	},
 	[ITEM_VLAN_HAS_MORE_VLAN] = {
 		.name = "has_more_vlan",
@@ -10733,7 +10758,9 @@ parse_dump(struct context *ctx, const struct token *token,
 	switch (ctx->curr) {
 	case DUMP_ALL:
 	case DUMP_ONE:
-		out->args.dump.mode = (ctx->curr == DUMP_ALL) ? true : false;
+		out->args.dump.dump_all = (ctx->curr == DUMP_ALL) ? true : false;
+		/* don't append to file by default */
+		out->args.dump.append_to_file = false;
 		out->command = ctx->curr;
 		ctx->objdata = 0;
 		ctx->object = out;
@@ -10741,6 +10768,12 @@ parse_dump(struct context *ctx, const struct token *token,
 		return len;
 	case DUMP_IS_USER_ID:
 		out->args.dump.is_user_id = true;
+		return len;
+	case DUMP_WRITE:
+		out->args.dump.append_to_file = false;
+		return len;
+	case DUMP_APPEND:
+		out->args.dump.append_to_file = true;
 		return len;
 	default:
 		return -1;
@@ -11878,7 +11911,7 @@ parse_string0(struct context *ctx, const struct token *token __rte_unused,
 	if (!ctx->object)
 		return len;
 	buf = (uint8_t *)ctx->object + arg_data->offset;
-	strncpy(buf, str, len);
+	memcpy(buf, str, len);
 	if (ctx->objmask)
 		memset((uint8_t *)ctx->objmask + arg_data->offset, 0xff, len);
 	return len;
@@ -13579,9 +13612,10 @@ cmd_flow_parsed(const struct buffer *in)
 		break;
 	case DUMP_ONE:
 	case DUMP_ALL:
-		port_flow_dump(in->port, in->args.dump.mode,
+		port_flow_dump(in->port, in->args.dump.dump_all,
 				in->args.dump.rule, in->args.dump.file,
-				in->args.dump.is_user_id);
+				in->args.dump.is_user_id,
+				in->args.dump.append_to_file);
 		break;
 	case QUERY:
 		port_flow_query(in->port, in->args.query.rule,

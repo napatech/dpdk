@@ -310,7 +310,7 @@ ice_dcf_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		tm_node->id = node_id;
 		tm_node->parent = NULL;
 		tm_node->reference_count = 0;
-		rte_memcpy(&tm_node->params, params,
+		memcpy(&tm_node->params, params,
 				 sizeof(struct rte_tm_node_params));
 		hw->tm_conf.root = tm_node;
 
@@ -375,7 +375,7 @@ ice_dcf_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	tm_node->shaper_profile = shaper_profile;
 	tm_node->reference_count = 0;
 	tm_node->parent = parent_node;
-	rte_memcpy(&tm_node->params, params,
+	memcpy(&tm_node->params, params,
 			 sizeof(struct rte_tm_node_params));
 	if (parent_node_type == ICE_DCF_TM_NODE_TYPE_PORT) {
 		TAILQ_INSERT_TAIL(&hw->tm_conf.tc_list,
@@ -522,7 +522,7 @@ ice_dcf_shaper_profile_add(struct rte_eth_dev *dev,
 	if (!shaper_profile)
 		return -ENOMEM;
 	shaper_profile->shaper_profile_id = shaper_profile_id;
-	rte_memcpy(&shaper_profile->profile, profile,
+	memcpy(&shaper_profile->profile, profile,
 			 sizeof(struct rte_tm_shaper_params));
 	TAILQ_INSERT_TAIL(&hw->tm_conf.shaper_profile_list,
 			  shaper_profile, node);
@@ -877,10 +877,8 @@ static int ice_dcf_hierarchy_commit(struct rte_eth_dev *dev,
 	return ret_val;
 
 fail_clear:
-	if (vf_bw != NULL)
-		free(vf_bw);
-	if (tc_bw != NULL)
-		free(tc_bw);
+	free(vf_bw);
+	free(tc_bw);
 
 	/* clear all the traffic manager configuration */
 	if (clear_on_fail) {

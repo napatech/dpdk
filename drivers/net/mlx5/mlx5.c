@@ -120,6 +120,18 @@
 #define MLX5_TX_SKEW "tx_skew"
 
 /*
+ * Device parameter to specify burst upper bound in bytes
+ * for packet pacing rate evaluation.
+ */
+#define MLX5_TX_BURST_BOUND "tx_burst_bound"
+
+/*
+ * Device parameter to specify typical packet size in bytes
+ * for packet pacing rate accuracy improvement.
+ */
+#define MLX5_TX_TYPICAL_PKT_SZ "tx_typical_pkt_sz"
+
+/*
  * Device parameter to enable hardware Tx vector.
  * Deprecated, ignored (no vectorized Tx routines anymore).
  */
@@ -1407,6 +1419,10 @@ mlx5_dev_args_check_handler(const char *key, const char *val, void *opaque)
 		config->tx_pp = tmp;
 	} else if (strcmp(MLX5_TX_SKEW, key) == 0) {
 		config->tx_skew = tmp;
+	} else if (strcmp(MLX5_TX_BURST_BOUND, key) == 0) {
+		config->tx_burst_bound = tmp;
+	} else if (strcmp(MLX5_TX_TYPICAL_PKT_SZ, key) == 0) {
+		config->tx_typical_pkt_sz = tmp;
 	} else if (strcmp(MLX5_L3_VXLAN_EN, key) == 0) {
 		config->l3_vxlan_en = !!tmp;
 	} else if (strcmp(MLX5_VF_NL_EN, key) == 0) {
@@ -1481,8 +1497,10 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 				struct mlx5_sh_config *config)
 {
 	const char **params = (const char *[]){
+		MLX5_TX_BURST_BOUND,
 		MLX5_TX_PP,
 		MLX5_TX_SKEW,
+		MLX5_TX_TYPICAL_PKT_SZ,
 		MLX5_L3_VXLAN_EN,
 		MLX5_VF_NL_EN,
 		MLX5_DV_ESW_EN,
@@ -1556,6 +1574,18 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	    !sh->cdev->config.hca_attr.wait_on_time) {
 		DRV_LOG(WARNING,
 			"\"tx_skew\" doesn't affect without \"tx_pp\".");
+	}
+	if (config->tx_burst_bound &&
+	    !sh->cdev->config.hca_attr.qos.packet_pacing_burst_bound) {
+		DRV_LOG(WARNING,
+			"HW does not support burst_upper_bound, ignoring.");
+		config->tx_burst_bound = 0;
+	}
+	if (config->tx_typical_pkt_sz &&
+	    !sh->cdev->config.hca_attr.qos.packet_pacing_typical_size) {
+		DRV_LOG(WARNING,
+			"HW does not support typical_packet_size, ignoring.");
+		config->tx_typical_pkt_sz = 0;
 	}
 	/* Check for LRO support. */
 	if (mlx5_devx_obj_ops_en(sh) && sh->cdev->config.hca_attr.lro_cap) {
@@ -1945,6 +1975,9 @@ mlx5_alloc_shared_dev_ctx(const struct mlx5_dev_spawn_data *spawn,
 	/* Init counter pool list header and lock. */
 	LIST_INIT(&sh->hws_cpool_list);
 	rte_spinlock_init(&sh->cpool_lock);
+	sh->null_mr = mlx5_os_alloc_null_mr(sh->cdev->dev, sh->cdev->pd);
+	if (!sh->null_mr)
+		DRV_LOG(DEBUG, "Fail to initialize NULL MR, selective Rx is disabled.");
 exit:
 	pthread_mutex_unlock(&mlx5_dev_ctx_list_mutex);
 	return sh;
@@ -2109,6 +2142,10 @@ mlx5_free_shared_dev_ctx(struct mlx5_dev_ctx_shared *sh)
 	MLX5_ASSERT(sh->geneve_tlv_option_resource == NULL);
 	pthread_mutex_destroy(&sh->txpp.mutex);
 	mlx5_lwm_unset(sh);
+	if (sh->null_mr) {
+		mlx5_os_free_null_mr(sh->null_mr);
+		sh->null_mr = NULL;
+	}
 	mlx5_physical_device_destroy(sh->phdev);
 	mlx5_free(sh);
 	return;
@@ -2629,6 +2666,8 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
 	.rx_metadata_negotiate = mlx5_flow_rx_metadata_negotiate,
 	.get_restore_flags = mlx5_get_restore_flags,
+	.set_queue_rate_limit = mlx5_set_queue_rate_limit,
+	.get_queue_rate_limit = mlx5_get_queue_rate_limit,
 };
 
 /* Available operations from secondary process. */
@@ -2722,6 +2761,8 @@ const struct eth_dev_ops mlx5_dev_ops_isolate = {
 	.count_aggr_ports = mlx5_count_aggr_ports,
 	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
 	.get_restore_flags = mlx5_get_restore_flags,
+	.set_queue_rate_limit = mlx5_set_queue_rate_limit,
+	.get_queue_rate_limit = mlx5_get_queue_rate_limit,
 };
 
 /**
@@ -3193,6 +3234,18 @@ mlx5_probe_again_args_validate(struct mlx5_common_device *cdev,
 	}
 	if (sh->config.tx_skew ^ config->tx_skew) {
 		DRV_LOG(ERR, "\"tx_skew\" "
+			"configuration mismatch for shared %s context.",
+			sh->ibdev_name);
+		goto error;
+	}
+	if (sh->config.tx_burst_bound != config->tx_burst_bound) {
+		DRV_LOG(ERR, "\"tx_burst_bound\" "
+			"configuration mismatch for shared %s context.",
+			sh->ibdev_name);
+		goto error;
+	}
+	if (sh->config.tx_typical_pkt_sz != config->tx_typical_pkt_sz) {
+		DRV_LOG(ERR, "\"tx_typical_pkt_sz\" "
 			"configuration mismatch for shared %s context.",
 			sh->ibdev_name);
 		goto error;
@@ -3878,6 +3931,14 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 				PCI_DEVICE_ID_MELLANOX_BLUEFIELD4)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX10)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX10C2C)
 	},
 	{
 		.vendor_id = 0

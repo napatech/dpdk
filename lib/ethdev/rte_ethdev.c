@@ -313,7 +313,7 @@ rte_eth_iterator_next(struct rte_dev_iterator *iter)
 				iter->class_device == NULL) {
 			/* get next rte_device to try. */
 			iter->device = iter->bus->dev_iterate(
-					iter->device, iter->bus_str, iter);
+					iter->bus, iter->device, iter->bus_str, iter);
 			if (iter->device == NULL)
 				break; /* no more rte_device candidate */
 		}
@@ -2129,7 +2129,7 @@ rte_eth_rx_queue_check_split(uint16_t port_id,
 			const struct rte_eth_dev_info *dev_info)
 {
 	const struct rte_eth_rxseg_capa *seg_capa = &dev_info->rx_seg_capa;
-	struct rte_mempool *mp_first;
+	struct rte_mempool *mp_first = NULL;
 	uint32_t offset_mask;
 	uint16_t seg_idx;
 	int ret = 0;
@@ -2148,7 +2148,6 @@ rte_eth_rx_queue_check_split(uint16_t port_id,
 	 * Check the sizes and offsets against buffer sizes
 	 * for each segment specified in extended configuration.
 	 */
-	mp_first = rx_seg[0].mp;
 	offset_mask = RTE_BIT32(seg_capa->offset_align_log2) - 1;
 
 	ptypes = NULL;
@@ -2160,13 +2159,17 @@ rte_eth_rx_queue_check_split(uint16_t port_id,
 		uint32_t offset = rx_seg[seg_idx].offset;
 		uint32_t proto_hdr = rx_seg[seg_idx].proto_hdr;
 
-		if (mpl == NULL) {
-			RTE_ETHDEV_LOG_LINE(ERR, "null mempool pointer");
-			ret = -EINVAL;
-			goto out;
+		if (mpl == NULL) { /* discarded segment */
+			if (seg_capa->selective_rx == 0) { /* not supported */
+				RTE_ETHDEV_LOG_LINE(ERR, "null mempool pointer");
+				ret = -EINVAL;
+				goto out;
+			}
+			continue; /* next checks are not relevant if no mempool */
 		}
-		if (seg_idx != 0 && mp_first != mpl &&
-		    seg_capa->multi_pools == 0) {
+		if (mp_first == NULL)
+			mp_first = mpl;
+		if (mp_first != mpl && seg_capa->multi_pools == 0) {
 			RTE_ETHDEV_LOG_LINE(ERR, "Receiving to multiple pools is not supported");
 			ret = -ENOTSUP;
 			goto out;
@@ -2232,6 +2235,11 @@ rte_eth_rx_queue_check_split(uint16_t port_id,
 		ret = rte_eth_check_rx_mempool(mpl, offset, length);
 		if (ret != 0)
 			goto out;
+	}
+	if (mp_first == NULL) {
+		RTE_ETHDEV_LOG_LINE(ERR, "At least one Rx segment must have a mempool");
+		ret = -EINVAL;
+		goto out;
 	}
 out:
 	free(ptypes);
@@ -5690,6 +5698,41 @@ int rte_eth_set_queue_rate_limit(uint16_t port_id, uint16_t queue_idx,
 	ret = eth_err(port_id, dev->dev_ops->set_queue_rate_limit(dev, queue_idx, tx_rate));
 
 	rte_eth_trace_set_queue_rate_limit(port_id, queue_idx, tx_rate, ret);
+
+	return ret;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_eth_get_queue_rate_limit, 26.07)
+int rte_eth_get_queue_rate_limit(uint16_t port_id, uint16_t queue_idx,
+		uint32_t *tx_rate)
+{
+	struct rte_eth_dev *dev;
+	int ret;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+
+	if (tx_rate == NULL) {
+		RTE_ETHDEV_LOG_LINE(ERR,
+			"Get queue rate limit:port %u: NULL tx_rate pointer",
+			port_id);
+		return -EINVAL;
+	}
+
+	if (queue_idx >= dev->data->nb_tx_queues) {
+		RTE_ETHDEV_LOG_LINE(ERR,
+			"Get queue rate limit:port %u: invalid queue ID=%u",
+			port_id, queue_idx);
+		return -EINVAL;
+	}
+
+	if (dev->dev_ops->get_queue_rate_limit == NULL)
+		return -ENOTSUP;
+	ret = eth_err(port_id,
+		      dev->dev_ops->get_queue_rate_limit(dev, queue_idx,
+							 tx_rate));
+
+	rte_eth_trace_get_queue_rate_limit(port_id, queue_idx, ret);
 
 	return ret;
 }

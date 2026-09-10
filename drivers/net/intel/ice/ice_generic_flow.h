@@ -66,6 +66,7 @@
 #define ICE_IP_PK_ID			BIT_ULL(40)
 #define ICE_IP_FRAG_OFS			BIT_ULL(39)
 #define ICE_L2TPV2OIP_SESSION_ID	BIT_ULL(38)
+#define ICE_L2TPV2OIP_LEN_SESSION_ID	BIT_ULL(37)
 
 /* input set */
 
@@ -135,6 +136,8 @@
 	(ICE_PROT_NAT_T_ESP | ICE_ESP_SPI)
 #define ICE_INSET_L2TPV2OIP_SESSION_ID \
 	(ICE_PROT_L2TPV2OIP | ICE_L2TPV2OIP_SESSION_ID)
+#define ICE_INSET_L2TPV2OIP_LEN_SESSION_ID \
+	(ICE_PROT_L2TPV2OIP | ICE_L2TPV2OIP_LEN_SESSION_ID)
 #define ICE_INSET_TUN_IPV4_SRC \
 	(ICE_PROT_IPV4_INNER | ICE_IP_SRC)
 #define ICE_INSET_TUN_IPV4_DST \
@@ -522,7 +525,7 @@ typedef int (*parse_pattern_action_t)(struct ice_adapter *ad,
 		uint32_t array_len,
 		const struct rte_flow_item pattern[],
 		const struct rte_flow_action actions[],
-		uint32_t priority,
+		const struct rte_flow_attr *attr,
 		void **meta,
 		struct rte_flow_error *error);
 
@@ -536,7 +539,9 @@ struct ice_flow_engine {
 	engine_query_t query_count;
 	engine_redirect_t redirect;
 	engine_free_t free;
+	const char *name;
 	enum ice_flow_engine_type type;
+	size_t rule_size;
 };
 TAILQ_HEAD(ice_engine_list, ice_flow_engine);
 

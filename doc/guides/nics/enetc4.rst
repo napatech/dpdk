@@ -1,5 +1,5 @@
 .. SPDX-License-Identifier: BSD-3-Clause
-   Copyright 2024-2025 NXP
+   Copyright 2024-2026 NXP
 
 ENETC4 Poll Mode Driver
 =======================
@@ -87,6 +87,64 @@ The following dependencies are not part of DPDK and must be installed separately
 Driver compilation and testing
 ------------------------------
 
-Follow instructions available in the document
-:ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-to launch **testpmd**.
+Follow instructions available in the document :doc:`build_and_test` to launch **testpmd**.
+
+
+Driver Arguments (devargs)
+--------------------------
+
+The ENETC4 PMD supports the following device arguments (devargs)
+that can be passed via ``-a`` (allow-list) option in DPDK applications.
+
+VF-specific devargs
+~~~~~~~~~~~~~~~~~~~
+
+``enetc4_vsi_disable``
+  Disable VSI-PSI messaging for the VF.
+  When present, features that require VSI-PSI communication
+  (link update, MAC filter, VLAN filter) are replaced with no-op stubs.
+  Useful when the PF driver does not support VSI-PSI messages.
+
+  Usage example::
+
+    dpdk-testpmd -a 0000:00:01.0,enetc4_vsi_disable -- -i
+
+``enetc4_vsi_timeout``
+  Set the VSI-PSI message wait timeout as an iteration count.
+  Controls how many polling iterations the driver waits
+  for a VSI-PSI response before timing out.
+  Defaults to ``ENETC4_DEF_VSI_WAIT_TIMEOUT_UPDATE`` when not set.
+
+  Usage example::
+
+    dpdk-testpmd -a 0000:00:01.0,enetc4_vsi_timeout=200 -- -i
+
+``enetc4_vsi_delay``
+  Set the VSI-PSI message wait delay in microseconds between polling iterations.
+  Defaults to ``ENETC4_DEF_VSI_WAIT_DELAY_UPDATE`` when not set.
+
+  Usage example::
+
+    dpdk-testpmd -a 0000:00:01.0,enetc4_vsi_delay=10 -- -i
+
+PF/Common devargs
+~~~~~~~~~~~~~~~~~
+
+``enetc4_txq_prior``
+  Set per-queue Tx ring priority (TBMR bits).
+  The value is a ``|``-separated list of priority values, one per Tx queue.
+  Values beyond the maximum supported Tx queue count are discarded.
+
+  Usage example::
+
+    dpdk-testpmd -a 0000:00:00.0,enetc4_txq_prior=1|2|3 -- -i
+
+``nc``
+  Select non-cacheable Rx/Tx ops (BD rings mapped as non-cacheable memory).
+  Set to ``1`` to use non-cacheable descriptor ring operations.
+  By default, cacheable BD rings with software cache maintenance are used.
+  Applies to both PF and VF.
+
+  Usage example::
+
+    dpdk-testpmd -a 0000:00:00.0,nc=1 -- -i

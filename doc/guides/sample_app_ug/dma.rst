@@ -38,7 +38,7 @@ Running the Application
 In order to run the hardware copy application, the copying device
 needs to be bound to user-space IO driver.
 
-Refer to the :doc:`../prog_guide/dmadev` for information on using the library.
+Refer to the :doc:`/prog_guide/dmadev` for information on using the library.
 
 The application requires a number of command line options:
 
@@ -135,8 +135,8 @@ used by the application:
     :end-before: >8 End of allocates mempool to hold the mbufs.
     :dedent: 1
 
-Mbufs are the packet buffer structure used by DPDK. They are explained in
-detail in the "Mbuf Library" section of the *DPDK Programmer's Guide*.
+Mbufs are the packet buffer structure used by DPDK.
+They are explained in detail in the :doc:`/prog_guide/mbuf_lib`.
 
 The ``main()`` function also initializes the ports:
 
@@ -304,7 +304,7 @@ if it was enabled. After that, copies are sent in burst mode using ``rte_eth_tx_
     :dedent: 0
 
 The Packet Copying Functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In order to perform SW packet copy, there are user-defined functions to the first copy
 the packet metadata (``pktmbuf_metadata_copy()``) and then the packet data
@@ -320,4 +320,4 @@ The metadata in this example is copied from ``rx_descriptor_fields1`` marker of
 ``rte_mbuf`` struct up to ``buf_len`` member.
 
 In order to understand why software packet copying is done as shown
-above, please refer to the :doc:`../prog_guide/mbuf_lib`.
+above, please refer to the :doc:`/prog_guide/mbuf_lib`.

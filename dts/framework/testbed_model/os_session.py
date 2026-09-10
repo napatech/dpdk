@@ -574,6 +574,25 @@ class OSSession(ABC):
         """
 
     @abstractmethod
+    def unbind_ports(self, ports: list[Port]) -> None:
+        """Unbind `ports` from any driver.
+
+        Args:
+            ports: The list of ports to unbind.
+        """
+
+    @abstractmethod
+    def get_nic_info(self) -> list[dict[str, str]]:
+        """Get NIC information.
+
+        Returns:
+            NIC info as a list of dictionaries.
+
+        Raises:
+            ConfigurationError: If the NIC info could not be found.
+        """
+
+    @abstractmethod
     def bind_ports_to_driver(self, ports: list[Port], driver_name: str) -> None:
         """Bind `ports` to the given `driver_name`.
 

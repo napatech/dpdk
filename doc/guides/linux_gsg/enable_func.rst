@@ -3,12 +3,10 @@
 
 .. include:: <isonum.txt>
 
-.. _Enabling_Additional_Functionality:
-
 Enabling Additional Functionality
 =================================
 
-.. _Running_Without_Root_Privileges:
+.. _linux_gsg_running_without_root_privileges:
 
 Running DPDK Applications Without Root Privileges
 -------------------------------------------------
@@ -85,7 +83,7 @@ need to be adjusted in order to ensure normal DPDK operation:
 The above limits can usually be adjusted by editing
 ``/etc/security/limits.conf`` file, and rebooting.
 
-See :ref:`Hugepage Mapping <hugepage_mapping>` section to learn how these limits affect EAL.
+See :ref:`eal_hugepage_mapping` section to learn how these limits affect EAL.
 
 Device Control
 ~~~~~~~~~~~~~~
@@ -162,7 +160,7 @@ Also see
 `CPU isolation example <https://www.suse.com/c/cpu-isolation-practical-example-part-5/>`_
 and `systemd core isolation example <https://www.rcannings.com/systemd-core-isolation/>`_.
 
-.. _High_Precision_Event_Timer:
+.. _linux_gsg_high_precision_event_timer:
 
 High Precision Event Timer (HPET) Functionality
 -----------------------------------------------

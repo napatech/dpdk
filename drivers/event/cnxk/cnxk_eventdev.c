@@ -566,7 +566,7 @@ parse_list(const char *value, void *opaque, param_parse_t fn)
 		else if (*s == ']')
 			end = s;
 
-		if (start && start < end) {
+		if (start && end && start < end) {
 			*end = 0;
 			fn(start + 1, opaque);
 			s = end;
@@ -654,7 +654,7 @@ cnxk_sso_init(struct rte_eventdev *event_dev)
 		return -ENOMEM;
 	}
 
-	pci_dev = container_of(event_dev->dev, struct rte_pci_device, device);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(event_dev, *pci_dev);
 	dev->sso.pci_dev = pci_dev;
 
 	*(uint64_t *)mz->addr = (uint64_t)dev;

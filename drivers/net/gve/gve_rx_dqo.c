@@ -40,12 +40,12 @@ static inline void
 gve_rx_refill_dqo(struct gve_rx_queue *rxq)
 {
 	volatile struct gve_rx_desc_dqo *rx_buf_desc;
-	struct rte_mbuf *new_bufs[rxq->nb_rx_desc];
 	uint16_t rx_mask = rxq->nb_rx_desc - 1;
 	uint16_t next_avail = rxq->bufq_tail;
 	struct rte_eth_dev *dev;
 	uint16_t nb_refill;
 	uint64_t dma_addr;
+	rte_iova_t iova;
 	int16_t buf_id;
 	int diag;
 	int i;
@@ -54,7 +54,7 @@ gve_rx_refill_dqo(struct gve_rx_queue *rxq)
 	if (nb_refill < rxq->free_thresh)
 		return;
 
-	diag = rte_pktmbuf_alloc_bulk(rxq->mpool, new_bufs, nb_refill);
+	diag = rte_pktmbuf_alloc_bulk(rxq->mpool, rxq->refill_bufs, nb_refill);
 	if (unlikely(diag < 0)) {
 		rxq->stats.no_mbufs_bulk++;
 		rxq->stats.no_mbufs += nb_refill;
@@ -76,12 +76,14 @@ gve_rx_refill_dqo(struct gve_rx_queue *rxq)
 			PMD_DRV_DP_LOG(ERR,
 				       "No free entries in sw_ring for port %d, queue %d.",
 				       rxq->port_id, rxq->queue_id);
-			rte_pktmbuf_free_bulk(new_bufs + i, nb_refill - i);
+			rte_pktmbuf_free_bulk(rxq->refill_bufs + i,
+					      nb_refill - i);
 			nb_refill = i;
 			break;
 		}
-		rxq->sw_ring[buf_id] = new_bufs[i];
-		dma_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(new_bufs[i]));
+		rxq->sw_ring[buf_id] = rxq->refill_bufs[i];
+		iova = rte_mbuf_data_iova_default(rxq->refill_bufs[i]);
+		dma_addr = rte_cpu_to_le_64(iova);
 		rx_buf_desc->buf_id = buf_id;
 		rx_buf_desc->header_buf_addr = 0;
 		rx_buf_desc->buf_addr = dma_addr;
@@ -158,6 +160,8 @@ gve_rx_burst_dqo(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
 	volatile struct gve_rx_compl_desc_dqo *rx_desc;
 	struct gve_rx_queue *rxq;
+	uint64_t last_sync = 0;
+	struct gve_priv *priv;
 	struct rte_mbuf *rxm;
 	uint16_t rx_buf_id;
 	uint16_t pkt_len;
@@ -169,6 +173,15 @@ gve_rx_burst_dqo(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	nb_rx = 0;
 	rxq = rx_queue;
 	rx_id = rxq->rx_tail;
+	priv = rxq->hw;
+
+	if (rxq->timestamp_enabled &&
+	    !rte_atomic_load_explicit(&priv->nic_ts_stale,
+				      rte_memory_order_acquire)) {
+		last_sync =
+			rte_atomic_load_explicit(&priv->last_read_nic_timestamp,
+						 rte_memory_order_relaxed);
+	}
 
 	while (nb_rx < nb_pkts) {
 		rx_desc = &rxq->compl_ring[rx_id];
@@ -187,8 +200,14 @@ gve_rx_burst_dqo(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		}
 
 		rx_buf_id = rte_le_to_cpu_16(rx_desc->buf_id);
+		if (unlikely(rx_buf_id >= rxq->nb_rx_desc)) {
+			PMD_DRV_DP_LOG(ERR, "Invalid buf_id %d", rx_buf_id);
+			continue;
+		}
+
 		rxm = rxq->sw_ring[rx_buf_id];
 		gve_completed_buf_list_push(rxq, rx_buf_id);
+		rxq->sw_ring[rx_buf_id] = NULL;
 
 		/* Free buffer and report error. */
 		if (unlikely(rx_desc->rx_error)) {
@@ -205,6 +224,16 @@ gve_rx_burst_dqo(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rxm->ol_flags = RTE_MBUF_F_RX_RSS_HASH;
 		gve_parse_csum_ol_flags(rxm, rx_desc);
 		rxm->hash.rss = rte_le_to_cpu_32(rx_desc->hash);
+
+		if (last_sync != 0 &&
+		    (rx_desc->ts_sub_nsecs_low & GVE_DQO_RX_HWTSTAMP_VALID) &&
+		    priv->mbuf_timestamp_offset >= 0) {
+			uint32_t ts = rte_le_to_cpu_32(rx_desc->ts);
+			uint64_t full_ts = gve_reconstruct_ts(last_sync, ts);
+
+			*RTE_MBUF_DYNFIELD(rxm, priv->mbuf_timestamp_offset, uint64_t *) = full_ts;
+			rxm->ol_flags |= priv->mbuf_timestamp_mask;
+		}
 
 		rx_pkts[nb_rx++] = rxm;
 		bytes += pkt_len;
@@ -247,6 +276,7 @@ gve_rx_queue_release_dqo(struct rte_eth_dev *dev, uint16_t qid)
 	gve_release_rxq_mbufs_dqo(q);
 	rte_free(q->sw_ring);
 	rte_free(q->completed_buf_list);
+	rte_free(q->refill_bufs);
 	rte_memzone_free(q->compl_ring_mz);
 	rte_memzone_free(q->mz);
 	rte_memzone_free(q->qres_mz);
@@ -317,6 +347,11 @@ gve_rx_queue_setup_dqo(struct rte_eth_dev *dev, uint16_t queue_id,
 		return -ENOMEM;
 	}
 
+	/* Setup hardware timestamping if enabled */
+	if ((conf->offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) ||
+	    (dev->data->dev_conf.rxmode.offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP))
+		rxq->timestamp_enabled = true;
+
 	/* check free_thresh here */
 	free_thresh = conf->rx_free_thresh ?
 			conf->rx_free_thresh : GVE_DEFAULT_RX_FREE_THRESH;
@@ -363,6 +398,16 @@ gve_rx_queue_setup_dqo(struct rte_eth_dev *dev, uint16_t queue_id,
 		goto free_rxq_sw_ring;
 	}
 
+	/* Allocate buffer for reallocating mbufs */
+	rxq->refill_bufs = rte_zmalloc_socket("gve rx refill bufs",
+		nb_desc * sizeof(*rxq->refill_bufs), RTE_CACHE_LINE_SIZE,
+		socket_id);
+	if (rxq->refill_bufs == NULL) {
+		PMD_DRV_LOG(ERR, "Failed to allocate rx refill bufs.");
+		err = -ENOMEM;
+		goto free_rxq_completed_buf_list;
+	}
+
 	/* Allocate RX buffer queue */
 	mz = rte_eth_dma_zone_reserve(dev, "rx_ring", queue_id,
 				      nb_desc * sizeof(struct gve_rx_desc_dqo),
@@ -370,7 +415,7 @@ gve_rx_queue_setup_dqo(struct rte_eth_dev *dev, uint16_t queue_id,
 	if (mz == NULL) {
 		PMD_DRV_LOG(ERR, "Failed to reserve DMA memory for RX buffer queue");
 		err = -ENOMEM;
-		goto free_rxq_completed_buf_list;
+		goto free_rxq_refill_bufs;
 	}
 	rxq->rx_ring = (struct gve_rx_desc_dqo *)mz->addr;
 	rxq->rx_ring_phys_addr = mz->iova;
@@ -412,6 +457,8 @@ free_rxq_cq_mz:
 	rte_memzone_free(rxq->compl_ring_mz);
 free_rxq_mz:
 	rte_memzone_free(rxq->mz);
+free_rxq_refill_bufs:
+	rte_free(rxq->refill_bufs);
 free_rxq_completed_buf_list:
 	rte_free(rxq->completed_buf_list);
 free_rxq_sw_ring:

@@ -35,6 +35,7 @@ source_file_deps = {
     'test_bitset.c': [],
     'test_bitratestats.c': ['metrics', 'bitratestats', 'ethdev'] + sample_packet_forward_deps,
     'test_bpf.c': ['bpf', 'net'],
+    'test_bpf_validate.c': ['bpf'],
     'test_byteorder.c': [],
     'test_cfgfile.c': ['cfgfile'],
     'test_cksum.c': ['net'],
@@ -141,6 +142,8 @@ source_file_deps = {
     'test_per_lcore.c': [],
     'test_pflock.c': [],
     'test_pie.c': ['sched'],
+    'test_pmd_af_packet.c': ['net_af_packet', 'ethdev', 'bus_vdev'],
+    'test_pmd_pcap.c': ['net_pcap', 'ethdev', 'bus_vdev']  + packet_burst_generator_deps,
     'test_pmd_perf.c': ['ethdev', 'net'] + packet_burst_generator_deps,
     'test_pmd_ring.c': ['net_ring', 'ethdev', 'bus_vdev'],
     'test_pmd_ring_perf.c': ['ethdev', 'net_ring', 'bus_vdev'],
@@ -158,6 +161,7 @@ source_file_deps = {
     'test_rawdev.c': ['rawdev', 'bus_vdev', 'raw_skeleton'],
     'test_rcu_qsbr.c': ['rcu', 'hash'],
     'test_rcu_qsbr_perf.c': ['rcu', 'hash'],
+    'test_reassembly.c': ['net', 'ip_frag'],
     'test_reassembly_perf.c': ['net', 'ip_frag'],
     'test_reciprocal_division.c': [],
     'test_reciprocal_division_perf.c': [],
@@ -185,6 +189,7 @@ source_file_deps = {
     'test_service_cores.c': [],
     'test_soring.c': [],
     'test_soring_mt_stress.c': [],
+    'test_soring_peek_stress.c': [],
     'test_soring_stress.c': [],
     'test_spinlock.c': [],
     'test_stack.c': ['stack'],
@@ -217,6 +222,7 @@ source_file_deps = {
 source_file_ext_deps = {
     'test_compressdev.c': ['zlib'],
     'test_pcapng.c': ['pcap'],
+    'test_pmd_pcap.c': ['pcap'],
 }
 
 # the NULL ethdev is used by a number of tests, in some cases as an optional dependency.

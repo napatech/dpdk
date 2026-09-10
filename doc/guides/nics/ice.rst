@@ -2,7 +2,7 @@
     Copyright(c) 2018 Intel Corporation.
 
 ICE Poll Mode Driver
-======================
+====================
 
 The ice PMD (**librte_net_ice**) provides poll mode driver support for
 10/25/50/100/200 Gbps Intel® Ethernet 800 Series Network Adapters based on
@@ -17,10 +17,10 @@ the following controllers,
 Linux Prerequisites
 -------------------
 
-- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
-- To get better performance on Intel platforms, please follow the "How to get best performance with NICs on Intel platforms"
-  section of the :ref:`Getting Started Guide for Linux <linux_gsg>`.
+- To get better performance on Intel platforms,
+  please follow :doc:`/linux_gsg/nic_perf_intel_platform`.
 
 - Please follow the matching list to download specific kernel driver, firmware and DDP package from
   `https://www.intel.com/content/www/us/en/search.html?ws=text#q=e810&t=Downloads&layout=table`.
@@ -34,7 +34,7 @@ Linux Prerequisites
 Windows Prerequisites
 ---------------------
 
-- Follow the :doc:`guide for Windows <../windows_gsg/run_apps>`
+- Follow the :doc:`guide for Windows </windows_gsg/run_apps>`
   to setup the basic DPDK environment.
 
 - Identify the Intel® Ethernet adapter and get the latest NVM/FW version.
@@ -61,6 +61,7 @@ are listed in the Tested Platforms section of the Release Notes for each release
 =====  =============  ===========  =========  ============  =======  =======
 DPDK   Kernel Driver  Default DDP  COMMS DDP  Wireless DDP  E810 FW  E830 FW
 =====  =============  ===========  =========  ============  =======  =======
+26.07     2.6.6         1.3.59      1.3.63       1.3.28      5.0      2.10
 26.03     2.4.5         1.3.53      1.3.61       1.3.25      4.91     1.20
 25.11     2.3.14        1.3.43      1.3.55       1.3.25      4.9      1.11
 24.11     1.15.4        1.3.36      1.3.46       1.3.14      4.6
@@ -157,6 +158,18 @@ Runtime Configuration
   for example::
 
     -a 80:00.0,source-prune=1
+
+- ``Scheduler rate-limiter burst size`` (default ``0``)
+
+  The hardware Tx scheduler uses a default rate-limiter burst size that favours throughput.
+  Time-sensitive applications can lower this value to reduce Tx latency jitter
+  at the cost of throughput by setting the ``rl_burst_size`` devargs parameter, in bytes.
+  A value of ``0`` (the default) keeps the hardware default.
+  Values outside the range supported by the hardware cause the driver to fail to initialize.
+
+  For example::
+
+    -a 80:00.0,rl_burst_size=2048
 
 - ``Protocol extraction for per queue``
 
@@ -354,8 +367,7 @@ Runtime Configuration
 Driver compilation and testing
 ------------------------------
 
-Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-for details.
+Refer to the document :doc:`build_and_test` for details.
 
 Features
 --------
@@ -388,7 +400,7 @@ report a MDD event and drop the packets.
 The APPs based on DPDK should avoid providing such packets.
 
 Device Config Function (DCF)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This section demonstrates ICE DCF PMD, which shares the core module with ICE
 PMD and iAVF PMD.
@@ -880,8 +892,6 @@ Additional Options
   ``acl=off`` to disable the ACL engine and shorten the startup time.
 
     -a 18:01.0,cap=dcf,acl=off
-
-.. _figure_ice_dcf:
 
 .. figure:: img/ice_dcf.*
 

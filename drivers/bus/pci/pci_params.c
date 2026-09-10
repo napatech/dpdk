@@ -49,7 +49,7 @@ pci_dev_match(const struct rte_device *dev,
 	if (kvlist == NULL)
 		/* Empty string matches everything. */
 		return 0;
-	pdev = RTE_DEV_TO_PCI_CONST(dev);
+	pdev = RTE_BUS_DEVICE(dev, *pdev);
 	/* if any field does not match. */
 	if (rte_kvargs_process(kvlist, pci_params_keys[RTE_PCI_PARAM_ADDR],
 			       &pci_addr_kv_cmp,
@@ -59,11 +59,11 @@ pci_dev_match(const struct rte_device *dev,
 }
 
 void *
-rte_pci_dev_iterate(const void *start,
+rte_pci_dev_iterate(const struct rte_bus *bus __rte_unused,
+		    const void *start,
 		    const char *str,
 		    const struct rte_dev_iterator *it __rte_unused)
 {
-	rte_bus_find_device_t find_device;
 	struct rte_kvargs *kvargs = NULL;
 	struct rte_device *dev;
 
@@ -75,8 +75,7 @@ rte_pci_dev_iterate(const void *start,
 			return NULL;
 		}
 	}
-	find_device = rte_pci_bus.bus.find_device;
-	dev = find_device(start, pci_dev_match, kvargs);
+	dev = rte_bus_generic_find_device(&rte_pci_bus, start, pci_dev_match, kvargs);
 	rte_kvargs_free(kvargs);
 	return dev;
 }

@@ -11,6 +11,7 @@
 #include <sys/queue.h>
 
 #include <dev_driver.h>
+#include <rte_bitset.h>
 #include <rte_lcore.h>
 #include <rte_log.h>
 #include <rte_memory.h>
@@ -44,6 +45,8 @@ extern struct lcore_config lcore_config[RTE_MAX_LCORE];
  * The global RTE configuration structure.
  */
 struct rte_config {
+	RTE_BITSET_DECLARE(core_indices,
+			   RTE_MAX_LCORE); /**< bitset of currently allocated core_indices */
 	uint32_t main_lcore;         /**< Id of the main lcore */
 	uint32_t lcore_count;        /**< Number of available logical cores. */
 	uint32_t numa_node_count;    /**< Number of detected NUMA nodes. */
@@ -299,14 +302,14 @@ eal_memseg_list_init_named(struct rte_memseg_list *msl, const char *name,
  * Initialize memory segment list and create its backing storage
  * with a name corresponding to MSL parameters.
  *
- * @param type_msl_idx
- *  Index of the MSL among other MSLs of the same socket and page size.
+ * @param msl_idx
+ *  Index of the MSL in memsegs array.
  *
  * @see eal_memseg_list_init_named for remaining parameters description.
  */
 int
 eal_memseg_list_init(struct rte_memseg_list *msl, uint64_t page_sz,
-	int n_segs, int socket_id, int type_msl_idx, bool heap);
+		int n_segs, int socket_id, int msl_idx, bool heap);
 
 /**
  * Reserve VA space for a memory segment list
@@ -321,6 +324,19 @@ eal_memseg_list_init(struct rte_memseg_list *msl, uint64_t page_sz,
  */
 int
 eal_memseg_list_alloc(struct rte_memseg_list *msl, int reserve_flags);
+
+/**
+ * Assign a pre-reserved VA range to a memory segment list.
+ *
+ * @param msl
+ *  Initialized memory segment list with page size defined.
+ * @param addr
+ *  Starting address of list VA range.
+ * @return
+ *  0 on success, (-1) on failure and rte_errno is set.
+ */
+int
+eal_memseg_list_assign(struct rte_memseg_list *msl, void *addr);
 
 /**
  * Populate MSL, each segment is one page long.

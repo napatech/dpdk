@@ -8,7 +8,7 @@ This document demonstrates some concrete examples for programming flow rules
 with the ``rte_flow`` APIs.
 
 * Detail of the rte_flow APIs can be found in the following link:
-  :doc:`../prog_guide/ethdev/flow_offload`.
+  :doc:`/prog_guide/ethdev/flow_offload`.
 
 * Details of the TestPMD commands to set the flow rules can be found in the
   following link: :ref:`TestPMD Flow rules <testpmd_rte_flow>`
@@ -106,7 +106,7 @@ Terminal 1: output log::
   received packet with src ip = 176.80.50.4
 
 Range IPv4 drop
-----------------
+---------------
 
 Description
 ~~~~~~~~~~~

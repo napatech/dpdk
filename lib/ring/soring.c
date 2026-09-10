@@ -37,24 +37,24 @@
  * plus current stage index).
  * 'release()' extracts old head value from provided ftoken and checks that
  * corresponding 'state[]' contains expected values(mostly for sanity
- * purposes).
- * Then it marks this state[] with 'SORING_ST_FINISH' flag to indicate
- * that given subset of objects was released.
- * After that, it checks does old head value equals to current tail value?
- * If yes, then it performs  'finalize()' operation, otherwise 'release()'
- * just returns (without spinning on stage tail value).
- * As updated state[] is shared by all threads, some other thread can do
- * 'finalize()' for given stage.
- * That allows 'release()' to avoid excessive waits on the tail value.
+ * purposes). Then it marks this state[] with 'SORING_ST_FINISH' flag to
+ * indicate that given subset of objects was released.
+ * After that, it calls 'finalize()'.
  * Main purpose of 'finalize()' operation is to walk through 'state[]'
  * from current stage tail up to its head, check state[] and move stage tail
  * through elements that already are in SORING_ST_FINISH state.
  * Along with that, corresponding state[] values are reset to zero.
- * Note that 'finalize()' for given stage can be done from multiple places:
+ * Note that updated state[] is shared by all threads, so
+ * 'finalize()' for given stage can be done from multiple places:
  * 'release()' for that stage or from 'acquire()' for next stage
  * even from consumer's 'dequeue()' - in case given stage is the last one.
  * So 'finalize()' has to be MT-safe and inside it we have to
- * guarantee that only one thread will update state[] and stage's tail values.
+ * guarantee that only one thread at a time will update state[] and
+ * stage's tail values (sort of critical-section).
+ * When multiple threads trying to do finalize() for the same stage,
+ * simultaneously one thread will win the race and do all the pending
+ * updates, while others will simply return (kind of try-lock scenario).
+ * That allows 'release()' to avoid excessive waits on the tail value.
  */
 
 #include "soring.h"
@@ -135,9 +135,12 @@ __rte_soring_move_prod_head(struct rte_soring *r, uint32_t num,
 
 	switch (st) {
 	case RTE_RING_SYNC_ST:
+		n = __rte_ring_headtail_move_head_st(&r->prod.ht, &r->cons.ht,
+			r->capacity, num, behavior, head, next, free);
+		break;
 	case RTE_RING_SYNC_MT:
-		n = __rte_ring_headtail_move_head(&r->prod.ht, &r->cons.ht,
-			r->capacity, st, num, behavior, head, next, free);
+		n = __rte_ring_headtail_move_head_mt(&r->prod.ht, &r->cons.ht,
+			r->capacity, num, behavior, head, next, free);
 		break;
 	case RTE_RING_SYNC_MT_RTS:
 		n = __rte_ring_rts_move_head(&r->prod.rts, &r->cons.ht,
@@ -168,9 +171,13 @@ __rte_soring_move_cons_head(struct rte_soring *r, uint32_t stage, uint32_t num,
 
 	switch (st) {
 	case RTE_RING_SYNC_ST:
+		n = __rte_ring_headtail_move_head_st(&r->cons.ht,
+			&r->stage[stage].ht, 0, num, behavior,
+			head, next, avail);
+		break;
 	case RTE_RING_SYNC_MT:
-		n = __rte_ring_headtail_move_head(&r->cons.ht,
-			&r->stage[stage].ht, 0, st, num, behavior,
+		n = __rte_ring_headtail_move_head_mt(&r->cons.ht,
+			&r->stage[stage].ht, 0, num, behavior,
 			head, next, avail);
 		break;
 	case RTE_RING_SYNC_MT_RTS:
@@ -195,21 +202,21 @@ __rte_soring_move_cons_head(struct rte_soring *r, uint32_t stage, uint32_t num,
 
 static __rte_always_inline void
 __rte_soring_update_tail(struct __rte_ring_headtail *rht,
-	enum rte_ring_sync_type st, uint32_t head, uint32_t next, uint32_t enq)
+		 enum rte_ring_sync_type st, uint32_t head, uint32_t next)
 {
 	uint32_t n;
 
 	switch (st) {
 	case RTE_RING_SYNC_ST:
 	case RTE_RING_SYNC_MT:
-		__rte_ring_update_tail(&rht->ht, head, next, st, enq);
+		__rte_ring_update_tail(&rht->ht, head, next, st);
 		break;
 	case RTE_RING_SYNC_MT_RTS:
 		__rte_ring_rts_update_tail(&rht->rts);
 		break;
 	case RTE_RING_SYNC_MT_HTS:
 		n = next - head;
-		__rte_ring_hts_update_tail(&rht->hts, head, n, enq);
+		__rte_ring_hts_update_tail(&rht->hts, head, n);
 		break;
 	default:
 		/* unsupported mode, shouldn't be here */
@@ -249,6 +256,28 @@ __rte_soring_stage_move_head(struct soring_stage_headtail *d,
 	return n;
 }
 
+static inline void
+__enqueue_elems(struct rte_soring *r, const void *objs, const void *meta,
+	uint32_t head, uint32_t n)
+{
+	__rte_ring_do_enqueue_elems(&r[1], objs, r->size, head & r->mask,
+		r->esize, n);
+	if (meta != NULL)
+		__rte_ring_do_enqueue_elems(r->meta, meta, r->size,
+			head & r->mask, r->msize, n);
+}
+
+static inline void
+__dequeue_elems(const struct rte_soring *r, void *objs, void *meta,
+	uint32_t head, uint32_t n)
+{
+	__rte_ring_do_dequeue_elems(objs, &r[1], r->size, head & r->mask,
+			r->esize, n);
+	if (meta != NULL)
+		__rte_ring_do_dequeue_elems(meta, r->meta, r->size,
+			head & r->mask, r->msize, n);
+}
+
 static inline uint32_t
 soring_enqueue(struct rte_soring *r, const void *objs,
 	const void *meta, uint32_t n, enum rte_ring_queue_behavior behavior,
@@ -265,17 +294,76 @@ soring_enqueue(struct rte_soring *r, const void *objs,
 	n = __rte_soring_move_prod_head(r, n, behavior, st,
 			&prod_head, &prod_next, &nb_free);
 	if (n != 0) {
-		__rte_ring_do_enqueue_elems(&r[1], objs, r->size,
-			prod_head & r->mask, r->esize, n);
-		if (meta != NULL)
-			__rte_ring_do_enqueue_elems(r->meta, meta, r->size,
-				prod_head & r->mask, r->msize, n);
-		__rte_soring_update_tail(&r->prod, st, prod_head, prod_next, 1);
+		__enqueue_elems(r, objs, meta, prod_head, n);
+		__rte_soring_update_tail(&r->prod, st, prod_head, prod_next);
 	}
 
 	if (free_space != NULL)
 		*free_space = nb_free - n;
 	return n;
+}
+
+static inline uint32_t
+soring_enqueue_start(struct rte_soring *r, uint32_t num,
+	enum rte_ring_queue_behavior behavior, uint32_t *free_space)
+{
+	enum rte_ring_sync_type st;
+	uint32_t free, head, n, next;
+
+	RTE_ASSERT(r != NULL && r->nb_stage > 0);
+
+	st = r->prod.ht.sync_type;
+
+	switch (st) {
+	case RTE_RING_SYNC_ST:
+		n = __rte_ring_headtail_move_head_st(&r->prod.ht, &r->cons.ht,
+			r->capacity, num, behavior, &head, &next, &free);
+		break;
+	case RTE_RING_SYNC_MT_HTS:
+		n = __rte_ring_hts_move_head(&r->prod.hts, &r->cons.ht,
+			r->capacity, num, behavior, &head, &free);
+		break;
+	default:
+		/* unsupported mode, shouldn't be here */
+		RTE_ASSERT(0);
+		free = 0;
+		n = 0;
+	}
+
+	if (free_space != NULL)
+		*free_space = free - n;
+	return n;
+}
+
+static inline void
+soring_enqueue_finish(struct rte_soring *r, const void *objs, const void *meta,
+	uint32_t num)
+{
+	enum rte_ring_sync_type st;
+	uint32_t n, tail;
+
+	RTE_ASSERT(r != NULL && r->nb_stage > 0);
+	RTE_ASSERT(meta == NULL || r->meta != NULL);
+
+	st = r->prod.ht.sync_type;
+
+	switch (st) {
+	case RTE_RING_SYNC_ST:
+		n = __rte_ring_st_get_tail(&r->prod.ht, &tail, num);
+		if (n != 0)
+			__enqueue_elems(r, objs, meta, tail, n);
+		__rte_ring_st_set_head_tail(&r->prod.ht, tail, n, 1);
+		break;
+	case RTE_RING_SYNC_MT_HTS:
+		n = __rte_ring_hts_get_tail(&r->prod.hts, &tail, num);
+		if (n != 0)
+			__enqueue_elems(r, objs, meta, tail, n);
+		__rte_ring_hts_set_head_tail(&r->prod.hts, tail, n, 1);
+		break;
+	default:
+		/* unsupported mode, shouldn't be here */
+		RTE_ASSERT(0);
+	}
 }
 
 static inline uint32_t
@@ -312,17 +400,76 @@ soring_dequeue(struct rte_soring *r, void *objs, void *meta,
 
 	/* we have some elems to consume */
 	if (n != 0) {
-		__rte_ring_do_dequeue_elems(objs, &r[1], r->size,
-			cons_head & r->mask, r->esize, n);
-		if (meta != NULL)
-			__rte_ring_do_dequeue_elems(meta, r->meta, r->size,
-				cons_head & r->mask, r->msize, n);
-		__rte_soring_update_tail(&r->cons, st, cons_head, cons_next, 0);
+		__dequeue_elems(r, objs, meta, cons_head, n);
+		__rte_soring_update_tail(&r->cons, st, cons_head, cons_next);
 	}
 
 	if (available != NULL)
 		*available = entries - n;
 	return n;
+}
+
+static inline uint32_t
+soring_dequeue_start(struct rte_soring *r, void *objs, void *meta,
+	uint32_t num, enum rte_ring_queue_behavior behavior,
+	uint32_t *available)
+{
+	enum rte_ring_sync_type st;
+	uint32_t avail, head, next, n, ns;
+
+	RTE_ASSERT(r != NULL && r->nb_stage > 0);
+	RTE_ASSERT(meta == NULL || r->meta != NULL);
+
+	ns = r->nb_stage - 1;
+	st = r->cons.ht.sync_type;
+
+	switch (st) {
+	case RTE_RING_SYNC_ST:
+		n = __rte_ring_headtail_move_head_st(&r->cons.ht, &r->stage[ns].ht,
+			0, num, behavior, &head, &next,
+			&avail);
+		break;
+	case RTE_RING_SYNC_MT_HTS:
+		n = __rte_ring_hts_move_head(&r->cons.hts, &r->stage[ns].ht,
+			0, num, behavior, &head, &avail);
+		break;
+	default:
+		/* unsupported mode, shouldn't be here */
+		RTE_ASSERT(0);
+		avail = 0;
+		n = 0;
+	}
+
+	/* we have some elems to consume */
+	if (n != 0)
+		__dequeue_elems(r, objs, meta, head, n);
+
+	if (available != NULL)
+		*available = avail - n;
+	return n;
+}
+
+
+static inline void
+soring_dequeue_finish(struct rte_soring *r, uint32_t num)
+{
+	uint32_t n, tail;
+
+	RTE_ASSERT(r != NULL && r->nb_stage > 0);
+
+	switch (r->cons.ht.sync_type) {
+	case RTE_RING_SYNC_ST:
+		n = __rte_ring_st_get_tail(&r->cons.ht, &tail, num);
+		__rte_ring_st_set_head_tail(&r->cons.ht, tail, n, 0);
+		break;
+	case RTE_RING_SYNC_MT_HTS:
+		n = __rte_ring_hts_get_tail(&r->cons.hts, &tail, num);
+		__rte_ring_hts_set_head_tail(&r->cons.hts, tail, n, 0);
+		break;
+	default:
+		/* unsupported mode, shouldn't be here */
+		RTE_ASSERT(0);
+	}
 }
 
 /*
@@ -442,7 +589,7 @@ static __rte_always_inline void
 soring_release(struct rte_soring *r, const void *objs,
 	const void *meta, uint32_t stage, uint32_t n, uint32_t ftoken)
 {
-	uint32_t idx, pos, tail;
+	uint32_t idx, pos;
 	struct soring_stage *stg;
 	union soring_state st;
 
@@ -479,12 +626,9 @@ soring_release(struct rte_soring *r, const void *objs,
 	rte_atomic_store_explicit(&r->state[idx].raw, st.raw,
 			rte_memory_order_relaxed);
 
-	/* try to do finalize(), if appropriate */
-	tail = rte_atomic_load_explicit(&stg->sht.tail.pos,
-			rte_memory_order_relaxed);
-	if (tail == pos)
-		__rte_soring_stage_finalize(&stg->sht, stage, r->state, r->mask,
-				r->capacity);
+	/* now, try to do finalize() */
+	__rte_soring_stage_finalize(&stg->sht, stage, r->state, r->mask,
+			r->capacity);
 }
 
 /*
@@ -631,4 +775,82 @@ unsigned int
 rte_soring_free_count(const struct rte_soring *r)
 {
 	return r->capacity - rte_soring_count(r);
+}
+
+/*
+ * SORING public peek API
+ */
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_enqueue_bulk_start, 26.07)
+uint32_t
+rte_soring_enqueue_bulk_start(struct rte_soring *r, uint32_t n,
+	uint32_t *free_space)
+{
+	return soring_enqueue_start(r, n, RTE_RING_QUEUE_FIXED, free_space);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_enqueue_burst_start, 26.07)
+uint32_t
+rte_soring_enqueue_burst_start(struct rte_soring *r, uint32_t n,
+	uint32_t *free_space)
+{
+	return soring_enqueue_start(r, n, RTE_RING_QUEUE_VARIABLE, free_space);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_enqueue_finish, 26.07)
+void
+rte_soring_enqueue_finish(struct rte_soring *r, const void *objs, uint32_t n)
+{
+	soring_enqueue_finish(r, objs, NULL, n);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_enqueux_finish, 26.07)
+void
+rte_soring_enqueux_finish(struct rte_soring *r, const void *objs,
+	const void *meta, uint32_t n)
+{
+	soring_enqueue_finish(r, objs, meta, n);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_dequeue_bulk_start, 26.07)
+uint32_t
+rte_soring_dequeue_bulk_start(struct rte_soring *r, void *objs, uint32_t num,
+	uint32_t *available)
+{
+	return soring_dequeue_start(r, objs, NULL, num, RTE_RING_QUEUE_FIXED,
+		available);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_dequeux_bulk_start, 26.07)
+uint32_t
+rte_soring_dequeux_bulk_start(struct rte_soring *r, void *objs, void *meta,
+	uint32_t num, uint32_t *available)
+{
+	return soring_dequeue_start(r, objs, meta, num, RTE_RING_QUEUE_FIXED,
+		available);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_dequeue_burst_start, 26.07)
+uint32_t
+rte_soring_dequeue_burst_start(struct rte_soring *r, void *objs, uint32_t num,
+	uint32_t *available)
+{
+	return soring_dequeue_start(r, objs, NULL, num, RTE_RING_QUEUE_VARIABLE,
+		available);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_dequeux_burst_start, 26.07)
+uint32_t
+rte_soring_dequeux_burst_start(struct rte_soring *r, void *objs, void *meta,
+	uint32_t num, uint32_t *available)
+{
+	return soring_dequeue_start(r, objs, meta, num, RTE_RING_QUEUE_VARIABLE,
+		available);
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_soring_dequeue_finish, 26.07)
+void
+rte_soring_dequeue_finish(struct rte_soring *r, uint32_t n)
+{
+	soring_dequeue_finish(r, n);
 }

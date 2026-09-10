@@ -204,6 +204,8 @@ enum ice_rx_func_type {
 	ICE_RX_AVX512_SCATTERED,
 	ICE_RX_AVX512_OFFLOAD,
 	ICE_RX_AVX512_SCATTERED_OFFLOAD,
+	ICE_RX_NEON,
+	ICE_RX_NEON_SCATTERED,
 };
 
 enum ice_tx_func_type {
@@ -213,6 +215,7 @@ enum ice_tx_func_type {
 	ICE_TX_AVX2_OFFLOAD,
 	ICE_TX_AVX512,
 	ICE_TX_AVX512_OFFLOAD,
+	ICE_TX_NEON,
 };
 
 struct ice_adapter;
@@ -596,6 +599,7 @@ struct ice_pf {
 	struct ice_eth_stats internal_stats;
 	bool offset_loaded;
 	bool adapter_stopped;
+	bool use_aq_polling; /* true when alarm polls AdminQ in place of interrupt */
 	struct ice_flow_list flow_list;
 	rte_spinlock_t flow_ops_lock;
 	bool init_link_up;
@@ -628,6 +632,7 @@ struct ice_devargs {
 	uint8_t ddp_load_sched;
 	uint8_t tm_exposed_levels;
 	uint8_t source_prune;
+	uint32_t rl_burst_size;
 	int link_state_on_close;
 	int xtr_field_offs;
 	uint8_t xtr_flag_offs[PROTO_XTR_MAX];
@@ -708,7 +713,7 @@ struct ice_vsi_vlan_pvid_info {
 };
 
 #define ICE_DEV_TO_PCI(eth_dev) \
-	RTE_DEV_TO_PCI((eth_dev)->device)
+	RTE_CLASS_TO_BUS_DEVICE(eth_dev, struct rte_pci_device)
 
 /* ICE_DEV_PRIVATE_TO */
 #define ICE_DEV_PRIVATE_TO_PF(adapter) \

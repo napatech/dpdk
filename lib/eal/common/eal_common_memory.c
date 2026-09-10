@@ -33,11 +33,10 @@
 #include "malloc_heap.h"
 
 /*
- * Try to mmap *size bytes in /dev/zero. If it is successful, return the
- * pointer to the mmap'd area and keep *size unmodified. Else, retry
- * with a smaller zone: decrease *size by hugepage_sz until it reaches
- * 0. In this case, return NULL. Note: this function returns an address
- * which is a multiple of hugepage size.
+ * Try to mmap *size bytes. If it is successful, return the pointer to the
+ * mmap'd area and keep *size unmodified. Else, retry with a smaller zone:
+ * decrease *size by page_sz until it reaches 0. In this case, return NULL.
+ * Note: this function returns an address which is a multiple of page size.
  */
 
 #define MEMSEG_LIST_FMT "memseg-%" PRIu64 "k-%i-%i"
@@ -228,15 +227,13 @@ eal_memseg_list_init_named(struct rte_memseg_list *msl, const char *name,
 
 int
 eal_memseg_list_init(struct rte_memseg_list *msl, uint64_t page_sz,
-		int n_segs, int socket_id, int type_msl_idx, bool heap)
+		int n_segs, int socket_id, int msl_idx, bool heap)
 {
 	char name[RTE_FBARRAY_NAME_LEN];
 
-	snprintf(name, sizeof(name), MEMSEG_LIST_FMT, page_sz >> 10, socket_id,
-		 type_msl_idx);
+	snprintf(name, sizeof(name), MEMSEG_LIST_FMT, page_sz >> 10, socket_id, msl_idx);
 
-	return eal_memseg_list_init_named(
-		msl, name, page_sz, n_segs, socket_id, heap);
+	return eal_memseg_list_init_named(msl, name, page_sz, n_segs, socket_id, heap);
 }
 
 int
@@ -267,6 +264,28 @@ eal_memseg_list_alloc(struct rte_memseg_list *msl, int reserve_flags)
 	msl->len = mem_sz;
 
 	EAL_LOG(DEBUG, "VA reserved for memseg list at %p, size %zx",
+			addr, mem_sz);
+
+	return 0;
+}
+
+int
+eal_memseg_list_assign(struct rte_memseg_list *msl, void *addr)
+{
+	size_t page_sz, mem_sz;
+
+	page_sz = msl->page_sz;
+	mem_sz = page_sz * msl->memseg_arr.len;
+
+	if (addr == NULL || addr != RTE_PTR_ALIGN(addr, page_sz)) {
+		rte_errno = EINVAL;
+		return -1;
+	}
+
+	msl->base_va = addr;
+	msl->len = mem_sz;
+
+	EAL_LOG(DEBUG, "VA assigned for memseg list at %p, size %zx",
 			addr, mem_sz);
 
 	return 0;

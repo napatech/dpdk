@@ -22,8 +22,6 @@ The application uses three CPU cores:
 
 *   Core C ("TX core") receives traffic from core B through software queues and sends it to the NIC ports for transmission.
 
-.. _figure_test_pipeline_app:
-
 .. figure:: img/test_pipeline_app.*
 
    Test Pipeline Application
@@ -55,7 +53,7 @@ The PORTMASK parameter must contain 2 or 4 ports.
 Table Types and Behavior
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-:numref:`table_test_pipeline_1` describes the table types used and how they are populated.
+:numref:`test_pipeline_table_1` describes the table types used and how they are populated.
 
 The hash tables are pre-populated with 16 million keys.
 For hash tables, the following parameters can be selected:
@@ -70,7 +68,7 @@ For hash tables, the following parameters can be selected:
 *   **Table type (e.g. hash-spec-16-ext or hash-spec-16-lru).**
     The available options are ext (extendable bucket) or lru (least recently used).
 
-.. _table_test_pipeline_1:
+.. _test_pipeline_table_1:
 
 .. table:: Table Types
 

@@ -13,10 +13,10 @@ Intel\ |reg| Infrastructure Processing Unit (Intel\ |reg| IPU) E2100.
 Linux Prerequisites
 -------------------
 
-Follow the DPDK :doc:`../linux_gsg/index` to setup the basic DPDK environment.
+Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
 To get better performance on Intel platforms,
-please follow the :doc:`../linux_gsg/nic_perf_intel_platform`.
+please follow the :doc:`/linux_gsg/nic_perf_intel_platform`.
 
 
 Recommended Matching List
@@ -26,17 +26,14 @@ It is highly recommended to upgrade the idpf kernel driver, MEV-ts release
 to avoid compatibility issues with the idpf PMD.
 Here is the suggested matching list which has been tested and verified.
 
-   +------------+---------------+------------------+
-   |    DPDK    | Kernel Driver |  MEV-ts release  |
-   +============+===============+==================+
-   |    23.07   |    0.0.710    |      0.9.1       |
-   +------------+---------------+------------------+
-   |    23.11   |    0.0.720    |       1.0        |
-   +------------+---------------+------------------+
-   |    24.11   |    0.0.754    |       1.6        |
-   +------------+---------------+------------------+
-   |    25.07   |    0.0.772    |       2.0        |
-   +------------+---------------+------------------+
+=====  =============  ==============
+DPDK   Kernel Driver  MEV-ts release
+=====  =============  ==============
+26.07     0.0.780           2.2
+25.11     0.0.772           2.0
+24.11     0.0.754           1.6
+23.11     0.0.720           1.0
+=====  =============  ==============
 
 
 Configuration

@@ -83,9 +83,9 @@ The Intel vRAN Boost v1.0 PMD supports the following bbdev capabilities:
 Installation
 ------------
 
-Section 3 of the DPDK manual provides instructions on installing and compiling DPDK.
+See :doc:`/linux_gsg/build_dpdk` for build instructions.
 
-DPDK requires hugepages to be configured as detailed in section 2 of the DPDK manual.
+DPDK requires hugepages to be configured as described in :ref:`linux_gsg_hugepages`.
 The bbdev test application has been tested with a configuration 40 x 1GB hugepages.
 The hugepage configuration of a server may be examined using:
 
@@ -134,7 +134,7 @@ BBDEV provides a test application, ``test-bbdev.py`` and range of test data for 
 the functionality of the device, depending on the device's capabilities.
 
 For more details on how to use the test application,
-see :ref:`test_bbdev_application`.
+see :doc:`/tools/testbbdev`.
 
 
 Test Vectors

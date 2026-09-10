@@ -672,7 +672,18 @@ rtl_rx_init(struct rte_eth_dev *dev)
 
 	rtl_enable_cfg9346_write(hw);
 
-	if (!rtl_is_8125(hw)) {
+	if (rtl_is_8125(hw)) {
+		/* RSS_control_0 */
+		if (hw->EnableRss) {
+			rtl_init_rss(hw, nb_rx_queues);
+			rtl8125_config_rss(hw, nb_rx_queues);
+		} else {
+			RTL_W32(hw, RSS_CTRL_8125, 0x00);
+		}
+
+		/* VMQ_control */
+		rtl8125_set_rx_q_num(hw, nb_rx_queues);
+	} else {
 		/* RX ftr mcu enable */
 		csi_tmp = rtl_eri_read(hw, 0xDC, 1, ERIAR_ExGMAC);
 		csi_tmp &= ~BIT_0;
@@ -699,17 +710,6 @@ rtl_rx_init(struct rte_eth_dev *dev)
 		rtl_clear_rdu = rtl8125_clear_rdu;
 	else
 		rtl_clear_rdu = rtl8168_clear_rdu;
-
-	/* RSS_control_0 */
-	if (hw->EnableRss) {
-		rtl_init_rss(hw, nb_rx_queues);
-		rtl8125_config_rss(hw, nb_rx_queues);
-	} else {
-		RTL_W32(hw, RSS_CTRL_8125, 0x00);
-	}
-
-	/* VMQ_control */
-	rtl8125_set_rx_q_num(hw, nb_rx_queues);
 
 	RTL_W8(hw, ChipCmd, RTL_R8(hw, ChipCmd) | CmdRxEnb);
 
@@ -1621,8 +1621,7 @@ rtl_xmit_pkt(struct rtl_hw *hw, struct rtl_tx_queue *txq,
 
 		len = m_seg->data_len;
 
-		if (len == 0)
-			break;
+		RTE_ASSERT(len > 0);
 
 		txd = &txq->hw_ring[tail];
 
@@ -1971,10 +1970,7 @@ rtl_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 		if (txq->tx_free < tx_pkt->nb_segs)
 			break;
 
-		/* Check mbuf is valid */
-		if (tx_pkt->nb_segs == 0 || tx_pkt->pkt_len == 0 ||
-		    (tx_pkt->nb_segs > 1 && tx_pkt->next == NULL))
-			break;
+		RTE_ASSERT(tx_pkt->pkt_len > 0);
 
 		rtl_xmit_pkt(hw, txq, tx_pkt);
 	}

@@ -221,9 +221,9 @@ Current RDMA core package and Linux kernel (recommended)
     ninja
     ninja install
 
-.. _`RDMA core installation documentation`: https://raw.githubusercontent.com/linux-rdma/rdma-core/master/README.md
+.. _RDMA core installation documentation: https://raw.githubusercontent.com/linux-rdma/rdma-core/master/README.md
 
-.. _OFED_as_a_fallback:
+.. _mlx4_ofed_as_a_fallback:
 
 NVIDIA MLNX_OFED as a fallback
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -231,7 +231,7 @@ NVIDIA MLNX_OFED as a fallback
 - `NVIDIA MLNX_OFED`_ version: **4.4, 4.5, 4.6**.
 - firmware version: **2.42.5000** and above.
 
-.. _`NVIDIA MLNX_OFED`: https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/
+.. _NVIDIA MLNX_OFED: https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/
 
 .. note::
 
@@ -267,7 +267,7 @@ Installing NVIDIA MLNX_OFED
 
         connectx_port_config
 
-#. Continue with :ref:`section 2 of the Quick Start Guide <mlx4_QSG_2>`.
+#. Continue with the :ref:`Quick Start Guide <mlx4_QSG_2>`.
 
 
 Quick Start Guide
@@ -283,7 +283,7 @@ Quick Start Guide
 
         If using NVIDIA MLNX_OFED one can permanently set the port link
         to Ethernet using connectx_port_config tool provided by it.
-        :ref:`OFED_as_a_fallback`:
+        :ref:`mlx4_ofed_as_a_fallback`:
 
 .. _mlx4_QSG_2:
 
@@ -306,7 +306,7 @@ Quick Start Guide
         service openibd restart
 
 #. Install DPDK and you are ready to go.
-   See :doc:`compilation instructions <../linux_gsg/build_dpdk>`.
+   See :doc:`compilation instructions </linux_gsg/build_dpdk>`.
 
 Performance tuning
 ------------------

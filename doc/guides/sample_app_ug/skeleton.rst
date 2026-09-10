@@ -65,12 +65,12 @@ used by the application:
 
 .. literalinclude:: ../../../examples/skeleton/basicfwd.c
     :language: c
-    :start-after: Allocates mempool to hold the mbufs. 8<
+    :start-after: Create and allocate a mempool to hold the mbufs. 8<
     :end-before: >8 End of allocating mempool to hold mbuf.
     :dedent: 1
 
-Mbufs are the packet buffer structure used by DPDK. They are explained in
-detail in the "Mbuf Library" section of the *DPDK Programmer's Guide*.
+Mbufs are the packet buffer structure used by DPDK.
+They are explained in detail in the :doc:`/prog_guide/mbuf_lib`.
 
 The ``main()`` function also initializes all the ports using the user defined
 ``port_init()`` function which is explained in the next section:

@@ -1639,10 +1639,9 @@ cnxk_nix_configure(struct rte_eth_dev *eth_dev)
 		goto free_nix_lf;
 	}
 
-	rc = roc_nix_switch_hdr_set(nix, dev->npc.switch_header_type,
-				    dev->npc.pre_l2_size_offset,
+	rc = roc_nix_switch_hdr_set(nix, dev->npc.switch_header_type, dev->npc.pre_l2_size_offset,
 				    dev->npc.pre_l2_size_offset_mask,
-				    dev->npc.pre_l2_size_shift_dir);
+				    dev->npc.pre_l2_size_shift_dir, dev->npc.skip_size);
 	if (rc) {
 		plt_err("Failed to enable switch type nix_lf rc=%d", rc);
 		goto free_nix_lf;
@@ -2138,6 +2137,9 @@ struct eth_dev_ops cnxk_eth_dev_ops = {
 	.cman_config_set = cnxk_nix_cman_config_set,
 	.cman_config_get = cnxk_nix_cman_config_get,
 	.eth_tx_descriptor_dump = cnxk_nix_tx_descriptor_dump,
+	.fec_get_capability = cnxk_nix_fec_get_capability,
+	.fec_get = cnxk_nix_fec_get,
+	.fec_set = cnxk_nix_fec_set,
 };
 
 void
@@ -2177,7 +2179,7 @@ cnxk_eth_dev_init(struct rte_eth_dev *eth_dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
-	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
 	/* Parse devargs string */
@@ -2219,6 +2221,13 @@ cnxk_eth_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* Register callback for inline meta pool create 1:N pool:aura */
 	roc_nix_inl_custom_meta_pool_cb_register(cnxk_nix_inl_custom_meta_pool_cb);
+
+	/* Reserve memory for lookup_memory */
+	if (!cnxk_nix_fastpath_lookup_mem_get()) {
+		plt_err("Failed to reserve lookup memory");
+		rc = -ENOMEM;
+		goto dev_fini;
+	}
 
 	dev->eth_dev = eth_dev;
 	dev->configured = 0;
@@ -2358,7 +2367,7 @@ cnxk_eth_dev_uninit(struct rte_eth_dev *eth_dev, bool reset)
 		return 0;
 
 	/* Disable switch hdr pkind */
-	roc_nix_switch_hdr_set(&dev->nix, 0, 0, 0, 0);
+	roc_nix_switch_hdr_set(&dev->nix, 0, 0, 0, 0, 0);
 
 	/* Clear the flag since we are closing down */
 	dev->configured = 0;

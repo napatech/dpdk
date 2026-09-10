@@ -45,17 +45,13 @@ extern RTE_DEFINE_PER_LCORE(IMB_MGR *, mb_mgr);
 #define CRYPTODEV_NAME_AESNI_GCM_PMD crypto_aesni_gcm
 /**< IPSEC Multi buffer PMD aesni_gcm device name */
 
-#define CRYPTODEV_NAME_KASUMI_PMD crypto_kasumi
-/**< IPSEC Multi buffer PMD kasumi device name */
-
+#if defined(RTE_ARCH_ARM)
 #define CRYPTODEV_NAME_SNOW3G_PMD crypto_snow3g
 /**< IPSEC Multi buffer PMD snow3g device name */
 
 #define CRYPTODEV_NAME_ZUC_PMD crypto_zuc
 /**< IPSEC Multi buffer PMD zuc device name */
-
-#define CRYPTODEV_NAME_CHACHA20_POLY1305_PMD crypto_chacha20_poly1305
-/**< IPSEC Multi buffer PMD chacha20_poly1305 device name */
+#endif
 
 /** PMD LOGTYPE DRIVER, common to all PMDs */
 extern int ipsec_mb_logtype_driver;
@@ -68,10 +64,10 @@ extern int ipsec_mb_logtype_driver;
 enum ipsec_mb_pmd_types {
 	IPSEC_MB_PMD_TYPE_AESNI_MB = 0,
 	IPSEC_MB_PMD_TYPE_AESNI_GCM,
-	IPSEC_MB_PMD_TYPE_KASUMI,
+#if defined(RTE_ARCH_ARM)
 	IPSEC_MB_PMD_TYPE_SNOW3G,
 	IPSEC_MB_PMD_TYPE_ZUC,
-	IPSEC_MB_PMD_TYPE_CHACHA20_POLY1305,
+#endif
 	IPSEC_MB_N_PMD_TYPES
 };
 
@@ -92,10 +88,8 @@ enum ipsec_mb_operation {
 
 extern uint8_t pmd_driver_id_aesni_mb;
 extern uint8_t pmd_driver_id_aesni_gcm;
-extern uint8_t pmd_driver_id_kasumi;
 extern uint8_t pmd_driver_id_snow3g;
 extern uint8_t pmd_driver_id_zuc;
-extern uint8_t pmd_driver_id_chacha20_poly1305;
 
 /** Helper function. Gets driver ID based on PMD type */
 static __rte_always_inline uint8_t
@@ -106,14 +100,12 @@ ipsec_mb_get_driver_id(enum ipsec_mb_pmd_types pmd_type)
 		return pmd_driver_id_aesni_mb;
 	case IPSEC_MB_PMD_TYPE_AESNI_GCM:
 		return pmd_driver_id_aesni_gcm;
-	case IPSEC_MB_PMD_TYPE_KASUMI:
-		return pmd_driver_id_kasumi;
+#if defined(RTE_ARCH_ARM)
 	case IPSEC_MB_PMD_TYPE_SNOW3G:
 		return pmd_driver_id_snow3g;
 	case IPSEC_MB_PMD_TYPE_ZUC:
 		return pmd_driver_id_zuc;
-	case IPSEC_MB_PMD_TYPE_CHACHA20_POLY1305:
-		return pmd_driver_id_chacha20_poly1305;
+#endif
 	default:
 		break;
 	}

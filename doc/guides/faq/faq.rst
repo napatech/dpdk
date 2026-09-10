@@ -6,7 +6,7 @@ What does "EAL: map_all_hugepages(): open failed: Permission denied Cannot init 
 
 This is most likely due to the test application not being run with sudo to promote the user to a superuser.
 Alternatively, applications can also be run as regular user.
-For more information, please refer to :ref:`DPDK Getting Started Guide <linux_gsg>`.
+For more information, please refer to :ref:`linux_gsg_running_without_root_privileges`.
 
 
 If I want to change the number of hugepages allocated, how do I remove the original pages allocated?
@@ -141,7 +141,7 @@ and <MAC address> being the desired MAC address.
 
 
 Is it safe to add an entry to the hash table while running?
-------------------------------------------------------------
+-----------------------------------------------------------
 Currently the table implementation is not a thread safe implementation and assumes that locking between threads and processes is handled by the user's application.
 This is likely to be supported in future releases.
 
@@ -184,7 +184,7 @@ I350 has RSS support and 8 queue pairs can be used in RSS mode. It should work w
 How can hugepage-backed memory be shared among multiple processes?
 ------------------------------------------------------------------
 
-See the Primary and Secondary examples in the :doc:`../sample_app_ug/multi_process`.
+See the Primary and Secondary examples in the :doc:`/sample_app_ug/multi_process`.
 
 
 Why can't my application receive packets on my system with UEFI Secure Boot enabled?

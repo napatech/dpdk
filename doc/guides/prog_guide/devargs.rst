@@ -183,7 +183,7 @@ Devargs can be specified on the command line when starting a DPDK application:
 
    ./myapp --vdev net_ring0 --vdev 'net_pcap0,rx_pcap=input.pcap'
 
-See :doc:`../linux_gsg/linux_eal_parameters` for complete EAL parameter documentation.
+See :doc:`/linux_gsg/linux_eal_parameters` for complete EAL parameter documentation.
 
 
 At Runtime (Hotplug)
@@ -217,7 +217,7 @@ See :doc:`device_hotplug` for detailed information on runtime device management.
 
 
 Parsing Devargs in Drivers
----------------------------
+--------------------------
 
 PMD drivers can parse devargs using the kvargs library:
 

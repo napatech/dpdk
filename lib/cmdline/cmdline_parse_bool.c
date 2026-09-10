@@ -13,13 +13,17 @@
 #include "cmdline_parse.h"
 #include "cmdline_parse_bool.h"
 
+static int
+cmdline_get_help_bool(cmdline_parse_token_hdr_t *tk, char *dstbuf,
+		unsigned int size);
+
 
 RTE_EXPORT_EXPERIMENTAL_SYMBOL(cmdline_token_bool_ops, 25.03)
 struct cmdline_token_ops cmdline_token_bool_ops = {
 	.parse = cmdline_parse_bool,
 	.complete_get_nb = NULL,
 	.complete_get_elt = NULL,
-	.get_help = cmdline_get_help_string,
+	.get_help = cmdline_get_help_bool,
 };
 
 static cmdline_parse_token_string_t cmd_parse_token_bool = {
@@ -32,20 +36,45 @@ static cmdline_parse_token_string_t cmd_parse_token_bool = {
 	}
 };
 
+/* get help for bool token */
+static int
+cmdline_get_help_bool(__rte_unused cmdline_parse_token_hdr_t *tk,
+		char *dstbuf, unsigned int size)
+{
+	if (dstbuf == NULL || size == 0)
+		return -1;
+
+	strlcpy(dstbuf, "on|off", size);
+	return 0;
+}
+
 /* parse string to bool */
 int
 cmdline_parse_bool(__rte_unused cmdline_parse_token_hdr_t *tk, const char *srcbuf, void *res,
-	__rte_unused unsigned int ressize)
+	unsigned int ressize)
 {
 	cmdline_fixed_string_t on_off = {0};
+	uint8_t val;
+
+	if (!srcbuf || !*srcbuf)
+		return -1;
+
+	if (res != NULL && ressize < sizeof(uint8_t))
+		return -1;
+
 	if (cmdline_token_string_ops.parse
 			(&cmd_parse_token_bool.hdr, srcbuf, on_off, sizeof(on_off)) < 0)
 		return -1;
 
 	if (strcmp((char *)on_off, "on") == 0)
-		*(uint8_t *)res = 1;
+		val = 1;
 	else if (strcmp((char *)on_off, "off") == 0)
-		*(uint8_t *)res = 0;
+		val = 0;
+	else
+		return -1;
+
+	if (res != NULL)
+		*(uint8_t *)res = val;
 
 	return strlen(on_off);
 }

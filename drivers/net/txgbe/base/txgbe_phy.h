@@ -40,7 +40,6 @@
 #define   SR_PMA_KR_LD_CESTS_RR		MS16(15, 0x1)
 #define SR_PMA_KR_FEC_CTRL              0x0100AB
 #define   SR_PMA_KR_FEC_CTRL_EN		MS16(0, 0x1)
-#define SR_PMA_RS_FEC_CTRL              0x0100C8
 #define SR_MII_MMD_CTL                  0x1F0000
 #define   SR_MII_MMD_CTL_AN_EN              0x1000
 #define   SR_MII_MMD_CTL_RESTART_AN         0x0200
@@ -106,6 +105,8 @@
 #define   VR_AN_INTR_CMPLT		  MS16(0, 0x1)
 #define   VR_AN_INTR_LINK		  MS16(1, 0x1)
 #define   VR_AN_INTR_PG_RCV		  MS16(2, 0x1)
+#define   TXGBE_E56_AN_TXDIS              MS16(3, 0x1)
+#define   TXGBE_E56_AN_PG_RCV             MS16(4, 0x1)
 #define VR_AN_KR_MODE_CL                  0x078003
 #define   VR_AN_KR_MODE_CL_PDET		  MS16(0, 0x1)
 #define VR_XS_OR_PCS_MMD_DIGI_CTL1        0x038000
@@ -244,6 +245,7 @@
 /* EEPROM (dev_addr = 0xA0) */
 #define TXGBE_I2C_EEPROM_DEV_ADDR	0xA0
 #define TXGBE_SFF_IDENTIFIER		0x00
+#define TXGBE_SFF_8636_STATUS_OFFSET	0x02
 #define TXGBE_SFF_IDENTIFIER_SFP	0x03
 #define TXGBE_SFF_VENDOR_OUI_BYTE0	0x25
 #define TXGBE_SFF_VENDOR_OUI_BYTE1	0x26
@@ -257,10 +259,16 @@
 #define   TXGBE_SFF_CABLE_DA_ACTIVE     0x8
 #define TXGBE_SFF_CABLE_SPEC_COMP	0x3C
 #define TXGBE_SFF_SFF_8472_SWAP		0x5C
+#define   TXGBE_SFF_DDM_IMPLEMENTED	0x40
 #define TXGBE_SFF_SFF_8472_COMP		0x5E
 #define TXGBE_SFF_SFF_8472_OSCB		0x6E
 #define TXGBE_SFF_SFF_8472_ESCB		0x76
+#define TXGBE_SFF_SFF_REVISION_ADDR	0x01
+#define TXGBE_SFF_QSFP_PAGE_SELECT	0x7F
 
+#define TXGBE_MODULE_QSFP_MAX_LEN	640
+
+#define TXGBE_SFF_IDENTIFIER_QSFP	0x0C
 #define TXGBE_SFF_IDENTIFIER_QSFP_PLUS	0x0D
 #define TXGBE_SFF_QSFP_VENDOR_OUI_BYTE0	0xA5
 #define TXGBE_SFF_QSFP_VENDOR_OUI_BYTE1	0xA6
@@ -288,12 +296,20 @@
 #define TXGBE_SFF_4x10GBASESR_CAP		0x11
 #define TXGBE_SFF_40GBASEPSM4_PARALLEL		0x12
 #define TXGBE_SFF_40GBASE_SWMD4_CAP		0x1f
+#define TXGBE_SFF_COPPER_5M			0x5
+#define TXGBE_SFF_COPPER_3M			0x3
+#define TXGBE_SFF_COPPER_1M			0x1
 
 #define TXGBE_SFF_DA_SPEC_ACTIVE_LIMITING	0x4
 #define TXGBE_SFF_25GAUI_C2M_AOC_BER_5		0x1
 #define TXGBE_SFF_25GAUI_C2M_ACC_BER_5		0x8
 #define TXGBE_SFF_25GAUI_C2M_AOC_BER_12		0x18
 #define TXGBE_SFF_25GAUI_C2M_ACC_BER_12		0x19
+
+#define TXGBE_ETHERNET_COMP_OFFSET		0x83
+#define TXGBE_SFF_ETHERNET_40G_CR4		MS(3, 0x1)
+#define TXGBE_SFF_ETHERNET_40G_SR4		MS(2, 0x1)
+#define TXGBE_SFF_ETHERNET_40G_LR4		MS(1, 0x1)
 
 #define TXGBE_SFF_SOFT_RS_SELECT_MASK		0x8
 #define TXGBE_SFF_SOFT_RS_SELECT_10G		0x8
@@ -429,6 +445,24 @@
 #define TXGBE_BP_M_NAUTO                     0
 #define TXGBE_BP_M_AUTO                      1
 
+#define kr_read_poll(op, val, cond, sleep_us, \
+		     times, args...) \
+({ \
+	unsigned long __sleep_us = (sleep_us); \
+	u32 __times = (times); \
+	u32 i; \
+	int __cond = 0; \
+	for (i = 0; i < __times; i++) { \
+		(val) = op(args); \
+		if (cond) { \
+			__cond = 1; \
+			break; \
+		} \
+		usec_delay(__sleep_us);\
+	} \
+	(__cond) ? 0 : -1; \
+})
+
 #ifndef CL72_KRTR_PRBS_MODE_EN
 #define CL72_KRTR_PRBS_MODE_EN	0xFFFF	/* open kr prbs check */
 #endif
@@ -474,14 +508,12 @@ s32 txgbe_identify_qsfp_module(struct txgbe_hw *hw);
 s32 txgbe_check_overtemp(struct txgbe_hw *hw);
 s32 txgbe_read_i2c_byte(struct txgbe_hw *hw, u8 byte_offset,
 				u8 dev_addr, u8 *data);
-s32 txgbe_read_i2c_byte_unlocked(struct txgbe_hw *hw, u8 byte_offset,
-					 u8 dev_addr, u8 *data);
 s32 txgbe_write_i2c_byte(struct txgbe_hw *hw, u8 byte_offset,
 				 u8 dev_addr, u8 data);
-s32 txgbe_write_i2c_byte_unlocked(struct txgbe_hw *hw, u8 byte_offset,
-					  u8 dev_addr, u8 data);
 s32 txgbe_read_i2c_sff8472(struct txgbe_hw *hw, u8 byte_offset,
-					  u8 *sff8472_data);
+				  u8 *sff8472_data);
+s32 txgbe_read_i2c_sff8636(struct txgbe_hw *hw, u8 page, u8 byte_offset,
+					  u8 *sff8636_data);
 s32 txgbe_read_i2c_eeprom(struct txgbe_hw *hw, u8 byte_offset,
 				  u8 *eeprom_data);
 s32 txgbe_write_i2c_eeprom(struct txgbe_hw *hw, u8 byte_offset,
@@ -491,6 +523,8 @@ void txgbe_autoc_write(struct txgbe_hw *hw, u64 value);
 void txgbe_bp_mode_set(struct txgbe_hw *hw);
 void txgbe_set_phy_temp(struct txgbe_hw *hw);
 void txgbe_bp_down_event(struct txgbe_hw *hw);
+int txgbe_is_dac_cable(struct txgbe_hw *hw);
+int txgbe_xpcs_an_enabled(struct txgbe_hw *hw);
 s32 txgbe_kr_handle(struct txgbe_hw *hw);
 
 #endif /* _TXGBE_PHY_H_ */

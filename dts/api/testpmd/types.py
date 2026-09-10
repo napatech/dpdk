@@ -279,7 +279,7 @@ class RSSOffloadTypesFlag(Flag):
         Returns:
             An instance of this flag.
         """
-        flag = cls(0)
+        flag: RSSOffloadTypesFlag = cls(0)
         for name in names.split():
             flag |= cls.from_str(name)
         return flag
@@ -400,19 +400,33 @@ class TestPmdQueueInfo(TextParser):
     """Dataclass representation of the common parts of the testpmd `show rxq/txq info` commands."""
 
     #:
-    prefetch_threshold: int = field(metadata=TextParser.find_int(r"prefetch threshold: (\d+)"))
+    prefetch_threshold: int | None = field(
+        default=None, metadata=TextParser.find_int(r"prefetch threshold: (\d+)")
+    )
     #:
-    host_threshold: int = field(metadata=TextParser.find_int(r"host threshold: (\d+)"))
+    host_threshold: int | None = field(
+        default=None, metadata=TextParser.find_int(r"host threshold: (\d+)")
+    )
     #:
-    writeback_threshold: int = field(metadata=TextParser.find_int(r"writeback threshold: (\d+)"))
+    writeback_threshold: int | None = field(
+        default=None, metadata=TextParser.find_int(r"writeback threshold: (\d+)")
+    )
     #:
-    free_threshold: int = field(metadata=TextParser.find_int(r"free threshold: (\d+)"))
+    free_threshold: int | None = field(
+        default=None, metadata=TextParser.find_int(r"free threshold: (\d+)")
+    )
     #:
-    deferred_start: bool = field(metadata=TextParser.find("deferred start: on"))
+    deferred_start: bool | None = field(
+        default=None, metadata=TextParser.find("deferred start: on")
+    )
     #: The number of RXD/TXDs is just the ring size of the queue.
-    ring_size: int = field(metadata=TextParser.find_int(r"Number of (?:RXDs|TXDs): (\d+)"))
+    ring_size: int | None = field(
+        default=None, metadata=TextParser.find_int(r"Number of (?:RXDs|TXDs): (\d+)")
+    )
     #:
-    is_queue_started: bool = field(metadata=TextParser.find("queue state: started"))
+    is_queue_started: bool | None = field(
+        default=None, metadata=TextParser.find("queue state: started")
+    )
     #:
     burst_mode: str | None = field(
         default=None, metadata=TextParser.find(r"Burst mode: ([^\r\n]+)")
@@ -612,6 +626,12 @@ class TestPmdPort(TextParser):
     vlan_offload: VLANOffloadFlag | None = field(
         default=None,
         metadata=VLANOffloadFlag.make_parser(),
+    )
+
+    #: Selective Rx support
+    selective_rx: bool = field(
+        default=False,
+        metadata=TextParser.find(r"Selective Rx: supported"),
     )
 
     #: Maximum size of RX buffer
@@ -960,7 +980,7 @@ class PacketOffloadFlag(Flag):
         Returns:
             An instance of this flag.
         """
-        flag = cls(0)
+        flag: PacketOffloadFlag = cls(0)
         for name in names.split():
             flag |= cls.from_str(name)
         return flag
@@ -1168,7 +1188,7 @@ class RtePTypes(Flag):
         Returns:
             An instance of this flag.
         """
-        flag = cls(0)
+        flag: RtePTypes = cls(0)
         for name in names.split():
             flag |= cls.from_str(name)
         return flag

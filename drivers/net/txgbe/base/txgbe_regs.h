@@ -158,6 +158,8 @@
 #define   TXGBE_RST_SW             MS(0, 0x1)
 #define   TXGBE_RST_LAN(i)         MS(((i) + 1), 0x1)
 #define   TXGBE_RST_FW             MS(3, 0x1)
+#define   TXGBE_RST_EPHY_LAN_1     MS(16, 0x1)
+#define   TXGBE_RST_EPHY_LAN_0     MS(19, 0x1)
 #define   TXGBE_RST_MAC_LAN_1      MS(17, 0x1)
 #define   TXGBE_RST_MAC_LAN_0      MS(20, 0x1)
 #define   TXGBE_RST_ETH(i)         MS(((i) + 29), 0x1)
@@ -503,10 +505,8 @@
 #define TXGBE_PBRXCTL                   0x019000
 #define   TXGBE_PBRXCTL_ST              MS(0, 0x1)
 #define   TXGBE_PBRXCTL_ENA             MS(31, 0x1)
-#define TXGBE_PBRXUP2TC                 0x019008
 #define TXGBE_PBTXUP2TC                 0x01C800
-#define   TXGBE_DCBUP2TC_MAP(tc, v)     LS(v, 3 * (tc), 0x7)
-#define   TXGBE_DCBUP2TC_DEC(tc, r)     RS(r, 3 * (tc), 0x7)
+#define   TXGBE_DCBUP2TC_MAP(tc, v)     LS(v, 4 * (tc), 0x7)
 #define TXGBE_PBRXSIZE(tc)              (0x019020 + (tc) * 4)
 #define   TXGBE_PBRXSIZE_KB(v)          LS(v, 10, 0x3FF)
 
@@ -1085,6 +1085,8 @@ enum txgbe_5tuple_protocol {
 #define TXGBE_PBRXDROP                    0x019068
 #define TXGBE_PBRXLNKXOFF                 0x011988
 #define TXGBE_PBRXLNKXON                  0x011E0C
+#define TXGBE_PBRXLNKXOFF_AML             0x011F80
+#define TXGBE_PBRXLNKXON_AML              0x011F84
 #define TXGBE_PBRXUPXON(up)               (0x011E30 + (up) * 4)
 #define TXGBE_PBRXUPXOFF(up)              (0x011E10 + (up) * 4)
 
@@ -1670,6 +1672,9 @@ enum txgbe_5tuple_protocol {
 #define   TXGBE_TDM_FACTOR_INT_SHIFT    16
 #define   TXGBE_TDM_FACTOR_FRA_SHIFT    2
 
+#define TXGBE_TDM_RL_ADJ                0x1820C
+ /* Ethernet framing overhead: 7B Ethernet preamble + 1B SFD + 1B EFD + 12B IPG */
+#define   TXGBE_FRAME_OVERHEAD          21
 #define TXGBE_TDM_RL_VM_IDX             0x018218
 #define TXGBE_TDM_RL_VM_CFG             0x01821C
 #define TXGBE_TDM_RL_CFG                0x018400
@@ -1700,7 +1705,7 @@ enum txgbe_5tuple_protocol {
 #define TXGBE_RDM_PF_HIDE(_i)   (0x12090 + ((_i) * 4))
 
 #define TXGBE_RPUP2TC                   0x019008
-#define   TXGBE_RPUP2TC_UP_SHIFT        3
+#define   TXGBE_RPUP2TC_UP_SHIFT        4
 #define   TXGBE_RPUP2TC_UP_MASK         0x7
 
 #define TXGBE_RDM_DCACHE_CTL             0x0120A8
@@ -1824,12 +1829,14 @@ txgbe_map_reg(struct txgbe_hw *hw, u32 reg)
 	switch (reg) {
 	case TXGBE_REG_RSSTBL:
 		if (hw->mac.type == txgbe_mac_sp_vf ||
-		    hw->mac.type == txgbe_mac_aml_vf)
+		    hw->mac.type == txgbe_mac_aml_vf ||
+		    hw->mac.type == txgbe_mac_aml40_vf)
 			reg = TXGBE_VFRSSTBL(0);
 		break;
 	case TXGBE_REG_RSSKEY:
 		if (hw->mac.type == txgbe_mac_sp_vf ||
-		    hw->mac.type == txgbe_mac_aml_vf)
+		    hw->mac.type == txgbe_mac_aml_vf ||
+		    hw->mac.type == txgbe_mac_aml40_vf)
 			reg = TXGBE_VFRSSKEY(0);
 		break;
 	default:
@@ -2012,6 +2019,7 @@ static inline void txgbe_flush(struct txgbe_hw *hw)
 		break;
 	case txgbe_mac_sp_vf:
 	case txgbe_mac_aml_vf:
+	case txgbe_mac_aml40_vf:
 		rd32(hw, TXGBE_VFSTATUS);
 		break;
 	default:

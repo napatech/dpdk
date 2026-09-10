@@ -7,7 +7,7 @@
 # DPDK instance, use 'make'
 
 allow_experimental_apis = true
+deps += ['net']
 sources = files(
         'ptpclient.c',
 )
-cflags += no_shadow_cflag

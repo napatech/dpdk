@@ -9,6 +9,12 @@
  * Copyright (c) 2011 - 2014 PLUMgrid, http://plumgrid.com
  */
 
+#include "bpf_impl.h"
+#include <eal_export.h>
+#include <rte_errno.h>
+
+#ifdef RTE_HAS_LIBPCAP
+
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -17,17 +23,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <eal_export.h>
 #include <rte_common.h>
 #include <rte_bpf.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
-#include <rte_errno.h>
 
 #include <pcap/pcap.h>
 #include <pcap/bpf.h>
 
-#include "bpf_impl.h"
 #include "bpf_def.h"
 
 #ifndef BPF_MAXINSNS
@@ -247,8 +250,8 @@ static int bpf_convert_filter(const struct bpf_insn *prog, size_t len,
 	uint8_t bpf_src;
 
 	if (len > BPF_MAXINSNS) {
-		RTE_BPF_LOG_LINE(ERR, "%s: cBPF program too long (%zu insns)",
-			    __func__, len);
+		RTE_BPF_LOG_FUNC_LINE(ERR, "cBPF program too long (%zu insns)",
+			    len);
 		return -EINVAL;
 	}
 
@@ -483,8 +486,8 @@ do_pass:
 
 			/* Unknown instruction. */
 		default:
-			RTE_BPF_LOG_LINE(ERR, "%s: Unknown instruction!: %#x",
-				    __func__, fp->code);
+			RTE_BPF_LOG_FUNC_LINE(ERR, "Unknown instruction!: %#x",
+				    fp->code);
 			goto err;
 		}
 
@@ -528,7 +531,7 @@ rte_bpf_convert(const struct bpf_program *prog)
 	int ret;
 
 	if (prog == NULL) {
-		RTE_BPF_LOG_LINE(ERR, "%s: NULL program", __func__);
+		RTE_BPF_LOG_FUNC_LINE(ERR, "NULL program");
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -536,13 +539,13 @@ rte_bpf_convert(const struct bpf_program *prog)
 	/* 1st pass: calculate the eBPF program length */
 	ret = bpf_convert_filter(prog->bf_insns, prog->bf_len, NULL, &ebpf_len);
 	if (ret < 0) {
-		RTE_BPF_LOG_LINE(ERR, "%s: cannot get eBPF length", __func__);
+		RTE_BPF_LOG_FUNC_LINE(ERR, "cannot get eBPF length");
 		rte_errno = -ret;
 		return NULL;
 	}
 
-	RTE_BPF_LOG_LINE(DEBUG, "%s: prog len cBPF=%u -> eBPF=%u",
-		    __func__, prog->bf_len, ebpf_len);
+	RTE_BPF_LOG_FUNC_LINE(DEBUG, "prog len cBPF=%u -> eBPF=%u",
+		    prog->bf_len, ebpf_len);
 
 	prm = rte_zmalloc("bpf_filter",
 			  sizeof(*prm) + ebpf_len * sizeof(*ebpf), 0);
@@ -557,7 +560,7 @@ rte_bpf_convert(const struct bpf_program *prog)
 	/* 2nd pass: remap cBPF to eBPF instructions  */
 	ret = bpf_convert_filter(prog->bf_insns, prog->bf_len, ebpf, &ebpf_len);
 	if (ret < 0) {
-		RTE_BPF_LOG_LINE(ERR, "%s: cannot convert cBPF to eBPF", __func__);
+		RTE_BPF_LOG_FUNC_LINE(ERR, "cannot convert cBPF to eBPF");
 		rte_free(prm);
 		rte_errno = -ret;
 		return NULL;
@@ -572,3 +575,75 @@ rte_bpf_convert(const struct bpf_program *prog)
 
 	return prm;
 }
+
+void
+__rte_bpf_convert_cleanup(struct __rte_bpf_load *load)
+{
+	free(load->ins);
+}
+
+int
+__rte_bpf_convert(struct __rte_bpf_load *load)
+{
+	struct rte_bpf_prm_ex *const prm = &load->prm;
+	uint32_t nb_ins = 0;
+	int ret;
+
+	RTE_ASSERT(prm->origin == RTE_BPF_ORIGIN_CBPF);
+
+	if (prm->cbpf.ins == NULL || prm->cbpf.nb_ins == 0)
+		return -EINVAL;
+
+	/* 1st pass: calculate the eBPF program length */
+	ret = bpf_convert_filter(prm->cbpf.ins, prm->cbpf.nb_ins, NULL, &nb_ins);
+	if (ret < 0) {
+		RTE_BPF_LOG_FUNC_LINE(ERR, "cannot get eBPF length");
+		return ret;
+	}
+
+	RTE_ASSERT(load->ins == NULL);
+	load->ins = malloc(nb_ins * sizeof(load->ins[0]));
+	if (load->ins == NULL)
+		return -ENOMEM;
+
+	/* 2nd pass: remap cBPF to eBPF instructions  */
+	ret = bpf_convert_filter(prm->cbpf.ins, prm->cbpf.nb_ins, load->ins, &nb_ins);
+	if (ret < 0) {
+		RTE_BPF_LOG_FUNC_LINE(ERR, "cannot convert cBPF to eBPF");
+		return ret;
+	}
+
+	prm->origin = RTE_BPF_ORIGIN_RAW;
+	prm->raw.ins = load->ins;
+	prm->raw.nb_ins = nb_ins;
+
+	return 0;
+}
+
+#else /* RTE_HAS_LIBPCAP */
+
+RTE_EXPORT_SYMBOL(rte_bpf_convert)
+struct rte_bpf_prm *
+rte_bpf_convert(const struct bpf_program *prog)
+{
+	RTE_SET_USED(prog);
+	RTE_BPF_LOG_FUNC_LINE(ERR, "not supported, rebuild with libpcap installed");
+	rte_errno = ENOTSUP;
+	return NULL;
+}
+
+void
+__rte_bpf_convert_cleanup(struct __rte_bpf_load *load)
+{
+	RTE_ASSERT(load->ins == NULL);
+}
+
+int
+__rte_bpf_convert(struct __rte_bpf_load *load)
+{
+	RTE_SET_USED(load);
+	RTE_BPF_LOG_FUNC_LINE(ERR, "not supported, rebuild with libpcap installed");
+	return -ENOTSUP;
+}
+
+#endif /* RTE_HAS_LIBPCAP */

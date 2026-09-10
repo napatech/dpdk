@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2018-2024 NXP
+ * Copyright 2018-2026 NXP
  */
 
 #include <stdbool.h>
@@ -95,6 +95,7 @@ enetc_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused,
 		RTE_PTYPE_L4_UDP,
 		RTE_PTYPE_L4_SCTP,
 		RTE_PTYPE_L4_ICMP,
+		RTE_PTYPE_TUNNEL_ESP
 	};
 
 	*no_of_elements = RTE_DIM(ptypes);
@@ -194,20 +195,18 @@ enetc_hardware_init(struct enetc_eth_hw *hw)
 	}
 
 	if ((high_mac | low_mac) == 0) {
-		char *first_byte;
-
 		ENETC_PMD_NOTICE("MAC is not available for this SI, "
 				"set random MAC");
-		mac = (uint32_t *)hw->mac.addr;
-		*mac = (uint32_t)rte_rand();
-		first_byte = (char *)mac;
-		*first_byte &= 0xfe;	/* clear multicast bit */
-		*first_byte |= 0x02;	/* set local assignment bit (IEEE802) */
-
-		enetc_port_wr(enetc_hw, ENETC_PSIPMAR0(0), *mac);
-		mac++;
-		*mac = (uint16_t)rte_rand();
-		enetc_port_wr(enetc_hw, ENETC_PSIPMAR1(0), *mac);
+		rte_eth_random_addr(hw->mac.addr);
+		high_mac = *(uint32_t *)hw->mac.addr;
+		low_mac = *(uint16_t *)(hw->mac.addr + 4);
+		if (hw->device_id == ENETC_DEV_ID_VF) {
+			enetc_wr(enetc_hw, ENETC_SIPMAR0, high_mac);
+			enetc_wr(enetc_hw, ENETC_SIPMAR1, low_mac);
+		} else {
+			enetc_port_wr(enetc_hw, ENETC_PSIPMAR0(0), high_mac);
+			enetc_port_wr(enetc_hw, ENETC_PSIPMAR1(0), low_mac);
+		}
 		enetc_print_ethaddr("New address: ",
 			      (const struct rte_ether_addr *)hw->mac.addr);
 	}
@@ -886,7 +885,7 @@ static int
 enetc_dev_init(struct rte_eth_dev *eth_dev)
 {
 	int error = 0;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	struct enetc_eth_hw *hw =
 		ENETC_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 

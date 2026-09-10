@@ -491,7 +491,7 @@ idpf_dp_splitq_recv_pkts_avx2(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_
 	struct rte_mbuf **sw_ring = &queue->bufq2->sw_ring[queue->rx_tail];
 	volatile union virtchnl2_rx_desc *rxdp =
 		(volatile union virtchnl2_rx_desc *)queue->rx_ring + queue->rx_tail;
-	const __m256i mbuf_init = _mm256_set_epi64x(0, 0, 0, queue->mbuf_initializer);
+	const __m256i mbuf_init = _mm256_set_epi64x(0, 0, 0, queue->bufq2->mbuf_initializer);
 	uint64_t head_gen;
 	uint16_t received = 0;
 	int i;
@@ -524,8 +524,8 @@ idpf_dp_splitq_recv_pkts_avx2(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_
 
 	/* check if there is at least one packet available */
 	head_gen = rxdp->flex_adv_nic_3_wb.pktlen_gen_bufq_id;
-	if (((head_gen >> VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) &
-		 VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) != queue->expected_gen_id)
+	if (((head_gen & VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) >>
+		 VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) != queue->expected_gen_id)
 		return 0;
 
 	for (i = 0; i < nb_pkts;
@@ -570,9 +570,9 @@ idpf_dp_splitq_recv_pkts_avx2(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_
 		ptype2 = (uint16_t)_mm256_extract_epi16(pt32, 1);
 		ptype3 = (uint16_t)_mm256_extract_epi16(pt32, 9);
 
-		mb10 = _mm256_insert_epi32(mb10, (int)ptype_tbl[ptype1], 2);
+		mb10 = _mm256_insert_epi32(mb10, (int)ptype_tbl[ptype1], 4);
 		mb10 = _mm256_insert_epi32(mb10, (int)ptype_tbl[ptype0], 0);
-		mb32 = _mm256_insert_epi32(mb32, (int)ptype_tbl[ptype3], 2);
+		mb32 = _mm256_insert_epi32(mb32, (int)ptype_tbl[ptype3], 4);
 		mb32 = _mm256_insert_epi32(mb32, (int)ptype_tbl[ptype2], 0);
 
 		/* Build rearm data for each mbuf */
@@ -587,11 +587,11 @@ idpf_dp_splitq_recv_pkts_avx2(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_
 		_mm256_storeu_si256((__m256i *)&rx_pkts[i + 2]->rearm_data, rearm2);
 		_mm256_storeu_si256((__m256i *)&rx_pkts[i + 3]->rearm_data, rearm3);
 
-		/* Extract DD and generation bits from the already-loaded descriptor data (d0-d3) */
-		stat0 = (uint8_t)_mm_extract_epi8(d0, 1);
-		stat1 = (uint8_t)_mm_extract_epi8(d1, 1);
-		stat2 = (uint8_t)_mm_extract_epi8(d2, 1);
-		stat3 = (uint8_t)_mm_extract_epi8(d3, 1);
+		/* Extract DD bit from status_err0_qw1 (byte 8 of descriptor) */
+		stat0 = (uint8_t)_mm_extract_epi8(d0, 8);
+		stat1 = (uint8_t)_mm_extract_epi8(d1, 8);
+		stat2 = (uint8_t)_mm_extract_epi8(d2, 8);
+		stat3 = (uint8_t)_mm_extract_epi8(d3, 8);
 
 		pktlen_gen0 = (uint16_t)_mm_extract_epi16(d0, 2);
 		pktlen_gen1 = (uint16_t)_mm_extract_epi16(d1, 2);
@@ -599,17 +599,17 @@ idpf_dp_splitq_recv_pkts_avx2(void *rxq, struct rte_mbuf **rx_pkts, uint16_t nb_
 		pktlen_gen3 = (uint16_t)_mm_extract_epi16(d3, 2);
 
 		valid0 = (stat0 & 1) &&
-			 (((pktlen_gen0 >> VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) &
-			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) == queue->expected_gen_id);
+			 (((pktlen_gen0 & VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) >>
+			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) == queue->expected_gen_id);
 		valid1 = (stat1 & 1) &&
-			 (((pktlen_gen1 >> VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) &
-			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) == queue->expected_gen_id);
+			 (((pktlen_gen1 & VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) >>
+			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) == queue->expected_gen_id);
 		valid2 = (stat2 & 1) &&
-			 (((pktlen_gen2 >> VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) &
-			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) == queue->expected_gen_id);
+			 (((pktlen_gen2 & VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) >>
+			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) == queue->expected_gen_id);
 		valid3 = (stat3 & 1) &&
-			 (((pktlen_gen3 >> VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) &
-			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) == queue->expected_gen_id);
+			 (((pktlen_gen3 & VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_M) >>
+			   VIRTCHNL2_RX_FLEX_DESC_ADV_GEN_S) == queue->expected_gen_id);
 
 		/* count valid descriptors (holes are impossible because
 		 * descriptors are read in reverse order while the NIC
@@ -781,9 +781,9 @@ idpf_dp_singleq_xmit_pkts_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 }
 
 static __rte_always_inline void
-idpf_splitq_scan_cq_ring(struct ci_tx_queue *cq)
+idpf_splitq_scan_cq_ring(struct idpf_complq *cq)
 {
-	struct idpf_splitq_tx_compl_desc *compl_ring;
+	volatile struct idpf_splitq_tx_compl_desc *compl_ring;
 	struct ci_tx_queue *txq;
 	uint16_t genid, txq_qid, cq_qid, i;
 	uint8_t ctype;
@@ -819,6 +819,8 @@ idpf_splitq_scan_cq_ring(struct ci_tx_queue *cq)
 	cq->tx_tail = cq_qid;
 }
 
+#define IDPF_TXD_FLEX_QW1_TX_BUF_SZ_S  48
+
 static __rte_always_inline void
 idpf_splitq_vtx1_avx2(struct idpf_flex_tx_sched_desc *txdp,
 				struct rte_mbuf *pkt, uint64_t flags)
@@ -826,7 +828,7 @@ idpf_splitq_vtx1_avx2(struct idpf_flex_tx_sched_desc *txdp,
 	uint64_t high_qw =
 		IDPF_TX_DESC_DTYPE_FLEX_FLOW_SCHE |
 		((uint64_t)flags) |
-		((uint64_t)pkt->data_len << IDPF_TXD_QW1_TX_BUF_SZ_S);
+		((uint64_t)pkt->data_len << IDPF_TXD_FLEX_QW1_TX_BUF_SZ_S);
 
 	__m128i descriptor = _mm_set_epi64x(high_qw,
 						pkt->buf_iova + pkt->data_off);
@@ -848,13 +850,13 @@ idpf_splitq_vtx_avx2(struct idpf_flex_tx_sched_desc *txdp,
 	for (; nb_pkts >= IDPF_VPMD_DESCS_PER_LOOP; txdp += IDPF_VPMD_DESCS_PER_LOOP,
 			pkt += IDPF_VPMD_DESCS_PER_LOOP, nb_pkts -= IDPF_VPMD_DESCS_PER_LOOP) {
 		uint64_t hi_qw0 = hi_qw_tmpl |
-			((uint64_t)pkt[0]->data_len << IDPF_TXD_QW1_TX_BUF_SZ_S);
+			((uint64_t)pkt[0]->data_len << IDPF_TXD_FLEX_QW1_TX_BUF_SZ_S);
 		uint64_t hi_qw1 = hi_qw_tmpl |
-			((uint64_t)pkt[1]->data_len << IDPF_TXD_QW1_TX_BUF_SZ_S);
+			((uint64_t)pkt[1]->data_len << IDPF_TXD_FLEX_QW1_TX_BUF_SZ_S);
 		uint64_t hi_qw2 = hi_qw_tmpl |
-			((uint64_t)pkt[2]->data_len << IDPF_TXD_QW1_TX_BUF_SZ_S);
+			((uint64_t)pkt[2]->data_len << IDPF_TXD_FLEX_QW1_TX_BUF_SZ_S);
 		uint64_t hi_qw3 = hi_qw_tmpl |
-			((uint64_t)pkt[3]->data_len << IDPF_TXD_QW1_TX_BUF_SZ_S);
+			((uint64_t)pkt[3]->data_len << IDPF_TXD_FLEX_QW1_TX_BUF_SZ_S);
 
 		__m256i desc0_1 = _mm256_set_epi64x(hi_qw1,
 			pkt[1]->buf_iova + pkt[1]->data_off,
@@ -882,17 +884,21 @@ idpf_splitq_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 	struct ci_tx_queue *txq = (struct ci_tx_queue *)tx_queue;
 	struct idpf_flex_tx_sched_desc *txdp;
 	struct ci_tx_entry_vec *txep;
-	uint16_t n, nb_commit;
+	uint16_t n, nb_commit, tx_id;
 	uint64_t cmd_dtype = IDPF_TXD_FLEX_FLOW_CMD_EOP;
-	uint16_t tx_id = txq->tx_tail;
 
-	nb_commit = (uint16_t)RTE_MIN(txq->nb_tx_free, nb_pkts);
-	nb_pkts = nb_commit;
+	/* cross rs_thresh boundary is not allowed */
+	nb_pkts = RTE_MIN(nb_pkts, txq->tx_rs_thresh);
+
+	nb_pkts = (uint16_t)RTE_MIN(txq->nb_tx_free, nb_pkts);
+	nb_commit = nb_pkts;
 	if (unlikely(nb_pkts == 0))
 		return 0;
 
-	txdp = (struct idpf_flex_tx_sched_desc *)&txq->desc_ring[tx_id];
-	txep = &txq->sw_ring_vec[tx_id];
+	tx_id = txq->tx_tail;
+	txdp = &txq->desc_ring[tx_id];
+	txep = (void *)txq->sw_ring;
+	txep += tx_id;
 
 	txq->nb_tx_free = (uint16_t)(txq->nb_tx_free - nb_pkts);
 
@@ -907,10 +913,14 @@ idpf_splitq_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 		idpf_splitq_vtx1_avx2(txdp, *tx_pkts++, cmd_dtype);
 
 		nb_commit = (uint16_t)(nb_commit - n);
-		tx_id = 0;
 
+		tx_id = 0;
+		txq->tx_next_rs = (uint16_t)(txq->tx_rs_thresh - 1);
+
+		/* avoid reach the end of ring */
 		txdp = &txq->desc_ring[tx_id];
 		txep = (void *)txq->sw_ring;
+		txep += tx_id;
 	}
 
 	ci_tx_backlog_entry_vec(txep, tx_pkts, nb_commit);
@@ -918,6 +928,10 @@ idpf_splitq_xmit_fixed_burst_vec_avx2(void *tx_queue, struct rte_mbuf **tx_pkts,
 	idpf_splitq_vtx_avx2(txdp, tx_pkts, nb_commit, cmd_dtype);
 
 	tx_id = (uint16_t)(tx_id + nb_commit);
+	if (tx_id > txq->tx_next_rs)
+		txq->tx_next_rs =
+			(uint16_t)(txq->tx_next_rs + txq->tx_rs_thresh);
+
 	txq->tx_tail = tx_id;
 
 	IDPF_PCI_REG_WRITE(txq->qtx_tail, txq->tx_tail);

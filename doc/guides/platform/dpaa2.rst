@@ -26,23 +26,23 @@ Common Offload HW Block Drivers
 
 #. **Nics Driver**
 
-   See :doc:`../nics/dpaa2` for NXP dpaa2 nic driver information.
+   See :doc:`/nics/dpaa2` for NXP dpaa2 nic driver information.
 
 #. **Cryptodev Driver**
 
-   See :doc:`../cryptodevs/dpaa2_sec` for NXP dpaa2 cryptodev driver information.
+   See :doc:`/cryptodevs/dpaa2_sec` for NXP dpaa2 cryptodev driver information.
 
 #. **Eventdev Driver**
 
-   See :doc:`../eventdevs/dpaa2` for NXP dpaa2 eventdev driver information.
+   See :doc:`/eventdevs/dpaa2` for NXP dpaa2 eventdev driver information.
 
 #. **Rawdev AIOP CMDIF Driver**
 
-   See :doc:`../rawdevs/dpaa2_cmdif` for NXP dpaa2 AIOP command interface driver information.
+   See :doc:`/rawdevs/dpaa2_cmdif` for NXP dpaa2 AIOP command interface driver information.
 
 #. **DMA Driver**
 
-   See :doc:`../dmadevs/dpaa2` for NXP dpaa2 QDMA driver information.
+   See :doc:`/dmadevs/dpaa2` for NXP dpaa2 QDMA driver information.
 
 
 Steps To Setup Platform
@@ -94,8 +94,6 @@ separately:
   SDK and related information can be obtained from:  `NXP QorIQ SDK  <http://www.nxp.com/products/software-and-tools/run-time-software/linux-sdk/linux-sdk-for-qoriq-processors:SDKLINUX>`_.
 
 
-.. _extra_scripts:
-
 - **DPDK Extra Scripts**
 
   DPAA2 based resources can be configured easily with the help of ready scripts
@@ -109,5 +107,4 @@ Currently supported by DPDK:
 - MC Firmware version **10.37.0** and higher.
 - Supported architectures:  **arm64 LE**.
 
-- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>`
-  to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.

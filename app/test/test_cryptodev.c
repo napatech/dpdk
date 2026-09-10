@@ -1564,7 +1564,8 @@ ut_setup_security_rx_inject(void)
 	struct rte_eth_conf port_conf = {
 		.rxmode = {
 			.offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM |
-				    RTE_ETH_RX_OFFLOAD_SECURITY,
+				    RTE_ETH_RX_OFFLOAD_SECURITY |
+					RTE_ETH_RX_OFFLOAD_SCATTER,
 		},
 		.txmode = {
 			.offloads = RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE,
@@ -10782,6 +10783,25 @@ test_ipsec_proto_known_vec_inb_rx_inject(const void *test_data)
 }
 
 static int
+test_ipsec_proto_known_vec_inb_rx_inject_multi_seg(const void *test_data)
+{
+	const struct ipsec_test_data *td = test_data;
+	struct ipsec_test_flags flags;
+	struct ipsec_test_data td_inb;
+
+	memset(&flags, 0, sizeof(flags));
+	flags.rx_inject = true;
+	flags.nb_segs_in_mbuf = 4;
+
+	if (td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS)
+		test_ipsec_td_in_from_out(td, &td_inb);
+	else
+		memcpy(&td_inb, td, sizeof(td_inb));
+
+	return test_ipsec_proto_process(&td_inb, NULL, 1, false, &flags);
+}
+
+static int
 test_ipsec_proto_all(const struct ipsec_test_flags *flags)
 {
 	struct ipsec_test_data td_outb[TEST_SEC_PKTS_MAX];
@@ -18389,6 +18409,11 @@ static struct unit_test_suite ipsec_proto_testsuite  = {
 			"Inbound known vector (ESP tunnel mode IPv4 AES-GCM 128) Rx inject",
 			ut_setup_security_rx_inject, ut_teardown_rx_inject,
 			test_ipsec_proto_known_vec_inb_rx_inject, &pkt_aes_128_gcm),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Inbound known vector (ESP tunnel mode IPv4 AES-GCM 128) Rx inject multi seg",
+			ut_setup_security_rx_inject, ut_teardown_rx_inject,
+			test_ipsec_proto_known_vec_inb_rx_inject_multi_seg, &pkt_aes_128_gcm),
+
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	}
 };
@@ -20603,17 +20628,6 @@ test_cryptodev_cpu_aesni_mb(void)
 }
 
 static int
-test_cryptodev_chacha_poly_mb(void)
-{
-	int32_t rc;
-	enum rte_security_session_action_type at = gbl_action_type;
-	rc = run_cryptodev_testsuite(
-			RTE_STR(CRYPTODEV_NAME_CHACHA20_POLY1305_PMD));
-	gbl_action_type = at;
-	return rc;
-}
-
-static int
 test_cryptodev_openssl(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_OPENSSL_PMD));
@@ -20652,12 +20666,6 @@ static int
 test_cryptodev_sw_snow3g(void)
 {
 	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_SNOW3G_PMD));
-}
-
-static int
-test_cryptodev_sw_kasumi(void)
-{
-	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_KASUMI_PMD));
 }
 
 static int
@@ -20881,6 +20889,18 @@ test_cryptodev_cn10k_raw_api(void)
 }
 
 static int
+test_cryptodev_cn20k(void)
+{
+	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_CN20K_PMD));
+}
+
+static int
+test_cryptodev_cn20k_raw_api(void)
+{
+	return run_cryptodev_raw_testsuite(RTE_STR(CRYPTODEV_NAME_CN20K_PMD));
+}
+
+static int
 test_cryptodev_dpaa2_sec_raw_api(void)
 {
 	return run_cryptodev_raw_testsuite(RTE_STR(CRYPTODEV_NAME_DPAA2_SEC_PMD));
@@ -20900,6 +20920,8 @@ test_cryptodev_zsda(void)
 
 REGISTER_DRIVER_TEST(cryptodev_cn10k_raw_api_autotest,
 		test_cryptodev_cn10k_raw_api);
+REGISTER_DRIVER_TEST(cryptodev_cn20k_raw_api_autotest,
+		test_cryptodev_cn20k_raw_api);
 REGISTER_DRIVER_TEST(cryptodev_dpaa2_sec_raw_api_autotest,
 		test_cryptodev_dpaa2_sec_raw_api);
 REGISTER_DRIVER_TEST(cryptodev_dpaa_sec_raw_api_autotest,
@@ -20910,8 +20932,6 @@ REGISTER_DRIVER_TEST(cryptodev_qat_autotest, test_cryptodev_qat);
 REGISTER_DRIVER_TEST(cryptodev_aesni_mb_autotest, test_cryptodev_aesni_mb);
 REGISTER_DRIVER_TEST(cryptodev_cpu_aesni_mb_autotest,
 	test_cryptodev_cpu_aesni_mb);
-REGISTER_DRIVER_TEST(cryptodev_chacha_poly_mb_autotest,
-	test_cryptodev_chacha_poly_mb);
 REGISTER_DRIVER_TEST(cryptodev_openssl_autotest, test_cryptodev_openssl);
 REGISTER_DRIVER_TEST(cryptodev_aesni_gcm_autotest, test_cryptodev_aesni_gcm);
 REGISTER_DRIVER_TEST(cryptodev_cpu_aesni_gcm_autotest,
@@ -20919,7 +20939,6 @@ REGISTER_DRIVER_TEST(cryptodev_cpu_aesni_gcm_autotest,
 REGISTER_DRIVER_TEST(cryptodev_mlx5_autotest, test_cryptodev_mlx5);
 REGISTER_DRIVER_TEST(cryptodev_null_autotest, test_cryptodev_null);
 REGISTER_DRIVER_TEST(cryptodev_sw_snow3g_autotest, test_cryptodev_sw_snow3g);
-REGISTER_DRIVER_TEST(cryptodev_sw_kasumi_autotest, test_cryptodev_sw_kasumi);
 REGISTER_DRIVER_TEST(cryptodev_sw_zuc_autotest, test_cryptodev_sw_zuc);
 REGISTER_DRIVER_TEST(cryptodev_sw_armv8_autotest, test_cryptodev_armv8);
 REGISTER_DRIVER_TEST(cryptodev_sw_mvsam_autotest, test_cryptodev_mrvl);
@@ -20935,4 +20954,5 @@ REGISTER_DRIVER_TEST(cryptodev_nitrox_autotest, test_cryptodev_nitrox);
 REGISTER_DRIVER_TEST(cryptodev_bcmfs_autotest, test_cryptodev_bcmfs);
 REGISTER_DRIVER_TEST(cryptodev_cn9k_autotest, test_cryptodev_cn9k);
 REGISTER_DRIVER_TEST(cryptodev_cn10k_autotest, test_cryptodev_cn10k);
+REGISTER_DRIVER_TEST(cryptodev_cn20k_autotest, test_cryptodev_cn20k);
 REGISTER_DRIVER_TEST(cryptodev_zsda_autotest, test_cryptodev_zsda);

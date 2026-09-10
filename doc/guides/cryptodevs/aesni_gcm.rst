@@ -43,6 +43,10 @@ and compile it on their user system before building DPDK.
 The latest version of the library supported by this PMD is v1.5, which
 can be downloaded in `<https://github.com/01org/intel-ipsec-mb/archive/v1.5.zip>`_.
 
+For Arm system, ARM64 port of the multi-buffer library can be downloaded from
+https://gitlab.arm.com/arm-reference-solutions/ipsec-mb/-/tree/main/.
+The latest version of the library supported by this PMD is tagged as SECLIB-IPSEC-2026.05.30.
+
 .. code-block:: console
 
     make
@@ -65,8 +69,6 @@ Once it is downloaded, extract it and follow these steps:
 
 As a reference, the following table shows a mapping between the past DPDK versions
 and the external crypto libraries supported by them:
-
-.. _table_aesni_gcm_versions:
 
 .. table:: DPDK and external crypto library version compatibility
 

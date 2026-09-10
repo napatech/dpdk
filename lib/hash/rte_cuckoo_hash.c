@@ -25,14 +25,237 @@
 #include <rte_tailq.h>
 
 #include "rte_hash.h"
+#include "rte_cuckoo_hash.h"
 
-/* needs to be before rte_cuckoo_hash.h */
 RTE_LOG_REGISTER_DEFAULT(hash_logtype, INFO);
 #define RTE_LOGTYPE_HASH hash_logtype
 #define HASH_LOG(level, ...) \
 	RTE_LOG_LINE(level, HASH, "" __VA_ARGS__)
 
-#include "rte_cuckoo_hash.h"
+/* Macro to enable/disable run-time checking of function parameters */
+#if defined(RTE_LIBRTE_HASH_DEBUG)
+#define RETURN_IF_TRUE(cond, retval) do { \
+	if (cond) \
+		return retval; \
+} while (0)
+#else
+#define RETURN_IF_TRUE(cond, retval)
+#endif
+
+
+/*
+ * All different options to select a key compare function,
+ * based on the key size and custom function.
+ * Not in rte_cuckoo_hash.h to avoid ABI issues.
+ */
+enum cmp_jump_table_case {
+	KEY_CUSTOM,
+	KEY_2_BYTES,
+	KEY_3_BYTES,
+	KEY_4_BYTES,
+	KEY_5_BYTES,
+	KEY_6_BYTES,
+	KEY_8_BYTES,
+	KEY_10_BYTES,
+	KEY_12_BYTES,
+	KEY_14_BYTES,
+	KEY_16_BYTES,
+	KEY_20_BYTES,
+	KEY_32_BYTES,
+	KEY_36_BYTES,
+	KEY_48_BYTES,
+	KEY_64_BYTES,
+	KEY_80_BYTES,
+	KEY_96_BYTES,
+	KEY_112_BYTES,
+	KEY_128_BYTES,
+	KEY_OTHER_BYTES,
+	NUM_KEY_CMP_CASES,
+};
+
+/* Table of custom key sizes. */
+static const unsigned int cmp_jump_key_size[] = {
+	0,	/* Custom */
+	2,	3,	4,	5,	6,	8,	10,	12,	14,	16,	20,
+	32,	36,	48,	64,	80,	96,	112,	128,
+	UINT32_MAX /* Other */
+};
+
+static_assert(RTE_DIM(cmp_jump_key_size) == NUM_KEY_CMP_CASES,
+	      "cmp_jump_key_size table mismatch");
+
+/*
+ * Comparison functions for different key sizes.
+ * Each function is only called with a specific fixed key size.
+ *
+ * Return value is 0 on equality to allow direct use of memcmp.
+ * Recommend using XOR and | operator to avoid branching
+ * as long as key is smaller than cache line size.
+ *
+ * Key1 always points to key[] in rte_hash_key which is aligned.
+ * Key2 is parameter to insert which might not be.
+ *
+ * Special cases for 16 and 32 bytes to allow for architecture
+ * specific optimizations.
+ */
+
+#if defined(RTE_ARCH_X86)
+#include "rte_cmp_x86.h"
+#elif defined(RTE_ARCH_ARM64)
+#include "rte_cmp_arm64.h"
+#else
+#include "rte_cmp_generic.h"
+#endif
+
+static inline int
+rte_hash_k2_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	const unaligned_uint16_t *k1 = key1;
+	const unaligned_uint16_t *k2 = key2;
+
+	return !!(k1[0] ^ k2[0]);
+}
+
+static int
+rte_hash_k3_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k2_cmp_eq(key1, key2, 2)
+		| (((const uint8_t *)key1)[2] ^ ((const uint8_t *)key2)[2]);
+}
+
+static inline int
+rte_hash_k4_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	const unaligned_uint32_t *k1 = key1;
+	const unaligned_uint32_t *k2 = key2;
+
+	return !!(k1[0] ^ k2[0]);
+}
+
+static int
+rte_hash_k5_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	const uint8_t *k1 = key1;
+	const uint8_t *k2 = key2;
+
+	return rte_hash_k4_cmp_eq(key1, key2, 4) | (k1[4] ^ k2[4]);
+}
+
+static int
+rte_hash_k6_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	const unaligned_uint16_t *k1 = key1;
+	const unaligned_uint16_t *k2 = key2;
+
+	return !!((k1[0] ^ k2[0]) | (k1[1] ^ k2[1]) | (k1[2] ^ k2[2]));
+}
+
+static inline int
+rte_hash_k8_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+#ifdef RTE_ARCH_64
+	const unaligned_uint64_t *k1 = key1;
+	const unaligned_uint64_t *k2 = key2;
+
+	return !!(k1[0] ^ k2[0]);
+#else
+	const unaligned_uint32_t *k1 = key1;
+	const unaligned_uint32_t *k2 = key2;
+
+	return (k1[0] ^ k2[0]) | (k1[1] ^ k2[1]);
+#endif
+}
+
+static int
+rte_hash_k10_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k8_cmp_eq(key1, key2, 8) |
+		rte_hash_k2_cmp_eq((const uint8_t *)key1 + 8,
+				   (const uint8_t *)key2 + 8, 2);
+}
+
+static int
+rte_hash_k12_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	const unaligned_uint32_t *k1 = key1;
+	const unaligned_uint32_t *k2 = key2;
+
+	return !!((k1[0] ^ k2[0]) | (k1[1] ^ k2[1]) | (k1[2] ^ k2[2]));
+}
+
+static int
+rte_hash_k14_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k8_cmp_eq(key1, key2, 8) |
+		rte_hash_k6_cmp_eq((const uint8_t *)key1 + 8,
+				   (const uint8_t *)key2 + 8, 6);
+}
+
+static int
+rte_hash_k20_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k16_cmp_eq(key1, key2, 16) |
+		rte_hash_k4_cmp_eq((const uint8_t *)key1 + 16,
+				   (const uint8_t *)key2 + 16, 4);
+}
+
+static int
+rte_hash_k36_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k32_cmp_eq(key1, key2, 32) |
+		rte_hash_k4_cmp_eq((const uint8_t *)key1 + 32,
+				   (const uint8_t *)key2 + 32, 4);
+}
+
+static int
+rte_hash_k48_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return	rte_hash_k32_cmp_eq(key1, key2, 32) |
+		rte_hash_k16_cmp_eq((const uint8_t *)key1 + 32,
+				    (const uint8_t *)key2 + 32, 16);
+}
+
+static inline int
+rte_hash_k64_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k32_cmp_eq(key1, key2, 32) |
+		rte_hash_k32_cmp_eq((const uint8_t *)key1 + 32,
+				    (const uint8_t *)key2 + 32, 32);
+}
+
+static int
+rte_hash_k80_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k64_cmp_eq(key1, key2, 64) |
+		rte_hash_k16_cmp_eq((const uint8_t *)key1 + 64,
+				    (const uint8_t *)key2 + 64, 64);
+}
+
+static int
+rte_hash_k96_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k64_cmp_eq(key1, key2, 64) |
+		rte_hash_k32_cmp_eq((const uint8_t *)key1 + 64,
+				    (const uint8_t *)key2 + 64, 32);
+}
+
+static int
+rte_hash_k112_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k64_cmp_eq(key1, key2, 64) |
+		rte_hash_k32_cmp_eq((const uint8_t *)key1 + 64,
+				    (const uint8_t *)key2 + 64, 32) |
+		rte_hash_k16_cmp_eq((const uint8_t *)key1 + 96,
+				    (const uint8_t *)key2 + 96, 16);
+}
+
+static int
+rte_hash_k128_cmp_eq(const void *key1, const void *key2, size_t key_len __rte_unused)
+{
+	return rte_hash_k64_cmp_eq(key1, key2, 64) |
+		rte_hash_k64_cmp_eq((const uint8_t *)key1 + 64,
+				    (const uint8_t *)key2 + 64, 64);
+}
 
 /* Enum used to select the implementation of the signature comparison function to use
  * eg: a system supporting SVE might want to use a NEON or scalar implementation.
@@ -117,6 +340,34 @@ void rte_hash_set_cmp_func(struct rte_hash *h, rte_hash_cmp_eq_t func)
 	h->cmp_jump_table_idx = KEY_CUSTOM;
 	h->rte_hash_custom_cmp_eq = func;
 }
+
+/*
+ * Table storing all different key compare functions
+ * (multi-process supported)
+ */
+static const rte_hash_cmp_eq_t cmp_jump_table[NUM_KEY_CMP_CASES] = {
+	[KEY_CUSTOM] = NULL,
+	[KEY_2_BYTES] = rte_hash_k2_cmp_eq,
+	[KEY_3_BYTES] = rte_hash_k3_cmp_eq,
+	[KEY_4_BYTES] = rte_hash_k4_cmp_eq,
+	[KEY_5_BYTES] = rte_hash_k5_cmp_eq,
+	[KEY_6_BYTES] = rte_hash_k6_cmp_eq,
+	[KEY_8_BYTES] = rte_hash_k8_cmp_eq,
+	[KEY_10_BYTES] = rte_hash_k10_cmp_eq,
+	[KEY_12_BYTES] = rte_hash_k12_cmp_eq,
+	[KEY_14_BYTES] = rte_hash_k14_cmp_eq,
+	[KEY_16_BYTES] = rte_hash_k16_cmp_eq,
+	[KEY_20_BYTES] = rte_hash_k20_cmp_eq,
+	[KEY_32_BYTES] = rte_hash_k32_cmp_eq,
+	[KEY_36_BYTES] = rte_hash_k36_cmp_eq,
+	[KEY_48_BYTES] = rte_hash_k48_cmp_eq,
+	[KEY_64_BYTES] = rte_hash_k64_cmp_eq,
+	[KEY_80_BYTES] = rte_hash_k80_cmp_eq,
+	[KEY_96_BYTES] = rte_hash_k96_cmp_eq,
+	[KEY_112_BYTES] = rte_hash_k112_cmp_eq,
+	[KEY_128_BYTES] = rte_hash_k128_cmp_eq,
+	[KEY_OTHER_BYTES] = memcmp,
+};
 
 static inline int
 rte_hash_cmp_eq(const void *key1, const void *key2, const struct rte_hash *h)
@@ -406,44 +657,16 @@ rte_hash_create(const struct rte_hash_parameters *params)
 		goto err_unlock;
 	}
 
-/*
- * If x86 architecture is used, select appropriate compare function,
- * which may use x86 intrinsics, otherwise use memcmp
- */
-#if defined(RTE_ARCH_X86) || defined(RTE_ARCH_ARM64)
-	/* Select function to compare keys */
-	switch (params->key_len) {
-	case 16:
-		h->cmp_jump_table_idx = KEY_16_BYTES;
-		break;
-	case 32:
-		h->cmp_jump_table_idx = KEY_32_BYTES;
-		break;
-	case 48:
-		h->cmp_jump_table_idx = KEY_48_BYTES;
-		break;
-	case 64:
-		h->cmp_jump_table_idx = KEY_64_BYTES;
-		break;
-	case 80:
-		h->cmp_jump_table_idx = KEY_80_BYTES;
-		break;
-	case 96:
-		h->cmp_jump_table_idx = KEY_96_BYTES;
-		break;
-	case 112:
-		h->cmp_jump_table_idx = KEY_112_BYTES;
-		break;
-	case 128:
-		h->cmp_jump_table_idx = KEY_128_BYTES;
-		break;
-	default:
-		/* If key is not multiple of 16, use generic memcmp */
-		h->cmp_jump_table_idx = KEY_OTHER_BYTES;
-	}
-#else
+	/* fallback if no special case */
 	h->cmp_jump_table_idx = KEY_OTHER_BYTES;
-#endif
+
+	/* Search table of enum values, 0 is reserved for custom */
+	for (unsigned int key_idx = KEY_2_BYTES; key_idx < KEY_OTHER_BYTES; key_idx++) {
+		if (params->key_len == cmp_jump_key_size[key_idx]) {
+			h->cmp_jump_table_idx = key_idx;
+			break;
+		}
+	}
 
 	if (use_local_cache) {
 		local_free_slots = rte_zmalloc_socket(NULL,

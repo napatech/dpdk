@@ -10,7 +10,7 @@ data processing functions.
 
 The graph library provides API to enable graph framework operations such as
 create, lookup, dump and destroy on graph and node operations such as clone,
-edge update, and edge shrink, etc. The API also allows to create the stats
+edge update, and edge shrink, etc. The API also allows creating the stats
 cluster to monitor per graph and per node stats.
 
 Features
@@ -37,7 +37,7 @@ Advantages of Graph architecture
   caches misses.
 - Exploits the probability that most packets will follow the same nodes in the
   graph.
-- Allow SIMD instructions for packet processing of the node.-
+- Allow SIMD instructions for packet processing of the node.
 - The modular scheme allows having reusable nodes for the consumers.
 - The modular scheme allows us to abstract the vendor HW specific
   optimizations as a node.
@@ -57,8 +57,6 @@ Programming model
 
 Anatomy of Node:
 ~~~~~~~~~~~~~~~~
-
-.. _figure_anatomy_of_a_node:
 
 .. figure:: img/anatomy_of_a_node.*
 
@@ -92,7 +90,7 @@ fini():
 ^^^^^^^
 
 The callback function will be invoked by ``rte_graph_destroy()`` on when a
-node gets detached to a graph.
+node gets detached from a graph.
 
 Node name:
 ^^^^^^^^^^
@@ -146,7 +144,6 @@ Node creation and registration
 
 Link the Nodes to create the graph topology
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-.. _figure_link_the_nodes:
 
 .. figure:: img/link_the_nodes.*
 
@@ -387,7 +384,6 @@ Example of intermediate node implementation with home run:
 
 Graph object memory layout
 --------------------------
-.. _figure_graph_mem_layout:
 
 .. figure:: img/graph_mem_layout.*
 
@@ -422,7 +418,7 @@ Graph feature arc is an abstraction to manage more than one network protocols
    Feature arc abstraction is introduced as an optional functionality
    to the graph library.
    Feature arc is a ``NOP`` to application which skips
-   :ref:`feature arc initialization <Feature_Arc_Initialization>`
+   :ref:`feature arc initialization <graph_feature_arc_initialization>`
 
 Runtime network configurability
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -460,7 +456,7 @@ Feature arc provides application to overload default node path
 by providing hook points (like netfilter)
 to insert out-of-tree or another protocol nodes in packet path.
 
-.. _Control_Data_Plane_Synchronization:
+.. _graph_control_data_plane_synchronization:
 
 Control/Data plane synchronization
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -481,7 +477,7 @@ Furthermore, when IPsec gets disabled for same ``[feature, index]`` in later poi
 cleanup would be required to free resources associated with SA.
 Cleanup can only be done in control thread when it ensures that no worker thread is using the SA.
 For this use case, application can use RCU mechanism provided with enable/disable API.
-See :ref:`notifier_cb <Feature_Notifier_Cb>`.
+See :ref:`notifier_cb <graph_feature_notifier_cb>`.
 
 Objects
 ~~~~~~~
@@ -491,7 +487,7 @@ Feature
 
 Feature is analogous to a protocol.
 
-.. _Feature_Nodes:
+.. _graph_feature_nodes:
 
 Features nodes
 ^^^^^^^^^^^^^^
@@ -502,7 +498,7 @@ and are part of a unique arc.
 
 Not all nodes in graph required to be made feature nodes.
 
-.. _Start_Node:
+.. _graph_start_node:
 
 Start node
 ^^^^^^^^^^
@@ -513,7 +509,7 @@ Each feature arc object has unique ``start node``.
 It can be a new node or any existing node in a graph.
 Start node is not counted as a feature node in an arc.
 
-.. _End_Feature_Node:
+.. _graph_end_feature_node:
 
 End feature node
 ^^^^^^^^^^^^^^^^
@@ -529,7 +525,7 @@ this node does not uses any feature arc fast path API.
 Feature arc
 ^^^^^^^^^^^
 
-.. _Figure_Arc_1:
+.. _graph_figure_arc_1:
 
 .. figure:: img/feature_arc-1.*
    :alt: feature-arc-1
@@ -541,13 +537,13 @@ Feature arc
 An ordered list of feature nodes in a given network layer is called as feature arc.
 It consists of three objects:
 
-- :ref:`Start node <Start_Node>`
-- :ref:`End feature node <End_Feature_Node>`
-- :ref:`Zero or more feature nodes <Feature_Nodes>`
+- :ref:`graph_start_node`
+- :ref:`graph_end_feature_node`
+- :ref:`Zero or more feature nodes <graph_feature_nodes>`
 
-In order to :ref:`create <Feature_Arc_Registration>` a feature arc object,
+In order to :ref:`create <graph_feature_arc_registration>` a feature arc object,
 only ``start node`` and ``end feature node`` are required.
-Once created, feature nodes can be :ref:`added <Feature_Registration>` to the arc.
+Once created, feature nodes can be :ref:`added <graph_feature_registration>` to the arc.
 
 Feature data
 ^^^^^^^^^^^^
@@ -569,18 +565,18 @@ the feature registration adds provided node to a feature arc object.
    During registration, no memory is allocated associated with any feature arc.
    Actual memory allocation, object creation and connecting of nodes via edges
    corresponding to all registered feature arcs happens as part of
-   :ref:`feature arc initialization <Feature_Arc_Initialization>`.
+   :ref:`feature arc initialization <graph_feature_arc_initialization>`.
 
-.. _Feature_Arc_Registration:
+.. _graph_feature_arc_registration:
 
 Feature arc registration
 ************************
 
 A feature arc object creation require ``feature arc registration``.
 Once registered, feature arc is created as part of
-:ref:`initialization <Feature_Arc_Initialization>`.
+:ref:`initialization <graph_feature_arc_initialization>`.
 A feature arc is registered via ``RTE_GRAPH_FEATURE_ARC_REGISTER()``.
-An arc shown in :ref:`figure <Figure_Arc_1>` can be registered as follows:
+An arc shown in :ref:`figure <graph_figure_arc_1>` can be registered as follows:
 
 .. code-block:: c
 
@@ -612,7 +608,7 @@ An arc shown in :ref:`figure <Figure_Arc_1>` can be registered as follows:
 
    Feature arc can also be created using ``rte_graph_feature_arc_create()`` API as well.
 
-.. _Feature_Registration:
+.. _graph_feature_registration:
 
 Feature registration
 ********************
@@ -622,7 +618,7 @@ which would be added to a unique ``arc``.
 A feature nodes needs to know ``arc name`` to which it wants to connect to.
 Registration happens via ``RTE_GRAPH_FEATURE_REGISTER()``.
 
-A ``Feature-1`` shown in :ref:`figure <Figure_Arc_1>` can be registered as follows:
+A ``Feature-1`` shown in :ref:`figure <graph_figure_arc_1>` can be registered as follows:
 
 .. code-block:: c
 
@@ -649,7 +645,7 @@ A ``Feature-1`` shown in :ref:`figure <Figure_Arc_1>` can be registered as follo
 Advance parameters
 ``````````````````
 
-.. _Figure_Arc_2:
+.. _graph_figure_arc_2:
 
 .. figure:: img/feature_arc-2.*
    :alt: feature-arc-2
@@ -696,7 +692,7 @@ it can be defined as shown above.
 Similarly, if ``Feature-2`` needs to run before ``Custom-Feature`` but after ``Feature-1``,
 it can be done as shown above.
 
-.. _Feature_Notifier_Cb:
+.. _graph_feature_notifier_cb:
 
 notifier_cb()
 .............
@@ -717,14 +713,14 @@ Application also needs to call ``rte_rcu_qsbr_quiescent()`` in worker thread
 override_index_cb()
 ....................
 
-A feature arc is :ref:`registered <Feature_Arc_Registration>`
+A feature arc is :ref:`registered <graph_feature_arc_registration>`
 to operate on certain number of ``max_indexes``.
 If particular feature like to overload this ``max_indexes``
 with a larger value, it can do so by returning larger value in this callback.
 In case of multiple features, largest value returned by any feature
 would be selected for creating feature arc.
 
-.. _Feature_Arc_Initialization:
+.. _graph_feature_arc_initialization:
 
 Initializing Feature arc
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -778,8 +774,8 @@ using ``rte_graph_feature_enable()`` and ``rte_graph_feature_disable()`` functio
 .. note::
 
    RCU argument is optional argument to enable/disable API.
-   See :ref:`control/data plane synchronization <Control_Data_Plane_Synchronization>`
-   and :ref:`notifier_cb <Feature_Notifier_Cb>` for more details on when RCU is needed.
+   See :ref:`graph_control_data_plane_synchronization`
+   and :ref:`notifier_cb <graph_feature_notifier_cb>` for more details on when RCU is needed.
 
 Fast path traversal rules
 ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -787,7 +783,7 @@ Fast path traversal rules
 ``Start node``
 **************
 
-If feature arc is :ref:`initialized <Feature_Arc_Initialization>`,
+If feature arc is :ref:`initialized <graph_feature_arc_initialization>`,
 ``start_node_feature_process_fn()`` will be called by ``rte_graph_walk()``
 instead of node's original ``process()``.
 This function should allow packets to enter arc path
@@ -849,7 +845,7 @@ whenever any feature is enabled at runtime.
 *****************
 
 Following code-snippet explains fast path traversal rule for ``Feature-1``
-:ref:`feature node <Feature_Nodes>` shown in :ref:`figure <Figure_Arc_2>`.
+:ref:`graph_feature_nodes` shown in :ref:`figure <graph_figure_arc_2>`.
 
 .. code-block:: c
 
@@ -930,8 +926,6 @@ Inbuilt Nodes
 
 DPDK provides a set of nodes for data processing.
 The following diagram depicts inbuilt nodes data flow.
-
-.. _figure_graph_inbuit_node_flow:
 
 .. figure:: img/graph_inbuilt_node_flow.*
 
@@ -1095,16 +1089,15 @@ This node is an intermediate node that does udp destination port lookup for
 the received ipv4 packets and the result determines each packets next node.
 
 User registers a new node ``udp4_input`` into graph library during initialization
-and attach user specified node as edege to this node using
-``rte_node_udp4_usr_node_add()``, and create empty hash table with destination
-port and node id as its feilds.
+and attaches user specified node as edge to this node using ``rte_node_udp4_usr_node_add()``,
+and creates empty hash table with destination port and node id as its fields.
 
-After successful addition of user node as edege, edge id is returned to the user.
+After successful addition of user node as edge, edge id is returned to the user.
 
 User would register ``ip4_lookup`` table with specified ip address and 32 bit as mask
 for ip filtration using api ``rte_node_ip4_route_add()``.
 
-After graph is created user would update hash table with custom port with
+After graph is created user would update hash table with custom port
 and previously obtained edge id using API ``rte_node_udp4_dst_port_add()``.
 
 When packet is received lpm look up is performed if ip is matched the packet

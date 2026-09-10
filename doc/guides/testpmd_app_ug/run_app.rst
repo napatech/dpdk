@@ -7,8 +7,8 @@ Running the Application
 EAL Command-line Options
 ------------------------
 
-Please refer to :doc:`EAL parameters (Linux) <../linux_gsg/linux_eal_parameters>`
-or :doc:`EAL parameters (FreeBSD) <../freebsd_gsg/freebsd_eal_parameters>` for
+Please refer to :doc:`EAL parameters (Linux) </linux_gsg/linux_eal_parameters>`
+or :doc:`EAL parameters (FreeBSD) </freebsd_gsg/freebsd_eal_parameters>` for
 a list of available EAL command-line options.
 
 
@@ -29,7 +29,7 @@ The command line options are:
     Run testpmd in interactive mode.
     In this mode, the testpmd starts with a prompt that can be used to start and stop forwarding,
     configure the application and display stats on the current packet processing session.
-    See :ref:`testpmd_runtime` for more details.
+    See :doc:`testpmd_funcs` for more details.
 
     In non-interactive mode,
     the application starts with the configuration specified on the command-line and
@@ -127,6 +127,7 @@ The command line options are:
     The default value is 2048. If multiple mbuf-size values are specified the
     extra memory pools will be created for allocating mbufs to receive packets
     with buffer splitting features.
+    A value of 0 indicates a discarded segment in buffer split.
 
 *   ``--total-num-mbufs=N``
 
@@ -372,6 +373,21 @@ The command line options are:
     Optionally the multiple memory pools can be specified with --mbuf-size
     command line parameter and the mbufs to receive will be allocated
     sequentially from these extra memory pools.
+    A length of 0 means maximum length: rest of the segment
+    or all remaining packet data in case of a discard segment.
+
+    To receive only the Ethernet header (14 bytes)
+    and a 64-byte segment starting at offset 128,
+    while discarding the rest::
+
+       --rxpkts=14,114,64,0 --mbuf-size=256,0,256,0
+
+    This configuration will:
+
+    * Receive 14 bytes (Ethernet header)
+    * Discard 114 bytes (NULL mempool segment)
+    * Receive 64 bytes
+    * Discard remaining bytes (NULL mempool segment, length=0)
 
 *   ``--txpkts=X[,Y]``
 

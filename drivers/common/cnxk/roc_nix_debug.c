@@ -540,6 +540,8 @@ nix_cn10k_lf_sq_dump(__io struct nix_cn10k_sq_ctx_s *ctx, uint32_t *sqb_aura_p, 
 static inline void
 nix_lf_sq_dump(__io struct nix_cn20k_sq_ctx_s *ctx, uint32_t *sqb_aura_p, FILE *file)
 {
+	int64_t *sq_cnt_ptr = NULL;
+
 	nix_dump(file, "W0: sqe_way_mask \t\t%d\nW0: cq \t\t\t\t%d",
 		 ctx->sqe_way_mask, ctx->cq);
 	nix_dump(file, "W0: sdp_mcast \t\t\t%d\nW0: substream \t\t\t0x%03x",
@@ -561,6 +563,7 @@ nix_lf_sq_dump(__io struct nix_cn20k_sq_ctx_s *ctx, uint32_t *sqb_aura_p, FILE *
 	nix_dump(file, "W2: smq_rr_count[ub:lb] \t\t%x:%x\n", ctx->smq_rr_count_ub,
 		 ctx->smq_rr_count_lb);
 
+	nix_dump(file, "W3: update_sq_count\t\t%d\n", ctx->update_sq_count);
 	nix_dump(file, "W3: smq_next_sq_vld\t\t%d\nW3: smq_pend\t\t\t%d",
 		 ctx->smq_next_sq_vld, ctx->smq_pend);
 	nix_dump(file, "W3: smenq_next_sqb_vld  \t%d\nW3: head_offset\t\t\t%d",
@@ -588,6 +591,12 @@ nix_lf_sq_dump(__io struct nix_cn20k_sq_ctx_s *ctx, uint32_t *sqb_aura_p, FILE *
 		 ctx->vfi_lso_sizem1);
 	nix_dump(file, "W9: vfi_lso_total\t\t%d", ctx->vfi_lso_total);
 
+	nix_dump(file, "W10: sq_count_iova \t\t0x%" PRIx64 "", (uint64_t)ctx->sq_count_iova);
+	sq_cnt_ptr = (int64_t *)(uintptr_t)(ctx->sq_count_iova << 3);
+	if (sq_cnt_ptr && ctx->update_sq_count)
+		nix_dump(file, "sq_count value \t\t0x%" PRIx64 "",
+			 plt_atomic_load_explicit((uint64_t __plt_atomic *)sq_cnt_ptr,
+						  plt_memory_order_relaxed));
 	nix_dump(file, "W10: scm_lso_rem \t\t0x%" PRIx64 "", (uint64_t)ctx->scm_lso_rem);
 	nix_dump(file, "W11: octs \t\t\t0x%" PRIx64 "", (uint64_t)ctx->octs);
 	nix_dump(file, "W12: pkts \t\t\t0x%" PRIx64 "", (uint64_t)ctx->pkts);
@@ -1141,7 +1150,7 @@ roc_nix_sq_dump(struct roc_nix_sq *sq, FILE *file)
 };
 
 static uint8_t
-nix_tm_reg_dump_prep(uint16_t hw_lvl, uint16_t schq, uint16_t link,
+nix_tm_reg_dump_prep(struct nix *nix, uint16_t hw_lvl, uint16_t schq,
 		     uint64_t *reg, char regstr[][NIX_REG_NAME_SZ])
 {
 	FILE *file = NULL;
@@ -1219,9 +1228,14 @@ nix_tm_reg_dump_prep(uint16_t hw_lvl, uint16_t schq, uint16_t link,
 		snprintf(regstr[k++], NIX_REG_NAME_SZ,
 			 "NIX_AF_TL3[%u]_TOPOLOGY", schq);
 
-		reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(schq, link);
-		snprintf(regstr[k++], NIX_REG_NAME_SZ,
-			 "NIX_AF_TL3_TL2[%u]_LINK[%u]_CFG", schq, link);
+		/* Link configuration */
+		if (!nix->sdp_link &&
+		    nix->tm_link_cfg_lvl == NIX_TXSCH_LVL_TL3) {
+			reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(schq, nix->tx_link);
+			snprintf(regstr[k++], NIX_REG_NAME_SZ,
+				 "NIX_AF_TL3_TL2[%u]_LINK[%u]_CFG", schq,
+				 nix->tx_link);
+		}
 
 		reg[k] = NIX_AF_TL3X_SCHEDULE(schq);
 		snprintf(regstr[k++], NIX_REG_NAME_SZ,
@@ -1252,9 +1266,14 @@ nix_tm_reg_dump_prep(uint16_t hw_lvl, uint16_t schq, uint16_t link,
 		snprintf(regstr[k++], NIX_REG_NAME_SZ,
 			 "NIX_AF_TL2[%u]_TOPOLOGY", schq);
 
-		reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(schq, link);
-		snprintf(regstr[k++], NIX_REG_NAME_SZ,
-			 "NIX_AF_TL3_TL2[%u]_LINK[%u]_CFG", schq, link);
+		/* Link configuration */
+		if (!nix->sdp_link &&
+		    nix->tm_link_cfg_lvl == NIX_TXSCH_LVL_TL2) {
+			reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(schq, nix->tx_link);
+			snprintf(regstr[k++], NIX_REG_NAME_SZ,
+				 "NIX_AF_TL3_TL2[%u]_LINK[%u]_CFG", schq,
+				 nix->tx_link);
+		}
 
 		reg[k] = NIX_AF_TL2X_SCHEDULE(schq);
 		snprintf(regstr[k++], NIX_REG_NAME_SZ,
@@ -1361,8 +1380,7 @@ nix_tm_dump_lvl(struct nix *nix, struct nix_tm_node_list *list, uint8_t hw_lvl)
 			root = node;
 
 		/* Dump registers only when HWRES is present */
-		k = nix_tm_reg_dump_prep(node->hw_lvl, schq, nix->tx_link, reg,
-					 regstr);
+		k = nix_tm_reg_dump_prep(nix, node->hw_lvl, schq, reg, regstr);
 		if (!k)
 			continue;
 
@@ -1387,8 +1405,8 @@ nix_tm_dump_lvl(struct nix *nix, struct nix_tm_node_list *list, uint8_t hw_lvl)
 
 	/* Dump TL1 node data when root level is TL2 */
 	if (root && root->hw_lvl == NIX_TXSCH_LVL_TL2) {
-		k = nix_tm_reg_dump_prep(NIX_TXSCH_LVL_TL1, root->parent_hw_id,
-					 nix->tx_link, reg, regstr);
+		k = nix_tm_reg_dump_prep(nix, NIX_TXSCH_LVL_TL1,
+					 root->parent_hw_id, reg, regstr);
 		if (!k)
 			return;
 

@@ -2,7 +2,7 @@
     Copyright(c) 2020 Marvell International Ltd.
 
 CN9K REE Regexdev Driver
-==============================
+========================
 
 The CN9K REE PMD (**librte_regex_cn9k**) provides poll mode
 regexdev driver support for the inbuilt regex device found in the **Marvell CN9K**
@@ -22,7 +22,7 @@ Features of the CN9K REE PMD are:
 Prerequisites and Compilation procedure
 ---------------------------------------
 
-   See :doc:`../platform/cnxk` for setup information.
+   See :doc:`/platform/cnxk` for setup information.
 
 Device Setup
 ------------
@@ -37,8 +37,6 @@ those devices alone.
 
 Debugging Options
 -----------------
-
-.. _table_cn9k_regex_debug_options:
 
 .. table:: CN9K regex device debug options
 

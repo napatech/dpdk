@@ -35,7 +35,7 @@ Linearization setting
 ---------------------
 
 It is possible linearized input segmented packets just before crypto operation
-for devices which doesn't support scatter-gather, and allows to measure
+for devices which doesn't support scatter-gather, and allows measuring
 performance also for this use case.
 
 To set on the linearization options add below definition to the
@@ -153,7 +153,6 @@ The following are the application command-line options:
            crypto_cn10k
            crypto_dpaa_sec
            crypto_dpaa2_sec
-           crypto_kasumi
            crypto_mvsam
            crypto_null
            crypto_octeontx
@@ -183,6 +182,8 @@ The following are the application command-line options:
            eddsa_25519
            rsa
            sm2
+           mlkem_512
+           mldsa_44
            ipsec
            tls-record
 

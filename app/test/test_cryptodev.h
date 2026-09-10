@@ -59,9 +59,7 @@
 #define CRYPTODEV_NAME_QAT_SYM_PMD	crypto_qat
 #define CRYPTODEV_NAME_QAT_ASYM_PMD	crypto_qat_asym
 #define CRYPTODEV_NAME_SNOW3G_PMD	crypto_snow3g
-#define CRYPTODEV_NAME_KASUMI_PMD	crypto_kasumi
 #define CRYPTODEV_NAME_ZUC_PMD		crypto_zuc
-#define CRYPTODEV_NAME_CHACHA20_POLY1305_PMD	crypto_chacha20_poly1305
 #define CRYPTODEV_NAME_ARMV8_PMD	crypto_armv8
 #define CRYPTODEV_NAME_DPAA_SEC_PMD	crypto_dpaa_sec
 #define CRYPTODEV_NAME_DPAA2_SEC_PMD	crypto_dpaa2_sec
@@ -76,6 +74,7 @@
 #define CRYPTODEV_NAME_BCMFS_PMD	crypto_bcmfs
 #define CRYPTODEV_NAME_CN9K_PMD		crypto_cn9k
 #define CRYPTODEV_NAME_CN10K_PMD	crypto_cn10k
+#define CRYPTODEV_NAME_CN20K_PMD	crypto_cn20k
 #define CRYPTODEV_NAME_MLX5_PMD		crypto_mlx5
 #define CRYPTODEV_NAME_UADK_PMD		crypto_uadk
 #define CRYPTODEV_NAME_ZSDA_SYM_PMD	crypto_zsda

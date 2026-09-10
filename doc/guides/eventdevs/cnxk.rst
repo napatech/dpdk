@@ -56,7 +56,7 @@ Features of the OCTEON cnxk SSO PMD are:
 Prerequisites and Compilation procedure
 ---------------------------------------
 
-   See :doc:`../platform/cnxk` for setup information.
+   See :doc:`/platform/cnxk` for setup information.
 
 
 Runtime Config Options
@@ -201,8 +201,6 @@ This feature can be selected by configuring meson with ``RTE_ARM_USE_WFE`` enabl
 
 Debugging Options
 -----------------
-
-.. _table_octeon_cnxk_event_debug_options:
 
 .. table:: OCTEON cnxk event device debug options
 

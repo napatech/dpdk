@@ -14,6 +14,7 @@
 /** PCLMULQDQ CRC computation context structure */
 struct crc_pclmulqdq_ctx {
 	__m128i rk1_rk2;
+	__m128i rk3_rk4;
 	__m128i rk5_rk6;
 	__m128i rk7_rk8;
 };
@@ -96,35 +97,24 @@ crcr32_reduce_128_to_64(__m128i data128, __m128i precomp)
 static __rte_always_inline uint32_t
 crcr32_reduce_64_to_32(__m128i data64, __m128i precomp)
 {
-	static const alignas(16) uint32_t mask1[4] = {
-		0xffffffff, 0xffffffff, 0x00000000, 0x00000000
-	};
-
-	static const alignas(16) uint32_t mask2[4] = {
-		0x00000000, 0xffffffff, 0xffffffff, 0xffffffff
-	};
 	__m128i tmp0, tmp1, tmp2;
 
-	tmp0 = _mm_and_si128(data64, _mm_load_si128((const __m128i *)mask2));
+	tmp0 = _mm_blend_epi16(data64, _mm_setzero_si128(), 0x3);
 
 	tmp1 = _mm_clmulepi64_si128(tmp0, precomp, 0x00);
 	tmp1 = _mm_xor_si128(tmp1, tmp0);
-	tmp1 = _mm_and_si128(tmp1, _mm_load_si128((const __m128i *)mask1));
 
 	tmp2 = _mm_clmulepi64_si128(tmp1, precomp, 0x10);
-	tmp2 = _mm_xor_si128(tmp2, tmp1);
 	tmp2 = _mm_xor_si128(tmp2, tmp0);
 
 	return _mm_extract_epi32(tmp2, 2);
 }
 
-static const alignas(16) uint8_t crc_xmm_shift_tab[48] = {
-	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+static const alignas(16) uint8_t crc_xmm_shift_tab[32] = {
+	0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8,
+	0xf7, 0xf6, 0xf5, 0xf4, 0xf3, 0xf2, 0xf1, 0xf0,
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+	0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
 };
 
 /**
@@ -161,87 +151,86 @@ crc32_eth_calc_pclmulqdq(
 	temp = _mm_insert_epi32(_mm_setzero_si128(), crc, 0);
 
 	/**
-	 * Folding all data into single 16 byte data block
-	 * Assumes: fold holds first 16 bytes of data
+	 * Folding all data into 4 parallel 16 byte data block
+	 * Later folds 4 parallel blocks into single fold block
 	 */
-
-	if (unlikely(data_len < 32)) {
-		if (unlikely(data_len == 16)) {
-			/* 16 bytes */
-			fold = _mm_loadu_si128((const __m128i *)data);
-			fold = _mm_xor_si128(fold, temp);
-			goto reduction_128_64;
-		}
-
-		if (unlikely(data_len < 16)) {
-			/* 0 to 15 bytes */
-			alignas(16) uint8_t buffer[16];
-
-			memset(buffer, 0, sizeof(buffer));
-			memcpy(buffer, data, data_len);
-
-			fold = _mm_load_si128((const __m128i *)buffer);
-			fold = _mm_xor_si128(fold, temp);
-			if (unlikely(data_len < 4)) {
-				fold = xmm_shift_left(fold, 8 - data_len);
-				goto barret_reduction;
-			}
-			fold = xmm_shift_left(fold, 16 - data_len);
-			goto reduction_128_64;
-		}
-		/* 17 to 31 bytes */
-		fold = _mm_loadu_si128((const __m128i *)data);
-		fold = _mm_xor_si128(fold, temp);
-		n = 16;
+	if (likely(data_len >= 64)) {
+		__m128i fold1, fold2, fold3, fold4;
+		__m128i temp1, temp2, temp3, temp4;
+		fold1 = _mm_loadu_si128((const __m128i *)(data +  0));
+		fold2 = _mm_loadu_si128((const __m128i *)(data + 16));
+		fold3 = _mm_loadu_si128((const __m128i *)(data + 32));
+		fold4 = _mm_loadu_si128((const __m128i *)(data + 48));
+		fold1 = _mm_xor_si128(fold1, temp);
 		k = params->rk1_rk2;
-		goto partial_bytes;
+
+		for (n = 64; (n + 64) <= data_len; n += 64) {
+			temp1 = _mm_loadu_si128((const __m128i *)&data[n]);
+			temp2 = _mm_loadu_si128((const __m128i *)&data[n + 16]);
+			temp3 = _mm_loadu_si128((const __m128i *)&data[n + 32]);
+			temp4 = _mm_loadu_si128((const __m128i *)&data[n + 48]);
+			fold1 = crcr32_folding_round(temp1, k, fold1);
+			fold2 = crcr32_folding_round(temp2, k, fold2);
+			fold3 = crcr32_folding_round(temp3, k, fold3);
+			fold4 = crcr32_folding_round(temp4, k, fold4);
+		}
+
+		k = params->rk3_rk4;
+		fold1 = crcr32_folding_round(fold2, k, fold1);
+		fold1 = crcr32_folding_round(fold3, k, fold1);
+		fold = crcr32_folding_round(fold4, k, fold1);
+		goto single_fold_loop;
 	}
 
-	/** At least 32 bytes in the buffer */
+	if (unlikely(data_len < 16)) {
+		/* 0 to 15 bytes */
+		alignas(16) uint8_t buffer[16];
+
+		memset(buffer, 0, sizeof(buffer));
+		memcpy(buffer, data, data_len);
+
+		fold = _mm_load_si128((const __m128i *)buffer);
+		fold = _mm_xor_si128(fold, temp);
+		if (unlikely(data_len < 4)) {
+			fold = xmm_shift_left(fold, 8 - data_len);
+			goto barret_reduction;
+		}
+		fold = xmm_shift_left(fold, 16 - data_len);
+		goto reduction_128_64;
+	}
+
+	/** At least 16 bytes in the buffer */
 	/** Apply CRC initial value */
 	fold = _mm_loadu_si128((const __m128i *)data);
 	fold = _mm_xor_si128(fold, temp);
 
-	/** Main folding loop - the last 16 bytes is processed separately */
-	k = params->rk1_rk2;
-	for (n = 16; (n + 16) <= data_len; n += 16) {
+	/** Single folding loop - the last 16 bytes is processed separately */
+	k = params->rk3_rk4;
+	n = 16;
+
+single_fold_loop:
+	for (; (n + 16) <= data_len; n += 16) {
 		temp = _mm_loadu_si128((const __m128i *)&data[n]);
 		fold = crcr32_folding_round(temp, k, fold);
 	}
 
-partial_bytes:
+	/** Partial bytes - process last <16 bytes */
 	if (likely(n < data_len)) {
-
-		const alignas(16) uint32_t mask3[4] = {
-			0x80808080, 0x80808080, 0x80808080, 0x80808080
-		};
-
-		const alignas(16) uint8_t shf_table[32] = {
-			0x00, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
-			0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
-			0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-			0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
-		};
 
 		__m128i last16, a, b;
 
 		last16 = _mm_loadu_si128((const __m128i *)&data[data_len - 16]);
 
 		temp = _mm_loadu_si128((const __m128i *)
-			&shf_table[data_len & 15]);
+			&crc_xmm_shift_tab[data_len & 15]);
 		a = _mm_shuffle_epi8(fold, temp);
 
-		temp = _mm_xor_si128(temp,
-			_mm_load_si128((const __m128i *)mask3));
+		temp = _mm_xor_si128(temp, _mm_set1_epi8(0xff));
 		b = _mm_shuffle_epi8(fold, temp);
 		b = _mm_blendv_epi8(b, last16, temp);
 
-		/* k = rk1 & rk2 */
-		temp = _mm_clmulepi64_si128(a, k, 0x01);
-		fold = _mm_clmulepi64_si128(a, k, 0x10);
-
-		fold = _mm_xor_si128(fold, temp);
-		fold = _mm_xor_si128(fold, b);
+		/* k = rk3 & rk4 */
+		fold = crcr32_folding_round(b, k, a);
 	}
 
 	/** Reduction 128 -> 32 Assumes: fold holds 128bit folded data */
@@ -259,12 +248,14 @@ barret_reduction:
 void
 rte_net_crc_sse42_init(void)
 {
-	uint64_t k1, k2, k5, k6;
+	uint64_t k1, k2, k3, k4, k5, k6;
 	uint64_t p = 0, q = 0;
 
 	/** Initialize CRC16 data */
-	k1 = 0x189aeLLU;
-	k2 = 0x8e10LLU;
+	k1 = 0x14ff2LLU;
+	k2 = 0x19a3cLLU;
+	k3 = 0x189aeLLU;
+	k4 = 0x8e10LLU;
 	k5 = 0x189aeLLU;
 	k6 = 0x114aaLLU;
 	q =  0x11c581910LLU;
@@ -272,12 +263,15 @@ rte_net_crc_sse42_init(void)
 
 	/** Save the params in context structure */
 	crc16_ccitt_pclmulqdq.rk1_rk2 = _mm_set_epi64x(k2, k1);
+	crc16_ccitt_pclmulqdq.rk3_rk4 = _mm_set_epi64x(k4, k3);
 	crc16_ccitt_pclmulqdq.rk5_rk6 = _mm_set_epi64x(k6, k5);
 	crc16_ccitt_pclmulqdq.rk7_rk8 = _mm_set_epi64x(p, q);
 
 	/** Initialize CRC32 data */
-	k1 = 0xccaa009eLLU;
-	k2 = 0x1751997d0LLU;
+	k1 = 0x1c6e41596LLU;
+	k2 = 0x154442bd4LLU;
+	k3 = 0xccaa009eLLU;
+	k4 = 0x1751997d0LLU;
 	k5 = 0xccaa009eLLU;
 	k6 = 0x163cd6124LLU;
 	q =  0x1f7011640LLU;
@@ -285,6 +279,7 @@ rte_net_crc_sse42_init(void)
 
 	/** Save the params in context structure */
 	crc32_eth_pclmulqdq.rk1_rk2 = _mm_set_epi64x(k2, k1);
+	crc32_eth_pclmulqdq.rk3_rk4 = _mm_set_epi64x(k4, k3);
 	crc32_eth_pclmulqdq.rk5_rk6 = _mm_set_epi64x(k6, k5);
 	crc32_eth_pclmulqdq.rk7_rk8 = _mm_set_epi64x(p, q);
 }

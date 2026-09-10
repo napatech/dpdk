@@ -26,6 +26,10 @@
 
 #define CNXK_ETH_DEV_PMD_VERSION "1.0"
 
+/* Macros for packing configuration fields */
+#define CNXK_FIELD_MASK(width)	((1ULL << (width)) - 1)
+#define PACK(val, shift, width) (((uint64_t)((val) & CNXK_FIELD_MASK(width))) << (shift))
+
 /* Used for struct cnxk_eth_dev::flags */
 #define CNXK_LINK_CFG_IN_PROGRESS_F BIT_ULL(0)
 
@@ -221,6 +225,9 @@ struct cnxk_eth_sec_sess {
 
 	/* Out-Of-Place processing */
 	bool inb_oop;
+
+	/* Back pointer to eth_dev for port_id derivation in CQ callbacks */
+	struct rte_eth_dev *eth_dev;
 };
 
 TAILQ_HEAD(cnxk_eth_sec_sess_list, cnxk_eth_sec_sess);
@@ -659,6 +666,12 @@ int cnxk_nix_tm_mark_ip_dscp(struct rte_eth_dev *eth_dev, int mark_green,
 			     struct rte_tm_error *error);
 int cnxk_nix_tx_descriptor_dump(const struct rte_eth_dev *eth_dev, uint16_t qid, uint16_t offset,
 				uint16_t num, FILE *file);
+
+/* FEC */
+int cnxk_nix_fec_get_capability(struct rte_eth_dev *eth_dev,
+				struct rte_eth_fec_capa *speed_fec_capa, unsigned int num);
+int cnxk_nix_fec_get(struct rte_eth_dev *eth_dev, uint32_t *fec_capa);
+int cnxk_nix_fec_set(struct rte_eth_dev *eth_dev, uint32_t fec_capa);
 
 /* MTR */
 int cnxk_nix_mtr_ops_get(struct rte_eth_dev *dev, void *ops);

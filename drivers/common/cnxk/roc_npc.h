@@ -285,6 +285,12 @@ struct roc_npc_sec_action {
 	 */
 	enum roc_npc_sec_action_alg alg;
 	bool is_non_inp;
+	uint16_t profile_id;
+	/* Enable custom inline profile.
+	 * When true, use custom IPsec profile specified by profile_id.
+	 * When false, use default IPsec profile (backward compatible).
+	 */
+	bool use_custom_profile;
 };
 
 struct roc_npc_attr {
@@ -417,6 +423,7 @@ struct roc_npc {
 					  */
 	uint8_t pre_l2_size_shift_dir;	 /**< Shift direction to calculate size
 					  */
+	uint8_t skip_size;		 /**< Switch header skip size */
 	uint16_t flow_prealloc_size;
 	uint16_t flow_max_priority;
 	uint16_t channel;
@@ -500,4 +507,5 @@ void __roc_api roc_npc_sdp_channel_get(struct roc_npc *roc_npc, uint16_t *chan_b
 				       uint16_t *chan_mask);
 int __roc_api roc_npc_mcam_get_stats(struct roc_npc *roc_npc, struct roc_npc_flow *flow,
 				     uint64_t *count);
+int __roc_api roc_npc_skip_size_pkind_get(struct roc_npc *roc_npc);
 #endif /* _ROC_NPC_H_ */

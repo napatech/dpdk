@@ -1,12 +1,41 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright 2024 NXP
+ * Copyright 2024-2026 NXP
  */
 
 #include <stdbool.h>
+#include <rte_kvargs.h>
 #include <rte_random.h>
 #include <dpaax_iova_table.h>
 #include "enetc_logs.h"
 #include "enetc.h"
+
+#define ENETC4_VSI_DISABLE		"enetc4_vsi_disable"
+#define ENETC4_VSI_TIMEOUT		"enetc4_vsi_timeout"
+#define ENETC4_VSI_DELAY		"enetc4_vsi_delay"
+#define ENETC4_NC_MEMORY		"nc"
+
+static void
+enetc4_vf_get_devarg_nc(struct rte_eth_dev *dev)
+{
+	struct enetc_eth_hw *hw =
+		ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_devargs *devargs = dev->device->devargs;
+	struct rte_kvargs *kvlist;
+	const char *val;
+
+	if (!devargs)
+		return;
+
+	kvlist = rte_kvargs_parse(devargs->args, NULL);
+	if (!kvlist)
+		return;
+
+	val = rte_kvargs_get(kvlist, ENETC4_NC_MEMORY);
+	if (val && atoi(val) == 1)
+		hw->nc_mode = 1;
+
+	rte_kvargs_free(kvlist);
+}
 
 #define ENETC_CRC_TABLE_SIZE		256
 #define ENETC_POLY			0x1021
@@ -18,8 +47,19 @@ uint16_t enetc_crc_table[ENETC_CRC_TABLE_SIZE];
 bool enetc_crc_gen;
 
 /* Supported Rx offloads */
-static uint64_t dev_vf_rx_offloads_sup =
-	RTE_ETH_RX_OFFLOAD_VLAN_FILTER;
+static uint64_t dev_rx_offloads_sup =
+	RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
+	RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
+	RTE_ETH_RX_OFFLOAD_TCP_CKSUM |
+	RTE_ETH_RX_OFFLOAD_VLAN_FILTER |
+	RTE_ETH_RX_OFFLOAD_SCATTER;
+
+/* Supported Tx offloads */
+static uint64_t dev_tx_offloads_sup =
+	RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+	RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+	RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
+	RTE_ETH_TX_OFFLOAD_MULTI_SEGS;
 
 static void
 enetc_gen_crc_table(void)
@@ -61,20 +101,37 @@ static int
 enetc4_vf_dev_infos_get(struct rte_eth_dev *dev,
 			struct rte_eth_dev_info *dev_info)
 {
-	int ret = 0;
+	struct enetc_eth_hw *hw =
+		ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	PMD_INIT_FUNC_TRACE();
 
-	ret = enetc4_dev_infos_get(dev, dev_info);
-	if (ret)
-		return ret;
-
+	dev_info->rx_desc_lim = (struct rte_eth_desc_lim) {
+		.nb_max = MAX_BD_COUNT,
+		.nb_min = MIN_BD_COUNT,
+		.nb_align = BD_ALIGN,
+		.nb_seg_max = ENETC4_MAX_SEGS,
+		.nb_mtu_seg_max = ENETC4_MAX_SEGS,
+	};
+	dev_info->tx_desc_lim = (struct rte_eth_desc_lim) {
+		.nb_max = MAX_BD_COUNT,
+		.nb_min = MIN_BD_COUNT,
+		.nb_align = BD_ALIGN,
+		.nb_seg_max = ENETC4_MAX_SEGS,
+		.nb_mtu_seg_max = ENETC4_MAX_SEGS,
+	};
+	dev_info->max_rx_queues = hw->max_rx_queues;
+	dev_info->max_tx_queues = hw->max_tx_queues;
+	dev_info->max_rx_pktlen = ENETC4_MAC_MAXFRM_SIZE;
 	dev_info->max_mtu = dev_info->max_rx_pktlen - (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN);
 	dev_info->max_mac_addrs = ENETC4_MAC_ENTRIES;
-	dev_info->rx_offload_capa |= dev_vf_rx_offloads_sup;
+	dev_info->rx_offload_capa = dev_rx_offloads_sup;
+	dev_info->tx_offload_capa = dev_tx_offloads_sup;
+	dev_info->flow_type_rss_offloads = ENETC_RSS_OFFLOAD_ALL;
 
 	return 0;
 }
+
 
 int
 enetc4_vf_dev_stop(struct rte_eth_dev *dev __rte_unused)
@@ -231,10 +288,13 @@ enetc4_process_psi_msg(struct rte_eth_dev *eth_dev, struct enetc_hw *enetc_hw)
 }
 
 static int
-enetc4_msg_vsi_send(struct enetc_hw *enetc_hw, struct enetc_msg_swbd *msg)
+enetc4_msg_vsi_send(struct enetc_eth_hw *hw, struct enetc_msg_swbd *msg)
 {
-	int timeout = ENETC4_DEF_VSI_WAIT_TIMEOUT_UPDATE;
-	int delay_us = ENETC4_DEF_VSI_WAIT_DELAY_UPDATE;
+	struct enetc_hw *enetc_hw = &hw->hw;
+	int timeout = hw->vsi_timeout ? (int)hw->vsi_timeout :
+					ENETC4_DEF_VSI_WAIT_TIMEOUT_UPDATE;
+	int delay_us = hw->vsi_delay ? (int)hw->vsi_delay :
+				       ENETC4_DEF_VSI_WAIT_DELAY_UPDATE;
 	uint8_t class_id = 0;
 	int err = 0;
 	int vsimsgsr;
@@ -351,7 +411,7 @@ enetc4_vf_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 					ENETC_CMD_ID_SET_PRIMARY_MAC, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -395,7 +455,6 @@ static int
 enetc4_vf_promisc_send_message(struct rte_eth_dev *dev, bool promisc_en)
 {
 	struct enetc_eth_hw *hw = ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct enetc_hw *enetc_hw = &hw->hw;
 	struct enetc_msg_cmd_set_promisc *cmd;
 	struct enetc_msg_swbd *msg;
 	uint32_t msg_size;
@@ -435,7 +494,7 @@ enetc4_vf_promisc_send_message(struct rte_eth_dev *dev, bool promisc_en)
 				ENETC_CMD_ID_SET_MAC_PROMISCUOUS, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -452,7 +511,6 @@ static int
 enetc4_vf_allmulti_send_message(struct rte_eth_dev *dev, bool mc_promisc)
 {
 	struct enetc_eth_hw *hw = ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct enetc_hw *enetc_hw = &hw->hw;
 	struct enetc_msg_cmd_set_promisc *cmd;
 	struct enetc_msg_swbd *msg;
 	uint32_t msg_size;
@@ -493,7 +551,7 @@ enetc4_vf_allmulti_send_message(struct rte_eth_dev *dev, bool mc_promisc)
 				ENETC_CMD_ID_SET_MAC_PROMISCUOUS, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -599,7 +657,7 @@ enetc4_vf_get_link_status(struct rte_eth_dev *dev, struct enetc_psi_reply_msg *r
 			ENETC_CMD_ID_GET_LINK_STATUS, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -645,7 +703,7 @@ enetc4_vf_get_link_speed(struct rte_eth_dev *dev, struct enetc_psi_reply_msg *re
 			ENETC_CMD_ID_GET_LINK_SPEED, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -657,6 +715,13 @@ end:
 	rte_free(msg->vaddr);
 	rte_free(msg);
 	return err;
+}
+
+static int
+enetc4_vf_link_update_dummy(struct rte_eth_dev *dev __rte_unused,
+			    int wait_to_complete __rte_unused)
+{
+	return 0;
 }
 
 static int
@@ -781,7 +846,6 @@ static int
 enetc4_vf_vlan_promisc(struct rte_eth_dev *dev, bool promisc_en)
 {
 	struct enetc_eth_hw *hw = ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct enetc_hw *enetc_hw = &hw->hw;
 	struct enetc_msg_cmd_set_vlan_promisc *cmd;
 	struct enetc_msg_swbd *msg;
 	uint32_t msg_size;
@@ -820,7 +884,7 @@ enetc4_vf_vlan_promisc(struct rte_eth_dev *dev, bool promisc_en)
 				ENETC_CMD_ID_SET_VLAN_PROMISCUOUS, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -883,7 +947,7 @@ enetc4_vf_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *addr,
 			ENETC_MSG_ADD_EXACT_MAC_ENTRIES, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -983,7 +1047,7 @@ static int enetc4_vf_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, 
 	}
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err) {
 		ENETC_PMD_ERR("VSI message send error");
 		goto end;
@@ -1066,7 +1130,6 @@ static int
 enetc4_vf_link_register_notif(struct rte_eth_dev *dev, bool enable)
 {
 	struct enetc_eth_hw *hw = ENETC_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct enetc_hw *enetc_hw = &hw->hw;
 	struct enetc_msg_swbd *msg;
 	struct rte_eth_link link;
 	uint32_t msg_size;
@@ -1100,7 +1163,7 @@ enetc4_vf_link_register_notif(struct rte_eth_dev *dev, bool enable)
 			cmd, 0, 0, 0);
 
 	/* send the command and wait */
-	err = enetc4_msg_vsi_send(enetc_hw, msg);
+	err = enetc4_msg_vsi_send(hw, msg);
 	if (err)
 		ENETC_PMD_ERR("VSI msg error for link status notification");
 
@@ -1120,6 +1183,27 @@ static const struct rte_pci_id pci_vf_id_enetc4_map[] = {
 };
 
 /* Features supported by this driver */
+/* ops table used when VSI messaging is disabled */
+static const struct eth_dev_ops enetc4_vf_ops_no_vsi_m = {
+	.dev_configure        = enetc4_dev_configure,
+	.dev_start            = enetc4_vf_dev_start,
+	.dev_stop             = enetc4_vf_dev_stop,
+	.dev_close            = enetc4_dev_close,
+	.stats_get            = enetc4_vf_stats_get,
+	.dev_infos_get        = enetc4_vf_dev_infos_get,
+	.mtu_set              = enetc4_vf_mtu_set,
+	.link_update	      = enetc4_vf_link_update_dummy,
+	.rx_queue_setup       = enetc4_rx_queue_setup,
+	.rx_queue_start       = enetc4_rx_queue_start,
+	.rx_queue_stop        = enetc4_rx_queue_stop,
+	.rx_queue_release     = enetc4_rx_queue_release,
+	.tx_queue_setup       = enetc4_tx_queue_setup,
+	.tx_queue_start       = enetc4_tx_queue_start,
+	.tx_queue_stop        = enetc4_tx_queue_stop,
+	.tx_queue_release     = enetc4_tx_queue_release,
+	.dev_supported_ptypes_get = enetc4_supported_ptypes_get,
+};
+
 static const struct eth_dev_ops enetc4_vf_ops = {
 	.dev_configure        = enetc4_dev_configure,
 	.dev_start            = enetc4_vf_dev_start,
@@ -1249,14 +1333,74 @@ enetc4_vf_dev_init(struct rte_eth_dev *eth_dev)
 {
 	struct enetc_eth_hw *hw =
 			    ENETC_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	int error = 0;
 	uint32_t si_cap;
 	struct enetc_hw *enetc_hw = &hw->hw;
 
 	PMD_INIT_FUNC_TRACE();
-	eth_dev->dev_ops = &enetc4_vf_ops;
+
+	/* check if VSI messaging should be disabled via devarg */
+	if (eth_dev->device->devargs) {
+		struct rte_kvargs *kvlist;
+
+		kvlist = rte_kvargs_parse(eth_dev->device->devargs->args,
+					  NULL);
+		if (kvlist) {
+			const char *val;
+
+			if (rte_kvargs_count(kvlist, ENETC4_VSI_DISABLE) != 0) {
+				ENETC_PMD_NOTICE("VSI messaging disabled by devarg");
+				eth_dev->dev_ops = &enetc4_vf_ops_no_vsi_m;
+			} else {
+				eth_dev->dev_ops = &enetc4_vf_ops;
+			}
+
+			/* parse optional VSI-PSI timeout devarg */
+			val = rte_kvargs_get(kvlist, ENETC4_VSI_TIMEOUT);
+			if (val) {
+				errno = 0;
+				hw->vsi_timeout = (uint32_t)strtoul(val, NULL, 0);
+				if (errno != 0 || hw->vsi_timeout == 0) {
+					ENETC_PMD_ERR("Invalid VSI Timeout value = %u",
+							hw->vsi_timeout);
+					rte_kvargs_free(kvlist);
+					return -1;
+				}
+				ENETC_PMD_NOTICE("VSI timeout set to %u", hw->vsi_timeout);
+			}
+
+			/* parse optional VSI-PSI delay devarg */
+			val = rte_kvargs_get(kvlist, ENETC4_VSI_DELAY);
+			if (val) {
+				errno = 0;
+				hw->vsi_delay = (uint32_t)strtoul(val, NULL, 0);
+				if (errno != 0 || hw->vsi_delay == 0) {
+					ENETC_PMD_ERR("Invalid VSI Delay value = %u",
+							hw->vsi_delay);
+					rte_kvargs_free(kvlist);
+					return -1;
+				}
+				ENETC_PMD_NOTICE("VSI delay set to %u us", hw->vsi_delay);
+			}
+
+			rte_kvargs_free(kvlist);
+		} else {
+			eth_dev->dev_ops = &enetc4_vf_ops;
+		}
+	} else {
+		eth_dev->dev_ops = &enetc4_vf_ops;
+	}
+
 	enetc4_dev_hw_init(eth_dev);
+
+	hw->nc_mode = 0;
+	enetc4_vf_get_devarg_nc(eth_dev);
+	if (hw->nc_mode) {
+		eth_dev->rx_pkt_burst = &enetc_recv_pkts_nc;
+		eth_dev->tx_pkt_burst = &enetc_xmit_pkts_nc;
+		ENETC_PMD_LOG(INFO, "nc=1: using non-cacheable BD ops (_nc)");
+	}
 
 	si_cap = enetc_rd(enetc_hw, ENETC_SICAPR0);
 	hw->max_tx_queues = si_cap & ENETC_SICAPR0_BDR_MASK;
@@ -1276,8 +1420,9 @@ enetc4_vf_dev_init(struct rte_eth_dev *eth_dev)
 	ENETC_PMD_DEBUG("port_id %d vendorID=0x%x deviceID=0x%x",
 			eth_dev->data->port_id, pci_dev->id.vendor_id,
 			pci_dev->id.device_id);
-	/* update link */
-	enetc4_vf_link_update(eth_dev, 0);
+	/* update link if VSI messaging is enabled */
+	if (eth_dev->dev_ops == &enetc4_vf_ops)
+		enetc4_vf_link_update(eth_dev, 0);
 
 	return 0;
 }
@@ -1297,7 +1442,7 @@ enetc4_vf_dev_intr(struct rte_eth_dev *eth_dev, bool enable)
 	struct enetc_eth_hw *hw =
 		ENETC_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
 	struct enetc_hw *enetc_hw = &hw->hw;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int ret = 0;
 
@@ -1361,4 +1506,9 @@ static struct rte_pci_driver rte_enetc4_vf_pmd = {
 RTE_PMD_REGISTER_PCI(net_enetc4_vf, rte_enetc4_vf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_enetc4_vf, pci_vf_id_enetc4_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_enetc4_vf, "* igb_uio | uio_pci_generic");
+RTE_PMD_REGISTER_PARAM_STRING(net_enetc4_vf,
+			      ENETC4_VSI_DISABLE "=<any> "
+			      ENETC4_VSI_TIMEOUT "=<uint> "
+			      ENETC4_VSI_DELAY "=<uint> "
+			      ENETC4_NC_MEMORY "=<int>");
 RTE_LOG_REGISTER_DEFAULT(enetc4_vf_logtype_pmd, NOTICE);

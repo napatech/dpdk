@@ -1336,7 +1336,7 @@ ice_dcf_dev_rss_reta_update(struct rte_eth_dev *dev,
 		return -ENOMEM;
 	}
 	/* store the old lut table temporarily */
-	rte_memcpy(lut, hw->rss_lut, reta_size);
+	memcpy(lut, hw->rss_lut, reta_size);
 
 	for (i = 0; i < reta_size; i++) {
 		idx = i / RTE_ETH_RETA_GROUP_SIZE;
@@ -1345,11 +1345,11 @@ ice_dcf_dev_rss_reta_update(struct rte_eth_dev *dev,
 			lut[i] = reta_conf[idx].reta[shift];
 	}
 
-	rte_memcpy(hw->rss_lut, lut, reta_size);
+	memcpy(hw->rss_lut, lut, reta_size);
 	/* send virtchnnl ops to configure rss*/
 	ret = ice_dcf_configure_rss_lut(hw);
 	if (ret) /* revert back */
-		rte_memcpy(hw->rss_lut, lut, reta_size);
+		memcpy(hw->rss_lut, lut, reta_size);
 	free(lut);
 
 	return ret;
@@ -1399,7 +1399,7 @@ ice_dcf_set_rss_key(struct ice_dcf_hw *hw, uint8_t *key, uint8_t key_len)
 		return -EINVAL;
 	}
 
-	rte_memcpy(hw->rss_key, key, key_len);
+	memcpy(hw->rss_key, key, key_len);
 
 	return ice_dcf_configure_rss_key(hw);
 }
@@ -1456,7 +1456,7 @@ ice_dcf_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 		return 0;
 
 	rss_conf->rss_key_len = hw->vf_res->rss_key_size;
-	rte_memcpy(rss_conf->rss_key, hw->rss_key, rss_conf->rss_key_len);
+	memcpy(rss_conf->rss_key, hw->rss_key, rss_conf->rss_key_len);
 
 	return 0;
 }
@@ -1523,8 +1523,16 @@ ice_dcf_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
 	ret = ice_dcf_query_stats(hw, &pstats);
 	if (ret == 0) {
 		ice_dcf_update_stats(&hw->eth_stats_offset, &pstats);
-		stats->ipackets = pstats.rx_unicast + pstats.rx_multicast +
-				pstats.rx_broadcast - pstats.rx_discards;
+		stats->ipackets = pstats.rx_unicast + pstats.rx_multicast + pstats.rx_broadcast;
+		/*
+		 * Unicast/multicast/broadcast counters include discarded packets, so subtract
+		 * rx_discards to report only the packets delivered to the application. The
+		 * counters are sampled from separate sources and can be momentarily inconsistent
+		 * under load. If rx_discards exceeds their sum then essentially nothing was
+		 * delivered, so saturate at zero rather than underflow.
+		 */
+		stats->ipackets = stats->ipackets >= pstats.rx_discards ?
+					stats->ipackets - pstats.rx_discards : 0;
 		stats->opackets = pstats.tx_broadcast + pstats.tx_multicast +
 						pstats.tx_unicast;
 		stats->imissed = pstats.rx_discards;

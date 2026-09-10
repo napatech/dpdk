@@ -211,7 +211,7 @@ Only single file segments mode (EAL option --single-file-segments) is supported,
 offset from multiple segments is too expensive.
 
 Example: testpmd
-----------------------------
+----------------
 In this example we run two instances of testpmd application and transmit packets over memif.
 
 First create ``server`` interface::
@@ -238,7 +238,7 @@ Show status::
 
     testpmd> show port stats 0
 
-For more details on testpmd please refer to :doc:`../testpmd_app_ug/index`.
+For more details on testpmd please refer to :doc:`/testpmd_app_ug/index`.
 
 Example: testpmd and VPP
 ------------------------

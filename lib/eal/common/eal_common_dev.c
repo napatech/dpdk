@@ -179,6 +179,7 @@ int
 local_dev_probe(const char *devargs, struct rte_device **new_dev)
 {
 	struct rte_device *dev;
+	struct rte_driver *drv;
 	struct rte_devargs *da;
 	int ret;
 
@@ -191,8 +192,8 @@ local_dev_probe(const char *devargs, struct rte_device **new_dev)
 	if (ret)
 		goto err_devarg;
 
-	if (da->bus->plug == NULL) {
-		EAL_LOG(ERR, "Function plug not supported by bus (%s)",
+	if (da->bus->probe_device == NULL) {
+		EAL_LOG(ERR, "Function probe_device not supported by bus (%s)",
 			da->bus->name);
 		ret = -ENOTSUP;
 		goto err_devarg;
@@ -207,7 +208,7 @@ local_dev_probe(const char *devargs, struct rte_device **new_dev)
 	if (ret)
 		goto err_devarg;
 
-	dev = da->bus->find_device(NULL, cmp_dev_name, da->name);
+	dev = da->bus->find_device(da->bus, NULL, cmp_dev_name, da->name);
 	if (dev == NULL) {
 		EAL_LOG(ERR, "Cannot find device (%s)",
 			da->name);
@@ -219,9 +220,31 @@ local_dev_probe(const char *devargs, struct rte_device **new_dev)
 	 * those devargs shouldn't be removed manually anymore.
 	 */
 
-	ret = dev->bus->plug(dev);
-	if (ret > 0)
+	drv = NULL;
+next_driver:
+	drv = rte_bus_find_driver(dev->bus, drv, dev);
+	if (drv == NULL) {
 		ret = -ENOTSUP;
+	} else if (rte_dev_is_probed(dev) && !dev->bus->allow_multi_probe) {
+		EAL_LOG(INFO, "Device %s is already probed", dev->name);
+		ret = -EEXIST;
+	} else {
+		bool was_probed = rte_dev_is_probed(dev);
+
+		/*
+		 * Reference driver structure.
+		 * This needs to be before .probe_device as some bus (like PCI) use
+		 * driver flags for adjusting configuration.
+		 */
+		if (!was_probed)
+			dev->driver = drv;
+		ret = dev->bus->probe_device(drv, dev);
+		if (!was_probed && ret != 0)
+			dev->driver = NULL;
+
+		if (ret > 0)
+			goto next_driver;
+	}
 
 	if (ret && !rte_dev_is_probed(dev)) { /* if hasn't ever succeeded */
 		EAL_LOG(ERR, "Driver cannot attach the device (%s)",
@@ -244,9 +267,21 @@ RTE_EXPORT_SYMBOL(rte_dev_probe)
 int
 rte_dev_probe(const char *devargs)
 {
+	const struct internal_config *internal_conf =
+		eal_get_internal_configuration();
+	bool do_mp = internal_conf->no_shconf == 0;
 	struct eal_dev_mp_req req;
 	struct rte_device *dev;
 	int ret;
+
+	if (!do_mp)
+		goto skip_mp_req;
+
+	if (strlen(devargs) >= EAL_DEV_MP_DEV_ARGS_MAX_LEN) {
+		EAL_LOG(ERR, "devargs truncated (len %zu, max %d)",
+			strlen(devargs), EAL_DEV_MP_DEV_ARGS_MAX_LEN);
+		return -E2BIG;
+	}
 
 	memset(&req, 0, sizeof(req));
 	req.t = EAL_DEV_REQ_TYPE_ATTACH;
@@ -271,6 +306,7 @@ rte_dev_probe(const char *devargs)
 
 	/* attach a shared device from primary start from here: */
 
+skip_mp_req:
 	/* primary attach the new device itself. */
 	ret = local_dev_probe(devargs, &dev);
 
@@ -287,6 +323,9 @@ rte_dev_probe(const char *devargs)
 		if (ret != -EEXIST)
 			return ret;
 	}
+
+	if (!do_mp)
+		goto skip_mp_notify;
 
 	/* primary send attach sync request to secondary. */
 	ret = eal_dev_hotplug_request_to_secondary(&req);
@@ -314,16 +353,19 @@ rte_dev_probe(const char *devargs)
 		goto rollback;
 	}
 
+skip_mp_notify:
 	return 0;
 
 rollback:
-	req.t = EAL_DEV_REQ_TYPE_ATTACH_ROLLBACK;
+	if (do_mp) {
+		req.t = EAL_DEV_REQ_TYPE_ATTACH_ROLLBACK;
 
-	/* primary send rollback request to secondary. */
-	if (eal_dev_hotplug_request_to_secondary(&req) != 0)
-		EAL_LOG(WARNING,
-			"Failed to rollback device attach on secondary."
-			"Devices in secondary may not sync with primary");
+		/* primary send rollback request to secondary. */
+		if (eal_dev_hotplug_request_to_secondary(&req) != 0)
+			EAL_LOG(WARNING,
+				"Failed to rollback device attach on secondary."
+				"Devices in secondary may not sync with primary");
+	}
 
 	/* primary rollback itself. */
 	if (local_dev_remove(dev) != 0)
@@ -347,7 +389,7 @@ rte_eal_hotplug_remove(const char *busname, const char *devname)
 		return -ENOENT;
 	}
 
-	dev = bus->find_device(NULL, cmp_dev_name, devname);
+	dev = bus->find_device(bus, NULL, cmp_dev_name, devname);
 	if (dev == NULL) {
 		EAL_LOG(ERR, "Cannot find plugged device (%s)", devname);
 		return -EINVAL;
@@ -362,18 +404,20 @@ local_dev_remove(struct rte_device *dev)
 {
 	int ret;
 
-	if (dev->bus->unplug == NULL) {
-		EAL_LOG(ERR, "Function unplug not supported by bus (%s)",
+	if (dev->bus->unplug_device == NULL) {
+		EAL_LOG(ERR, "Function unplug_device not supported by bus (%s)",
 			dev->bus->name);
 		return -ENOTSUP;
 	}
 
-	ret = dev->bus->unplug(dev);
+	ret = dev->bus->unplug_device(dev);
 	if (ret) {
 		EAL_LOG(ERR, "Driver cannot detach the device (%s)",
 			dev->name);
 		return (ret < 0) ? ret : -ENOENT;
 	}
+
+	dev->driver = NULL;
 
 	return 0;
 }
@@ -382,6 +426,9 @@ RTE_EXPORT_SYMBOL(rte_dev_remove)
 int
 rte_dev_remove(struct rte_device *dev)
 {
+	const struct internal_config *internal_conf =
+		eal_get_internal_configuration();
+	bool do_mp = internal_conf->no_shconf == 0;
 	struct eal_dev_mp_req req;
 	char *devargs;
 	int ret;
@@ -390,6 +437,9 @@ rte_dev_remove(struct rte_device *dev)
 		EAL_LOG(ERR, "Device is not probed");
 		return -ENOENT;
 	}
+
+	if (!do_mp)
+		goto skip_mp_req;
 
 	ret = build_devargs(dev->bus->name, dev->name, "", &devargs);
 	if (ret != 0)
@@ -449,6 +499,7 @@ rte_dev_remove(struct rte_device *dev)
 			goto rollback;
 	}
 
+skip_mp_req:
 	/* primary detach the device itself. */
 	ret = local_dev_remove(dev);
 
@@ -465,13 +516,15 @@ rte_dev_remove(struct rte_device *dev)
 	return 0;
 
 rollback:
-	req.t = EAL_DEV_REQ_TYPE_DETACH_ROLLBACK;
+	if (do_mp) {
+		req.t = EAL_DEV_REQ_TYPE_DETACH_ROLLBACK;
 
-	/* primary send rollback request to secondary. */
-	if (eal_dev_hotplug_request_to_secondary(&req) != 0)
-		EAL_LOG(WARNING,
-			"Failed to rollback device detach on secondary."
-			"Devices in secondary may not sync with primary");
+		/* primary send rollback request to secondary. */
+		if (eal_dev_hotplug_request_to_secondary(&req) != 0)
+			EAL_LOG(WARNING,
+				"Failed to rollback device detach on secondary."
+				"Devices in secondary may not sync with primary");
+	}
 
 	return ret;
 }
@@ -756,13 +809,13 @@ bus_next_dev_cmp(const struct rte_bus *bus,
 	if (rte_errno != 0)
 		return -1;
 	if (it->cls_str == NULL) {
-		dev = bus->dev_iterate(dev, bus_str, it);
+		dev = bus->dev_iterate(bus, dev, bus_str, it);
 		goto end;
 	}
 	/* cls_str != NULL */
 	if (dev == NULL) {
 next_dev_on_bus:
-		dev = bus->dev_iterate(dev, bus_str, it);
+		dev = bus->dev_iterate(bus, dev, bus_str, it);
 		it->device = dev;
 	}
 	if (dev == NULL)
@@ -829,6 +882,10 @@ int
 rte_dev_dma_map(struct rte_device *dev, void *addr, uint64_t iova,
 		size_t len)
 {
+	if (!rte_dev_is_probed(dev)) {
+		rte_errno = EINVAL;
+		return -1;
+	}
 	if (dev->bus->dma_map == NULL || len == 0) {
 		rte_errno = ENOTSUP;
 		return -1;
@@ -847,6 +904,10 @@ int
 rte_dev_dma_unmap(struct rte_device *dev, void *addr, uint64_t iova,
 		  size_t len)
 {
+	if (!rte_dev_is_probed(dev)) {
+		rte_errno = EINVAL;
+		return -1;
+	}
 	if (dev->bus->dma_unmap == NULL || len == 0) {
 		rte_errno = ENOTSUP;
 		return -1;

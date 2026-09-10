@@ -18,7 +18,6 @@
 #include <ethdev_driver.h>
 #include <ethdev_vdev.h>
 #include <rte_malloc.h>
-#include <rte_memcpy.h>
 #include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_spinlock.h>
@@ -309,19 +308,6 @@ struct ipn3ke_hw {
 
 	uint8_t *hw_addr;
 };
-
-/**
- * @internal
- * Helper macro for drivers that need to convert to struct rte_afu_device.
- */
-#define RTE_DEV_TO_AFU(ptr) \
-	container_of(ptr, struct rte_afu_device, device)
-
-#define RTE_DEV_TO_AFU_CONST(ptr) \
-	container_of(ptr, const struct rte_afu_device, device)
-
-#define RTE_ETH_DEV_TO_AFU(eth_dev) \
-	RTE_DEV_TO_AFU((eth_dev)->device)
 
 /**
  * PCIe MMIO Access

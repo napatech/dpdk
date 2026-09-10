@@ -29,7 +29,7 @@ options="$options --max-line-length=$length"
 options="$options --show-types"
 options="$options --ignore=LINUX_VERSION_CODE,ENOSYS,\
 FILE_PATH_CHANGES,MAINTAINERS_STYLE,SPDX_LICENSE_TAG,\
-VOLATILE,PREFER_PACKED,PREFER_ALIGNED,PREFER_PRINTF,STRLCPY,\
+VOLATILE,PREFER_PACKED,PREFER_ALIGNED,PREFER_PRINTF,STRLCPY,MSLEEP,\
 PREFER_KERNEL_TYPES,PREFER_FALLTHROUGH,BIT_MACRO,CONST_STRUCT,\
 SPLIT_STRING,LONG_LINE_STRING,C99_COMMENT_TOLERANCE,\
 LINE_SPACING,PARENTHESIS_ALIGNMENT,NETWORKING_BLOCK_COMMENT_STYLE,\
@@ -110,6 +110,14 @@ check_forbidden_additions() { # <patch>
 		-v EXPRESSIONS='%ll*[xud]' \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using %l format, prefer %PRI*64 if type is [u]int64_t' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
+	# refrain from using __rte_always_inline
+	awk -v FOLDERS="lib drivers app examples" \
+		-v EXPRESSIONS='\\<__rte_always_inline\\>' \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Adding __rte_always_inline; prefer plain inline' \
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
@@ -321,10 +329,10 @@ check_experimental_tags() { # <patch>
 		current_file = "";
 		ret = 0;
 	}
-	/^+++ b\// {
+	/^[+][+][+] b\// {
 		current_file = $2;
 	}
-	/^+.*__rte_experimental/ {
+	/^[+].*__rte_experimental/ {
 		if (current_file ~ ".c$" ) {
 			print "Please only put __rte_experimental tags in " \
 				"headers ("current_file")";
@@ -351,10 +359,10 @@ check_internal_tags() { # <patch>
 		current_file = "";
 		ret = 0;
 	}
-	/^+++ b\// {
+	/^[+][+][+] b\// {
 		current_file = $2;
 	}
-	/^+.*__rte_internal/ {
+	/^[+].*__rte_internal/ {
 		if (current_file ~ ".c$" ) {
 			print "Please only put __rte_internal tags in " \
 				"headers ("current_file")";

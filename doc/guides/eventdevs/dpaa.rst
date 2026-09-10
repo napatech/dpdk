@@ -2,7 +2,7 @@
    Copyright 2017 NXP
 
 NXP DPAA Eventdev Driver
-=========================
+========================
 
 The dpaa eventdev is an implementation of the eventdev API, that provides a
 wide range of the eventdev features. The eventdev relies on a dpaa based
@@ -23,7 +23,7 @@ The DPAA EVENTDEV implements many features in the eventdev API;
 - Atomic flows
 
 Supported DPAA SoCs
---------------------
+-------------------
 
 - LS1046A/LS1026A
 - LS1043A/LS1023A
@@ -31,14 +31,14 @@ Supported DPAA SoCs
 Prerequisites
 -------------
 
-See :doc:`../platform/dpaa` for setup information
+See :doc:`/platform/dpaa` for setup information
 
 Currently supported by DPDK:
 
 - NXP SDK **2.0+** or LSDK **18.09+**
 - Supported architectures:  **arm64 LE**.
 
-- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
 
 Initialization

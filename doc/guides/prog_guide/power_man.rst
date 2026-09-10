@@ -4,7 +4,7 @@
 Power Management
 ================
 
-The DPDK Power Management feature allows users space applications to save power
+The DPDK Power Management feature allows user space applications to save power
 by dynamically adjusting CPU frequency or entering into different C-States.
 
 *   Adjusting the CPU frequency dynamically according to the utilization of RX queue.
@@ -60,7 +60,7 @@ Core-load Throttling through C-States
 
 Core state can be altered by speculative sleeps whenever the specified lcore has nothing to do.
 In the DPDK, if no packet is received after polling,
-speculative sleeps can be triggered according the strategies defined by the user space application.
+speculative sleeps can be triggered according to the strategies defined by the user space application.
 
 Per-core Turbo Boost
 --------------------
@@ -101,7 +101,7 @@ The main methods exported by power library are for CPU frequency scaling and inc
 
 *   **Disable turbo**: Prompt the kernel to disable Turbo Boost for the specific lcore.
 
-User Cases
+Use Cases
 ----------
 
 The power management mechanism is used to save power when performing L3 forwarding.
@@ -179,7 +179,7 @@ The "monitor" mode is only supported in the following configurations and scenari
 
 * Not all Ethernet drivers support monitoring, even if the underlying
   platform may support the necessary CPU instructions. Please refer to
-  :doc:`../nics/overview` for more information.
+  :doc:`/nics/overview` for more information.
 
 
 API Overview for Ethernet PMD Power Management
@@ -285,15 +285,11 @@ Get Num Pkgs
   Get the number of packages (CPU's) on the system.
 
 Get Num Dies
-  Get the number of die's on a given package.
+  Get the number of dies on a given package.
 
 References
 ----------
 
-*   The :doc:`../sample_app_ug/l3_forward_power_man`
-    chapter in the :doc:`../sample_app_ug/index` section.
-
-*   The :doc:`../sample_app_ug/vm_power_management`
-    chapter in the :doc:`../sample_app_ug/index` section.
-
-*   The :doc:`../nics/overview` chapter in the :doc:`../nics/index` section
+* :doc:`../sample_app_ug/l3_forward_power_man`
+* :doc:`../sample_app_ug/vm_power_management`
+* :doc:`../nics/overview`

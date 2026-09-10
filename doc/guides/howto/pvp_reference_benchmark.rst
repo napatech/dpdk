@@ -20,8 +20,6 @@ v16.11 using RHEL7 for both host and guest.
 Setup overview
 --------------
 
-.. _figure_pvp_2nics:
-
 .. figure:: img/pvp_2nics.*
 
    PVP setup using 2 NICs
@@ -99,7 +97,7 @@ Build Qemu:
 DPDK build
 ~~~~~~~~~~
 
-See :doc:`../linux_gsg/build_dpdk` for details.
+See :doc:`/linux_gsg/build_dpdk` for details.
 
 
 Testpmd launch
@@ -306,7 +304,7 @@ Guest tuning
 DPDK build
 ~~~~~~~~~~
 
-See :doc:`../linux_gsg/build_dpdk` for details.
+See :doc:`/linux_gsg/build_dpdk` for details.
 
 
 Testpmd launch

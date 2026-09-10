@@ -137,7 +137,7 @@ ipn3ke_rpst_dev_start(struct rte_eth_dev *dev)
 
 	if (hw->retimer.mac_type == IFPGA_RAWDEV_RETIMER_MAC_TYPE_10GE_XFI) {
 		/* Set mac address */
-		rte_memcpy(((char *)(&val)),
+		memcpy(((char *)(&val)),
 			(char *)&dev->data->mac_addrs->addr_bytes[0],
 			sizeof(uint32_t));
 		(*hw->f_mac_write)(hw,
@@ -145,7 +145,7 @@ ipn3ke_rpst_dev_start(struct rte_eth_dev *dev)
 				IPN3KE_MAC_PRIMARY_MAC_ADDR0,
 				rpst->port_id,
 				0);
-		rte_memcpy(((char *)(&val)),
+		memcpy(((char *)(&val)),
 			(char *)&dev->data->mac_addrs->addr_bytes[4],
 			sizeof(uint16_t));
 		(*hw->f_mac_write)(hw,
@@ -2070,7 +2070,7 @@ ipn3ke_rpst_stats_reset(struct rte_eth_dev *ethdev)
 		return -EINVAL;
 	}
 
-	afu_dev = RTE_ETH_DEV_TO_AFU(ethdev);
+	afu_dev = RTE_CLASS_TO_BUS_DEVICE(ethdev, *afu_dev);
 	if (!afu_dev) {
 		IPN3KE_AFU_PMD_ERR("afu device to reset is NULL!");
 		return -EINVAL;
@@ -2138,7 +2138,7 @@ ipn3ke_rpst_stats_get
 		return -EINVAL;
 	}
 
-	afu_dev = RTE_ETH_DEV_TO_AFU(ethdev);
+	afu_dev = RTE_CLASS_TO_BUS_DEVICE(ethdev, *afu_dev);
 	if (!afu_dev) {
 		IPN3KE_AFU_PMD_ERR("afu device to get statistics is NULL!");
 		return -EINVAL;
@@ -2228,7 +2228,7 @@ ipn3ke_rpst_xstats_get
 		return -EINVAL;
 	}
 
-	afu_dev = RTE_ETH_DEV_TO_AFU(ethdev);
+	afu_dev = RTE_CLASS_TO_BUS_DEVICE(ethdev, *afu_dev);
 	if (!afu_dev) {
 		IPN3KE_AFU_PMD_ERR("afu device to get statistics is NULL!");
 		return -EINVAL;
@@ -2746,13 +2746,13 @@ ipn3ke_rpst_mac_addr_set(struct rte_eth_dev *ethdev,
 		rte_ether_addr_copy(&mac_addr[0], &rpst->mac_addr);
 
 		/* Set mac address */
-		rte_memcpy(((char *)(&val)), &mac_addr[0], sizeof(uint32_t));
+		memcpy(((char *)(&val)), &mac_addr[0], sizeof(uint32_t));
 		(*hw->f_mac_write)(hw,
 				val,
 				IPN3KE_MAC_PRIMARY_MAC_ADDR0,
 				rpst->port_id,
 				0);
-		rte_memcpy(((char *)(&val)), &mac_addr[4], sizeof(uint16_t));
+		memcpy(((char *)(&val)), &mac_addr[4], sizeof(uint16_t));
 		(*hw->f_mac_write)(hw,
 				val,
 				IPN3KE_MAC_PRIMARY_MAC_ADDR0,

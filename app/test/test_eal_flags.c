@@ -10,88 +10,95 @@
 #include <string.h>
 #include <stdarg.h>
 
-#ifdef RTE_EXEC_ENV_WINDOWS
+#ifndef RTE_EXEC_ENV_LINUX
 static int
 test_missing_c_flag(void)
 {
-	printf("missing_c_flag not supported on Windows, skipping test\n");
+	printf("missing_c_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_main_lcore_flag(void)
 {
-	printf("main_lcore_flag not supported on Windows, skipping test\n");
+	printf("main_lcore_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_invalid_n_flag(void)
 {
-	printf("invalid_n_flag not supported on Windows, skipping test\n");
+	printf("invalid_n_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_no_hpet_flag(void)
 {
-	printf("no_hpet_flag not supported on Windows, skipping test\n");
+	printf("no_hpet_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_no_huge_flag(void)
 {
-	printf("no_huge_flag not supported on Windows, skipping test\n");
+	printf("no_huge_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_allow_flag(void)
 {
-	printf("allow_flag not supported on Windows, skipping test\n");
+	printf("allow_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_invalid_b_flag(void)
 {
-	printf("invalid_b_flag not supported on Windows, skipping test\n");
+	printf("invalid_b_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_invalid_vdev_flag(void)
 {
-	printf("invalid_vdev_flag not supported on Windows, skipping test\n");
+	printf("invalid_vdev_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_invalid_r_flag(void)
 {
-	printf("invalid_r_flag not supported on Windows, skipping test\n");
+	printf("invalid_r_flag only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_memory_flags(void)
 {
-	printf("memory_flags not supported on Windows, skipping test\n");
+	printf("memory_flags only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_file_prefix(void)
 {
-	printf("file_prefix not supported on Windows, skipping test\n");
+	printf("file_prefix only supported on Linux, skipping test\n");
 	return TEST_SKIPPED;
 }
 
 static int
 test_misc_flags(void)
 {
-	printf("misc_flags not supported on Windows, skipping test\n");
+	printf("misc_flags only supported on Linux, skipping test\n");
+	return TEST_SKIPPED;
+}
+
+static int
+test_pagesz_mem_flags(void)
+{
+	printf("pagesz_mem_flags not supported on Windows, skipping test\n");
 	return TEST_SKIPPED;
 }
 
@@ -119,6 +126,8 @@ test_misc_flags(void)
 #define no_hpet "--no-hpet"
 #define no_huge "--no-huge"
 #define no_shconf "--no-shconf"
+#define auto_probing "--auto-probing"
+#define no_auto_probing "--no-auto-probing"
 #define allow "--allow"
 #define vdev "--vdev"
 #define no_pci "--no-pci"
@@ -338,6 +347,14 @@ test_allow_flag(void)
 			allow, "09:0B.3,type=test",
 			allow, "08:00.1,type=normal",
 	};
+	const char *wlval4[] = {prgname, prefix, mp_flag, eal_debug_logs,
+			no_auto_probing };
+	const char *wlval5[] = {prgname, prefix, mp_flag, eal_debug_logs,
+			no_auto_probing, allow, "00FF:09:0B.3"};
+	const char *wlval6[] = {prgname, prefix, mp_flag, eal_debug_logs,
+			auto_probing };
+	const char *wlval7[] = {prgname, prefix, mp_flag, eal_debug_logs,
+			auto_probing, allow, "00FF:09:0B.3"};
 
 	for (i = 0; i < RTE_DIM(wlinval); i++) {
 		if (launch_proc(wlinval[i]) == 0) {
@@ -357,6 +374,26 @@ test_allow_flag(void)
 	}
 	if (launch_proc(wlval3) != 0 ) {
 		printf("Error (line %d) - process did not run ok with valid allow + args\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(wlval4) != 0) {
+		printf("Error (line %d) - process did not run ok with no-auto-probing\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(wlval5) != 0) {
+		printf("Error (line %d) - process did not run ok with no-auto-probing + allow\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(wlval6) != 0) {
+		printf("Error (line %d) - process did not run ok with auto-probing\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(wlval7) != 0) {
+		printf("Error (line %d) - process did not run ok with auto-probing + allow\n",
 			__LINE__);
 		return -1;
 	}
@@ -383,6 +420,11 @@ test_invalid_b_flag(void)
 		{prgname, prefix, mp_flag, eal_debug_logs, "-b", "error0:0:0.1"},
 		{prgname, prefix, mp_flag, eal_debug_logs, "-b", "0:0:0.1.2"},
 	};
+	const char *blinval_probing[] =
+		{prgname, prefix, mp_flag, eal_debug_logs, "-b", "0:0.0", auto_probing};
+	const char *blinval_probing_inval[] =
+		{prgname, prefix, mp_flag, eal_debug_logs, "-b", "0:0.0", no_auto_probing};
+
 	/* Test with valid blocklist option */
 	const char *blval[] = {prgname, prefix, mp_flag, eal_debug_logs,
 			       "-b", "FF:09:0B.3"};
@@ -395,6 +437,16 @@ test_invalid_b_flag(void)
 				__LINE__);
 			return -1;
 		}
+	}
+	if (launch_proc(blinval_probing) != 0) {
+		printf("Error (line %d) - process did not run ok with blocklist and auto-probing\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(blinval_probing_inval) == 0) {
+		printf("Error (line %d) - process did run ok with blocklist and no-auto-probing\n",
+			__LINE__);
+		return -1;
 	}
 	if (launch_proc(blval) != 0) {
 		printf("Error (line %d) - process did not run ok with valid blocklist value\n",
@@ -434,6 +486,12 @@ test_invalid_vdev_flag(void)
 	const char *vdevval3[] = {prgname, prefix, no_huge, eal_debug_logs,
 				bus_debug_logs, no_pci, vdev, "net_ring0,nodeaction=r1:0:CREATE"};
 
+	const char *vdevval4[] = {prgname, prefix, no_huge, eal_debug_logs,
+				bus_debug_logs, no_auto_probing, vdev, "net_ring0"};
+
+	const char *vdevval5[] = {prgname, prefix, no_huge, eal_debug_logs,
+				bus_debug_logs, auto_probing, vdev, "net_ring0"};
+
 	if (launch_proc(vdevinval) == 0) {
 		printf("Error (line %d) - process did run ok with invalid vdev parameter\n",
 			__LINE__);
@@ -454,6 +512,18 @@ test_invalid_vdev_flag(void)
 
 	if (launch_proc(vdevval3) != 0) {
 		printf("Error (line %d) - process did not run ok with valid vdev value with valid args\n",
+			__LINE__);
+		return -1;
+	}
+
+	if (launch_proc(vdevval4) != 0) {
+		printf("Error (line %d) - process did not run ok with valid vdev value and no-auto-probing\n",
+			__LINE__);
+		return -1;
+	}
+
+	if (launch_proc(vdevval5) != 0) {
+		printf("Error (line %d) - process did not run ok with valid vdev value and auto-probing\n",
 			__LINE__);
 		return -1;
 	}
@@ -1503,6 +1573,123 @@ populate_socket_mem_param(int num_sockets, const char *mem,
 }
 
 /*
+ * Tests for correct handling of --pagesz-mem flag
+ */
+static int
+test_pagesz_mem_flags(void)
+{
+#ifdef RTE_EXEC_ENV_FREEBSD
+	/* FreeBSD does not support --pagesz-mem */
+	return 0;
+#else
+	const char *in_memory = "--in-memory";
+
+	/* invalid: no value */
+	const char * const argv0[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem="};
+
+	/* invalid: no colon (missing limit) */
+	const char * const argv1[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=2M"};
+
+	/* invalid: colon present but limit is empty */
+	const char * const argv2[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=2M:"};
+
+	/* invalid: limit not aligned to page size (3M is not a multiple of 2M) */
+	const char * const argv3[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=2M:3M"};
+
+	/* invalid: garbage value */
+	const char * const argv4[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=garbage"};
+
+	/* invalid: garbage value */
+	const char * const argv5[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=2M:garbage"};
+
+	/* invalid: --pagesz-mem combined with --no-huge */
+	const char * const argv6[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, no_huge, "--pagesz-mem=2M:2M"};
+
+	/* valid: single well-formed aligned pair */
+	const char * const argv7[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=2M:64M"};
+
+	/* valid: multiple occurrences */
+	const char * const argv8[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory,
+			"--pagesz-mem=2M:64M", "--pagesz-mem=1K:8K"};
+
+	/* valid: fake page size set to zero (ignored but syntactically valid) */
+	const char * const argv9[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=1K:0"};
+
+	/* invalid: page size must be a power of two */
+	const char * const argv10[] = {prgname, eal_debug_logs, no_pci,
+			"--file-prefix=" memtest, in_memory, "--pagesz-mem=3M:6M"};
+
+	if (launch_proc(argv0) == 0) {
+		printf("Error (line %d) - process run ok with empty --pagesz-mem!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv1) == 0) {
+		printf("Error (line %d) - process run ok with --pagesz-mem missing colon!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv2) == 0) {
+		printf("Error (line %d) - process run ok with --pagesz-mem missing limit!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv3) == 0) {
+		printf("Error (line %d) - process run ok with --pagesz-mem unaligned limit!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv4) == 0) {
+		printf("Error (line %d) - process run ok with --pagesz-mem garbage value!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv5) == 0) {
+		printf("Error (line %d) - process run ok with --pagesz-mem garbage value!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv6) == 0) {
+		printf("Error (line %d) - process run ok with --pagesz-mem and --no-huge!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv7) != 0) {
+		printf("Error (line %d) - process failed with valid --pagesz-mem!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv8) != 0) {
+		printf("Error (line %d) - process failed with multiple valid --pagesz-mem!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv9) != 0) {
+		printf("Error (line %d) - process failed with --pagesz-mem zero limit!\n",
+			__LINE__);
+		return -1;
+	}
+	if (launch_proc(argv10) == 0) {
+		printf("Error (line %d) - process run ok with non-power-of-two pagesz!\n",
+			__LINE__);
+		return -1;
+	}
+
+	return 0;
+#endif /* !RTE_EXEC_ENV_FREEBSD */
+}
+
+/*
  * Tests for correct handling of -m and --socket-mem flags
  */
 static int
@@ -1683,5 +1870,6 @@ REGISTER_FAST_TEST(eal_flags_b_opt_autotest, NOHUGE_SKIP, ASAN_SKIP, test_invali
 REGISTER_FAST_TEST(eal_flags_vdev_opt_autotest, NOHUGE_SKIP, ASAN_SKIP, test_invalid_vdev_flag);
 REGISTER_FAST_TEST(eal_flags_r_opt_autotest, NOHUGE_SKIP, ASAN_SKIP, test_invalid_r_flag);
 REGISTER_FAST_TEST(eal_flags_mem_autotest, NOHUGE_SKIP, ASAN_SKIP, test_memory_flags);
+REGISTER_FAST_TEST(eal_flags_pagesz_mem_autotest, NOHUGE_SKIP, ASAN_SKIP, test_pagesz_mem_flags);
 REGISTER_FAST_TEST(eal_flags_file_prefix_autotest, NOHUGE_SKIP, ASAN_SKIP, test_file_prefix);
 REGISTER_FAST_TEST(eal_flags_misc_autotest, NOHUGE_SKIP, ASAN_SKIP, test_misc_flags);

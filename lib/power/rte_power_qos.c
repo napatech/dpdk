@@ -27,10 +27,7 @@ rte_power_qos_set_cpu_resume_latency(uint16_t lcore_id, int latency)
 	FILE *f;
 	int ret;
 
-	if (!rte_lcore_is_enabled(lcore_id)) {
-		POWER_LOG(ERR, "lcore id %u is not enabled", lcore_id);
-		return -EINVAL;
-	}
+	RTE_POWER_VALID_LCOREID_OR_ERR_RET(lcore_id, -EINVAL);
 	ret = power_get_lcore_mapped_cpu_id(lcore_id, &cpu_id);
 	if (ret != 0)
 		return ret;
@@ -82,10 +79,7 @@ rte_power_qos_get_cpu_resume_latency(uint16_t lcore_id)
 	FILE *f;
 	int ret;
 
-	if (!rte_lcore_is_enabled(lcore_id)) {
-		POWER_LOG(ERR, "lcore id %u is not enabled", lcore_id);
-		return -EINVAL;
-	}
+	RTE_POWER_VALID_LCOREID_OR_ERR_RET(lcore_id, -EINVAL);
 	ret = power_get_lcore_mapped_cpu_id(lcore_id, &cpu_id);
 	if (ret != 0)
 		return ret;
@@ -115,7 +109,7 @@ rte_power_qos_get_cpu_resume_latency(uint16_t lcore_id)
 	if (strcmp(buf, "n/a") == 0)
 		latency = RTE_POWER_QOS_STRICT_LATENCY_VALUE;
 	else {
-		latency = strtoul(buf, NULL, 10);
+		latency = strtoul(buf, NULL, POWER_CONVERT_TO_DECIMAL);
 		latency = latency == 0 ? RTE_POWER_QOS_RESUME_LATENCY_NO_CONSTRAINT : latency;
 	}
 

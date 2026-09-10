@@ -1,0 +1,564 @@
+.. SPDX-License-Identifier: BSD-3-Clause
+   Copyright 2026 The DPDK contributors
+
+.. include:: <isonum.txt>
+
+DPDK Release 26.07
+==================
+
+New Features
+------------
+
+* **Changed mempool cache behaviour.**
+
+  * The mempool cache flush/refill algorithm was improved,
+    to reduce the mempool cache miss rate for most application types.
+    Applications where each lcore only puts or gets to a mempool,
+    e.g. pipelined applications where ethdev Rx and Tx run on separate lcores,
+    should adapt to the new algorithm by doubling their configured mempool cache size,
+    to avoid doubling their mempool cache miss rate.
+  * The effective size of a mempool cache was changed
+    to match the specified size at mempool creation;
+    the effective size was previously 50 % larger than requested.
+  * The size of the ``struct rte_mempool_cache`` was kept
+    for API/ABI compatibility purposes.
+
+* **Added option to change memory limits per page size.**
+
+  Added the EAL option ``--pagesz-mem``
+  to override the default per-page-size memory limits.
+  Each maximum can be configured with a pair ``<pagesz>:<limit>``.
+
+* **Added option to disable device auto probing.**
+
+  Added EAL options affecting the initial bus probing to find devices.
+
+  * ``-A`` or ``--no-auto-probing`` disables the initial bus probing: no device is probed during
+    ``rte_eal_init`` and the application is responsible for probing each device.
+  * ``--auto-probing`` enables the initial bus probing, which is the current default behavior.
+
+* **Added RISC-V vector paths.**
+
+  * Increased the default SIMD bitwidth to allow using the vector extension.
+  * Added vectorized ACL which can process up to 8 flows in parallel.
+  * Added vectorized IPv4 LPM lookup for the node library.
+
+* **Added peek style API for staged-ordered ring (``rte_soring``).**
+
+  For sorings with producer/consumer in ``RTE_RING_SYNC_ST``,
+  ``RTE_RING_SYNC_MT_HTS`` mode, provide the ability to split enqueue/dequeue
+  operation into two phases (enqueue/dequeue start and enqueue/dequeue finish).
+  This allows the user to inspect objects in the ring without removing them
+  (aka MT safe peek).
+
+* **Added PTP protocol definitions.**
+
+  Added IEEE 1588 Precision Time Protocol header structures, constants,
+  and inline helpers to ``lib/net/rte_ptp.h``.
+  Provides wire-format structures with endian-annotated types
+  and correction field manipulation for transparent clock implementations.
+
+* **Added PTP software relay example application.**
+
+  Added a new example application ``ptp_tap_relay_sw``
+  demonstrating a software PTP transparent clock relay
+  between a DPDK port and a kernel TAP interface.
+
+* **Added no-IOMMU mode to UACCE bus.**
+
+  Added no-IOMMU mode for devices that do not have or do not enable IOMMU/SVA support.
+
+* **Added unplug operation support to VMBUS bus.**
+
+  Implemented device unplug operation to allow runtime removal of VMBUS devices.
+
+* **Added selective Rx in ethdev API.**
+
+  Some parts of packets may be discarded in Rx
+  by configuring a split of packets received in a queue,
+  and assigning no mempool to some configuration segments.
+  This is a driver capability advertised in the ``selective_rx`` bit.
+
+* **Added vhost support for dynamic memory regions.**
+
+  The feature ``VHOST_USER_PROTOCOL_F_CONFIGURE_MEM_SLOTS`` has been implemented
+  to support adding and removing memory regions without resetting
+  the whole guest memory map.
+
+* **Updated Google gve driver.**
+
+  Added hardware timestamping support on DQO queues.
+
+* **Updated Intel iavf driver.**
+
+  * Added support for QinQ offloading operations.
+  * Added support for transmitting LLDP packets based on mbuf packet type.
+  * Implemented AVX2 context descriptor transmit paths.
+
+* **Updated Intel ice driver.**
+
+  Added ``rl_burst_size`` devarg to configure the scheduler rate-limiter
+  burst size, reducing Tx latency jitter for time-sensitive traffic.
+
+* **Added LinkData sxe2 ethernet driver.**
+
+  Added network driver for the LinkData network adapters.
+
+* **Updated Microsoft mana driver.**
+
+  Added device reset support to the MANA PMD,
+  doing automatic recovery from hardware service reset events,
+  and notification to upper layers of the reset lifecycle.
+
+* **Updated NVIDIA mlx5 ethernet driver.**
+
+  Added support for selective Rx in scalar SPRQ Rx path.
+
+* **Updated NXP dpaa2 driver.**
+
+  * Added RSS RETA query and update support.
+  * Removed the software VLAN strip offload:
+    ``RTE_ETH_RX_OFFLOAD_VLAN_STRIP`` is no longer advertised,
+    as no hardware strip backs it.
+    An application that needs the tag removed must now strip it itself.
+  * Added Rx queue interrupt support.
+
+* **Updated NXP enetc ethernet driver.**
+
+  * Added support for ESP packet type in packet parsing.
+  * Added scatter-gather support for ENETC4 PFs and VFs.
+  * Added devargs option ``enetc4_vsi_disable`` to disable VSI-PSI messaging.
+  * Added devargs options ``enetc4_vsi_timeout`` and ``enetc4_vsi_delay``
+    for VSI-PSI messaging timeout and delay.
+  * Added devargs option ``enetc4_txq_prior`` to set Tx queues priorities.
+  * Added devargs option ``nc`` to select non-cacheable Rx/Tx ops.
+
+* **Updated PCAP ethernet driver.**
+
+  * Added support for VLAN insertion and stripping.
+  * Added support for reporting link state in ``iface`` mode.
+  * Added support for link state interrupt in ``iface`` mode.
+  * Added nanosecond precision to timestamp support.
+  * Added ``snaplen`` devarg to configure packet capture snapshot length.
+  * Added ``eof`` devarg to use link state to signal end of receive file input.
+  * Added unit test suite.
+
+* **Updated Wangxun ngbe driver.**
+
+  Implemented UDP Segmentation Offload (USO) in the transmit path.
+  The ``RTE_ETH_TX_OFFLOAD_UDP_TSO`` capability was advertised
+  since the driver's initial integration but the data path was missing;
+  it is now functional.
+
+* **Updated Wangxun txgbe driver.**
+
+  * Implemented UDP Segmentation Offload (USO) in the transmit path.
+    The ``RTE_ETH_TX_OFFLOAD_UDP_TSO`` capability was advertised
+    since the driver's initial integration but the data path was missing;
+    it is now functional.
+  * Added support for VF sensing PF down.
+    VFs now detect when the PF goes down
+    (via the mailbox ``TXGBE_VT_MSGTYPE_CTS`` flag) and report link down.
+    When the PF comes back, the VF triggers an ``RTE_ETH_EVENT_INTR_RESET`` event
+    so the application can reset the VF and resume normal packet Rx/Tx.
+  * Added VF support for the Amber-Lite 40G NIC variant,
+    with new device IDs ``0x503f`` and ``0x513f``.
+
+* **Updated Intel qat crypto driver dependency requirements.**
+
+  The QAT crypto PMD now requires IPsec MB library (v1.4.0+)
+  for HMAC precomputes on all platforms.
+  OpenSSL 3.0+ is now optional and used only for DOCSIS BPI cipher fallback.
+  Previously, QAT could build with OpenSSL-only on x86.
+
+  On ARM, both IPsec MB and OpenSSL are required for full functionality.
+
+* **Updated Marvell cnxk crypto driver.**
+
+  Added support for ML-KEM and ML-DSA on CN20K platform.
+
+* **Updated lcore validation in power library.**
+
+  Lcore ID validation was moved into the cpufreq framework before driver dispatch.
+  Power QoS API was updated to accept service lcores.
+
+* **Extended BPF API.**
+
+  * Added an extensible BPF loading API comprising the function
+    ``rte_bpf_load_ex`` and struct ``rte_bpf_prm_ex``.
+    This enables new features such as loading classic BPF (cBPF),
+    loading ELF images directly from memory buffers,
+    and executing multi-argument programs, while avoiding future ABI breakages.
+  * Added support for loading and executing BPF programs with up to 5 arguments.
+    This introduces new API functions ``rte_bpf_exec_ex``,
+    ``rte_bpf_exec_burst_ex``, and ``rte_bpf_get_jit_ex``.
+  * Added API functions ``rte_bpf_eth_rx_install`` and ``rte_bpf_eth_tx_install``
+    for installing already loaded BPF programs as port callbacks
+    (as opposed to loading them directly from ELF files).
+
+* **Added BPF validation debugging API and hardened BPF validator.**
+
+  * Introduced a new API (prefixed with ``rte_bpf_validate_debug_``)
+    to introspect the BPF validator.
+    This provides a mechanism to set breakpoints or catchpoints during validation
+    and inspect the verifier's internal state (such as tracked register bounds).
+    This API is crucial primarily for writing comprehensive tests for the validator,
+    but also serves as a foundation for a future interactive eBPF validation debugger.
+  * Fixed numerous bugs in the BPF validator's abstract interpretation logic,
+    including incorrect bounds tracking for jumps and arithmetic operations,
+    as well as fixing several instances of undefined behavior (UB)
+    when verifying malicious or corrupt programs.
+
+* **Updated testpmd application.**
+
+  Added support for setting VLAN priority and CFI/DEI bits
+  in ``tx_vlan set``/``tx_qinq set`` commands and ``vlan_tci`` parameter.
+
+* **Added script for real-time telemetry monitoring.**
+
+  Introduced the ``dpdk-telemetry-watcher.py`` script,
+  enabling users to monitor real-time telemetry statistics from running DPDK applications.
+  The tool supports customizable display options, including delta values,
+  total statistics, and single-line output for compact monitoring.
+
+* **Added AI review helpers.**
+
+  Added AGENTS.md file for AI review
+  and supporting scripts to review patches and documentation.
+
+
+Removed Items
+-------------
+
+* crypto/openssl: Removed support for OpenSSL 1.x versions from the OpenSSL crypto PMD.
+
+  The OpenSSL crypto PMD now requires OpenSSL 3.0 as the minimum version,
+  and all compatibility code for OpenSSL 1.0.1, 1.1.0, and 1.1.1 versions has been removed.
+
+* crypto/ipsec_mb: Removed Chacha20-poly1305 and KASUMI crypto drivers.
+
+  The Chacha20-poly1305 and KASUMI drivers were just wrappers
+  around the main AESNI_MB driver.
+
+* crypto/ipsec_mb: Removed ZUC and SNOW 3G crypto drivers from the x86 release.
+
+  The ZUC and SNOW 3G crypto drivers are using APIs
+  that are now deprecated in the Intel IPsec Multi-Buffer library.
+
+
+API Changes
+-----------
+
+* eal: Promoted ``rte_memeq_timingsafe()`` from experimental to stable.
+
+* ethdev: Promoted the following flow metadata symbols from experimental to stable:
+
+  - ``rte_flow_dynf_metadata_register``
+  - ``rte_flow_dynf_metadata_offs``
+  - ``rte_flow_dynf_metadata_mask``
+  - ``rte_flow_dynf_metadata_avail``
+  - ``rte_flow_dynf_metadata_get``
+  - ``rte_flow_dynf_metadata_set``
+
+* mlx5: Promoted the following driver event and steering management functions
+  from experimental to stable:
+
+  - ``rte_pmd_mlx5_driver_event_cb_register``
+  - ``rte_pmd_mlx5_driver_event_cb_unregister``
+  - ``rte_pmd_mlx5_enable_steering``
+  - ``rte_pmd_mlx5_disable_steering``
+
+* ip_frag: Changed handling of malformed fragments.
+
+  - Duplicate fragments are tolerated instead of failing reassembly.
+  - Overlapping fragments are rejected on arrival rather than during reassembly.
+  - Oversized fragments (reassembled length over 65535) are rejected.
+  - For IPv6, fragments with per-fragment extension headers are rejected.
+
+  Overlap and oversize are now detected on arrival, which adds a scan of the
+  already received fragments per fragment and may affect throughput.
+
+
+ABI Changes
+-----------
+
+* No ABI change that would break compatibility with 25.11.
+
+
+Tested Platforms
+----------------
+
+* Intel\ |reg| platforms with Intel\ |reg| NICs combinations
+
+  * CPU
+    * Intel\ |reg| Xeon\ |reg| 6553P-B  CPU @ 2.60GHz
+    * Intel\ |reg| Xeon\ |reg| 6740E  CPU @ 2.40GHz
+    * Intel\ |reg| Xeon\ |reg| 6756P-B  CPU @ 2.20GHz
+    * Intel\ |reg| Xeon\ |reg| 6760P  CPU @ 2.20GHz
+    * Intel\ |reg| Xeon\ |reg| 6767P  CPU @ 2.40GHz
+    * Intel\ |reg| Xeon\ |reg| CPU Max 9480  CPU @ 1.90GHz
+    * Intel\ |reg| Xeon\ |reg| Gold 6348  CPU @ 2.60GHz
+    * Intel\ |reg| Xeon\ |reg| Gold 6430L  CPU @ 1.90GHz
+    * Intel\ |reg| Xeon\ |reg| Platinum 8468H  CPU @ 2.10GHz
+    * Intel\ |reg| Xeon\ |reg| Platinum 8490H  CPU @ 1.90GHz
+
+  * OS:
+
+    * Fedora 43
+    * FreeBSD 15.0
+    * Microsoft Azure Linux 3.0
+    * OpenAnolis OS 8.10
+    * openEuler 24.03 (LTS-SP3)
+    * Red Hat Enterprise Linux Server release 10
+    * Red Hat Enterprise Linux Server release 9.6
+    * Ubuntu 24.04.4 LTS
+    * Ubuntu 26.04
+    * Vmware Exsi 9.0
+
+  * NICs:
+
+    * Intel\ |reg| Ethernet Controller E835-CC for SFP
+
+      * Firmware version: 2.10 0x80018d57 1.4002.0
+      * Device id (pf/vf): 8086:124a / 8086:1889
+      * Driver version: 2.6.6 (ice)
+      * OS Default DDP: 1.3.59.0
+      * COMMS DDP: 1.3.63.0
+      * Wireless Edge DDP: 1.3.28.0
+
+    * Intel\ |reg| Ethernet Controller E810-C for SFP (4x25G)
+
+      * Firmware version: 5.00 0x80021c11 1.4002.0
+      * Device id (pf/vf): 8086:1593 / 8086:1889
+      * Driver version(out-of-tree): 2.6.6 (ice)
+      * Driver version(in-tree): 7.0.0-15-generic (Ubuntu26.04) (ice)
+      * OS Default DDP: 1.3.59.0
+      * COMMS DDP: 1.3.63.0
+      * Wireless Edge DDP: 1.3.28.0
+
+    * Intel\ |reg| Ethernet Controller E810-C for QSFP (2x100G)
+
+      * Firmware version: 5.00 0x80021bcc 1.4002.0
+      * Device id (pf/vf): 8086:1592 / 8086:1889
+      * Driver version(out-of-tree): 2.6.6 (ice)
+      * Driver version(in-tree): 6.6.119.3-1.azl3 (Microsoft Azure Linux 3.0) /
+        6.12.0-55.9.1.el10_0.x86_64+rt (RHEL10) / 7.0.0-15-generic (Ubuntu26.04) (ice)
+      * OS Default DDP: 1.3.59.0
+      * COMMS DDP: 1.3.63.0
+      * Wireless Edge DDP: 1.3.28.0
+
+    * Intel\ |reg| Ethernet Controller E830-CC for QSFP
+
+      * Firmware version: 2.10 0x80018d29 1.4002.0
+      * Device id (pf/vf): 8086:12d2 / 8086:1889
+      * Driver version: 2.6.6 (ice)
+      * OS Default DDP: 1.3.59.0
+      * COMMS DDP: 1.3.63.0
+      * Wireless Edge DDP: 1.3.28.0
+
+    * Intel\ |reg| Ethernet Connection E825-C for QSFP
+
+      * Firmware version: 4.10 0x800084d5 1.4002.0
+      * Device id (pf/vf): 8086:579d / 8086:1889
+      * Driver version: 2.6.6 (ice)
+      * OS Default DDP: 1.3.59.0
+      * COMMS DDP: 1.3.63.0
+      * Wireless Edge DDP: 1.3.28.0
+
+    * Intel\ |reg| Ethernet Network Adapter E610-XT2
+
+      * Firmware version: 1.60 0x8000f173 0.0.0
+      * Device id (pf/vf): 8086:57b0 / 8086:57ad
+      * Driver version(out-of-tree): 6.4.4 (ixgbe)
+
+    * Intel\ |reg| Ethernet Controller X550 1563
+
+      * Firmware version: 3.70 0x8000184a 1.3052.0
+      * Device id (pf/vf): 8086:1563 / 8086:1565
+      * Driver version(out-of-tree): 6.4.4 (ixgbe)
+
+    * Intel\ |reg| Ethernet Converged Network Adapter X710-DA4 (4x10G)
+
+      * Firmware version: 9.57 0x80010340 1.4002.0
+      * Device id (pf/vf): 8086:1572 / 8086:154c
+      * Driver version(out-of-tree): 2.30.18 (i40e)
+      * Driver version(in-tree): 6.12.0-55.9.1.el10_0.x86_64 (RHEL10) (i40e)
+
+    * Intel\ |reg| Ethernet Converged Network Adapter XXV710-DA2 (2x25G)
+
+      * Firmware version:  9.57 0x80010398 1.4002.0
+      * Device id (pf/vf): 8086:158b / 8086:154c
+      * Driver version(out-of-tree): 2.30.18 (i40e)
+
+    * Intel\ |reg| Ethernet Converged Network Adapter XL710-QDA2 (2X40G)
+
+      * Firmware version(PF): 9.57 0x8001037b 1.4002.0
+      * Device id (pf/vf): 8086:1583 / 8086:154c
+      * Driver version(out-of-tree): 2.30.18 (i40e)
+      * Driver version(in-tree): 7.0.0-27-generic (Ubuntu26.04) (i40e)
+
+    * Intel\ |reg| Corporation Ethernet Connection X722 for 10GbE SFP (2x10G)
+
+      * Firmware version: 6.51 0x80004430 1.4002.0
+      * Device id (pf/vf): 8086:37d0 / 8086:37cd
+      * Driver version(out-of-tree): 2.30.18 (i40e)
+
+    * Intel\ |reg| Ethernet Controller I226-LM
+
+      * Firmware version: 2.14, 0x8000028c
+      * Device id (pf): 8086:125b
+      * Driver version(in-tree): 7.0.0-15-generic (Ubuntu26.04) (igc)
+
+    * Intel\ |reg| Infrastructure Processing Unit (Intel\ |reg| IPU) E2100
+
+      * Firmware version: ci-ts.release.2.0.0.11126
+      * Device id (idpf/cpfl): 8086:1452/8086:1453
+      * Driver version: 1.0.13 (idpf)
+
+* Intel\ |reg| platforms with NVIDIA\ |reg| NICs combinations
+
+  * CPU:
+
+    * Intel\ |reg| Xeon\ |reg| Gold 6154 CPU @ 3.00GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2697A v4 @ 2.60GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2697 v3 @ 2.60GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2680 v2 @ 2.80GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2670 0 @ 2.60GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2650 v4 @ 2.20GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2650 v3 @ 2.30GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2640 @ 2.50GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2650 0 @ 2.00GHz
+    * Intel\ |reg| Xeon\ |reg| CPU E5-2620 v4 @ 2.10GHz
+
+  * OS:
+
+    * Red Hat Enterprise Linux release 9.2 (Plow)
+    * Red Hat Enterprise Linux release 9.1 (Plow)
+    * Red Hat Enterprise Linux release 8.6 (Ootpa)
+    * Ubuntu 24.04
+    * Ubuntu 22.04
+    * SUSE Enterprise Linux 15 SP4
+
+  * DOCA:
+
+    * DOCA 3.5.0-035000 and above.
+
+  * upstream kernel:
+
+    * Linux 6.18.0 and above
+
+  * rdma-core:
+
+    * rdma-core-60.0 and above
+
+  * NICs
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
+
+      * Host interface: PCI Express 4.0 x16
+      * Device ID: 15b3:101d
+      * Firmware version: 22.50.0394 and above
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-6 Lx EN 25G MCX631102AN-ADAT (2x25G)
+
+      * Host interface: PCI Express 4.0 x8
+      * Device ID: 15b3:101f
+      * Firmware version: 26.50.0394 and above
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-7 200G CX713106AE-HEA_QP1_Ax (2x200G)
+
+      * Host interface: PCI Express 5.0 x16
+      * Device ID: 15b3:1021
+      * Firmware version: 28.50.0394 and above
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-8 SuperNIC 400G  MT4131 - 900-9X81Q-00CN-STA (2x400G)
+
+      * Host interface: PCI Express 6.0 x16
+      * Device ID: 15b3:1023
+      * Firmware version: 40.50.0394 and above
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-9 SuperNIC 800G  MT4133 - 900-9X91E-00EB-STA_Ax (1x800G)
+
+      * Host interface: PCI Express 6.0 x16
+      * Device ID: 15b3:1025
+      * Firmware version: 82.50.0394 and above
+
+* NVIDIA\ |reg| BlueField\ |reg| SmartNIC
+
+  * NVIDIA\ |reg| BlueField\ |reg|-2 SmartNIC MT41686 - MBF2H332A-AEEOT_A1 (2x25G)
+
+    * Host interface: PCI Express 3.0 x16
+    * Device ID: 15b3:a2d6
+    * Firmware version: 24.50.0394 and above
+
+  * NVIDIA\ |reg| BlueField\ |reg|-3 P-Series DPU MT41692 - 900-9D3B6-00CV-AAB (2x200G)
+
+    * Host interface: PCI Express 5.0 x16
+    * Device ID: 15b3:a2dc
+    * Firmware version: 32.49.1014 and above
+
+  * Embedded software:
+
+    * Ubuntu 24.04
+    * MLNX_OFED 26.07-0.3.5.0
+    * DOCA 3.5.0-035000
+    * bf-bundle-3.5.0-47_26.7_ubuntu-24.04
+    * DPDK application running on ARM cores
+
+* IBM Power 9 platforms with NVIDIA\ |reg| NICs combinations
+
+  * CPU:
+
+    * POWER9 2.2 (pvr 004e 1202)
+
+  * OS:
+
+    * Ubuntu 24.04
+
+  * NICs:
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-6 Dx 100G MCX623106AN-CDAT (2x100G)
+
+      * Host interface: PCI Express 4.0 x16
+      * Device ID: 15b3:101d
+      * Firmware version: 22.50.0394 and above
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-7 200G CX713106AE-HEA_QP1_Ax (2x200G)
+
+      * Host interface: PCI Express 5.0 x16
+      * Device ID: 15b3:1021
+      * Firmware version: 28.50.0394 and above
+
+  * DOCA:
+
+    * DOCA 3.5.0-035000 and above
+
+* IBM Power 11 platforms with NVIDIA\ |reg| NICs combinations
+
+  * CPU:
+
+    * Power11 2.0 (pvr 0082 0200)
+
+  * OS:
+
+    * Red Hat Enterprise Linux 10.2 (6.12.0-211.20.1.el10_2.ppc64le)
+    * SUSE Linux Enterprise Server 15 SP7 (6.4.0-150700.53.66)
+    * PowerVM LPARs via pHyp Hypervisor
+
+  * NICs:
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-7 25GbE MCX713104AS-ADAT (4x25GbE)
+
+      * Host interface: PCIe 4.0 x16
+      * Driver version: 26.04-0.8.6
+      * Firmware version: 28.48.1000
+
+    * NVIDIA\ |reg| ConnectX\ |reg|-7 200GbE MCX755106AS-HEAT (2x200GbE)
+
+      * Host interface: PCIe 5.0x16 with x16 PCIe extension option
+      * Driver version: 26.04-0.8.6
+      * Firmware version: 28.48.1000
+
+  * DOCA:
+
+    * DOCA 3.4.0-085000.ppc64le

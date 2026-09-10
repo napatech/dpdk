@@ -74,7 +74,8 @@
 #define I40E_TX_OFFLOAD_SIMPLE_SUP_MASK (RTE_MBUF_F_TX_IPV4 | \
 		RTE_MBUF_F_TX_IPV6 | \
 		RTE_MBUF_F_TX_OUTER_IPV4 | \
-		RTE_MBUF_F_TX_OUTER_IPV6)
+		RTE_MBUF_F_TX_OUTER_IPV6 | \
+		RTE_MBUF_F_TX_TUNNEL_MASK)
 
 #define I40E_TX_OFFLOAD_SIMPLE_NOTSUP_MASK \
 		(RTE_MBUF_F_TX_OFFLOAD_MASK ^ I40E_TX_OFFLOAD_SIMPLE_SUP_MASK)
@@ -3042,7 +3043,7 @@ i40e_set_rx_function(struct rte_eth_dev *dev)
 
 out:
 	dev->rx_pkt_burst = i40e_rx_path_infos[ad->rx_func_type].pkt_burst;
-	PMD_DRV_LOG(NOTICE, "Using %s (port %d).",
+	PMD_DRV_LOG(DEBUG, "Using %s (port %d).",
 			i40e_rx_path_infos[ad->rx_func_type].info, dev->data->port_id);
 }
 
@@ -3124,7 +3125,7 @@ out:
 					 i40e_tx_path_infos[ad->tx_func_type].pkt_burst;
 	dev->tx_pkt_prepare = i40e_tx_path_infos[ad->tx_func_type].pkt_prep;
 
-	PMD_DRV_LOG(NOTICE, "Using %s (port %d).",
+	PMD_DRV_LOG(DEBUG, "Using %s (port %d).",
 		i40e_tx_path_infos[ad->tx_func_type].info, dev->data->port_id);
 
 	if (ad->tx_func_type == I40E_TX_SCALAR_SIMPLE ||

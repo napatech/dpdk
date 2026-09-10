@@ -394,6 +394,13 @@ s32 txgbe_clear_hw_cntrs(struct txgbe_hw *hw)
 	rd32(hw, TXGBE_PBTXLNKXON);
 	rd32(hw, TXGBE_PBTXLNKXOFF);
 
+	if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40) {
+		wr32(hw, TXGBE_PBRXLNKXON_AML, 0);
+		wr32(hw, TXGBE_PBRXLNKXOFF_AML, 0);
+		hw->last_stats.rx_xon_packets = 0;
+		hw->last_stats.rx_xoff_packets = 0;
+	}
+
 	/* DMA Stats */
 	rd32(hw, TXGBE_DMARXPKT);
 	rd32(hw, TXGBE_DMATXPKT);
@@ -1030,8 +1037,10 @@ s32 txgbe_fc_enable(struct txgbe_hw *hw)
 	for (i = 0; i < TXGBE_DCB_TC_MAX; i++) {
 		if ((hw->fc.current_mode & txgbe_fc_tx_pause) &&
 		    hw->fc.high_water[i]) {
-			fcrtl = TXGBE_FCWTRLO_TH(hw->fc.low_water[i]) |
-				TXGBE_FCWTRLO_XON;
+			fcrtl = TXGBE_FCWTRLO_TH(hw->fc.low_water[i]);
+			/* Only AML support XON */
+			if (hw->mac.type == txgbe_mac_aml || hw->mac.type == txgbe_mac_aml40)
+				fcrtl |= TXGBE_FCWTRLO_XON;
 			fcrth = TXGBE_FCWTRHI_TH(hw->fc.high_water[i]) |
 				TXGBE_FCWTRHI_XOFF;
 		} else {
@@ -2543,6 +2552,7 @@ s32 txgbe_init_shared_code(struct txgbe_hw *hw)
 		break;
 	case txgbe_mac_sp_vf:
 	case txgbe_mac_aml_vf:
+	case txgbe_mac_aml40_vf:
 		status = txgbe_init_ops_vf(hw);
 		break;
 	default:
@@ -2573,6 +2583,7 @@ bool txgbe_is_vf(struct txgbe_hw *hw)
 	switch (hw->mac.type) {
 	case txgbe_mac_sp_vf:
 	case txgbe_mac_aml_vf:
+	case txgbe_mac_aml40_vf:
 		return true;
 	default:
 		return false;
@@ -2619,6 +2630,11 @@ s32 txgbe_set_mac_type(struct txgbe_hw *hw)
 	case TXGBE_DEV_ID_AML5124_VF:
 		hw->phy.media_type = txgbe_media_type_virtual;
 		hw->mac.type = txgbe_mac_aml_vf;
+		break;
+	case TXGBE_DEV_ID_AML503F_VF:
+	case TXGBE_DEV_ID_AML513F_VF:
+		hw->phy.media_type = txgbe_media_type_virtual;
+		hw->mac.type = txgbe_mac_aml40_vf;
 		break;
 	default:
 		err = TXGBE_ERR_DEVICE_NOT_SUPPORTED;
@@ -2900,8 +2916,6 @@ s32 txgbe_init_ops_generic(struct txgbe_hw *hw)
 	phy->read_i2c_eeprom = txgbe_read_i2c_eeprom;
 	phy->write_i2c_eeprom = txgbe_write_i2c_eeprom;
 	phy->identify_sfp = txgbe_identify_module;
-	phy->read_i2c_byte_unlocked = txgbe_read_i2c_byte_unlocked;
-	phy->write_i2c_byte_unlocked = txgbe_write_i2c_byte_unlocked;
 	phy->check_overtemp = txgbe_check_overtemp;
 	phy->reset = txgbe_reset_phy;
 	phy->set_link_hostif = txgbe_hic_ephy_set_link;
@@ -4062,37 +4076,18 @@ s32 txgbe_reset_pipeline_raptor(struct txgbe_hw *hw)
 	return err;
 }
 
-s32 txgbe_e56_check_phy_link(struct txgbe_hw *hw, u32 *speed,
-				bool *link_up)
+bool txgbe_is_backplane(struct txgbe_hw *hw)
 {
-	u32 rdata = 0;
-	u32 links_reg = 0;
+	return hw->phy.get_media_type(hw) == txgbe_media_type_backplane ?
+						 true : false;
+}
 
-	/* must read it twice because the state may
-	 * not be correct the first time you read it
-	 */
-	rdata = rd32_epcs(hw, 0x30001);
-	rdata = rd32_epcs(hw, 0x30001);
+bool txgbe_gpio_ext_check(struct txgbe_hw *hw, u8 gpio_ext_mask)
+{
+	u32 gpio_ext = rd32(hw, TXGBE_GPIOEXT);
 
-	if (rdata & TXGBE_AML_PHY_LINK_UP)
-		*link_up = true;
-	else
-		*link_up = false;
+	if (gpio_ext & gpio_ext_mask)
+		return true;
 
-	links_reg = rd32(hw, TXGBE_PORTSTAT);
-	if (*link_up) {
-		if ((links_reg & TXGBE_CFG_PORT_ST_AML_LINK_40G) ==
-				TXGBE_CFG_PORT_ST_AML_LINK_40G)
-			*speed = TXGBE_LINK_SPEED_40GB_FULL;
-		else if ((links_reg & TXGBE_CFG_PORT_ST_AML_LINK_25G) ==
-				TXGBE_CFG_PORT_ST_AML_LINK_25G)
-			*speed = TXGBE_LINK_SPEED_25GB_FULL;
-		else if ((links_reg & TXGBE_CFG_PORT_ST_AML_LINK_10G) ==
-				TXGBE_CFG_PORT_ST_AML_LINK_10G)
-			*speed = TXGBE_LINK_SPEED_10GB_FULL;
-	} else {
-		*speed = TXGBE_LINK_SPEED_UNKNOWN;
-	}
-
-	return 0;
+	return false;
 }

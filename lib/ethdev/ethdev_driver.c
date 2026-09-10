@@ -135,7 +135,7 @@ rte_eth_dev_allocate(const char *name)
 	eth_dev->data->port_id = port_id;
 	eth_dev->data->backer_port_id = RTE_MAX_ETHPORTS;
 	eth_dev->data->mtu = RTE_ETHER_MTU;
-	pthread_mutex_init(&eth_dev->data->flow_ops_mutex, NULL);
+	rte_thread_mutex_init_shared(&eth_dev->data->flow_ops_mutex);
 	RTE_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
 	eth_dev_shared_data->allocated_ports++;
 
@@ -875,7 +875,7 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_eth_queue_count_dummy)
 int
 rte_eth_queue_count_dummy(void *queue __rte_unused)
 {
-	return -ENOTSUP;
+	return 0;
 }
 
 RTE_EXPORT_INTERNAL_SYMBOL(rte_eth_descriptor_status_dummy)

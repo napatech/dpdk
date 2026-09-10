@@ -9,11 +9,18 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+#include <rte_bpf_validate_debug.h>
 #include <rte_common.h>
 
 #include "bpf_impl.h"
+#include "bpf_validate.h"
+#include "bpf_validate_debug.h"
+#include "bpf_value_set.h"
 
 #define BPF_ARG_PTR_STACK RTE_BPF_ARG_RESERVED
+
+/* type containing no values (AKA "bottom", "never" etc)  */
+#define BPF_ARG_UNINHABITED ((enum rte_bpf_arg_type)(RTE_BPF_ARG_UNDEF - 1))
 
 struct bpf_reg_val {
 	struct rte_bpf_arg v;
@@ -32,6 +39,8 @@ struct bpf_eval_state {
 	SLIST_ENTRY(bpf_eval_state) next; /* for @safe list traversal */
 	struct bpf_reg_val rv[EBPF_REG_NUM];
 	struct bpf_reg_val sv[MAX_BPF_STACK_SIZE / sizeof(uint64_t)];
+	/* flag set for branches determined to be dynamically unreachable */
+	bool unreachable;
 };
 
 SLIST_HEAD(bpf_evst_head, bpf_eval_state);
@@ -80,7 +89,7 @@ struct evst_pool {
 };
 
 struct bpf_verifier {
-	const struct rte_bpf_prm *prm;
+	const struct rte_bpf_prm_ex *prm;
 	struct inst_node *in;
 	uint64_t stack_sz;
 	uint32_t nb_nodes;
@@ -92,6 +101,7 @@ struct bpf_verifier {
 	struct inst_node *evin;
 	struct evst_pool evst_sr_pool; /* for evst save/restore */
 	struct evst_pool evst_tp_pool; /* for evst track/prune */
+	struct rte_bpf_validate_debug *debug;
 };
 
 struct bpf_ins_check {
@@ -117,6 +127,416 @@ struct bpf_ins_check {
 
 /* For LD_IND R6 is an implicit CTX register. */
 #define	IND_SRC_REGS	(WRT_REGS ^ 1 << EBPF_REG_6)
+
+/*
+ * Debugging internal interface and helpers.
+ */
+
+static bool
+reg_val_range_is_valid(const struct bpf_reg_val *rv)
+{
+	if (rv->v.type == RTE_BPF_ARG_UNDEF)
+		return true;
+
+	if (rv->s.min > rv->s.max)
+		return false;
+
+	if (rv->u.min > rv->u.max)
+		return false;
+
+	/* If one of the ranges does not change sign, the other should match. */
+	if (rv->s.min >= 0 || rv->s.max < 0 ||
+			rv->u.min > INT64_MAX || rv->u.max <= INT64_MAX)
+		return rv->u.min == (uint64_t)rv->s.min &&
+			rv->u.max == (uint64_t)rv->s.max;
+
+	return true;
+}
+
+int
+__rte_bpf_validate_state_is_valid(const struct bpf_verifier *verifier)
+{
+	const struct bpf_eval_state *const st = verifier->evst;
+
+	for (int reg = 0; reg != RTE_DIM(st->rv); ++reg)
+		if (!reg_val_range_is_valid(st->rv + reg))
+			return false;
+
+	for (int var = 0; var != RTE_DIM(st->sv); ++var)
+		if (!reg_val_range_is_valid(st->sv + var))
+			return false;
+
+	return true;
+}
+
+int
+__rte_bpf_validate_can_access(const struct bpf_verifier *verifier,
+	const struct ebpf_insn *access, uint64_t off64)
+{
+	const struct bpf_eval_state *const st = verifier->evst;
+	const struct bpf_reg_val *rv;
+	/* Set of accessed byte offsets relative to memory area base. */
+	struct value_set access_set;
+	uint32_t opsz;
+
+	if (st->unreachable)
+		return -ENOENT;
+
+	switch (BPF_CLASS(access->code)) {
+	case BPF_LDX:
+		rv = &st->rv[access->src_reg];
+		if (rv->v.type == BPF_ARG_PTR_STACK)
+			/* Not supporting stack access queries yet. */
+			return -ENOTSUP;
+		break;
+	case BPF_ST:
+		rv = &st->rv[access->dst_reg];
+		break;
+	case BPF_STX:
+		rv = &st->rv[access->dst_reg];
+		if (st->rv[access->src_reg].v.type == RTE_BPF_ARG_UNDEF)
+			return false;
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	if (!RTE_BPF_ARG_PTR_TYPE(rv->v.type) || rv->v.size == 0)
+		return false;
+
+	access_set = value_set_from_pair(rv->s.min, rv->s.max, rv->u.min, rv->u.max);
+	value_set_translate(&access_set, off64);
+	opsz = bpf_size(BPF_SIZE(access->code));
+	value_set_add_contiguous(&access_set, 0, opsz - 1);
+
+	return value_set_is_covered_by_contiguous(&access_set, 0, rv->v.size - 1);
+}
+
+/* Return true if instruction `code` is supported by `may_jump`. */
+static bool
+may_jump_code_is_supported(uint8_t code)
+{
+	if (BPF_CLASS(code) != BPF_JMP)
+		return false;
+
+	switch (BPF_OP(code)) {
+	case BPF_JEQ:
+	case BPF_JGT:
+	case BPF_JGE:
+	case EBPF_JNE:
+	case EBPF_JSGT:
+	case EBPF_JSGE:
+	case EBPF_JLT:
+	case EBPF_JLE:
+	case EBPF_JSLT:
+	case EBPF_JSLE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* Return true if instruction `code` corresponds to a signed comparison. */
+static bool
+may_jump_code_is_signed(uint8_t code)
+{
+	switch (BPF_OP(code)) {
+	case EBPF_JSGT:
+	case EBPF_JSGE:
+	case EBPF_JSLT:
+	case EBPF_JSLE:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* Return true the specified jump condition _may_ be true. */
+static bool
+may_jump(uint8_t code, const struct value_set *origin,
+	const struct value_set *dst_set, const struct value_set *src_set)
+{
+	switch (BPF_OP(code)) {
+	case BPF_JEQ:
+		return value_sets_intersect(dst_set, src_set);
+	case EBPF_JNE:
+		return !(value_set_is_singleton(dst_set) &&
+			value_sets_equal(dst_set, src_set));
+	case BPF_JGT:
+	case EBPF_JSGT:
+		return !value_sets_based_less_or_equal(origin, dst_set, src_set);
+	case BPF_JGE:
+	case EBPF_JSGE:
+		return !value_sets_based_less(origin, dst_set, src_set);
+	case EBPF_JLT:
+	case EBPF_JSLT:
+		return !value_sets_based_less_or_equal(origin, src_set, dst_set);
+	case EBPF_JSLE:
+	case EBPF_JLE:
+		return !value_sets_based_less(origin, src_set, dst_set);
+	}
+	/* may_jump_code_is_supported should have caught this */
+	RTE_ASSERT(false);
+	return false;
+}
+
+/* Return instruction code for jump condition complement (negated result). */
+static uint8_t
+may_jump_code_complement(uint8_t code)
+{
+	switch (BPF_OP(code)) {
+	case BPF_JEQ:
+	case EBPF_JNE:
+		return code ^ BPF_JEQ ^ EBPF_JNE;
+	case BPF_JGT:
+	case EBPF_JLE:
+		return code ^ BPF_JGT ^ EBPF_JLE;
+	case BPF_JGE:
+	case EBPF_JLT:
+		return code ^ BPF_JGE ^ EBPF_JLT;
+	case EBPF_JSGT:
+	case EBPF_JSLE:
+		return code ^ EBPF_JSGT ^ EBPF_JSLE;
+	case EBPF_JSGE:
+	case EBPF_JSLT:
+		return code ^ EBPF_JSGE ^ EBPF_JSLT;
+	}
+	/* may_jump_code_is_supported should have caught this */
+	RTE_ASSERT(false);
+	return 0;
+}
+
+int
+__rte_bpf_validate_may_jump(const struct bpf_verifier *verifier,
+	const struct ebpf_insn *jump, uint64_t imm64)
+{
+	const struct bpf_eval_state *const st = verifier->evst;
+	const struct bpf_reg_val *rd, *rs;
+	struct value_set dst_set, src_set, origin;
+	int result;
+
+	if (!may_jump_code_is_supported(jump->code))
+		return -ENOTSUP;
+
+	if (st->unreachable)
+		/* Set no bits since neither false nor true is possible. */
+		return 0;
+
+	rd = &st->rv[jump->dst_reg];
+	dst_set = (rd->v.type == RTE_BPF_ARG_UNDEF) ? value_set_full :
+		value_set_from_pair(rd->s.min, rd->s.max, rd->u.min, rd->u.max);
+
+	rs = BPF_SRC(jump->code) == BPF_X ? &st->rv[jump->src_reg] : NULL;
+	src_set = rs == NULL ? value_set_singleton((int64_t)jump->imm) :
+		rs->v.type == RTE_BPF_ARG_UNDEF ? value_set_full :
+		value_set_from_pair(rs->s.min, rs->s.max, rs->u.min, rs->u.max);
+
+	value_set_translate(&src_set, imm64);
+
+	if (RTE_BPF_ARG_PTR_TYPE(rd->v.type) &&
+			(rs != NULL && RTE_BPF_ARG_PTR_TYPE(rs->v.type)) &&
+			rd->v.size == rs->v.size) {
+		/*
+		 * Both sides are pointers with the same memory area size.
+		 * Until tracking of memory areas is implemented we will consider them
+		 * pointing to the same memory area just because of this.
+		 * In this case our value sets represent offsets from the memory area base,
+		 * which is some unknown distance from the scalar zero (NULL).
+		 * We know however that the memory area cannot cross zero address.
+		 * Thus range of origin relative to memory base starts with 1 byte gap
+		 * after the memory area and ends just before it.
+		 */
+		origin = value_set_contiguous(rd->v.size + 1, -1);
+	} else {
+		/* Scalar value of a pointer depends on the memory area base address. */
+		if (RTE_BPF_ARG_PTR_TYPE(rd->v.type))
+			value_set_add_contiguous(&dst_set, 1, UINT64_MAX - rd->v.size);
+		if (rs != NULL && RTE_BPF_ARG_PTR_TYPE(rs->v.type))
+			value_set_add_contiguous(&dst_set, 1, UINT64_MAX - rs->v.size);
+		origin = value_set_singleton(0);
+	}
+
+	if (may_jump_code_is_signed(jump->code))
+		/* Shift origin to the minimal value for signed comparisons. */
+		value_set_translate(&origin, INT64_MIN);
+
+	result = 0;
+
+	if (may_jump(jump->code, &origin, &dst_set, &src_set))
+		result |= RTE_BPF_VALIDATE_DEBUG_MAY_BE_TRUE;
+
+	if (may_jump(may_jump_code_complement(jump->code), &origin, &dst_set, &src_set))
+		result |= RTE_BPF_VALIDATE_DEBUG_MAY_BE_FALSE;
+
+	return result;
+}
+
+/* Like snprintf, but advances (except for overflow) ptr and reduces szleft. */
+__rte_format_printf(3, 4)
+static int
+buf_printf(char **ptr, ssize_t *szleft, const char *format, ...)
+{
+	va_list args;
+	int rc;
+
+	va_start(args, format);
+	rc = vsnprintf(*ptr, RTE_MAX(0, *szleft), format, args);
+	va_end(args);
+
+	if (rc > 0) {
+		*szleft -= rc;
+		if (*szleft > 0)
+			*ptr += rc;
+	}
+
+	return rc;
+}
+
+static int
+format_memory_area(char **ptr, ssize_t *szleft, const struct bpf_reg_val *rv)
+{
+	switch (rv->v.type) {
+	case RTE_BPF_ARG_RAW:
+		return 0;
+	case RTE_BPF_ARG_PTR:
+		return buf_printf(ptr, szleft, "%%buffer<%zu> + ",
+			(size_t)rv->v.size);
+	case RTE_BPF_ARG_PTR_MBUF:
+		return buf_printf(ptr, szleft, "%%mbuf<%zu, %zu> + ",
+			(size_t)rv->v.size, (size_t)rv->v.buf_size);
+	case BPF_ARG_PTR_STACK:
+		return buf_printf(ptr, szleft, "%%stack + ");
+	default:
+		return -ENOTSUP;
+	}
+}
+
+/* Format min..max interval using validate-debug API and updating ptr and szleft. */
+static int
+buf_print_interval(char **ptr, ssize_t *szleft, char format, uint64_t min, uint64_t max)
+{
+	int rc;
+
+	rc = rte_bpf_validate_debug_format_interval(*ptr, RTE_MAX(0, *szleft),
+		format, min, max);
+
+	if (rc > 0) {
+		*szleft -= rc;
+		if (*szleft > 0)
+			*ptr += rc;
+	}
+
+	return rc;
+}
+
+/* Format rv roughly as "<signed-range> INTERSECT <unsigned-hex-range>" */
+static int
+format_register_range(char **ptr, ssize_t *szleft, const struct bpf_reg_val *rv)
+{
+	int rc;
+	uint64_t expected_unsigned_min, expected_unsigned_max;
+	const bool valid = reg_val_range_is_valid(rv);
+
+	/* Print signed unless trivial. */
+	if (!valid || rv->s.min != INT64_MIN || rv->s.max != INT64_MAX) {
+		rc = buf_print_interval(ptr, szleft, 'd', rv->s.min, rv->s.max);
+		if (rc < 0)
+			return rc;
+
+		if (valid) {
+			/* Skip printing unsigned if it has expected values. */
+			if (rv->s.min >= 0 || rv->s.max < 0) {
+				expected_unsigned_min = (uint64_t)rv->s.min;
+				expected_unsigned_max = (uint64_t)rv->s.max;
+			} else {
+				expected_unsigned_min = 0;
+				expected_unsigned_max = UINT64_MAX;
+			}
+
+			if (rv->u.min == expected_unsigned_min &&
+					rv->u.max == expected_unsigned_max)
+				return 0;
+		}
+
+		rc = buf_printf(ptr, szleft, " INTERSECT ");
+		if (rc < 0)
+			return rc;
+	}
+
+	rc = buf_print_interval(ptr, szleft, 'x', rv->u.min, rv->u.max);
+	if (rc < 0)
+		return rc;
+
+	if (!valid) {
+		rc = buf_printf(ptr, szleft, " (!)");
+		if (rc < 0)
+			return rc;
+	}
+
+	return 0;
+}
+
+/* Format rv roughly as "<memory-object> + <offsets-range>" */
+static int
+format_reg_val(char *buffer, size_t bufsz, const struct bpf_reg_val *rv)
+{
+	char *ptr = buffer;
+	ssize_t szleft = bufsz;
+	int rc;
+
+	if (rv->v.type == RTE_BPF_ARG_UNDEF)
+		return snprintf(buffer, bufsz, "%%undefined");
+
+	/* Print data area info, if any. */
+	rc = format_memory_area(&ptr, &szleft, rv);
+	if (rc < 0)
+		return rc;
+
+	rc = format_register_range(&ptr, &szleft, rv);
+	if (rc < 0)
+		return rc;
+
+	/* At least one snprintf was called and added terminating zero. */
+	RTE_ASSERT(szleft < (ssize_t)bufsz);
+	--szleft;
+
+	return bufsz - szleft;
+}
+
+int
+__rte_bpf_validate_format_register_info(const struct bpf_verifier *verifier,
+	char *buffer, size_t bufsz, uint8_t reg)
+{
+	if (reg >= EBPF_REG_NUM)
+		return -EINVAL;
+
+	return format_reg_val(buffer, bufsz, &verifier->evst->rv[reg]);
+}
+
+int
+__rte_bpf_validate_format_frame_info(const struct bpf_verifier *verifier,
+	char *buffer, size_t bufsz, int32_t offset)
+{
+	if (offset % sizeof(uint64_t) != 0)
+		return -EINVAL;
+
+	if (offset >= 0 || offset < -MAX_BPF_STACK_SIZE)
+		return -ERANGE;
+
+	offset = (MAX_BPF_STACK_SIZE + offset) / sizeof(uint64_t);
+
+	return format_reg_val(buffer, bufsz, &verifier->evst->sv[offset]);
+}
+
+int32_t
+__rte_bpf_validate_get_frame_size(const struct bpf_verifier *verifier)
+{
+	if (verifier->stack_sz > INT32_MAX)
+		return -ERANGE;
+
+	return verifier->stack_sz;
+}
+
 
 /*
  * check and evaluate functions for particular instruction types.
@@ -239,7 +659,19 @@ eval_apply_mask(struct bpf_reg_val *rv, uint64_t mask)
 static void
 eval_add(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, uint64_t msk)
 {
+	struct bpf_reg_val rs_buf;
 	struct bpf_reg_val rv;
+
+	if (RTE_BPF_ARG_PTR_TYPE(rs->v.type) != 0) {
+		if (RTE_BPF_ARG_PTR_TYPE(rd->v.type) != 0) {
+			/* treat sum of pointers as sum of two unknown scalars */
+			eval_fill_max_bound(&rs_buf, msk);
+			*rd = rs_buf;
+			rs = &rs_buf;
+		} else
+			/* scalar + pointer is a pointer of the same type */
+			rd->v = rs->v;
+	}
 
 	rv.u.min = (rd->u.min + rs->u.min) & msk;
 	rv.u.max = (rd->u.max + rs->u.max) & msk;
@@ -284,9 +716,9 @@ eval_sub(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, uint64_t msk)
 		eval_umax_bound(&rv, msk);
 
 	if ((rd->s.min != rd->s.max || rs->s.min != rs->s.max) &&
-			(((rs->s.min < 0 && rv.s.min < rd->s.min) ||
+			(((rs->s.max < 0 && rv.s.min < rd->s.min) ||
 			rv.s.min > rd->s.min) ||
-			((rs->s.max < 0 && rv.s.max < rd->s.max) ||
+			((rs->s.min < 0 && rv.s.max < rd->s.max) ||
 			rv.s.max > rd->s.max)))
 		eval_smax_bound(&rv, msk);
 
@@ -314,7 +746,8 @@ eval_lsh(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 
 	/* check that dreg values are and would remain always positive */
 	if ((uint64_t)rd->s.min >> (opsz - 1) != 0 || rd->s.max >=
-			RTE_LEN2MASK(opsz - rs->u.max - 1, int64_t))
+			(rs->u.max == opsz - 1 ? 0 :
+				 RTE_LEN2MASK(opsz - rs->u.max - 1, int64_t)))
 		eval_smax_bound(rd, msk);
 	else {
 		rd->s.max <<= rs->u.max;
@@ -416,7 +849,7 @@ eval_and(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 		rd->u.max &= rs->u.max;
 	} else {
 		rd->u.max = eval_uand_max(rd->u.max, rs->u.max, opsz);
-		rd->u.min &= rs->u.min;
+		rd->u.min = 0;
 	}
 
 	/* both operands are constants */
@@ -427,7 +860,7 @@ eval_and(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 	} else if (rd->s.min >= 0 || rs->s.min >= 0) {
 		rd->s.max = eval_uand_max(rd->s.max & (msk >> 1),
 			rs->s.max & (msk >> 1), opsz);
-		rd->s.min &= rs->s.min;
+		rd->s.min = 0;
 	} else
 		eval_smax_bound(rd, msk);
 }
@@ -442,7 +875,7 @@ eval_or(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 		rd->u.max |= rs->u.max;
 	} else {
 		rd->u.max = eval_uor_max(rd->u.max, rs->u.max, opsz);
-		rd->u.min |= rs->u.min;
+		rd->u.min = RTE_MAX(rd->u.min, rs->u.min);
 	}
 
 	/* both operands are constants */
@@ -451,9 +884,9 @@ eval_or(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 		rd->s.max |= rs->s.max;
 
 	/* both operands are non-negative */
-	} else if (rd->s.min >= 0 || rs->s.min >= 0) {
+	} else if (rd->s.min >= 0 && rs->s.min >= 0) {
 		rd->s.max = eval_uor_max(rd->s.max, rs->s.max, opsz);
-		rd->s.min |= rs->s.min;
+		rd->s.min = RTE_MAX(rd->s.min, rs->s.min);
 	} else
 		eval_smax_bound(rd, msk);
 }
@@ -477,7 +910,7 @@ eval_xor(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 		rd->s.max ^= rs->s.max;
 
 	/* both operands are non-negative */
-	} else if (rd->s.min >= 0 || rs->s.min >= 0) {
+	} else if (rd->s.min >= 0 && rs->s.min >= 0) {
 		rd->s.max = eval_uor_max(rd->s.max, rs->s.max, opsz);
 		rd->s.min = 0;
 	} else
@@ -495,25 +928,24 @@ eval_mul(struct bpf_reg_val *rd, const struct bpf_reg_val *rs, size_t opsz,
 	/* check for overflow */
 	} else if (rd->u.max <= msk >> opsz / 2 && rs->u.max <= msk >> opsz) {
 		rd->u.max *= rs->u.max;
-		rd->u.min *= rd->u.min;
+		rd->u.min *= rs->u.min;
 	} else
 		eval_umax_bound(rd, msk);
 
 	/* both operands are constants */
 	if (rd->s.min == rd->s.max && rs->s.min == rs->s.max) {
-		rd->s.min = (rd->s.min * rs->s.min) & msk;
-		rd->s.max = (rd->s.max * rs->s.max) & msk;
+		rd->s.min = ((uint64_t)rd->s.min * (uint64_t)rs->s.min) & msk;
+		rd->s.max = ((uint64_t)rd->s.max * (uint64_t)rs->s.max) & msk;
 	/* check that both operands are positive and no overflow */
 	} else if (rd->s.min >= 0 && rs->s.min >= 0) {
 		rd->s.max *= rs->s.max;
-		rd->s.min *= rd->s.min;
+		rd->s.min *= rs->s.min;
 	} else
 		eval_smax_bound(rd, msk);
 }
 
 static const char *
-eval_divmod(uint32_t op, struct bpf_reg_val *rd, struct bpf_reg_val *rs,
-	size_t opsz, uint64_t msk)
+eval_divmod(uint32_t op, struct bpf_reg_val *rd, struct bpf_reg_val *rs, uint64_t msk)
 {
 	/* both operands are constants */
 	if (rd->u.min == rd->u.max && rs->u.min == rs->u.max) {
@@ -534,33 +966,16 @@ eval_divmod(uint32_t op, struct bpf_reg_val *rd, struct bpf_reg_val *rs,
 		rd->u.min = 0;
 	}
 
-	/* if we have 32-bit values - extend them to 64-bit */
-	if (opsz == sizeof(uint32_t) * CHAR_BIT) {
-		rd->s.min = (int32_t)rd->s.min;
-		rd->s.max = (int32_t)rd->s.max;
-		rs->s.min = (int32_t)rs->s.min;
-		rs->s.max = (int32_t)rs->s.max;
-	}
-
-	/* both operands are constants */
-	if (rd->s.min == rd->s.max && rs->s.min == rs->s.max) {
-		if (rs->s.max == 0)
-			return "division by 0";
-		if (op == BPF_DIV) {
-			rd->s.min /= rs->s.min;
-			rd->s.max /= rs->s.max;
-		} else {
-			rd->s.min %= rs->s.min;
-			rd->s.max %= rs->s.max;
-		}
-	} else if (op == BPF_MOD) {
-		rd->s.min = RTE_MAX(rd->s.max, 0);
-		rd->s.min = RTE_MIN(rd->s.min, 0);
+	if (rd->u.min >= (uint64_t)INT64_MIN || rd->u.max <= (uint64_t)INT64_MAX) {
+		/*
+		 * All values have the same sign bit, which means range
+		 * contiguous as unsigned is also contiguous as signed,
+		 * so we can just reuse it without any changes.
+		 */
+		rd->s.min = rd->u.min;
+		rd->s.max = rd->u.max;
 	} else
 		eval_smax_bound(rd, msk);
-
-	rd->s.max &= msk;
-	rd->s.min &= msk;
 
 	return NULL;
 }
@@ -570,6 +985,11 @@ eval_neg(struct bpf_reg_val *rd, size_t opsz, uint64_t msk)
 {
 	uint64_t ux, uy;
 	int64_t sx, sy;
+	/* additional limits imposed by signed on unsigned and back */
+	struct bpf_reg_val cross_limits = {
+		.s = { INT64_MIN, INT64_MAX },
+		.u = { 0, UINT64_MAX },
+	};
 
 	/* if we have 32-bit values - extend them to 64-bit */
 	if (opsz == sizeof(uint32_t) * CHAR_BIT) {
@@ -577,11 +997,29 @@ eval_neg(struct bpf_reg_val *rd, size_t opsz, uint64_t msk)
 		rd->u.max = (int32_t)rd->u.max;
 	}
 
-	ux = -(int64_t)rd->u.min & msk;
-	uy = -(int64_t)rd->u.max & msk;
+	if (rd->u.min == 0) {
+		/* special case: ranges that include 0 and, possibly, 1 */
 
-	rd->u.max = RTE_MAX(ux, uy);
-	rd->u.min = RTE_MIN(ux, uy);
+		/*
+		 * Calculate requirements on the signed range of negation.
+		 * It is only possible when negated range does not cross from
+		 * INT64_MIN to INT64_MAX, which means our original range does
+		 * not reach (uint64_t)-INT64_MAX.
+		 */
+		if (rd->u.max < (uint64_t)-INT64_MAX) {
+			cross_limits.s.min = -rd->u.max;
+			cross_limits.s.max = -rd->u.min;
+		}
+
+		if (rd->u.max != 0)
+			rd->u.max = UINT64_MAX;
+	} else {
+		ux = -rd->u.min & msk;
+		uy = -rd->u.max & msk;
+
+		rd->u.max = RTE_MAX(ux, uy);
+		rd->u.min = RTE_MIN(ux, uy);
+	}
 
 	/* if we have 32-bit values - extend them to 64-bit */
 	if (opsz == sizeof(uint32_t) * CHAR_BIT) {
@@ -589,11 +1027,27 @@ eval_neg(struct bpf_reg_val *rd, size_t opsz, uint64_t msk)
 		rd->s.max = (int32_t)rd->s.max;
 	}
 
-	sx = -rd->s.min & msk;
-	sy = -rd->s.max & msk;
+	if (rd->s.min == INT64_MIN) {
+		/* special case: negation of INT64_MIN is INT64_MIN */
+		if (rd->s.max <= 0) {
+			cross_limits.u.min = -(uint64_t)rd->s.max;
+			cross_limits.u.max = -(uint64_t)rd->s.min;
+		}
+		if (rd->s.max != INT64_MIN)
+			rd->s.max = INT64_MAX;
+	} else {
+		/* since max >= min, neither can be INT64_MIN here */
+		sx = -rd->s.min & msk;
+		sy = -rd->s.max & msk;
 
-	rd->s.max = RTE_MAX(sx, sy);
-	rd->s.min = RTE_MIN(sx, sy);
+		rd->s.max = RTE_MAX(sx, sy);
+		rd->s.min = RTE_MIN(sx, sy);
+	}
+
+	rd->s.min = RTE_MAX(rd->s.min, cross_limits.s.min) & msk;
+	rd->s.max = RTE_MIN(rd->s.max, cross_limits.s.max) & msk;
+	rd->u.min = RTE_MAX(rd->u.min, cross_limits.u.min) & msk;
+	rd->u.max = RTE_MIN(rd->u.max, cross_limits.u.max) & msk;
 }
 
 static const char *
@@ -706,7 +1160,7 @@ eval_alu(struct bpf_verifier *bvf, const struct ebpf_insn *ins)
 	else if (op == BPF_MUL)
 		eval_mul(rd, &rs, opsz, msk);
 	else if (op == BPF_DIV || op == BPF_MOD)
-		err = eval_divmod(op, rd, &rs, opsz, msk);
+		err = eval_divmod(op, rd, &rs, msk);
 	else if (op == BPF_NEG)
 		eval_neg(rd, opsz, msk);
 	else if (op == EBPF_MOV)
@@ -800,10 +1254,11 @@ eval_max_load(struct bpf_reg_val *rv, uint64_t mask)
 	/* full 64-bit load */
 	if (mask == UINT64_MAX)
 		eval_smax_bound(rv, mask);
-
-	/* zero-extend load */
-	rv->s.min = rv->u.min;
-	rv->s.max = rv->u.max;
+	else {
+		/* zero-extend load */
+		rv->s.min = rv->u.min;
+		rv->s.max = rv->u.max;
+	}
 }
 
 
@@ -952,6 +1407,14 @@ eval_store(struct bpf_verifier *bvf, const struct ebpf_insn *ins)
 }
 
 static const char *
+eval_ja(struct bpf_verifier *bvf, const struct ebpf_insn *ins)
+{
+	RTE_SET_USED(bvf);
+	RTE_SET_USED(ins);
+	return NULL;
+}
+
+static const char *
 eval_func_arg(struct bpf_verifier *bvf, const struct rte_bpf_arg *arg,
 	struct bpf_reg_val *rv)
 {
@@ -1071,32 +1534,68 @@ static void
 eval_jgt_jle(struct bpf_reg_val *trd, struct bpf_reg_val *trs,
 	struct bpf_reg_val *frd, struct bpf_reg_val *frs)
 {
-	frd->u.max = RTE_MIN(frd->u.max, frs->u.min);
-	trd->u.min = RTE_MAX(trd->u.min, trs->u.min + 1);
+	if (frd->u.min <= frs->u.max) {
+		frd->u.max = RTE_MIN(frd->u.max, frs->u.max);
+		frs->u.min = RTE_MAX(frs->u.min, frd->u.min);
+	} else
+		frd->v.type = frs->v.type = BPF_ARG_UNINHABITED;
+
+	if (trs->u.min < trd->u.max) {
+		trd->u.min = RTE_MAX(trd->u.min, trs->u.min + 1);
+		trs->u.max = RTE_MIN(trs->u.max, trd->u.max - 1);
+	} else
+		trd->v.type = trs->v.type = BPF_ARG_UNINHABITED;
 }
 
 static void
 eval_jlt_jge(struct bpf_reg_val *trd, struct bpf_reg_val *trs,
 	struct bpf_reg_val *frd, struct bpf_reg_val *frs)
 {
-	frd->u.min = RTE_MAX(frd->u.min, frs->u.min);
-	trd->u.max = RTE_MIN(trd->u.max, trs->u.max - 1);
+	if (frs->u.min <= frd->u.max) {
+		frd->u.min = RTE_MAX(frd->u.min, frs->u.min);
+		frs->u.max = RTE_MIN(frs->u.max, frd->u.max);
+	} else
+		frd->v.type = frs->v.type = BPF_ARG_UNINHABITED;
+
+	if (trd->u.min < trs->u.max) {
+		trd->u.max = RTE_MIN(trd->u.max, trs->u.max - 1);
+		trs->u.min = RTE_MAX(trs->u.min, trd->u.min + 1);
+	} else
+		trd->v.type = trs->v.type = BPF_ARG_UNINHABITED;
 }
 
 static void
 eval_jsgt_jsle(struct bpf_reg_val *trd, struct bpf_reg_val *trs,
 	struct bpf_reg_val *frd, struct bpf_reg_val *frs)
 {
-	frd->s.max = RTE_MIN(frd->s.max, frs->s.min);
-	trd->s.min = RTE_MAX(trd->s.min, trs->s.min + 1);
+	if (frd->s.min <= frs->s.max) {
+		frd->s.max = RTE_MIN(frd->s.max, frs->s.max);
+		frs->s.min = RTE_MAX(frs->s.min, frd->s.min);
+	} else
+		frd->v.type = frs->v.type = BPF_ARG_UNINHABITED;
+
+	if (trs->s.min < trd->s.max) {
+		trd->s.min = RTE_MAX(trd->s.min, trs->s.min + 1);
+		trs->s.max = RTE_MIN(trs->s.max, trd->s.max - 1);
+	} else
+		trd->v.type = trs->v.type = BPF_ARG_UNINHABITED;
 }
 
 static void
 eval_jslt_jsge(struct bpf_reg_val *trd, struct bpf_reg_val *trs,
 	struct bpf_reg_val *frd, struct bpf_reg_val *frs)
 {
-	frd->s.min = RTE_MAX(frd->s.min, frs->s.min);
-	trd->s.max = RTE_MIN(trd->s.max, trs->s.max - 1);
+	if (frs->s.min <= frd->s.max) {
+		frd->s.min = RTE_MAX(frd->s.min, frs->s.min);
+		frs->s.max = RTE_MIN(frs->s.max, frd->s.max);
+	} else
+		frd->v.type = frs->v.type = BPF_ARG_UNINHABITED;
+
+	if (trd->s.min < trs->s.max) {
+		trd->s.max = RTE_MIN(trd->s.max, trs->s.max - 1);
+		trs->s.min = RTE_MAX(trs->s.min, trd->s.min + 1);
+	} else
+		trd->v.type = trs->v.type = BPF_ARG_UNINHABITED;
 }
 
 static const char *
@@ -1150,6 +1649,14 @@ eval_jcc(struct bpf_verifier *bvf, const struct ebpf_insn *ins)
 		eval_jslt_jsge(trd, trs, frd, frs);
 	else if (op == EBPF_JSGE)
 		eval_jslt_jsge(frd, frs, trd, trs);
+
+	if (trd->v.type == BPF_ARG_UNINHABITED ||
+			trs->v.type == BPF_ARG_UNINHABITED)
+		tst->unreachable = true;
+
+	if (frd->v.type == BPF_ARG_UNINHABITED ||
+			frs->v.type == BPF_ARG_UNINHABITED)
+		fst->unreachable = true;
 
 	return NULL;
 }
@@ -1602,6 +2109,7 @@ static const struct bpf_ins_check ins_chk[UINT8_MAX + 1] = {
 		.mask = { .dreg = ZERO_REG, .sreg = ZERO_REG},
 		.off = { .min = 0, .max = UINT16_MAX},
 		.imm = { .min = 0, .max = 0},
+		.eval = eval_ja,
 	},
 	/* jcc IMM instructions */
 	[(BPF_JMP | BPF_JEQ | BPF_K)] = {
@@ -1717,6 +2225,7 @@ static const struct bpf_ins_check ins_chk[UINT8_MAX + 1] = {
 		.mask = { .dreg = ALL_REGS, .sreg = ALL_REGS},
 		.off = { .min = 0, .max = UINT16_MAX},
 		.imm = { .min = 0, .max = 0},
+		.eval = eval_jcc,
 	},
 	[(BPF_JMP | EBPF_JSGE | BPF_X)] = {
 		.mask = { .dreg = ALL_REGS, .sreg = ALL_REGS},
@@ -1837,17 +2346,17 @@ add_edge(struct bpf_verifier *bvf, struct inst_node *node, uint32_t nidx)
 {
 	uint32_t ne;
 
-	if (nidx >= bvf->prm->nb_ins) {
-		RTE_BPF_LOG_LINE(ERR,
-			"%s: program boundary violation at pc: %u, next pc: %u",
-			__func__, get_node_idx(bvf, node), nidx);
+	if (nidx >= bvf->prm->raw.nb_ins) {
+		RTE_BPF_LOG_FUNC_LINE(ERR,
+			"program boundary violation at pc: %u, next pc: %u",
+			get_node_idx(bvf, node), nidx);
 		return -EINVAL;
 	}
 
 	ne = node->nb_edge;
 	if (ne >= RTE_DIM(node->edge_dest)) {
-		RTE_BPF_LOG_LINE(ERR, "%s: internal error at pc: %u",
-			__func__, get_node_idx(bvf, node));
+		RTE_BPF_LOG_FUNC_LINE(ERR, "internal error at pc: %u",
+			get_node_idx(bvf, node));
 		return -EINVAL;
 	}
 
@@ -1889,7 +2398,7 @@ set_edge_type(struct bpf_verifier *bvf, struct inst_node *node,
  * Depth-First Search (DFS) through previously constructed
  * Control Flow Graph (CFG).
  * Information collected at this path would be used later
- * to determine is there any loops, and/or unreachable instructions.
+ * to determine is there any loops, and/or statically unreachable instructions.
  * PREREQUISITE: there is at least one node.
  */
 static void
@@ -1937,7 +2446,7 @@ dfs(struct bpf_verifier *bvf)
 }
 
 /*
- * report unreachable instructions.
+ * report statically unreachable instructions.
  */
 static void
 log_unreachable(const struct bpf_verifier *bvf)
@@ -1946,10 +2455,10 @@ log_unreachable(const struct bpf_verifier *bvf)
 	struct inst_node *node;
 	const struct ebpf_insn *ins;
 
-	for (i = 0; i != bvf->prm->nb_ins; i++) {
+	for (i = 0; i != bvf->prm->raw.nb_ins; i++) {
 
 		node = bvf->in + i;
-		ins = bvf->prm->ins + i;
+		ins = bvf->prm->raw.ins + i;
 
 		if (node->colour == WHITE &&
 				ins->code != (BPF_LD | BPF_IMM | EBPF_DW))
@@ -1966,7 +2475,7 @@ log_loop(const struct bpf_verifier *bvf)
 	uint32_t i, j;
 	struct inst_node *node;
 
-	for (i = 0; i != bvf->prm->nb_ins; i++) {
+	for (i = 0; i != bvf->prm->raw.nb_ins; i++) {
 
 		node = bvf->in + i;
 		if (node->colour != BLACK)
@@ -1998,15 +2507,14 @@ validate(struct bpf_verifier *bvf)
 	const char *err;
 
 	rc = 0;
-	for (i = 0; i < bvf->prm->nb_ins; i++) {
+	for (i = 0; i < bvf->prm->raw.nb_ins; i++) {
 
-		ins = bvf->prm->ins + i;
+		ins = bvf->prm->raw.ins + i;
 		node = bvf->in + i;
 
 		err = check_syntax(ins);
 		if (err != 0) {
-			RTE_BPF_LOG_LINE(ERR, "%s: %s at pc: %u",
-				__func__, err, i);
+			RTE_BPF_LOG_FUNC_LINE(ERR, "%s at pc: %u", err, i);
 			rc |= -EINVAL;
 		}
 
@@ -2154,6 +2662,10 @@ evst_pool_init(struct bpf_verifier *bvf)
 {
 	uint32_t k, n;
 
+	if (bvf->nb_jcc_nodes > UINT32_MAX / 4)
+		/* Calculations that follow may overflow. */
+		return -E2BIG;
+
 	/*
 	 * We need nb_jcc_nodes + 1 for save_cur/restore_cur
 	 * remaining ones will be used for state tracking/pruning.
@@ -2230,9 +2742,9 @@ save_cur_eval_state(struct bpf_verifier *bvf, struct inst_node *node)
 	/* get new eval_state for this node */
 	st = pull_eval_state(&bvf->evst_sr_pool);
 	if (st == NULL) {
-		RTE_BPF_LOG_LINE(ERR,
-			"%s: internal error (out of space) at pc: %u",
-			__func__, get_node_idx(bvf, node));
+		RTE_BPF_LOG_FUNC_LINE(ERR,
+			"internal error (out of space) at pc: %u",
+			get_node_idx(bvf, node));
 		return -ENOMEM;
 	}
 
@@ -2402,11 +2914,13 @@ prune_eval_state(struct bpf_verifier *bvf, const struct inst_node *node,
 static int
 evaluate(struct bpf_verifier *bvf)
 {
-	int32_t rc;
 	uint32_t idx, op;
 	const char *err;
 	const struct ebpf_insn *ins;
 	struct inst_node *next, *node;
+	int prev_nb_edge;  /* branching number of the previous instruction */
+	int rc, debug_rc;
+	struct rte_bpf_validate_debug *const debug = bvf->prm->debug;
 
 	struct {
 		uint32_t nb_eval;
@@ -2426,27 +2940,35 @@ evaluate(struct bpf_verifier *bvf)
 		.s = {.min = MAX_BPF_STACK_SIZE, .max = MAX_BPF_STACK_SIZE},
 	};
 
-	bvf->evst->rv[EBPF_REG_1].v = bvf->prm->prog_arg;
-	bvf->evst->rv[EBPF_REG_1].mask = UINT64_MAX;
-	if (bvf->prm->prog_arg.type == RTE_BPF_ARG_RAW)
-		eval_max_bound(bvf->evst->rv + EBPF_REG_1, UINT64_MAX);
+	for (uint32_t pai = 0; pai != bvf->prm->nb_prog_arg; ++pai) {
+		struct bpf_reg_val *reg = &bvf->evst->rv[EBPF_REG_1 + pai];
+
+		reg->v = bvf->prm->prog_arg[pai];
+		reg->mask = UINT64_MAX;
+		if (reg->v.type == RTE_BPF_ARG_RAW)
+			eval_max_bound(reg, UINT64_MAX);
+	}
 
 	bvf->evst->rv[EBPF_REG_10] = rvfp;
 
-	ins = bvf->prm->ins;
+	ins = bvf->prm->raw.ins;
 	node = bvf->in;
 	next = node;
-	rc = 0;
+	prev_nb_edge = 1;
 
 	memset(&stats, 0, sizeof(stats));
 
-	while (node != NULL && rc == 0) {
+	rc = __rte_bpf_validate_debug_evaluate_start(debug, bvf, bvf->prm);
+	if (rc < 0)
+		return rc;
 
+	while (node != NULL) {
 		/*
 		 * current node evaluation, make sure we evaluate
 		 * each node only once.
 		 */
 		if (next != NULL) {
+			/* just started or stepped down the tree, node == next */
 
 			bvf->evin = node;
 			idx = get_node_idx(bvf, node);
@@ -2454,18 +2976,33 @@ evaluate(struct bpf_verifier *bvf)
 
 			/* for jcc node make a copy of evaluation state */
 			if (node->nb_edge > 1) {
-				rc |= save_cur_eval_state(bvf, node);
+				rc = save_cur_eval_state(bvf, node);
+				if (rc < 0)
+					break;
 				stats.nb_save++;
 			}
 
-			if (ins_chk[op].eval != NULL && rc == 0) {
-				err = ins_chk[op].eval(bvf, ins + idx);
-				stats.nb_eval++;
-				if (err != NULL) {
-					RTE_BPF_LOG_LINE(ERR, "%s: %s at pc: %u",
-						__func__, err, idx);
-					rc = -EINVAL;
-				}
+			if (ins_chk[op].eval == NULL) {
+				RTE_BPF_LOG_FUNC_LINE(ERR,
+					"Unrecognized instruction at pc: %u", idx);
+				rc = -EINVAL;
+				break;
+			}
+
+			rc = __rte_bpf_validate_debug_evaluate_step(debug, idx,
+				prev_nb_edge > 1 ?
+					RTE_BPF_VALIDATE_DEBUG_EVENT_BRANCH_ENTER :
+					RTE_BPF_VALIDATE_DEBUG_EVENT_STEP);
+			if (rc < 0)
+				break;
+
+			err = ins_chk[op].eval(bvf, ins + idx);
+			stats.nb_eval++;
+			if (err != NULL) {
+				RTE_BPF_LOG_FUNC_LINE(ERR,
+					"%s at pc: %u", err, idx);
+				rc = -EINVAL;
+				break;
 			}
 
 			log_dbg_eval_state(bvf, ins + idx, idx);
@@ -2476,25 +3013,42 @@ evaluate(struct bpf_verifier *bvf)
 		next = get_next_node(bvf, node);
 
 		if (next != NULL) {
-
-			/* proceed with next child */
+			/*
+			 * proceed with next child
+			 * next points to an unwalked subtree of node
+			 */
 			if (node->cur_edge == node->nb_edge &&
 					node->evst.cur != NULL) {
 				restore_cur_eval_state(bvf, node);
 				stats.nb_restore++;
 			}
 
+			if (bvf->evst->unreachable) {
+				rc = __rte_bpf_validate_debug_evaluate_step(
+					debug, get_node_idx(bvf, next),
+					RTE_BPF_VALIDATE_DEBUG_EVENT_BRANCH_UNREACHABLE);
+				if (rc < 0)
+					break;
+
+				next = NULL;
 			/*
 			 * for jcc targets: check did we already evaluated
 			 * that path and can it's evaluation be skipped that
 			 * time.
 			 */
-			if (node->nb_edge > 1 && prune_eval_state(bvf, node,
-					next) == 0) {
+			} else if (node->nb_edge > 1 &&
+					prune_eval_state(bvf, node, next) == 0) {
+				rc = __rte_bpf_validate_debug_evaluate_step(
+					debug, get_node_idx(bvf, next),
+					RTE_BPF_VALIDATE_DEBUG_EVENT_BRANCH_PRUNE);
+				if (rc < 0)
+					break;
+
 				next = NULL;
 				stats.nb_prune++;
 			} else {
 				next->prev_node = node;
+				prev_nb_edge = node->nb_edge;
 				node = next;
 			}
 		} else {
@@ -2503,12 +3057,27 @@ evaluate(struct bpf_verifier *bvf)
 			 * mark it's @start state as safe for future references,
 			 * and proceed with parent.
 			 */
+
+			if (prev_nb_edge != 0) {
+				rc = __rte_bpf_validate_debug_evaluate_step(
+					debug, get_node_idx(bvf, node) + 1,
+					RTE_BPF_VALIDATE_DEBUG_EVENT_BRANCH_RETURN);
+				if (rc < 0)
+					break;
+			}
+
 			node->cur_edge = 0;
 			save_safe_eval_state(bvf, node);
+			prev_nb_edge = 0;
 			node = node->prev_node;
 
 			/* first node will not have prev, signalling finish */
 		}
+
+		/*
+		 * next != NULL: stepped down the tree, node == next;
+		 * next == NULL: stepped up after processing or pruning subtree;
+		 */
 	}
 
 	RTE_LOG(DEBUG, BPF, "%s(%p) returns %d, stats:\n"
@@ -2519,27 +3088,52 @@ evaluate(struct bpf_verifier *bvf)
 		__func__, bvf, rc,
 		stats.nb_eval, stats.nb_prune, stats.nb_save, stats.nb_restore);
 
-	return rc;
+	debug_rc = __rte_bpf_validate_debug_evaluate_finish(debug, rc);
+	rc = debug_rc < 0 ? debug_rc : rc;
+
+	/* Caller does not expect positive values. */
+	return RTE_MIN(0, rc);
+}
+
+static bool
+prog_arg_is_valid(const struct rte_bpf_arg *prog_arg)
+{
+	/* check input argument type, don't allow mbuf ptr on 32-bit */
+	if (prog_arg->type != RTE_BPF_ARG_RAW &&
+			prog_arg->type != RTE_BPF_ARG_PTR &&
+			(sizeof(uint64_t) != sizeof(uintptr_t) ||
+			prog_arg->type != RTE_BPF_ARG_PTR_MBUF)) {
+		RTE_BPF_LOG_FUNC_LINE(ERR, "unsupported argument type");
+		return false;
+	}
+
+	return true;
 }
 
 int
-__rte_bpf_validate(struct rte_bpf *bpf)
+__rte_bpf_validate(const struct rte_bpf_prm_ex *prm, uint32_t *stack_sz)
 {
 	int32_t rc;
 	struct bpf_verifier bvf;
 
-	/* check input argument type, don't allow mbuf ptr on 32-bit */
-	if (bpf->prm.prog_arg.type != RTE_BPF_ARG_RAW &&
-			bpf->prm.prog_arg.type != RTE_BPF_ARG_PTR &&
-			(sizeof(uint64_t) != sizeof(uintptr_t) ||
-			bpf->prm.prog_arg.type != RTE_BPF_ARG_PTR_MBUF)) {
-		RTE_BPF_LOG_LINE(ERR, "%s: unsupported argument type", __func__);
+	if (prm->nb_prog_arg > EBPF_FUNC_MAX_ARGS) {
+		RTE_BPF_LOG_FUNC_LINE(ERR,
+			"support up to %u arguments, found %u",
+			EBPF_FUNC_MAX_ARGS, prm->nb_prog_arg);
 		return -ENOTSUP;
 	}
 
+	for (uint32_t pai = 0; pai != prm->nb_prog_arg; ++pai)
+		if (!prog_arg_is_valid(&prm->prog_arg[pai])) {
+			RTE_BPF_LOG_FUNC_LINE(ERR,
+				"unsupported argument %d (r%d) type",
+				pai, EBPF_REG_1 + pai);
+			return -ENOTSUP;
+		}
+
 	memset(&bvf, 0, sizeof(bvf));
-	bvf.prm = &bpf->prm;
-	bvf.in = calloc(bpf->prm.nb_ins, sizeof(bvf.in[0]));
+	bvf.prm = prm;
+	bvf.in = calloc(prm->raw.nb_ins, sizeof(bvf.in[0]));
 	if (bvf.in == NULL)
 		return -ENOMEM;
 
@@ -2556,11 +3150,11 @@ __rte_bpf_validate(struct rte_bpf *bpf)
 
 	/* copy collected info */
 	if (rc == 0) {
-		bpf->stack_sz = bvf.stack_sz;
+		*stack_sz = bvf.stack_sz;
 
 		/* for LD_ABS/LD_IND, we'll need extra space on the stack */
 		if (bvf.nb_ldmb_nodes != 0)
-			bpf->stack_sz = RTE_ALIGN_CEIL(bpf->stack_sz +
+			*stack_sz = RTE_ALIGN_CEIL(*stack_sz +
 				sizeof(uint64_t), sizeof(uint64_t));
 	}
 

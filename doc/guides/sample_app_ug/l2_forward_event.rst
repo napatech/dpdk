@@ -29,9 +29,9 @@ Application receives packets from Rx port using these methods:
 *   Eventdev mode (default)
 
 This application can be used to benchmark performance using a traffic-generator,
-as shown in the :numref:`figure_l2fwd_event_benchmark_setup`.
+as shown in the :numref:`l2_fwd_event_figure_benchmark_setup`.
 
-.. _figure_l2fwd_event_benchmark_setup:
+.. _l2_fwd_event_figure_benchmark_setup:
 
 .. figure:: img/l2_fwd_benchmark_setup.*
 
@@ -123,8 +123,6 @@ Explanation
 
 The following sections provide an explanation of the code.
 
-.. _l2_fwd_event_app_cmd_arguments:
-
 Command Line Arguments
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -175,15 +173,14 @@ and mbuf initializers, respectively ``rte_pktmbuf_pool_init()`` and ``rte_pktmbu
 An advanced application may want to use the mempool API to create the
 mbuf pool with more control.
 
-.. _l2_fwd_event_app_drv_init:
-
 Driver Initialization
 ~~~~~~~~~~~~~~~~~~~~~
 
 The main part of the code in the ``main()`` function relates to the initialization
 of the driver. To fully understand this code, it is recommended to study the
-chapters related to the Poll Mode and Event mode Driver in the
-*DPDK Programmer's Guide* - Rel 1.4 EAR and the *DPDK API Reference*.
+chapters related to :doc:`/prog_guide/ethdev/ethdev`
+and :doc:`/prog_guide/eventdev/eventdev`,
+as well as the DPDK API Reference.
 
 .. literalinclude:: ../../../examples/l2fwd-event/main.c
         :language: c
@@ -230,8 +227,6 @@ structure called struct lcore_queue_conf.
 The values n_rx_port and rx_port_list[] are used in the main packet processing
 loop (see :ref:`l2_fwd_event_app_rx_tx_packets`).
 
-.. _l2_fwd_event_app_tx_init:
-
 TX Queue Initialization
 ~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -251,8 +246,6 @@ To configure eventdev support, the application sets up following components:
 *   Event Port
 *   Rx/Tx adapters
 *   Ethernet ports
-
-.. _l2_fwd_event_app_event_dev_init:
 
 Event device Initialization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -293,8 +286,6 @@ Ethernet ports.
 
 In case of S/W scheduler, an extra event queue is created which will be used for
 Tx adapter service function for enqueue operation.
-
-.. _l2_fwd_app_event_port_init:
 
 Event port Initialization
 ~~~~~~~~~~~~~~~~~~~~~~~~~

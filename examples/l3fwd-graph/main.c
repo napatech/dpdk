@@ -49,7 +49,6 @@
 #define RX_DESC_DEFAULT 1024
 #define TX_DESC_DEFAULT 1024
 
-#define MAX_TX_QUEUE_PER_PORT RTE_MAX_ETHPORTS
 #define MAX_RX_QUEUE_PER_PORT 128
 
 #define MAX_RX_QUEUE_PER_LCORE 16
@@ -454,16 +453,16 @@ parse_config(const char *q_arg)
 }
 
 static void
-parse_eth_dest(const char *optarg)
+parse_eth_dest(const char *arg)
 {
 	uint8_t c, *dest, peer_addr[6];
 	uint16_t portid;
 	char *port_end;
 
 	errno = 0;
-	portid = strtoul(optarg, &port_end, 10);
-	if (errno != 0 || port_end == optarg || *port_end++ != ',')
-		rte_exit(EXIT_FAILURE, "Invalid eth-dest: %s", optarg);
+	portid = strtoul(arg, &port_end, 10);
+	if (errno != 0 || port_end == arg || *port_end++ != ',')
+		rte_exit(EXIT_FAILURE, "Invalid eth-dest: %s", arg);
 	if (portid >= RTE_MAX_ETHPORTS)
 		rte_exit(EXIT_FAILURE,
 			 "eth-dest: port %d >= RTE_MAX_ETHPORTS(%d)\n", portid,
@@ -1076,8 +1075,6 @@ main(int argc, char **argv)
 
 		nb_rx_queue = get_port_n_rx_queues(portid);
 		n_tx_queue = nb_lcores;
-		if (n_tx_queue > MAX_TX_QUEUE_PER_PORT)
-			n_tx_queue = MAX_TX_QUEUE_PER_PORT;
 		printf("Creating queues: nb_rxq=%d nb_txq=%u... ",
 		       nb_rx_queue, n_tx_queue);
 

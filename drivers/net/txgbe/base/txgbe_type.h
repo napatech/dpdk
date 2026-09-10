@@ -64,6 +64,9 @@
 #define TXGBE_AML_ALARM_THRE_MASK       0x1FFE0000U
 #define TXGBE_AML_DALARM_THRE_MASK      0x0001FFE0U
 
+#define CL74_KRTR_TRAINING_TIMEOUT     6000    /* 6000ms c74 training timeout */
+#define AN_TRAINING_MODE               0       /* 0: not dis an 1: dis an */
+
 struct txgbe_thermal_diode_data {
 	s16 temp;
 	s16 alarm_thresh;
@@ -171,6 +174,7 @@ enum txgbe_mac_type {
 	txgbe_mac_aml40,
 	txgbe_mac_sp_vf,
 	txgbe_mac_aml_vf,
+	txgbe_mac_aml40_vf,
 	txgbe_num_macs
 };
 
@@ -690,6 +694,8 @@ struct txgbe_phy_info {
 	s32 (*setup_link_speed)(struct txgbe_hw *hw, u32 speed,
 				bool autoneg_wait_to_complete);
 	s32 (*check_link)(struct txgbe_hw *hw, u32 *speed, bool *link_up);
+	s32 (*setup_link_core)(struct txgbe_hw *hw, u32 speed,
+			       bool autoneg_wait_to_complete, bool *need_reset);
 	s32 (*get_fw_version)(struct txgbe_hw *hw, u32 *fw_version);
 	s32 (*read_i2c_byte)(struct txgbe_hw *hw, u8 byte_offset,
 				u8 dev_addr, u8 *data);
@@ -697,6 +703,8 @@ struct txgbe_phy_info {
 				u8 dev_addr, u8 data);
 	s32 (*read_i2c_sff8472)(struct txgbe_hw *hw, u8 byte_offset,
 				u8 *sff8472_data);
+	s32 (*read_i2c_sff8636)(struct txgbe_hw *hw, u8 page, u8 byte_offset,
+				u8 *sff8636_data);
 	s32 (*read_i2c_eeprom)(struct txgbe_hw *hw, u8 byte_offset,
 				u8 *eeprom_data);
 	s32 (*write_i2c_eeprom)(struct txgbe_hw *hw, u8 byte_offset,
@@ -714,6 +722,7 @@ struct txgbe_phy_info {
 	u32 addr;
 	u32 id;
 	enum txgbe_sfp_type sfp_type;
+	u32 fiber_suppport_speed;
 	bool sfp_setup_needed;
 	u32 revision;
 	u32 media_type;
@@ -732,7 +741,10 @@ struct txgbe_phy_info {
 	u16 ffe_set;
 	u16 ffe_main;
 	u16 ffe_pre;
+	u16 ffe_pre2;
 	u16 ffe_post;
+	u16 fec_mode;
+	u16 bp_capa;
 };
 
 #define TXGBE_DEVARG_BP_AUTO		"auto_neg"
@@ -823,6 +835,7 @@ struct txgbe_devargs {
 struct txgbe_hw {
 	void IOMEM *hw_addr;
 	void *back;
+	void *dev_back;
 	struct txgbe_mac_info mac;
 	struct txgbe_addr_filter_info addr_ctrl;
 	struct txgbe_fc_info fc;
@@ -876,14 +889,44 @@ struct txgbe_hw {
 		u64 tx_qp_bytes;
 		u64 rx_qp_mc_packets;
 	} qp_last[TXGBE_MAX_QP];
+	struct {
+		u64 rx_xon_packets;
+		u64 rx_xoff_packets;
+	} last_stats;
 
 	rte_spinlock_t phy_lock;
 	/*amlite: new SW-FW mbox */
 	u8 swfw_index;
 	rte_atomic32_t swfw_busy;
+	bool link_valid;
+	bool reconfig_rx;
+	RTE_ATOMIC(bool) pf_running;
 	u32 fec_mode;
 	u32 cur_fec_link;
+	int temperature;
+	u32 bp_link_mode;
+	bool dac_sfp;
+	bool bypass_ctle;
+	u32 curbp_link_mode;
+	bool an_done;
+	u32 fsm;
+	u64 bp_event_interval;
 };
+
+typedef enum {
+	ABILITY_1000BASE_KX,
+	ABILITY_10GBASE_KX4,
+	ABILITY_10GBASE_KR,
+	ABILITY_40GBASE_KR4,
+	ABILITY_40GBASE_CR4,
+	ABILITY_100GBASE_CR10,
+	ABILITY_100GBASE_KP4,
+	ABILITY_100GBASE_KR4,
+	ABILITY_100GBASE_CR4,
+	ABILITY_25GBASE_KRCR_S,
+	ABILITY_25GBASE_KRCR,
+	ABILITY_MAX,
+} ability_filed_encding;
 
 struct txgbe_backplane_ability {
 	u32 next_page;	  /* Next Page (bit0) */

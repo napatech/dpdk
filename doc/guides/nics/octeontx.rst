@@ -47,7 +47,7 @@ The features supported by the device and not yet supported by this PMD include:
 Prerequisites
 -------------
 
-See :doc:`../platform/octeontx` for setup information.
+See :doc:`/platform/octeontx` for setup information.
 
 Configuration
 -------------
@@ -55,14 +55,11 @@ Configuration
 Driver compilation and testing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-for details.
+Refer to the document :doc:`build_and_test` for details.
 
 #. Running testpmd:
 
-   Follow instructions available in the document
-   :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-   to run testpmd.
+   Follow instructions available in the document :doc:`build_and_test` to run testpmd.
 
    Example output:
 

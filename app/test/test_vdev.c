@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include <rte_common.h>
+#include <rte_dev.h>
 #include <rte_kvargs.h>
 #include <bus_driver.h>
 #include <rte_bus_vdev.h>
@@ -60,7 +61,7 @@ get_matching_vdev(const char *match_str)
 		}
 	}
 
-	dev = vdev_bus->find_device(NULL, cmp_dev_match, kvargs);
+	dev = vdev_bus->find_device(vdev_bus, NULL, cmp_dev_match, kvargs);
 	rte_kvargs_free(kvargs);
 
 	return dev;
@@ -82,7 +83,7 @@ test_vdev_bus(void)
 		printf("Failed to create vdev net_null_test0\n");
 		goto fail;
 	}
-	dev0 = vdev_bus->find_device(NULL, cmp_dev_name, "net_null_test0");
+	dev0 = vdev_bus->find_device(vdev_bus, NULL, cmp_dev_name, "net_null_test0");
 	if (dev0 == NULL) {
 		printf("Cannot find net_null_test0 vdev\n");
 		goto fail;
@@ -93,7 +94,7 @@ test_vdev_bus(void)
 		printf("Failed to create vdev net_null_test1\n");
 		goto fail;
 	}
-	dev1 = vdev_bus->find_device(NULL, cmp_dev_name, "net_null_test1");
+	dev1 = vdev_bus->find_device(vdev_bus, NULL, cmp_dev_name, "net_null_test1");
 	if (dev1 == NULL) {
 		printf("Cannot find net_null_test1 vdev\n");
 		goto fail;

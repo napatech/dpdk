@@ -64,11 +64,11 @@ For example: ``class=crypto:regex`` will probe both Crypto and RegEx PMDs.
 Supported Classes
 ~~~~~~~~~~~~~~~~~
 
-- ``class=compress`` for :doc:`../../compressdevs/mlx5`.
-- ``class=crypto`` for :doc:`../../cryptodevs/mlx5`.
-- ``class=eth`` for :doc:`../../nics/mlx5`.
-- ``class=regex`` for :doc:`../../regexdevs/mlx5`.
-- ``class=vdpa`` for :doc:`../../vdpadevs/mlx5`.
+- ``class=compress`` for :doc:`/compressdevs/mlx5`.
+- ``class=crypto`` for :doc:`/cryptodevs/mlx5`.
+- ``class=eth`` for :doc:`/nics/mlx5`.
+- ``class=regex`` for :doc:`/regexdevs/mlx5`.
+- ``class=vdpa`` for :doc:`/vdpadevs/mlx5`.
 
 By default, the mlx5 device will be probed by the ``eth`` PMD.
 
@@ -143,7 +143,7 @@ The following dependencies are not part of DPDK and must be installed separately
   - BlueField-2: **24.28.1002** and above.
   - BlueField-3: **32.36.3126** and above.
 
-  New features may be added in more recent firmwares.
+  New features may be added in more recent :ref:`firmwares <mlx5_firmware_config>`.
 
 Libraries and kernel modules can be provided either by the Linux distribution,
 or by installing NVIDIA MLNX_OFED/EN which provides compatibility with older kernels.
@@ -170,12 +170,6 @@ It is possible to build rdma-core as static libraries starting with version 21::
     CFLAGS=-fPIC cmake -DENABLE_STATIC=1 -DNO_PYVERBS=1 -DNO_MAN_PAGES=1 -GNinja ..
     ninja
     ninja install
-
-The firmware can be updated with `mlxup
-<https://docs.nvidia.com/networking/display/mlxupfwutility>`_.
-The latest firmwares can be downloaded at
-https://network.nvidia.com/support/firmware/firmware-downloads/
-
 
 NVIDIA MLNX_OFED/EN
 ^^^^^^^^^^^^^^^^^^^
@@ -213,7 +207,7 @@ to match the kernel modules and libraries they come with.
 
    Several versions of NVIDIA MLNX_OFED/EN are available. Installing the version
    this DPDK release was developed and tested against is strongly recommended.
-   Please check the "Tested Platforms" section in the :doc:`../../rel_notes/index`.
+   Please check the "Tested Platforms" section in the :doc:`/rel_notes/index`.
 
 
 .. _mlx5_windows_prerequisites:
@@ -439,7 +433,7 @@ Run as Non-Root
 ^^^^^^^^^^^^^^^
 
 Hugepage and resource limit setup are documented
-in the :ref:`common Linux guide <Running_Without_Root_Privileges>`.
+in the :ref:`common Linux guide <linux_gsg_running_without_root_privileges>`.
 This PMD can operate without access to physical addresses,
 therefore it does not require ``SYS_ADMIN`` to access ``/proc/self/pagemaps``.
 Note that this requirement may still come from other drivers.
@@ -489,6 +483,11 @@ Additional information can be found in the WinOF2 user manual.
 
 Firmware Configuration
 ~~~~~~~~~~~~~~~~~~~~~~
+
+The firmware can be updated with `mlxup
+<https://docs.nvidia.com/networking/display/mlxupfwutility>`_
+after `downloading a new version
+<https://network.nvidia.com/support/firmware/firmware-downloads/>`_.
 
 Firmware features can be configured as key/value pairs.
 

@@ -1,8 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2017 Intel Corporation
 
-.. _test_bbdev_application:
-
 dpdk-test-bbdev Application
 ===========================
 
@@ -41,7 +39,7 @@ The following are the command-line options:
 
 ``-e EAL_PARAMS, --eal_params EAL_PARAMS``
  Specifies EAL arguments which are passed to the test app. For more details,
- refer to DPDK documentation at :doc:`../linux_gsg/linux_eal_parameters`.
+ refer to DPDK documentation at :doc:`/linux_gsg/linux_eal_parameters`.
 
 ``-t TIMEOUT, --timeout TIMEOUT``
  Specifies timeout in seconds. If not specified timeout is set to 300 seconds.
@@ -571,7 +569,7 @@ Following statuses can be used:
     OK
 
 LDPC decoder test vectors template
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For LDPC decoder it has to be always set to ``RTE_BBDEV_OP_LDPC_DEC``
 
@@ -695,7 +693,7 @@ Following statuses can be used:
 
 
 LDPC encoder test vectors template
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For turbo encoder it has to be always set to ``RTE_BBDEV_OP_LDPC_ENC``
 

@@ -199,6 +199,20 @@ Scatters the packets being received on specified boundaries to segmented mbufs.
 * **[related] API**: ``rte_eth_rx_queue_setup()``, ``rte_eth_buffer_split_get_supported_hdr_ptypes()``.
 
 
+.. _nic_features_selective_rx:
+
+Selective Rx
+------------
+
+Discards some segments of buffer split on Rx.
+
+* **[uses]     rte_eth_rxconf,rte_eth_rxmode**: ``offloads:RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT``.
+* **[uses]     rte_eth_rxconf**: ``rx_seg.mp = NULL`` to discard segments.
+* **[provides] rte_eth_dev_info**: ``rx_offload_capa:RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT``.
+* **[provides] rte_eth_dev_info**: ``rx_seg_capa.selective_rx``.
+* **[related]  API**: ``rte_eth_rx_queue_setup()``.
+
+
 .. _nic_features_lro:
 
 LRO
@@ -429,7 +443,8 @@ Inline crypto
 
 Supports inline crypto processing defined by rte_security library to perform crypto
 operations of security protocol while packet is received in NIC. NIC is not aware
-of protocol operations. See Security library and PMD documentation for more details.
+of protocol operations.
+See :doc:`/prog_guide/rte_security` and PMD documentation for more details.
 
 * **[uses]       rte_eth_rxconf,rte_eth_rxmode**: ``offloads:RTE_ETH_RX_OFFLOAD_SECURITY``,
 * **[uses]       rte_eth_txconf,rte_eth_txmode**: ``offloads:RTE_ETH_TX_OFFLOAD_SECURITY``.
@@ -451,7 +466,8 @@ Inline protocol
 Supports inline protocol processing defined by rte_security library to perform
 protocol processing for the security protocol (e.g. IPsec, MACSEC) while the
 packet is received at NIC. The NIC is capable of understanding the security
-protocol operations. See security library and PMD documentation for more details.
+protocol operations.
+See :doc:`/prog_guide/rte_security` and PMD documentation for more details.
 
 * **[uses]       rte_eth_rxconf,rte_eth_rxmode**: ``offloads:RTE_ETH_RX_OFFLOAD_SECURITY``,
 * **[uses]       rte_eth_txconf,rte_eth_txmode**: ``offloads:RTE_ETH_TX_OFFLOAD_SECURITY``.
@@ -1002,7 +1018,7 @@ PMD power management using monitor addresses
 --------------------------------------------
 
 Supports getting a monitoring condition to use together with Ethernet PMD power
-management (see :doc:`../prog_guide/power_man` for more details).
+management (see :doc:`/prog_guide/power_man` for more details).
 
 * **[implements] eth_dev_ops**: ``get_monitor_addr``
 

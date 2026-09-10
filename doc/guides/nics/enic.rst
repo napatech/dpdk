@@ -219,8 +219,6 @@ There are two known limitations of the current SR-IOV implementation.
    and assign them to VMs as passthrough devices.
 
 
-.. _enic-generic-flow-api:
-
 Generic Flow API support
 ------------------------
 
@@ -278,8 +276,6 @@ the (stripped) VLAN header whether stripping is enabled or disabled.
 
 More features may be added in future firmware and new versions of the VIC.
 Please refer to the release notes.
-
-.. _overlay_offload:
 
 Overlay Offload
 ---------------
@@ -429,8 +425,6 @@ To verify the selected entry size, enable debug logging
     PMD: rte_enic_pmd: Supported CQ entry sizes: 16 32
     PMD: rte_enic_pmd: Using 16B CQ entry size
 
-.. _enic_limitations:
-
 Limitations
 -----------
 
@@ -524,8 +518,7 @@ How to build the suite
 The build instructions for the DPDK suite should be followed. By default
 the ENIC PMD library will be built into the DPDK library.
 
-Refer to the document :ref:`compiling and testing a PMD for a NIC
-<pmd_build_and_test>` for details.
+Refer to the document :doc:`build_and_test` for details.
 
 For configuring and using UIO and VFIO frameworks, please refer to the
 documentation that comes with DPDK suite.

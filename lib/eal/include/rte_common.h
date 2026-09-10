@@ -356,7 +356,7 @@ typedef uint16_t unaligned_uint16_t;
  *   Priority number must be above 100.
  *   Lowest number is the first to run.
  */
-#ifndef RTE_INIT_PRIO /* Allow to override from EAL */
+#ifndef RTE_INIT_PRIO /* Allow overriding from EAL */
 #ifndef RTE_TOOLCHAIN_MSVC
 #define RTE_INIT_PRIO(func, prio) \
 static void __attribute__((constructor(RTE_PRIO(prio)), used)) func(void)
@@ -402,7 +402,7 @@ typedef int(__cdecl *_PIFV)(void);
  *   Priority number must be above 100.
  *   Lowest number is the last to run.
  */
-#ifndef RTE_FINI_PRIO /* Allow to override from EAL */
+#ifndef RTE_FINI_PRIO /* Allow overriding from EAL */
 #ifndef RTE_TOOLCHAIN_MSVC
 #define RTE_FINI_PRIO(func, prio) \
 static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
@@ -482,7 +482,23 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 #endif
 
 /**
- * Force a function to be inlined
+ * Force a function to be inlined, regardless of the compiler's size
+ * and call-graph heuristics.
+ *
+ * Prefer plain @c inline (or no annotation on a static function)
+ * and let the compiler decide.
+ * Modern compilers at -O2 inline small static functions well,
+ * and forcing it can hurt by inflating call sites, raising register pressure,
+ * and overriding profile-guided optimization.
+ *
+ * Reserve this attribute for cases where inlining is required for correctness,
+ * or for a documented and measured performance reason, e.g.
+ *  - a constant-folded fast path gated by @c __rte_constant()
+ *    that is lost unless the function is inlined into the caller;
+ *  - a wrapper around inline asm or an intrinsic
+ *    that needs a compile-time-constant argument from the caller's context.
+ *
+ * See the DPDK coding style guide for the full policy.
  */
 #ifdef RTE_TOOLCHAIN_MSVC
 #define __rte_always_inline __forceinline
@@ -491,7 +507,11 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 #endif
 
 /**
- * Force a function to be noinlined
+ * Force a function not to be inlined.
+ *
+ * Useful for explicitly outlining cold paths such as error handling,
+ * initialization, slow-path fallbacks, so they do not bloat the hot path
+ * or add to its instruction-cache footprint.
  */
 #ifdef RTE_TOOLCHAIN_MSVC
 #define __rte_noinline __declspec(noinline)
@@ -501,6 +521,12 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 
 /**
  * Hint function in the hot path
+ *
+ * The compiler may optimize the function more aggressively,
+ * treat calls to it as likely for branch prediction,
+ * and group it with other hot functions to improve instruction-cache locality.
+ * This affects code placement and prediction, not inlining;
+ * combine with an inline annotation if both are wanted.
  */
 #ifdef RTE_TOOLCHAIN_MSVC
 #define __rte_hot
@@ -510,6 +536,14 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 
 /**
  * Hint function in the cold path
+ *
+ * The compiler optimizes the function for size rather than speed,
+ * marks branches that reach it as unlikely,
+ * and may move it to a separate section to keep it off the hot path
+ * and reduce instruction-cache pressure there.
+ *
+ * Suitable for error handling, logging, and setup/teardown code.
+ * Functions marked @c __rte_noreturn are already treated as cold.
  */
 #ifdef RTE_TOOLCHAIN_MSVC
 #define __rte_cold
@@ -917,6 +951,10 @@ __extension__ typedef uint64_t RTE_MARKER64[0];
 #define _RTE_STR(x) #x
 /** Take a macro value and get a string version of it */
 #define RTE_STR(x) _RTE_STR(x)
+
+/** Concatenate two tokens after expanding macros in both. */
+#define _RTE_CONCAT2(a, b) a ## b
+#define RTE_CONCAT(a, b) _RTE_CONCAT2(a, b)
 
 /**
  * ISO C helpers to modify format strings using variadic macros.

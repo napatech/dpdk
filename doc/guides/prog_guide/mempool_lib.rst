@@ -33,7 +33,7 @@ but can be enabled by setting ``RTE_LIBRTE_MEMPOOL_STATS`` in ``config/rte_confi
 Memory Alignment Constraints on x86 architecture
 ------------------------------------------------
 
-Depending on hardware memory configuration on X86 architecture, performance can be greatly improved by adding a specific padding between objects.
+Depending on hardware memory configuration on x86 architecture, performance can be greatly improved by adding a specific padding between objects.
 The objective is to ensure that the beginning of each object starts on a different channel and rank in memory so that all channels are equally loaded.
 
 This is particularly true for packet buffers when doing L3 forwarding or flow classification.
@@ -47,9 +47,9 @@ When running an application, the EAL command line options provide the ability to
 
 
 Examples of alignment for different DIMM architectures are shown in
-:numref:`figure_memory-management` and :numref:`figure_memory-management2`.
+:numref:`mempool_figure_memory_management` and :numref:`mempool_figure_memory_management2`.
 
-.. _figure_memory-management:
+.. _mempool_figure_memory_management:
 
 .. figure:: img/memory-management.*
 
@@ -59,9 +59,9 @@ Examples of alignment for different DIMM architectures are shown in
 In this case, the assumption is that a packet is 16 blocks of 64 bytes, which is not true.
 
 The Intel® 5520 chipset has three channels, so in most cases,
-no padding is required between objects (except for objects whose size are n x 3 x 64 bytes blocks).
+no padding is required between objects (except for objects whose size is n x 3 x 64 bytes blocks).
 
-.. _figure_memory-management2:
+.. _mempool_figure_memory_management2:
 
 .. figure:: img/memory-management2.*
 
@@ -78,9 +78,6 @@ When creating a new pool, the user can specify to use this feature or not.
    As a result, the load is distributed evenly in all cases,
    including the above described, rendering this feature unnecessary.
 
-
-.. _mempool_local_cache:
-
 Local Cache
 -----------
 
@@ -89,7 +86,7 @@ since each access requires a compare-and-set (CAS) operation.
 To avoid having too many access requests to the memory pool's ring,
 the memory pool allocator can maintain a per-core cache and do bulk requests to the memory pool's ring,
 via the cache with many fewer locks on the actual memory pool structure.
-In this way, each core has full access to its own cache (with locks) of free objects and
+In this way, each core has full access to its own cache (without locks) of free objects and
 only when the cache fills does the core need to shuffle some of the free objects back to the pools ring or
 obtain more objects when the cache is empty.
 
@@ -101,9 +98,9 @@ This internal cache can be enabled or disabled at creation of the pool.
 
 The maximum size of the cache is static and is defined at compilation time (RTE_MEMPOOL_CACHE_MAX_SIZE).
 
-:numref:`figure_mempool` shows a cache in operation.
+:numref:`mempool_figure_cache` shows a cache in operation.
 
-.. _figure_mempool:
+.. _mempool_figure_cache:
 
 .. figure:: img/mempool.*
 
@@ -117,7 +114,7 @@ In contrast to the default caches, user-owned caches can be used by unregistered
 .. _Mempool_Handlers:
 
 Mempool Handlers
-------------------------
+----------------
 
 This allows external memory subsystems, such as external hardware memory
 management systems and software based memory allocators, to be used with DPDK.
@@ -140,7 +137,7 @@ Legacy applications may continue to use the old ``rte_mempool_create()`` API
 call, which uses a ring based mempool handler by default. These applications
 will need to be modified to use a new mempool handler.
 
-For applications that use ``rte_pktmbuf_create()``, there is a config setting
+For applications that use ``rte_pktmbuf_pool_create()``, there is a config setting
 (``RTE_MBUF_DEFAULT_MEMPOOL_OPS``) that allows the application to make use of
 an alternative mempool handler.
 

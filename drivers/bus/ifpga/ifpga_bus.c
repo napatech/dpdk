@@ -38,26 +38,20 @@
  */
 static struct rte_bus rte_ifpga_bus;
 
-static TAILQ_HEAD(, rte_afu_device) ifpga_afu_dev_list =
-	TAILQ_HEAD_INITIALIZER(ifpga_afu_dev_list);
-static TAILQ_HEAD(, rte_afu_driver) ifpga_afu_drv_list =
-	TAILQ_HEAD_INITIALIZER(ifpga_afu_drv_list);
-
-
 /* register a ifpga bus based driver */
 RTE_EXPORT_INTERNAL_SYMBOL(rte_ifpga_driver_register)
 void rte_ifpga_driver_register(struct rte_afu_driver *driver)
 {
 	RTE_VERIFY(driver);
 
-	TAILQ_INSERT_TAIL(&ifpga_afu_drv_list, driver, next);
+	rte_bus_add_driver(&rte_ifpga_bus, &driver->driver);
 }
 
 /* un-register a fpga bus based driver */
 RTE_EXPORT_INTERNAL_SYMBOL(rte_ifpga_driver_unregister)
 void rte_ifpga_driver_unregister(struct rte_afu_driver *driver)
 {
-	TAILQ_REMOVE(&ifpga_afu_drv_list, driver, next);
+	rte_bus_remove_driver(&rte_ifpga_bus, &driver->driver);
 }
 
 static struct rte_afu_device *
@@ -66,22 +60,9 @@ ifpga_find_afu_dev(const struct rte_rawdev *rdev,
 {
 	struct rte_afu_device *afu_dev = NULL;
 
-	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
+	RTE_BUS_FOREACH_DEV(afu_dev, &rte_ifpga_bus) {
 		if (afu_dev->rawdev == rdev &&
 			!ifpga_afu_id_cmp(&afu_dev->id, afu_id))
-			return afu_dev;
-	}
-	return NULL;
-}
-
-RTE_EXPORT_INTERNAL_SYMBOL(rte_ifpga_find_afu_by_name)
-struct rte_afu_device *
-rte_ifpga_find_afu_by_name(const char *name)
-{
-	struct rte_afu_device *afu_dev = NULL;
-
-	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		if (!strcmp(afu_dev->device.name, name))
 			return afu_dev;
 	}
 	return NULL;
@@ -155,7 +136,6 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 	if (!afu_dev)
 		goto end;
 
-	afu_dev->device.bus = &rte_ifpga_bus;
 	afu_dev->device.devargs = devargs;
 	afu_dev->device.numa_node = SOCKET_ID_ANY;
 	afu_dev->device.name = devargs->name;
@@ -163,14 +143,6 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 	afu_dev->id.uuid.uuid_low  = 0;
 	afu_dev->id.uuid.uuid_high = 0;
 	afu_dev->id.port      = afu_pr_conf.afu_id.port;
-
-	/* Allocate interrupt instance */
-	afu_dev->intr_handle =
-		rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
-	if (afu_dev->intr_handle == NULL) {
-		IFPGA_BUS_ERR("Failed to allocate intr handle");
-		goto end;
-	}
 
 	if (rawdev->dev_ops && rawdev->dev_ops->dev_info_get)
 		rawdev->dev_ops->dev_info_get(rawdev, afu_dev, sizeof(*afu_dev));
@@ -197,10 +169,7 @@ ifpga_scan_one(struct rte_rawdev *rawdev,
 end:
 	rte_kvargs_free(kvlist);
 	free(path);
-	if (afu_dev) {
-		rte_intr_instance_free(afu_dev->intr_handle);
-		free(afu_dev);
-	}
+	free(afu_dev);
 
 	return NULL;
 }
@@ -220,7 +189,7 @@ ifpga_scan(void)
 	struct rte_afu_device *afu_dev = NULL;
 
 	/* for FPGA devices we scan the devargs_list populated via cmdline */
-	RTE_EAL_DEVARGS_FOREACH(IFPGA_ARG_NAME, devargs) {
+	RTE_EAL_DEVARGS_FOREACH(rte_ifpga_bus.name, devargs) {
 		if (devargs->bus != &rte_ifpga_bus)
 			continue;
 
@@ -252,7 +221,7 @@ ifpga_scan(void)
 
 		afu_dev = ifpga_scan_one(rawdev, devargs);
 		if (afu_dev != NULL)
-			TAILQ_INSERT_TAIL(&ifpga_afu_dev_list, afu_dev, next);
+			rte_bus_add_device(&rte_ifpga_bus, &afu_dev->device);
 	}
 
 end:
@@ -265,10 +234,11 @@ end:
 /*
  * Match the AFU Driver and AFU Device using the ID Table
  */
-static int
-rte_afu_match(const struct rte_afu_driver *afu_drv,
-	      const struct rte_afu_device *afu_dev)
+static bool
+ifpga_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
+	const struct rte_afu_driver *afu_drv = RTE_BUS_DRIVER(drv, *afu_drv);
+	const struct rte_afu_device *afu_dev = RTE_BUS_DEVICE(dev, *afu_dev);
 	const struct rte_afu_uuid *id_table;
 
 	for (id_table = afu_drv->id_table;
@@ -280,188 +250,60 @@ rte_afu_match(const struct rte_afu_driver *afu_drv,
 				 afu_dev->id.uuid.uuid_high)
 			continue;
 
-		return 1;
+		return true;
 	}
 
-	return 0;
+	return false;
 }
 
 static int
-ifpga_probe_one_driver(struct rte_afu_driver *drv,
-			struct rte_afu_device *afu_dev)
+ifpga_probe_device(struct rte_driver *drv, struct rte_device *dev)
 {
+	struct rte_afu_device *afu_dev = RTE_BUS_DEVICE(dev, *afu_dev);
+	struct rte_afu_driver *afu_drv = RTE_BUS_DRIVER(drv, *afu_drv);
 	int ret;
 
-	if (!rte_afu_match(drv, afu_dev))
-		/* Match of device and driver failed */
-		return 1;
-
-	/* reference driver structure */
-	afu_dev->driver = drv;
-
-	/* call the driver probe() function */
-	ret = drv->probe(afu_dev);
-	if (ret)
-		afu_dev->driver = NULL;
-	else
-		afu_dev->device.driver = &drv->driver;
-
-	return ret;
-}
-
-static int
-ifpga_probe_all_drivers(struct rte_afu_device *afu_dev)
-{
-	struct rte_afu_driver *drv = NULL;
-	int ret = 0;
-
-	if (afu_dev == NULL)
-		return -1;
-
-	/* Check if a driver is already loaded */
-	if (rte_dev_is_probed(&afu_dev->device)) {
-		IFPGA_BUS_DEBUG("Device %s is already probed",
-				rte_ifpga_device_name(afu_dev));
-		return -EEXIST;
+	afu_dev->intr_handle =
+		rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_PRIVATE);
+	if (afu_dev->intr_handle == NULL) {
+		IFPGA_BUS_ERR("Failed to allocate intr handle");
+		return -ENOMEM;
 	}
 
-	TAILQ_FOREACH(drv, &ifpga_afu_drv_list, next) {
-		ret = ifpga_probe_one_driver(drv, afu_dev);
-		if (ret < 0)
-			/* negative value is an error */
-			return ret;
-		if (ret > 0)
-			/* positive value means driver doesn't support it */
-			continue;
-		return 0;
-	}
-	if ((ret > 0) && (afu_dev->driver == NULL))
-		return 0;
-	else
-		return ret;
-}
-
-/*
- * Scan the content of the Intel FPGA bus, and call the probe() function for
- * all registered drivers that have a matching entry in its id_table
- * for discovered devices.
- */
-static int
-ifpga_probe(void)
-{
-	struct rte_afu_device *afu_dev = NULL;
-	int ret = 0;
-
-	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		ret = ifpga_probe_all_drivers(afu_dev);
-		if (ret == -EEXIST)
-			continue;
-		if (ret < 0)
-			IFPGA_BUS_ERR("failed to initialize %s device",
-				rte_ifpga_device_name(afu_dev));
-	}
-
-	return ret;
-}
-
-/*
- * Cleanup the content of the Intel FPGA bus, and call the remove() function
- * for all registered devices.
- */
-static int
-ifpga_cleanup(void)
-{
-	struct rte_afu_device *afu_dev, *tmp_dev;
-	int error = 0;
-
-	RTE_TAILQ_FOREACH_SAFE(afu_dev, &ifpga_afu_dev_list, next, tmp_dev) {
-		struct rte_afu_driver *drv = afu_dev->driver;
-		int ret = 0;
-
-		if (drv == NULL || drv->remove == NULL)
-			goto free;
-
-		ret = drv->remove(afu_dev);
-		if (ret < 0) {
-			rte_errno = errno;
-			error = -1;
-		}
-		afu_dev->driver = NULL;
-		afu_dev->device.driver = NULL;
-
-free:
-		TAILQ_REMOVE(&ifpga_afu_dev_list, afu_dev, next);
-		rte_devargs_remove(afu_dev->device.devargs);
+	ret = afu_drv->probe(afu_dev);
+	if (ret != 0) {
 		rte_intr_instance_free(afu_dev->intr_handle);
-		free(afu_dev);
+		afu_dev->intr_handle = NULL;
 	}
 
-	return error;
+	return ret;
 }
 
 static int
-ifpga_plug(struct rte_device *dev)
+ifpga_unplug_device(struct rte_device *dev)
 {
-	return ifpga_probe_all_drivers(RTE_DEV_TO_AFU(dev));
-}
+	const struct rte_afu_driver *afu_drv = RTE_BUS_DRIVER(dev->driver, *afu_drv);
+	struct rte_afu_device *afu_dev = RTE_BUS_DEVICE(dev, *afu_dev);
+	int ret = 0;
 
-static int
-ifpga_remove_driver(struct rte_afu_device *afu_dev)
-{
-	const char *name;
-
-	name = rte_ifpga_device_name(afu_dev);
-	if (afu_dev->driver == NULL) {
-		IFPGA_BUS_DEBUG("no driver attach to device %s", name);
-		return 1;
+	if (afu_drv->remove) {
+		ret = afu_drv->remove(afu_dev);
+		if (ret)
+			return ret;
 	}
 
-	return afu_dev->driver->remove(afu_dev);
-}
-
-static int
-ifpga_unplug(struct rte_device *dev)
-{
-	struct rte_afu_device *afu_dev = NULL;
-	int ret;
-
-	if (dev == NULL)
-		return -EINVAL;
-
-	afu_dev = RTE_DEV_TO_AFU(dev);
-	if (!afu_dev)
-		return -ENOENT;
-
-	ret = ifpga_remove_driver(afu_dev);
-	if (ret)
-		return ret;
-
-	TAILQ_REMOVE(&ifpga_afu_dev_list, afu_dev, next);
-
-	rte_devargs_remove(dev->devargs);
 	rte_intr_instance_free(afu_dev->intr_handle);
-	free(afu_dev);
+	afu_dev->intr_handle = NULL;
+
 	return 0;
-
 }
 
-static struct rte_device *
-ifpga_find_device(const struct rte_device *start,
-	rte_dev_cmp_t cmp, const void *data)
+static void
+ifpga_free_device(struct rte_device *dev)
 {
-	struct rte_afu_device *afu_dev;
-
-	TAILQ_FOREACH(afu_dev, &ifpga_afu_dev_list, next) {
-		if (start && &afu_dev->device == start) {
-			start = NULL;
-			continue;
-		}
-		if (cmp(&afu_dev->device, data) == 0)
-			return &afu_dev->device;
-	}
-
-	return NULL;
+	free(RTE_BUS_DEVICE(dev, struct rte_afu_device));
 }
+
 static int
 ifpga_parse(const char *name, void *addr)
 {
@@ -508,13 +350,19 @@ ifpga_parse(const char *name, void *addr)
 
 static struct rte_bus rte_ifpga_bus = {
 	.scan        = ifpga_scan,
-	.probe       = ifpga_probe,
-	.cleanup     = ifpga_cleanup,
-	.find_device = ifpga_find_device,
-	.plug        = ifpga_plug,
-	.unplug      = ifpga_unplug,
+	.probe       = rte_bus_generic_probe,
+	.free_device = ifpga_free_device,
+	.cleanup     = rte_bus_generic_cleanup,
+	.find_device = rte_bus_generic_find_device,
+	.match       = ifpga_bus_match,
+	.probe_device = ifpga_probe_device,
+	.unplug_device = ifpga_unplug_device,
 	.parse       = ifpga_parse,
 };
 
-RTE_REGISTER_BUS(IFPGA_BUS_NAME, rte_ifpga_bus);
+RTE_REGISTER_BUS(ifpga, rte_ifpga_bus);
+RTE_INIT(ifpga_bus_init)
+{
+	RTE_VERIFY(strcmp(rte_ifpga_bus.name, RTE_STR(IFPGA_BUS_NAME)) == 0);
+}
 RTE_LOG_REGISTER_DEFAULT(ifpga_bus_logtype, NOTICE);

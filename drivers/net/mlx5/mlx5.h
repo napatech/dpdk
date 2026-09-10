@@ -152,6 +152,8 @@ struct mlx5_flow_cb_ctx {
 struct flow_hw_port_info {
 	uint32_t regc_mask;
 	uint32_t regc_value;
+	uint32_t vhca_id;
+	uint32_t is_set:1;
 	uint32_t is_wire:1;
 	uint32_t direction:2;
 };
@@ -383,6 +385,8 @@ struct mlx5_port_config {
 struct mlx5_sh_config {
 	int tx_pp; /* Timestamp scheduling granularity in nanoseconds. */
 	int tx_skew; /* Tx scheduling skew between WQE and data on wire. */
+	uint32_t tx_burst_bound; /* Burst upper bound in bytes, 0 = default. */
+	uint32_t tx_typical_pkt_sz; /* Typical packet size in bytes, 0 = default. */
 	uint32_t reclaim_mode:2; /* Memory reclaim mode. */
 	uint32_t dv_esw_en:1; /* Enable E-Switch DV flow. */
 	/* Enable DV flow. 1 means SW steering, 2 means HW steering. */
@@ -1297,6 +1301,13 @@ struct mlx5_txpp_ts {
 	RTE_ATOMIC(uint64_t) ts;
 };
 
+/* Per-queue rate limit tracking. */
+struct mlx5_txq_rate_limit {
+	void *pp;           /* Packet pacing context from dv_alloc_pp. */
+	uint16_t pp_id;     /* Packet pacing index. */
+	uint32_t rate_mbps; /* Current rate in Mbps, 0 = disabled. */
+};
+
 /* Tx packet pacing structure. */
 struct mlx5_dev_txpp {
 	pthread_mutex_t mutex; /* Pacing create/destroy mutex. */
@@ -1663,6 +1674,7 @@ struct mlx5_dev_ctx_shared {
 	rte_spinlock_t cpool_lock;
 	LIST_HEAD(hws_cpool_list, mlx5_hws_cnt_pool) hws_cpool_list; /* Count pool list. */
 	struct mlx5_dev_registers registers;
+	struct mlx5_pmd_mr *null_mr;
 	struct mlx5_dev_shared_port port[]; /* per device port data array. */
 };
 
@@ -1973,6 +1985,24 @@ struct mlx5_quota_ctx {
 	struct mlx5_indexed_pool *quota_ipool; /* Manage quota objects */
 };
 
+/* Stores info parsed from phys_port_name related to given DPDK port. */
+struct mlx5_representor_info {
+	enum mlx5_nl_phys_port_name_type type;
+	/* PCI controller index. 0 if no controller was reported in phys_port_name. */
+	int32_t ctrl_num;
+	/* PF index. */
+	int32_t pf_num;
+	/*
+	 * Representor number:
+	 *
+	 * - For VF/SF - VF/SF index.
+	 * - For PFHPF - -1.
+	 * - For uplink - physical port index.
+	 * - For others - VF representor is assumed, so VF index.
+	 */
+	int32_t port_num;
+};
+
 struct mlx5_nta_sample_ctx;
 struct mlx5_priv {
 	struct rte_eth_dev_data *dev_data;  /* Pointer to device data. */
@@ -2001,11 +2031,14 @@ struct mlx5_priv {
 	uint32_t tunnel_enabled:1; /* If tunnel offloading is enabled on rxqs. */
 	uint32_t unified_fdb_en:1; /* Unified FDB flag per port. */
 	uint32_t jump_fdb_rx_en:1; /* Jump from FDB Tx to FDB Rx flag per port. */
+	uint32_t vport_match:1; /* True if source_vport match is used instead of metadata */
 	uint16_t domain_id; /* Switch domain identifier. */
 	uint16_t vport_id; /* Associated VF vport index (if any). */
+	uint16_t vport_vhca_id; /* VHCA ID of the associated vport (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
 	uint32_t vport_meta_mask; /* Used for vport index field match mask. */
 	uint16_t representor_id; /* UINT16_MAX if not a representor. */
+	struct mlx5_representor_info port_info;
 	int32_t pf_bond; /* >=0, representor owner PF index in bonding. */
 	int32_t mpesw_owner; /* >=0, representor owner PF index in MPESW. */
 	int32_t mpesw_port; /* Related port index of MPESW device. < 0 - no MPESW. */
@@ -2027,6 +2060,7 @@ struct mlx5_priv {
 	rte_spinlock_t hw_ctrl_lock;
 	LIST_HEAD(hw_ctrl_flow, mlx5_ctrl_flow_entry) hw_ctrl_flows;
 	LIST_HEAD(hw_ext_ctrl_flow, mlx5_ctrl_flow_entry) hw_ext_ctrl_flows;
+	struct mlx5_flow_hw_lacp_miss *hw_lacp_miss; /* HWS LACP miss flow tables */
 	struct mlx5_flow_hw_ctrl_fdb *hw_ctrl_fdb; /* FDB control flow context */
 	struct mlx5_flow_hw_ctrl_nic *hw_ctrl_nic; /* NIC control flow context */
 	struct rte_flow_pattern_template *hw_tx_repr_tagging_pt;
@@ -2630,6 +2664,9 @@ int mlx5_txpp_xstats_get_names(struct rte_eth_dev *dev,
 void mlx5_txpp_interrupt_handler(void *cb_arg);
 int mlx5_txpp_map_hca_bar(struct rte_eth_dev *dev);
 void mlx5_txpp_unmap_hca_bar(struct rte_eth_dev *dev);
+int mlx5_txq_alloc_pp_rate_limit(struct mlx5_dev_ctx_shared *sh,
+		struct mlx5_txq_rate_limit *rate_limit, uint32_t rate_mbps);
+void mlx5_txq_free_pp_rate_limit(struct mlx5_txq_rate_limit *rate_limit);
 
 /* mlx5_rxtx.c */
 
@@ -2689,8 +2726,7 @@ int mlx5_aso_cnt_query(struct mlx5_dev_ctx_shared *sh,
 int mlx5_aso_ct_queue_init(struct mlx5_dev_ctx_shared *sh,
 			   struct mlx5_aso_ct_pools_mng *ct_mng,
 			   uint32_t nb_queues);
-int mlx5_aso_ct_queue_uninit(struct mlx5_dev_ctx_shared *sh,
-			     struct mlx5_aso_ct_pools_mng *ct_mng);
+int mlx5_aso_ct_queue_uninit(struct mlx5_aso_ct_pools_mng *ct_mng);
 int
 mlx5_aso_sq_create(struct mlx5_common_device *cdev, struct mlx5_aso_sq *sq,
 		   void *uar, uint16_t log_desc_n);

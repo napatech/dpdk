@@ -117,6 +117,9 @@ enum mlx5_indirect_type {
 	((struct rte_flow_action_handle *)(uintptr_t) \
 	 ((MLX5_INDIRECT_ACTION_TYPE_CT << MLX5_INDIRECT_ACTION_TYPE_OFFSET) | (index)))
 
+#define MLX5_EMPTY_ECPRI_TYPE_MASK RTE_BIT32(0)
+#define MLX5_EMPTY_ECPRI_BODY_MASK RTE_BIT32(1)
+
 enum mlx5_indirect_list_type {
 	MLX5_INDIRECT_ACTION_LIST_TYPE_ERR = 0,
 	MLX5_INDIRECT_ACTION_LIST_TYPE_LEGACY = 1,
@@ -1264,6 +1267,7 @@ struct mlx5_flow_attr {
 	/* Action flags, used by priority adjustment. */
 	uint32_t act_flags;
 	uint32_t tbl_type; /* Flow table type. */
+	uint32_t hws_root_match_flags;
 };
 
 /* Flow structure. */
@@ -1985,6 +1989,8 @@ struct mlx5_flow_workspace {
 	uint32_t skip_matcher_reg:1;
 	/* Indicates if need to skip matcher register in translate. */
 	uint32_t mark:1; /* Indicates if flow contains mark action. */
+	uint32_t empty_ecpri_type_mask:1; /* Indicates if eCPRI type was not masked. */
+	uint32_t empty_ecpri_body_mask:1; /* Indicates if 1st DW of eCPRI payload was not masked. */
 	uint32_t vport_meta_tag; /* Used for vport index match. */
 };
 
@@ -2018,6 +2024,7 @@ struct mlx5_dv_matcher_workspace {
 	const struct rte_flow_item *tunnel_item; /* Flow tunnel item. */
 	const struct rte_flow_item *gre_item; /* Flow GRE item. */
 	const struct rte_flow_item *integrity_items[2];
+	uint32_t *p_root_flags;
 };
 
 struct mlx5_flow_split_info {
@@ -2156,8 +2163,9 @@ flow_hw_conv_port_id(void *ctx, const uint16_t port_id)
 
 	if (port_id >= RTE_MAX_ETHPORTS)
 		return NULL;
+
 	port_info = &mlx5_flow_hw_port_infos[port_id];
-	return !!port_info->regc_mask ? port_info : NULL;
+	return port_info->is_set ? port_info : NULL;
 }
 
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
@@ -3030,6 +3038,13 @@ struct mlx5_flow_hw_ctrl_rx {
 						[MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_MAX];
 };
 
+/* Contains all templates and table required for redirecting LACP traffic with HWS. */
+struct mlx5_flow_hw_lacp_miss {
+	struct rte_flow_pattern_template *lacp_rx_items_tmpl;
+	struct rte_flow_actions_template *lacp_rx_actions_tmpl;
+	struct rte_flow_template_table *hw_lacp_rx_tbl;
+};
+
 /* Contains all templates required for control flow rules in FDB with HWS. */
 struct mlx5_flow_hw_ctrl_fdb {
 	struct rte_flow_pattern_template *esw_mgr_items_tmpl;
@@ -3041,9 +3056,6 @@ struct mlx5_flow_hw_ctrl_fdb {
 	struct rte_flow_pattern_template *port_items_tmpl;
 	struct rte_flow_actions_template *jump_one_actions_tmpl;
 	struct rte_flow_template_table *hw_esw_zero_tbl;
-	struct rte_flow_pattern_template *lacp_rx_items_tmpl;
-	struct rte_flow_actions_template *lacp_rx_actions_tmpl;
-	struct rte_flow_template_table *hw_lacp_rx_tbl;
 };
 
 struct mlx5_flow_hw_ctrl_nic {
@@ -3733,6 +3745,36 @@ void
 mlx5_indirect_list_handles_release(struct rte_eth_dev *dev);
 
 bool mlx5_flow_is_steering_disabled(void);
+
+/**
+ * Returns true if Rx control rule for LACP traffic is needed.
+ *
+ * mlx5 PMD needs to create a rule matching LACP traffic and forwarding it back to kernel if:
+ *
+ * - Underlying device is a bond interface.
+ * - User did not request to handle LACP traffic in user space.
+ *
+ * Creation of this rule is also controlled by the E-Switch mode:
+ *
+ * - It must be created in legacy mode.
+ * - It must be created only on proxy port in switchdev mode.
+ *
+ * @param[in] priv
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   True if LACP rules must be created.
+ *   False otherwise.
+ */
+static inline bool
+mlx5_flow_lacp_miss_needed(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	return !priv->sh->config.lacp_by_user &&
+	    priv->pf_bond >= 0 &&
+	    (!priv->sh->esw_mode || (priv->sh->esw_mode && priv->master));
+}
 
 #ifdef HAVE_MLX5_HWS_SUPPORT
 

@@ -2,7 +2,7 @@
     Copyright(c) 2010-2017 Intel Corporation.
 
 Vhost_blk Sample Application
-=============================
+============================
 
 The vhost_blk sample application implemented a simple block device,
 which used as the  backend of Qemu vhost-user-blk device. Users can extend
@@ -32,13 +32,11 @@ The application is located in the ``examples`` sub-directory.
 You will also need to build DPDK both on the host and inside the guest
 
 Start the vhost_blk example
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: console
 
         ./dpdk-vhost_blk -m 1024
-
-.. _vhost_blk_app_run_vm:
 
 Start the VM
 ~~~~~~~~~~~~

@@ -288,7 +288,7 @@ STATIC void e1000_toggle_lanphypc_pch_lpt(struct e1000_hw *hw)
  * e1000_reconfigure_k1_exit_timeout
  * @hw: pointer to the HW structure
  *
- * Reconfigure K1 exit timeout as a workaround to the PHY sycndhronization issue
+ * Reconfigure K1 exit timeout as a workaround to the PHY synchronization issue
  * on MTL, LNL, PTL and WCL.
  *
  * Assuming PHY semaphore is taken prior to this function call.
@@ -305,8 +305,8 @@ STATIC s32 e1000_reconfigure_k1_exit_timeout(struct e1000_hw *hw)
 		return E1000_SUCCESS;
 
 	fextnvm12 = E1000_READ_REG(hw, E1000_FEXTNVM12);
-	fextnvm12 |= (1 << 23);
-	fextnvm12 &= ~((1 << 22));
+	fextnvm12 &= ~E1000_FEXTNVM12_PHYPD_CTRL_MASK;
+	fextnvm12 |= E1000_FEXTNVM12_PHYPD_CTRL_P1;
 	E1000_WRITE_REG(hw, E1000_FEXTNVM12, fextnvm12);
 
 	msec_delay_irq(1);
@@ -317,6 +317,9 @@ STATIC s32 e1000_reconfigure_k1_exit_timeout(struct e1000_hw *hw)
 	phy_timeout |= 0xF00;
 	ret_val = hw->phy.ops.write_reg_locked(hw, E1000_PHY_TIMEOUTS_REG,
 					       phy_timeout);
+
+	DEBUGOUT1("e1000_reconfigure_k1_exit_timeout returns %d\n",
+		  ret_val);
 
 	return ret_val;
 }
@@ -460,8 +463,10 @@ STATIC s32 e1000_init_phy_workarounds_pchlan(struct e1000_hw *hw)
 		 *  the PHY is in.
 		 */
 		ret_val = hw->phy.ops.check_reset_block(hw);
-		if (ret_val)
+		if (ret_val) {
 			ERROR_REPORT("ME blocked access to PHY after reset\n");
+			goto out;
+		}
 
 		if (hw->mac.type >= e1000_pch_mtp) {
 			ret_val = hw->phy.ops.acquire(hw);
@@ -2691,6 +2696,8 @@ STATIC s32 e1000_hv_phy_workarounds_ich8lan(struct e1000_hw *hw)
 			e1000_phy_sw_reset_generic(hw);
 			ret_val = hw->phy.ops.write_reg(hw, PHY_CONTROL,
 							0x3140);
+			if (ret_val)
+				return ret_val;
 		}
 	}
 
@@ -4173,7 +4180,7 @@ STATIC s32 e1000_update_nvm_checksum_spt(struct e1000_hw *hw)
 
 		usec_delay(100);
 
-		/* Write the data to the new bank. Offset in words*/
+		/* Write the data to the new bank. Offset in words */
 		act_offset = i + new_bank_offset;
 		ret_val = e1000_retry_write_flash_dword_ich8lan(hw, act_offset,
 								dword);
@@ -4196,7 +4203,7 @@ STATIC s32 e1000_update_nvm_checksum_spt(struct e1000_hw *hw)
 	 */
 	act_offset = new_bank_offset + E1000_ICH_NVM_SIG_WORD;
 
-	/*offset in words but we read dword*/
+	/* offset in words but we read dword */
 	--act_offset;
 	ret_val = e1000_read_flash_dword_ich8lan(hw, act_offset, &dword);
 
@@ -4209,7 +4216,7 @@ STATIC s32 e1000_update_nvm_checksum_spt(struct e1000_hw *hw)
 	if (ret_val)
 		goto release;
 
-	/* offset in words but we read dword*/
+	/* offset in words but we read dword */
 	act_offset = old_bank_offset + E1000_ICH_NVM_SIG_WORD - 1;
 	ret_val = e1000_read_flash_dword_ich8lan(hw, act_offset, &dword);
 
@@ -5101,6 +5108,13 @@ STATIC s32 e1000_reset_hw_ich8lan(struct e1000_hw *hw)
 	reg = E1000_READ_REG(hw, E1000_KABGTXD);
 	reg |= E1000_KABGTXD_BGSQLBIAS;
 	E1000_WRITE_REG(hw, E1000_KABGTXD, reg);
+
+	if (hw->mac.type >= e1000_pch_ptp) {
+		DEBUGOUT("Clearing DPG EN bit post reset\n");
+		reg = E1000_READ_REG(hw, E1000_CTRL_EXT);
+		reg &= ~E1000_CTRL_EXT_DPG_EN;
+		E1000_WRITE_REG(hw, E1000_CTRL_EXT, reg);
+	}
 
 	return E1000_SUCCESS;
 }

@@ -19,27 +19,21 @@ if not jansson_dep.found()
         enable_mvtvm = false
 endif
 
-dlpack_dep = dependency('dlpack', method: 'cmake', required: false, cmake_args: 'CONFIG')
+dlpack_dep = dependency('dlpack', method: 'cmake', required: false)
 if not dlpack_dep.found()
         message('drivers/ml/cnxk: dlpack not found')
         enable_mvtvm = false
 endif
 
-dmlc_dep = dependency('dmlc', method: 'cmake', required: false, cmake_args: 'CONFIG')
+dmlc_dep = dependency('dmlc', method: 'cmake', required: false)
 if not dmlc_dep.found()
         message('drivers/ml/cnxk: dmlc not found')
         enable_mvtvm = false
 endif
 
-tvm_dep = dependency('tvm', method: 'cmake', required: false, cmake_args: 'CONFIG', modules : ['tvm::tvm_runtime'])
+tvm_dep = dependency('tvm', method: 'cmake', required: false, modules : ['tvm::tvm_runtime'])
 if not tvm_dep.found()
         message('drivers/ml/cnxk: tvm_runtime not found')
-        enable_mvtvm = false
-endif
-
-tvmdp_dep = dependency('tvmdp', method: 'pkg-config', required: false)
-if not tvmdp_dep.found()
-        message('drivers/ml/cnxk: tvmdp not found')
         enable_mvtvm = false
 endif
 
@@ -59,19 +53,20 @@ deps += ['mldev', 'common_cnxk', 'kvargs', 'hash']
 
 if enable_mvtvm
 
-dpdk_conf.set('RTE_MLDEV_CNXK_ENABLE_MVTVM', 1)
+dpdk_conf.set('RTE_MLDEV_CNXK_ENABLE_TVMRT', 1)
 
 sources += files(
         'mvtvm_ml_dev.c',
         'mvtvm_ml_ops.c',
-        'mvtvm_ml_model.c',
+        'tvmrt_ml_ops.c',
+        'tvmrt_ml_model.c',
 )
 
 ext_deps += jansson_dep
+ext_deps += libarchive
 ext_deps += dlpack_dep
 ext_deps += dmlc_dep
 ext_deps += tvm_dep
-ext_deps += tvmdp_dep
 stdcpp_dep = cc.find_library('stdc++', required: true)
 if not cc.links(min_c_code, dependencies: stdcpp_dep)
     error('broken dependency, "libstdc++"')
@@ -86,6 +81,7 @@ message('drivers/ml/cnxk: Disabled TVM model support')
 
 sources += files(
         'mvtvm_ml_stubs.c',
+        'tvmrt_ml_stubs.c',
 )
 
 endif

@@ -29,6 +29,7 @@ Features of the CNXK Ethdev PMD are:
 - Port hardware statistics
 - Link state information
 - Link flow control
+- Forward Error Correction (FEC)
 - MTU update
 - Scatter-Gather IO support
 - Vector Poll mode driver
@@ -45,20 +46,17 @@ Features of the CNXK Ethdev PMD are:
 Prerequisites
 -------------
 
-See :doc:`../platform/cnxk` for setup information.
+See :doc:`/platform/cnxk` for setup information.
 
 
 Driver compilation and testing
 ------------------------------
 
-Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-for details.
+Refer to the document :doc:`build_and_test` for details.
 
 #. Running testpmd:
 
-   Follow instructions available in the document
-   :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-   to run testpmd.
+   Follow instructions available in the document :doc:`build_and_test` to run testpmd.
 
    Example output:
 
@@ -183,8 +181,8 @@ Runtime Config Options
 
    With the above configuration, higig2 will be enabled on that port and the
    traffic on this port should be higig2 traffic only. Supported switch header
-   types are "chlen24b", "chlen90b", "dsa", "exdsa", "higig2", "vlan_exdsa" and
-   "pre_l2".
+   types are "chlen24b", "chlen90b", "dsa", "exdsa", "higig2", "vlan_exdsa",
+   "pre_l2" and "skip_size".
 
 - ``Flow pre_l2 info`` (default ``0x0/0x0/0x0``)
 
@@ -211,6 +209,21 @@ Runtime Config Options
    position of the rightmost set bit. If the mask is 0x7c and shift direction
    is 0 (i.e., left shift) then the shift count will be 1, that is, (8 - n),
    where n is the absolute position of leftmost set bit.
+
+- ``Skip size info`` (default ``0x0``)
+
+   When the switch header type is set to "skip_size",
+   the number of bytes to skip before the Ethernet header
+   can be configured using ``skip_size_info`` devargs parameter.
+   The value is in hexadecimal format and the valid range is 0 to 0xff.
+   This configures the PKIND so that the NPC parser skips the specified number of bytes.
+
+   For example::
+
+      -a 0002:02:00.0,switch_header="skip_size",skip_size_info=0x2
+
+   With the above configuration, 2 bytes will be skipped before the Ethernet header
+   when parsing the incoming packets.
 
 - ``RSS tag as XOR`` (default ``0``)
 
@@ -513,6 +526,27 @@ Runtime Config Options
    parameters to all the PCIe devices if application requires to configure on
    all the ethdev ports.
 
+Forward Error Correction (FEC)
+------------------------------
+
+The CNXK PMD supports the DPDK FEC ethdev API on physical function (PF) ports
+for links where firmware reports FEC support
+(typically high-speed Ethernet interfaces such as 25G, 50G and 100G).
+
+Supported FEC modes exposed through the ethdev API are:
+
+- ``RTE_ETH_FEC_NOFEC``: FEC disabled
+- ``RTE_ETH_FEC_AUTO``: maps to Reed-Solomon (RS) FEC on set
+- ``RTE_ETH_FEC_BASER``: Base-R FEC
+- ``RTE_ETH_FEC_RS``: Reed-Solomon FEC
+
+.. note::
+
+   ``rte_eth_fec_get_capability()`` and ``rte_eth_fec_set()``
+   are supported on PF ports only.
+   SR-IOV virtual function (VF) ports can use ``rte_eth_fec_get()``
+   to read the current FEC mode from link status.
+
 Limitations
 -----------
 
@@ -730,6 +764,19 @@ Runtime Config Options for inline device
    With the above configuration, inline inbound IPsec post-processing
    should be done by the application.
 
+- ``Enable CPT Completion Queue for inline IPsec`` (default ``1`` for CN20K, ``0`` otherwise)
+
+   CPT Completion Queue for inline IPsec event delivery can be enabled or disabled
+   by ``cpt_cq_enable`` devargs parameter.
+   This option is supported on OCTEON CN20K SoC family.
+
+   For example::
+
+      -a 0002:1d:00.0,cpt_cq_enable=1
+
+   With the above configuration, driver would enable CPT completion queue
+   for inline IPsec event delivery instead of using the err-ring poll thread.
+
 Port Representors
 -----------------
 
@@ -764,8 +811,6 @@ Port representor PMD supports following operations:
 
 Debugging Options
 -----------------
-
-.. _table_cnxk_ethdev_debug_options:
 
 .. table:: cnxk ethdev debug options
 

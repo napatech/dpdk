@@ -52,11 +52,6 @@ static void
 mempool_event_callback_invoke(enum rte_mempool_event event,
 			      struct rte_mempool *mp);
 
-/* Note: avoid using floating point since that compiler
- * may not think that is constant.
- */
-#define CALC_CACHE_FLUSHTHRESH(c) (((c) * 3) / 2)
-
 #if defined(RTE_ARCH_X86)
 /*
  * return the greatest common divisor between a and b (fast algorithm)
@@ -757,13 +752,8 @@ rte_mempool_free(struct rte_mempool *mp)
 static void
 mempool_cache_init(struct rte_mempool_cache *cache, uint32_t size)
 {
-	/* Check that cache have enough space for flush threshold */
-	RTE_BUILD_BUG_ON(CALC_CACHE_FLUSHTHRESH(RTE_MEMPOOL_CACHE_MAX_SIZE) >
-			 RTE_SIZEOF_FIELD(struct rte_mempool_cache, objs) /
-			 RTE_SIZEOF_FIELD(struct rte_mempool_cache, objs[0]));
-
 	cache->size = size;
-	cache->flushthresh = CALC_CACHE_FLUSHTHRESH(size);
+	cache->flushthresh = size; /* Obsolete; for API/ABI compatibility purposes only */
 	cache->len = 0;
 }
 
@@ -850,7 +840,7 @@ rte_mempool_create_empty(const char *name, unsigned n, unsigned elt_size,
 
 	/* asked cache too big */
 	if (cache_size > RTE_MEMPOOL_CACHE_MAX_SIZE ||
-	    CALC_CACHE_FLUSHTHRESH(cache_size) > n) {
+	    cache_size > n) {
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -1047,6 +1037,29 @@ unsigned int
 rte_mempool_in_use_count(const struct rte_mempool *mp)
 {
 	return mp->size - rte_mempool_avail_count(mp);
+}
+
+/* Reset the statistics of a mempool. */
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_mempool_stats_reset, 26.07)
+void
+rte_mempool_stats_reset(struct rte_mempool *mp)
+{
+	RTE_ASSERT(mp != NULL);
+
+#ifdef RTE_LIBRTE_MEMPOOL_STATS
+	memset(&mp->stats, 0, sizeof(mp->stats));
+	if (mp->cache_size != 0) {
+		for (unsigned int lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
+			memset(&mp->local_cache[lcore_id].stats, 0,
+					sizeof(mp->local_cache[lcore_id].stats));
+		}
+	}
+
+	RTE_MEMPOOL_LOG(DEBUG, "<%s>@%p: statistics reset", mp->name, mp);
+	rte_mempool_trace_stats_reset(mp);
+#else
+	RTE_SET_USED(mp);
+#endif
 }
 
 /* dump the cache status */
@@ -1327,10 +1340,34 @@ rte_mempool_dump(FILE *f, struct rte_mempool *mp)
 	fprintf(f, "    get_fail_bulk=%"PRIu64"\n", sum.get_fail_bulk);
 	fprintf(f, "    get_fail_objs=%"PRIu64"\n", sum.get_fail_objs);
 	if (info.contig_block_size > 0) {
-		fprintf(f, "    get_success_blks=%"PRIu64"\n",
-			sum.get_success_blks);
+		fprintf(f, "    get_success_blks=%"PRIu64"\n", sum.get_success_blks);
 		fprintf(f, "    get_fail_blks=%"PRIu64"\n", sum.get_fail_blks);
 	}
+	fprintf(f, "    avg objs/bulk put=%#Lf, get=%#Lf, get_fail=%#Lf\n",
+			sum.put_bulk != 0 ? (long double)sum.put_objs / sum.put_bulk : 0,
+			sum.get_success_bulk != 0 ?
+			(long double)sum.get_success_objs / sum.get_success_bulk : 0,
+			sum.get_fail_bulk != 0 ?
+			(long double)sum.get_fail_objs / sum.get_fail_bulk : 0);
+	fprintf(f, "    avg common_pool objs/bulk put=%#Lf, get=%#Lf\n",
+			sum.put_common_pool_bulk != 0 ?
+			(long double)sum.put_common_pool_objs / sum.put_common_pool_bulk : 0,
+			sum.get_common_pool_bulk != 0 ?
+			(long double)sum.get_common_pool_objs / sum.get_common_pool_bulk : 0);
+	fprintf(f, "    avg cache miss rate put_objs=%s%#Lf, get_objs=%s%#Lf\n",
+			sum.put_common_pool_objs != 0 ? "1/" : "",
+			sum.put_common_pool_objs != 0 ?
+			(long double)sum.put_objs / sum.put_common_pool_objs : 0,
+			sum.get_common_pool_objs != 0 ? "1/" : "",
+			sum.get_common_pool_objs != 0 ?
+			(long double)sum.get_success_objs / sum.get_common_pool_objs : 0);
+	fprintf(f, "    avg cache miss rate put_bulk=%s%#Lf, get_bulk=%s%#Lf\n",
+			sum.put_common_pool_bulk != 0 ? "1/" : "",
+			sum.put_common_pool_bulk != 0 ?
+			(long double)sum.put_bulk / sum.put_common_pool_bulk : 0,
+			sum.get_common_pool_bulk != 0 ? "1/" : "",
+			sum.get_common_pool_bulk != 0 ?
+			(long double)sum.get_success_bulk / sum.get_common_pool_bulk : 0);
 #else
 	fprintf(f, "  no statistics available\n");
 #endif

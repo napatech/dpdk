@@ -15,6 +15,8 @@
 #include "ice_rxtx.h"
 #include "ice_generic_flow.h"
 
+#include "../common/flow_check.h"
+
 #define ICE_FDIR_IPV6_TC_OFFSET		20
 #define ICE_IPV6_TC_MASK		(0xFF << ICE_FDIR_IPV6_TC_OFFSET)
 
@@ -110,7 +112,8 @@
 	ICE_INSET_NAT_T_ESP_SPI)
 
 #define ICE_FDIR_INSET_L2TPV2 (\
-	ICE_INSET_SMAC | ICE_INSET_DMAC | ICE_INSET_L2TPV2OIP_SESSION_ID)
+	ICE_INSET_SMAC | ICE_INSET_DMAC | ICE_INSET_L2TPV2OIP_SESSION_ID | \
+	ICE_INSET_L2TPV2OIP_LEN_SESSION_ID)
 
 #define ICE_FDIR_INSET_L2TPV2_PPP_IPV4 (\
 	ICE_INSET_TUN_IPV4_SRC | ICE_INSET_TUN_IPV4_DST)
@@ -967,6 +970,7 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 	};
 	static const struct ice_inset_map ice_inset_map[] = {
 		{ICE_INSET_DMAC, ICE_FLOW_FIELD_IDX_ETH_DA},
+		{ICE_INSET_SMAC, ICE_FLOW_FIELD_IDX_ETH_SA},
 		{ICE_INSET_ETHERTYPE, ICE_FLOW_FIELD_IDX_ETH_TYPE},
 		{ICE_INSET_IPV4_SRC, ICE_FLOW_FIELD_IDX_IPV4_SA},
 		{ICE_INSET_IPV4_DST, ICE_FLOW_FIELD_IDX_IPV4_DA},
@@ -1001,6 +1005,15 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 		{ICE_INSET_ESP_SPI, ICE_FLOW_FIELD_IDX_ESP_SPI},
 		{ICE_INSET_NAT_T_ESP_SPI, ICE_FLOW_FIELD_IDX_NAT_T_ESP_SPI},
 		{ICE_INSET_L2TPV2OIP_SESSION_ID, ICE_FLOW_FIELD_IDX_L2TPV2_SESS_ID},
+		{ICE_INSET_L2TPV2OIP_LEN_SESSION_ID, ICE_FLOW_FIELD_IDX_L2TPV2_LEN_SESS_ID},
+		{ICE_INSET_TUN_IPV4_SRC, ICE_FLOW_FIELD_IDX_IPV4_SA},
+		{ICE_INSET_TUN_IPV4_DST, ICE_FLOW_FIELD_IDX_IPV4_DA},
+		{ICE_INSET_TUN_IPV6_SRC, ICE_FLOW_FIELD_IDX_IPV6_SA},
+		{ICE_INSET_TUN_IPV6_DST, ICE_FLOW_FIELD_IDX_IPV6_DA},
+		{ICE_INSET_TUN_TCP_SRC_PORT, ICE_FLOW_FIELD_IDX_TCP_SRC_PORT},
+		{ICE_INSET_TUN_TCP_DST_PORT, ICE_FLOW_FIELD_IDX_TCP_DST_PORT},
+		{ICE_INSET_TUN_UDP_SRC_PORT, ICE_FLOW_FIELD_IDX_UDP_SRC_PORT},
+		{ICE_INSET_TUN_UDP_DST_PORT, ICE_FLOW_FIELD_IDX_UDP_DST_PORT},
 	};
 
 	for (i = 0, j = 0; i < RTE_DIM(ice_inset_map); i++) {
@@ -1011,7 +1024,8 @@ ice_fdir_input_set_parse(uint64_t inset, enum ice_flow_field *field)
 }
 
 static void
-ice_fdir_input_set_hdrs(enum ice_fltr_ptype flow, struct ice_flow_seg_info *seg)
+ice_fdir_input_set_hdrs(enum ice_fltr_ptype flow, struct ice_flow_seg_info *seg,
+		       int seg_idx)
 {
 	switch (flow) {
 	case ICE_FLTR_PTYPE_NONF_IPV4_UDP:
@@ -1119,16 +1133,77 @@ ice_fdir_input_set_hdrs(enum ice_fltr_ptype flow, struct ice_flow_seg_info *seg)
 				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV4:
-	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV4_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV4_UDP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV4_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_TCP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV6:
-	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV6_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV6_UDP:
-		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
-				  ICE_FLOW_SEG_HDR_PPP |
-				  ICE_FLOW_SEG_HDR_IPV6 |
-				  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP_IPV6_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_TCP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2:
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_CONTROL:
@@ -1137,16 +1212,77 @@ ice_fdir_input_set_hdrs(enum ice_fltr_ptype flow, struct ice_flow_seg_info *seg)
 				  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV4:
-	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV4_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV4_UDP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV4_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_TCP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV6:
-	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV6_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
 	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV6_UDP:
-		ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
-				  ICE_FLOW_SEG_HDR_PPP |
-				  ICE_FLOW_SEG_HDR_IPV4 |
-				  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_UDP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		break;
+	case ICE_FLTR_PTYPE_NONF_IPV4_L2TPV2_PPP_IPV6_TCP:
+		if (seg_idx == 0)
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_L2TPV2 |
+					  ICE_FLOW_SEG_HDR_PPP |
+					  ICE_FLOW_SEG_HDR_IPV4 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
+		else
+			ICE_FLOW_SET_HDRS(seg, ICE_FLOW_SEG_HDR_TCP |
+					  ICE_FLOW_SEG_HDR_IPV6 |
+					  ICE_FLOW_SEG_HDR_IPV_OTHER);
 		break;
 
 	default:
@@ -1181,15 +1317,22 @@ ice_fdir_input_set_conf(struct ice_pf *pf, enum ice_fltr_ptype flow,
 	for (k = 0; k <= ICE_FD_HW_SEG_TUN; k++) {
 		seg = &seg_tun[k];
 		input_set = (k == ICE_FD_HW_SEG_TUN) ? inner_input_set : outer_input_set;
-		if (input_set == 0)
+		if (input_set == 0) {
+			/* For tunnel inner segment, always set headers for
+			 * correct ptype narrowing even if no fields extracted.
+			 */
+			if (k == ICE_FD_HW_SEG_TUN &&
+			    ice_fdir_is_tunnel_profile(ttype))
+				ice_fdir_input_set_hdrs(flow, seg, k);
 			continue;
+		}
 
 		for (i = 0; i < ICE_FLOW_FIELD_IDX_MAX; i++)
 			field[i] = ICE_FLOW_FIELD_IDX_MAX;
 
 		ice_fdir_input_set_parse(input_set, field);
 
-		ice_fdir_input_set_hdrs(flow, seg);
+		ice_fdir_input_set_hdrs(flow, seg, k);
 
 		for (i = 0; field[i] != ICE_FLOW_FIELD_IDX_MAX; i++) {
 			ice_flow_set_fld(seg, field[i],
@@ -1252,9 +1395,7 @@ static int
 ice_fdir_is_tunnel_profile(enum ice_fdir_tunnel_type tunnel_type)
 {
 	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_VXLAN ||
-	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_L2TPV2 ||
-	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU ||
-	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_GTPU_EH)
+	    tunnel_type == ICE_FDIR_TUNNEL_TYPE_L2TPV2)
 		return 1;
 	else
 		return 0;
@@ -1268,7 +1409,7 @@ ice_fdir_add_del_raw(struct ice_pf *pf,
 	struct ice_hw *hw = ICE_PF_TO_HW(pf);
 
 	unsigned char *pkt = (unsigned char *)pf->fdir.prg_pkt;
-	rte_memcpy(pkt, filter->pkt_buf, filter->pkt_len);
+	memcpy(pkt, filter->pkt_buf, filter->pkt_len);
 
 	struct ice_fltr_desc desc;
 	memset(&desc, 0, sizeof(desc));
@@ -1315,16 +1456,27 @@ ice_fdir_extract_fltr_key(struct ice_fdir_fltr_pattern *key,
 	memset(key, 0, sizeof(*key));
 
 	key->flow_type = input->flow_type;
-	rte_memcpy(&key->ip, &input->ip, sizeof(key->ip));
-	rte_memcpy(&key->mask, &input->mask, sizeof(key->mask));
-	rte_memcpy(&key->ext_data, &input->ext_data, sizeof(key->ext_data));
-	rte_memcpy(&key->ext_mask, &input->ext_mask, sizeof(key->ext_mask));
+	memcpy(&key->ip, &input->ip, sizeof(key->ip));
+	memcpy(&key->mask, &input->mask, sizeof(key->mask));
+	memcpy(&key->ext_data, &input->ext_data, sizeof(key->ext_data));
+	memcpy(&key->ext_mask, &input->ext_mask, sizeof(key->ext_mask));
 
-	rte_memcpy(&key->gtpu_data, &input->gtpu_data, sizeof(key->gtpu_data));
-	rte_memcpy(&key->gtpu_mask, &input->gtpu_mask, sizeof(key->gtpu_mask));
+	memcpy(&key->gtpu_data, &input->gtpu_data, sizeof(key->gtpu_data));
+	memcpy(&key->gtpu_mask, &input->gtpu_mask, sizeof(key->gtpu_mask));
 
-	rte_memcpy(&key->l2tpv2_data, &input->l2tpv2_data, sizeof(key->l2tpv2_data));
-	rte_memcpy(&key->l2tpv2_mask, &input->l2tpv2_mask, sizeof(key->l2tpv2_mask));
+	memcpy(&key->l2tpv2_data, &input->l2tpv2_data, sizeof(key->l2tpv2_data));
+	memcpy(&key->l2tpv2_mask, &input->l2tpv2_mask, sizeof(key->l2tpv2_mask));
+
+	/* Normalize flags: keep only CTRL/LEN/VER bits that affect
+	 * FDIR extraction offsets. Subtypes differing only in S/O/P
+	 * share the same HW entry; masking prevents spurious SW hash
+	 * mismatches and delete failures.
+	 */
+	uint16_t fv_norm = rte_cpu_to_be_16(ICE_L2TPV2_FLAGS_CTRL |
+					     ICE_L2TPV2_FLAGS_LEN |
+					     ICE_L2TPV2_FLAGS_VER);
+	key->l2tpv2_data.flags_version &= fv_norm;
+	key->l2tpv2_mask.flags_version &= fv_norm;
 
 	key->tunnel_type = filter->tunnel_type;
 }
@@ -1452,7 +1604,7 @@ ice_fdir_create_filter(struct ice_adapter *ad,
 		if (!entry)
 			goto error;
 
-		rte_memcpy(entry, filter, sizeof(*filter));
+		memcpy(entry, filter, sizeof(*filter));
 
 		flow->rule = entry;
 
@@ -1513,7 +1665,7 @@ ice_fdir_create_filter(struct ice_adapter *ad,
 	if (filter->mark_flag == 1)
 		ice_fdir_rx_parsing_enable(ad, 1);
 
-	rte_memcpy(entry, filter, sizeof(*entry));
+	memcpy(entry, filter, sizeof(*entry));
 	ret = ice_fdir_entry_insert(pf, entry, &key);
 	if (ret) {
 		rte_flow_error_set(error, -ret,
@@ -1627,6 +1779,17 @@ ice_fdir_destroy_filter(struct ice_adapter *ad,
 
 	ice_fdir_cnt_update(pf, filter->input.flow_type, is_tun, false);
 
+	/* Remove the FDIR HW profile when no filters of this ptype
+	 * remain.  The profile encodes field extraction offsets that
+	 * vary between L2TPv2 subtypes (e.g. data vs data_l).  If the
+	 * profile is not removed, a subsequent rule with a different
+	 * subtype but the same ptype reuses the stale profile via
+	 * -EEXIST and the NIC extracts session_id from the wrong
+	 * offset, causing mismatched packets to hit the rule.
+	 */
+	if (pf->fdir_fltr_cnt[filter->input.flow_type][is_tun] == 0)
+		ice_fdir_prof_rm(pf, filter->input.flow_type, is_tun);
+
 	if (filter->mark_flag == 1)
 		ice_fdir_rx_parsing_enable(ad, 0);
 
@@ -1685,180 +1848,11 @@ static struct ice_flow_engine ice_fdir_engine = {
 	.create = ice_fdir_create_filter,
 	.destroy = ice_fdir_destroy_filter,
 	.query_count = ice_fdir_query_count,
+	.name = "fdir",
 	.type = ICE_FLOW_ENGINE_FDIR,
+	.rule_size = sizeof(struct ice_fdir_filter_conf),
 };
 
-static int
-ice_fdir_parse_action_qregion(struct ice_pf *pf,
-			      struct rte_flow_error *error,
-			      const struct rte_flow_action *act,
-			      struct ice_fdir_filter_conf *filter)
-{
-	const struct rte_flow_action_rss *rss = act->conf;
-	uint32_t i;
-
-	if (act->type != RTE_FLOW_ACTION_TYPE_RSS) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, act,
-				   "Invalid action.");
-		return -rte_errno;
-	}
-
-	if (rss->queue_num <= 1) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, act,
-				   "Queue region size can't be 0 or 1.");
-		return -rte_errno;
-	}
-
-	/* check if queue index for queue region is continuous */
-	for (i = 0; i < rss->queue_num - 1; i++) {
-		if (rss->queue[i + 1] != rss->queue[i] + 1) {
-			rte_flow_error_set(error, EINVAL,
-					   RTE_FLOW_ERROR_TYPE_ACTION, act,
-					   "Discontinuous queue region");
-			return -rte_errno;
-		}
-	}
-
-	if (rss->queue[rss->queue_num - 1] >= pf->dev_data->nb_rx_queues) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, act,
-				   "Invalid queue region indexes.");
-		return -rte_errno;
-	}
-
-	if (!(rte_is_power_of_2(rss->queue_num) &&
-	     (rss->queue_num <= ICE_FDIR_MAX_QREGION_SIZE))) {
-		rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, act,
-				   "The region size should be any of the following values:"
-				   "1, 2, 4, 8, 16, 32, 64, 128 as long as the total number "
-				   "of queues do not exceed the VSI allocation.");
-		return -rte_errno;
-	}
-
-	filter->input.q_index = rss->queue[0];
-	filter->input.q_region = rte_fls_u32(rss->queue_num) - 1;
-	filter->input.dest_ctl = ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_QGROUP;
-
-	return 0;
-}
-
-static int
-ice_fdir_parse_action(struct ice_adapter *ad,
-		      const struct rte_flow_action actions[],
-		      struct rte_flow_error *error,
-		      struct ice_fdir_filter_conf *filter)
-{
-	struct ice_pf *pf = &ad->pf;
-	const struct rte_flow_action_queue *act_q;
-	const struct rte_flow_action_mark *mark_spec = NULL;
-	const struct rte_flow_action_count *act_count;
-	uint32_t dest_num = 0;
-	uint32_t mark_num = 0;
-	uint32_t counter_num = 0;
-	int ret;
-
-	for (; actions->type != RTE_FLOW_ACTION_TYPE_END; actions++) {
-		switch (actions->type) {
-		case RTE_FLOW_ACTION_TYPE_VOID:
-			break;
-		case RTE_FLOW_ACTION_TYPE_QUEUE:
-			dest_num++;
-
-			act_q = actions->conf;
-			filter->input.q_index = act_q->index;
-			if (filter->input.q_index >=
-					pf->dev_data->nb_rx_queues) {
-				rte_flow_error_set(error, EINVAL,
-						   RTE_FLOW_ERROR_TYPE_ACTION,
-						   actions,
-						   "Invalid queue for FDIR.");
-				return -rte_errno;
-			}
-			filter->input.dest_ctl =
-				ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_QINDEX;
-			break;
-		case RTE_FLOW_ACTION_TYPE_DROP:
-			dest_num++;
-
-			filter->input.dest_ctl =
-				ICE_FLTR_PRGM_DESC_DEST_DROP_PKT;
-			break;
-		case RTE_FLOW_ACTION_TYPE_PASSTHRU:
-			dest_num++;
-
-			filter->input.dest_ctl =
-				ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
-			break;
-		case RTE_FLOW_ACTION_TYPE_RSS:
-			dest_num++;
-
-			ret = ice_fdir_parse_action_qregion(pf,
-						error, actions, filter);
-			if (ret)
-				return ret;
-			break;
-		case RTE_FLOW_ACTION_TYPE_MARK:
-			mark_num++;
-			filter->mark_flag = 1;
-			mark_spec = actions->conf;
-			filter->input.fltr_id = mark_spec->id;
-			filter->input.fdid_prio = ICE_FXD_FLTR_QW1_FDID_PRI_ONE;
-			break;
-		case RTE_FLOW_ACTION_TYPE_COUNT:
-			counter_num++;
-
-			act_count = actions->conf;
-			filter->input.cnt_ena = ICE_FXD_FLTR_QW0_STAT_ENA_PKTS;
-			rte_memcpy(&filter->act_count, act_count,
-						sizeof(filter->act_count));
-
-			break;
-		default:
-			rte_flow_error_set(error, EINVAL,
-				   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-				   "Invalid action.");
-			return -rte_errno;
-		}
-	}
-
-	if (dest_num >= 2) {
-		rte_flow_error_set(error, EINVAL,
-			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Unsupported action combination");
-		return -rte_errno;
-	}
-
-	if (mark_num >= 2) {
-		rte_flow_error_set(error, EINVAL,
-			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Too many mark actions");
-		return -rte_errno;
-	}
-
-	if (counter_num >= 2) {
-		rte_flow_error_set(error, EINVAL,
-			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Too many count actions");
-		return -rte_errno;
-	}
-
-	if (dest_num + mark_num + counter_num == 0) {
-		rte_flow_error_set(error, EINVAL,
-			   RTE_FLOW_ERROR_TYPE_ACTION, actions,
-			   "Empty action");
-		return -rte_errno;
-	}
-
-	/* set default action to PASSTHRU mode, in "mark/count only" case. */
-	if (dest_num == 0)
-		filter->input.dest_ctl =
-			ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
-
-	return 0;
-}
 
 static int
 ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
@@ -1911,6 +1905,8 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 	for (item = pattern; item->type != RTE_FLOW_ITEM_TYPE_END; item++) {
 		if (item->type == RTE_FLOW_ITEM_TYPE_VXLAN)
 			tunnel_type = ICE_FDIR_TUNNEL_TYPE_VXLAN;
+		if (item->type == RTE_FLOW_ITEM_TYPE_L2TPV2)
+			tunnel_type = ICE_FDIR_TUNNEL_TYPE_L2TPV2;
 		/* To align with shared code behavior, save gtpu outer
 		 * fields in inner struct.
 		 */
@@ -1933,6 +1929,7 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 			rte_flow_error_set(error, EINVAL,
 					   RTE_FLOW_ERROR_TYPE_ITEM, item,
 					   "Not support range");
+			return -rte_errno;
 		}
 
 		input_set = (tunnel_type && !is_outer) ?
@@ -2036,7 +2033,7 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 				ret_val = -ENOMEM;
 				goto raw_error;
 			}
-			rte_memcpy(pkt_buf, tmp_spec, pkt_len);
+			memcpy(pkt_buf, tmp_spec, pkt_len);
 			filter->pkt_buf = pkt_buf;
 
 			filter->pkt_len = pkt_len;
@@ -2086,11 +2083,11 @@ raw_error:
 			p_ext_data = (tunnel_type && is_outer) ?
 				     &filter->input.ext_data_outer :
 				     &filter->input.ext_data;
-			rte_memcpy(&p_ext_data->src_mac,
+			memcpy(&p_ext_data->src_mac,
 				   &eth_spec->hdr.src_addr, RTE_ETHER_ADDR_LEN);
-			rte_memcpy(&p_ext_data->dst_mac,
+			memcpy(&p_ext_data->dst_mac,
 				   &eth_spec->hdr.dst_addr, RTE_ETHER_ADDR_LEN);
-			rte_memcpy(&p_ext_data->ether_type,
+			memcpy(&p_ext_data->ether_type,
 				   &eth_spec->hdr.ether_type, sizeof(eth_spec->hdr.ether_type));
 			break;
 		case RTE_FLOW_ITEM_TYPE_IPV4:
@@ -2256,8 +2253,8 @@ raw_error:
 			if (ipv6_mask->hdr.hop_limits == UINT8_MAX)
 				*input_set |= ICE_INSET_IPV6_HOP_LIMIT;
 
-			rte_memcpy(&p_v6->dst_ip, &ipv6_spec->hdr.dst_addr, 16);
-			rte_memcpy(&p_v6->src_ip, &ipv6_spec->hdr.src_addr, 16);
+			memcpy(&p_v6->dst_ip, &ipv6_spec->hdr.dst_addr, 16);
+			memcpy(&p_v6->src_ip, &ipv6_spec->hdr.src_addr, 16);
 			vtc_flow_cpu = rte_be_to_cpu_32(ipv6_spec->hdr.vtc_flow);
 			p_v6->tc = (uint8_t)(vtc_flow_cpu >> ICE_FDIR_IPV6_TC_OFFSET);
 			p_v6->proto = ipv6_spec->hdr.proto;
@@ -2598,7 +2595,14 @@ raw_error:
 			     l2tpv2_mask->hdr.type1.session_id == UINT16_MAX) ||
 			    (flags_version == RTE_L2TPV2_MSG_TYPE_DATA_L_S_O &&
 			     l2tpv2_mask->hdr.type0.session_id == UINT16_MAX)) {
-				input_set_o |= ICE_INSET_L2TPV2OIP_SESSION_ID;
+				if (flags_version == RTE_L2TPV2_MSG_TYPE_CONTROL ||
+				    flags_version == RTE_L2TPV2_MSG_TYPE_DATA_L ||
+				    flags_version == RTE_L2TPV2_MSG_TYPE_DATA_L_S ||
+				    flags_version == RTE_L2TPV2_MSG_TYPE_DATA_L_O ||
+				    flags_version == RTE_L2TPV2_MSG_TYPE_DATA_L_S_O)
+					input_set_o |= ICE_INSET_L2TPV2OIP_LEN_SESSION_ID;
+				else
+					input_set_o |= ICE_INSET_L2TPV2OIP_SESSION_ID;
 			}
 
 			tunnel_type = ICE_FDIR_TUNNEL_TYPE_L2TPV2;
@@ -2780,10 +2784,213 @@ raw_error:
 			flow_type = ICE_FLTR_PTYPE_NONF_IPV6_L2TPV2_PPP;
 	}
 
+	/* Bare L2TPv2 (no inner fields) must use single-segment profile.
+	 * PPPoL2TPv2 rules must keep the tunnel profile even without
+	 * inner field values, so only reset when PPP is not present.
+	 */
+	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_L2TPV2 &&
+	    input_set_i == 0 && !ppp_present)
+		tunnel_type = ICE_FDIR_TUNNEL_TYPE_NONE;
+
+	/* Match outer IPv4/IPv6 for L2TPv2 via Ethertype. */
+	if (tunnel_type == ICE_FDIR_TUNNEL_TYPE_L2TPV2) {
+		if (l3 == RTE_FLOW_ITEM_TYPE_IPV4) {
+			input_set_o |= ICE_INSET_ETHERTYPE;
+			filter->input.ext_data.ether_type =
+				rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
+		} else if (l3 == RTE_FLOW_ITEM_TYPE_IPV6) {
+			input_set_o |= ICE_INSET_ETHERTYPE;
+			filter->input.ext_data.ether_type =
+				rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6);
+		}
+	}
+
 	filter->tunnel_type = tunnel_type;
 	filter->input.flow_type = flow_type;
 	filter->input_set_o = input_set_o;
 	filter->input_set_i = input_set_i;
+
+	return 0;
+}
+
+static int
+ice_fdir_parse_action(struct ice_adapter *ad,
+		const struct ci_flow_actions *actions,
+		struct rte_flow_error *error)
+{
+	struct ice_pf *pf = &ad->pf;
+	struct ice_fdir_filter_conf *filter = &pf->fdir.conf;
+	bool dest_set = false;
+	size_t i;
+
+	for (i = 0; i < actions->count; i++) {
+		const struct rte_flow_action *act = actions->actions[i];
+
+		switch (act->type) {
+		case RTE_FLOW_ACTION_TYPE_QUEUE:
+		{
+			const struct rte_flow_action_queue *act_q = act->conf;
+			dest_set = true;
+
+			filter->input.q_index = act_q->index;
+			filter->input.dest_ctl =
+				ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_QINDEX;
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_DROP:
+			dest_set = true;
+
+			filter->input.dest_ctl =
+				ICE_FLTR_PRGM_DESC_DEST_DROP_PKT;
+			break;
+		case RTE_FLOW_ACTION_TYPE_PASSTHRU:
+			dest_set = true;
+
+			filter->input.dest_ctl =
+				ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
+			break;
+		case RTE_FLOW_ACTION_TYPE_RSS:
+		{
+			const struct rte_flow_action_rss *rss = act->conf;
+			dest_set = true;
+
+			filter->input.q_index = rss->queue[0];
+			filter->input.q_region = rte_fls_u32(rss->queue_num) - 1;
+			filter->input.dest_ctl = ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_QGROUP;
+
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_MARK:
+		{
+			const struct rte_flow_action_mark *mark_spec = act->conf;
+			filter->mark_flag = 1;
+			filter->input.fltr_id = mark_spec->id;
+			filter->input.fdid_prio = ICE_FXD_FLTR_QW1_FDID_PRI_ONE;
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_COUNT:
+		{
+			const struct rte_flow_action_count *act_count = act->conf;
+
+			filter->input.cnt_ena = ICE_FXD_FLTR_QW0_STAT_ENA_PKTS;
+			rte_memcpy(&filter->act_count, act_count,
+						sizeof(filter->act_count));
+			break;
+		}
+		default:
+			/* Should not happen */
+			return rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ACTION, act,
+					"Invalid action.");
+		}
+	}
+
+	/* set default action to PASSTHRU mode, in "mark/count only" case. */
+	if (!dest_set) {
+		filter->input.dest_ctl =
+			ICE_FLTR_PRGM_DESC_DEST_DIRECT_PKT_OTHER;
+	}
+
+	return 0;
+}
+
+static int
+ice_fdir_check_action_qregion(struct ice_pf *pf,
+			      struct rte_flow_error *error,
+			      const struct rte_flow_action_rss *rss)
+{
+	if (rss->queue_num <= 1) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"Queue region size can't be 0 or 1.");
+	}
+
+	if (rss->queue[rss->queue_num - 1] >= pf->dev_data->nb_rx_queues) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"Invalid queue region indexes.");
+	}
+
+	if (!(rte_is_power_of_2(rss->queue_num) &&
+	     (rss->queue_num <= ICE_FDIR_MAX_QREGION_SIZE)))
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION_CONF, rss,
+				"The region size should be any of the following values:"
+				"2, 4, 8, 16, 32, 64, 128 as long as the total number "
+				"of queues do not exceed the VSI allocation.");
+
+	return 0;
+}
+
+static int
+ice_fdir_check_action(const struct ci_flow_actions *actions,
+		const struct ci_flow_actions_check_param *param,
+		struct rte_flow_error *error)
+{
+	struct ice_adapter *ad = param->driver_ctx;
+	struct ice_pf *pf = &ad->pf;
+	uint32_t dest_num = 0;
+	uint32_t mark_num = 0;
+	uint32_t counter_num = 0;
+	size_t i;
+	int ret;
+
+	for (i = 0; i < actions->count; i++) {
+		const struct rte_flow_action *act = actions->actions[i];
+
+		switch (act->type) {
+		case RTE_FLOW_ACTION_TYPE_QUEUE:
+		{
+			const struct rte_flow_action_queue *act_q = act->conf;
+			dest_num++;
+
+			if (act_q->index >= pf->dev_data->nb_rx_queues) {
+				return rte_flow_error_set(error, EINVAL,
+						   RTE_FLOW_ERROR_TYPE_ACTION,
+						   act,
+						   "Invalid queue for FDIR.");
+			}
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_DROP:
+			dest_num++;
+			break;
+		case RTE_FLOW_ACTION_TYPE_PASSTHRU:
+			dest_num++;
+			break;
+		case RTE_FLOW_ACTION_TYPE_RSS:
+		{
+			const struct rte_flow_action_rss *rss = act->conf;
+
+			dest_num++;
+			ret = ice_fdir_check_action_qregion(pf, error, rss);
+			if (ret)
+				return ret;
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_MARK:
+		{
+			mark_num++;
+			break;
+		}
+		case RTE_FLOW_ACTION_TYPE_COUNT:
+		{
+			counter_num++;
+			break;
+		}
+		default:
+			/* Should not happen */
+			return rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_ACTION, act,
+					"Invalid action.");
+		}
+	}
+
+	if (dest_num > 1 || mark_num > 1 || counter_num > 1) {
+		return rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ACTION, NULL,
+				"Unsupported action combination");
+	}
 
 	return 0;
 }
@@ -2794,10 +3001,26 @@ ice_fdir_parse(struct ice_adapter *ad,
 	       uint32_t array_len,
 	       const struct rte_flow_item pattern[],
 	       const struct rte_flow_action actions[],
-	       uint32_t priority __rte_unused,
+	       const struct rte_flow_attr *attr,
 	       void **meta,
 	       struct rte_flow_error *error)
 {
+	struct ci_flow_actions parsed_actions = {0};
+	struct ci_flow_actions_check_param param = {
+		.allowed_types = (enum rte_flow_action_type[]){
+			RTE_FLOW_ACTION_TYPE_PASSTHRU,
+			RTE_FLOW_ACTION_TYPE_DROP,
+			RTE_FLOW_ACTION_TYPE_QUEUE,
+			RTE_FLOW_ACTION_TYPE_RSS,
+			RTE_FLOW_ACTION_TYPE_MARK,
+			RTE_FLOW_ACTION_TYPE_COUNT,
+			RTE_FLOW_ACTION_TYPE_END
+		},
+		.max_actions = 3,
+		.check = ice_fdir_check_action,
+		.driver_ctx = ad,
+		.rss_queues_contig = true,
+	};
 	struct ice_pf *pf = &ad->pf;
 	struct ice_fdir_filter_conf *filter = &pf->fdir.conf;
 	struct ice_pattern_match_item *item = NULL;
@@ -2805,7 +3028,16 @@ ice_fdir_parse(struct ice_adapter *ad,
 	bool raw = false;
 	int ret;
 
+	ret = ci_flow_check_attr(attr, NULL, error);
+	if (ret)
+		return ret;
+
 	memset(filter, 0, sizeof(*filter));
+
+	ret = ci_flow_check_actions(actions, &param, &parsed_actions, error);
+	if (ret)
+		return ret;
+
 	item = ice_search_pattern_match_item(ad, pattern, array, array_len,
 					     error);
 
@@ -2834,7 +3066,7 @@ ice_fdir_parse(struct ice_adapter *ad,
 		goto error;
 	}
 
-	ret = ice_fdir_parse_action(ad, actions, error, filter);
+	ret = ice_fdir_parse_action(ad, &parsed_actions, error);
 	if (ret)
 		goto error;
 

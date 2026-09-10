@@ -10,12 +10,14 @@
 #include <stdbool.h>
 #include <sys/queue.h>
 
+#include <rte_os_shim.h>
 #include <eal_export.h>
 #include <rte_eal.h>
 #include <dev_driver.h>
 #include <bus_driver.h>
 #include <rte_common.h>
 #include <rte_devargs.h>
+#include <rte_log.h>
 #include <rte_memory.h>
 #include <rte_tailq.h>
 #include <rte_spinlock.h>
@@ -23,23 +25,21 @@
 #include <rte_errno.h>
 
 #include "bus_vdev_driver.h"
-#include "vdev_logs.h"
-#include "vdev_private.h"
 
 #define VDEV_MP_KEY	"bus_vdev_mp"
+
+int vdev_logtype_bus;
+#define RTE_LOGTYPE_VDEV_BUS vdev_logtype_bus
+
+#define VDEV_LOG(level, ...) \
+	RTE_LOG_LINE_PREFIX(level, VDEV_BUS, "%s(): ", __func__, __VA_ARGS__)
 
 /* Forward declare to access virtual bus name */
 static struct rte_bus rte_vdev_bus;
 
-
-static TAILQ_HEAD(, rte_vdev_device) vdev_device_list =
-	TAILQ_HEAD_INITIALIZER(vdev_device_list);
 /* The lock needs to be recursive because a vdev can manage another vdev. */
 static rte_spinlock_recursive_t vdev_device_list_lock =
 	RTE_SPINLOCK_RECURSIVE_INITIALIZER;
-
-static TAILQ_HEAD(, rte_vdev_driver) vdev_driver_list =
-	TAILQ_HEAD_INITIALIZER(vdev_driver_list);
 
 struct vdev_custom_scan {
 	TAILQ_ENTRY(vdev_custom_scan) next;
@@ -56,7 +56,7 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_vdev_register)
 void
 rte_vdev_register(struct rte_vdev_driver *driver)
 {
-	TAILQ_INSERT_TAIL(&vdev_driver_list, driver, next);
+	rte_bus_add_driver(&rte_vdev_bus, &driver->driver);
 }
 
 /* unregister a driver */
@@ -64,7 +64,7 @@ RTE_EXPORT_INTERNAL_SYMBOL(rte_vdev_unregister)
 void
 rte_vdev_unregister(struct rte_vdev_driver *driver)
 {
-	TAILQ_REMOVE(&vdev_driver_list, driver, next);
+	rte_bus_remove_driver(&rte_vdev_bus, &driver->driver);
 }
 
 RTE_EXPORT_SYMBOL(rte_vdev_add_custom_scan)
@@ -123,7 +123,7 @@ vdev_parse(const char *name, void *addr)
 	struct rte_vdev_driver **out = addr;
 	struct rte_vdev_driver *driver = NULL;
 
-	TAILQ_FOREACH(driver, &vdev_driver_list, next) {
+	RTE_BUS_FOREACH_DRV(driver, &rte_vdev_bus) {
 		if (strncmp(driver->driver.name, name,
 			    strlen(driver->driver.name)) == 0)
 			break;
@@ -141,23 +141,10 @@ vdev_parse(const char *name, void *addr)
 static int
 vdev_dma_map(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 {
-	struct rte_vdev_device *vdev = RTE_DEV_TO_VDEV(dev);
-	const struct rte_vdev_driver *driver;
+	struct rte_vdev_device *vdev = RTE_BUS_DEVICE(dev, *vdev);
+	const struct rte_vdev_driver *driver = RTE_BUS_DRIVER(vdev->device.driver, *driver);
 
-	if (!vdev) {
-		rte_errno = EINVAL;
-		return -1;
-	}
-
-	if (!vdev->device.driver) {
-		VDEV_LOG(DEBUG, "no driver attach to device %s", dev->name);
-		return 1;
-	}
-
-	driver = container_of(vdev->device.driver, const struct rte_vdev_driver,
-			driver);
-
-	if (driver->dma_map)
+	if (driver->dma_map != NULL)
 		return driver->dma_map(vdev, addr, iova, len);
 
 	return 0;
@@ -166,56 +153,53 @@ vdev_dma_map(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 static int
 vdev_dma_unmap(struct rte_device *dev, void *addr, uint64_t iova, size_t len)
 {
-	struct rte_vdev_device *vdev = RTE_DEV_TO_VDEV(dev);
-	const struct rte_vdev_driver *driver;
+	struct rte_vdev_device *vdev = RTE_BUS_DEVICE(dev, *vdev);
+	const struct rte_vdev_driver *driver = RTE_BUS_DRIVER(vdev->device.driver, *driver);
 
-	if (!vdev) {
-		rte_errno = EINVAL;
-		return -1;
-	}
-
-	if (!vdev->device.driver) {
-		VDEV_LOG(DEBUG, "no driver attach to device %s", dev->name);
-		return 1;
-	}
-
-	driver = container_of(vdev->device.driver, const struct rte_vdev_driver,
-			driver);
-
-	if (driver->dma_unmap)
+	if (driver->dma_unmap != NULL)
 		return driver->dma_unmap(vdev, addr, iova, len);
 
 	return 0;
 }
 
-static int
-vdev_probe_all_drivers(struct rte_vdev_device *dev)
+/*
+ * Check if a vdev driver matches a vdev device by name.
+ */
+static bool
+vdev_bus_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
+	const char *name = dev->name;
+
+	/* Check driver name match */
+	if (strncmp(drv->name, name, strlen(drv->name)) == 0)
+		return true;
+
+	/* Check driver alias match */
+	if (drv->alias && strncmp(drv->alias, name, strlen(drv->alias)) == 0)
+		return true;
+
+	return false;
+}
+
+static int
+vdev_probe_device(struct rte_driver *drv, struct rte_device *dev)
+{
+	struct rte_vdev_device *vdev_dev = RTE_BUS_DEVICE(dev, *vdev_dev);
+	struct rte_vdev_driver *vdev_drv = RTE_BUS_DRIVER(drv, *vdev_drv);
 	const char *name;
-	struct rte_vdev_driver *driver;
 	enum rte_iova_mode iova_mode;
-	int ret;
 
-	if (rte_dev_is_probed(&dev->device))
-		return -EEXIST;
-
-	name = rte_vdev_device_name(dev);
+	name = rte_vdev_device_name(vdev_dev);
 	VDEV_LOG(DEBUG, "Search driver to probe device %s", name);
 
-	if (vdev_parse(name, &driver))
-		return -1;
-
 	iova_mode = rte_eal_iova_mode();
-	if ((driver->drv_flags & RTE_VDEV_DRV_NEED_IOVA_AS_VA) && (iova_mode == RTE_IOVA_PA)) {
+	if ((vdev_drv->drv_flags & RTE_VDEV_DRV_NEED_IOVA_AS_VA) && (iova_mode == RTE_IOVA_PA)) {
 		VDEV_LOG(ERR, "%s requires VA IOVA mode but current mode is PA, not initializing",
 				name);
 		return -1;
 	}
 
-	ret = driver->probe(dev);
-	if (ret == 0)
-		dev->device.driver = &driver->driver;
-	return ret;
+	return vdev_drv->probe(vdev_dev);
 }
 
 /* The caller shall be responsible for thread-safe */
@@ -227,7 +211,7 @@ find_vdev(const char *name)
 	if (!name)
 		return NULL;
 
-	TAILQ_FOREACH(dev, &vdev_device_list, next) {
+	RTE_BUS_FOREACH_DEV(dev, &rte_vdev_bus) {
 		const char *devname = rte_vdev_device_name(dev);
 
 		if (!strcmp(devname, name))
@@ -291,7 +275,6 @@ insert_vdev(const char *name, const char *args,
 		goto fail;
 	}
 
-	dev->device.bus = &rte_vdev_bus;
 	dev->device.numa_node = SOCKET_ID_ANY;
 
 	if (find_vdev(name)) {
@@ -308,7 +291,7 @@ insert_vdev(const char *name, const char *args,
 		rte_devargs_insert(&devargs);
 	dev->device.devargs = devargs;
 	dev->device.name = devargs->name;
-	TAILQ_INSERT_TAIL(&vdev_device_list, dev, next);
+	rte_bus_add_device(&rte_vdev_bus, &dev->device);
 
 	if (p_dev)
 		*p_dev = dev;
@@ -331,14 +314,28 @@ rte_vdev_init(const char *name, const char *args)
 	rte_spinlock_recursive_lock(&vdev_device_list_lock);
 	ret = insert_vdev(name, args, &dev, true);
 	if (ret == 0) {
-		ret = vdev_probe_all_drivers(dev);
-		if (ret) {
-			if (ret > 0)
-				VDEV_LOG(ERR, "no driver found for %s", name);
+		struct rte_driver *drv = NULL;
+
+next_driver:
+		drv = rte_bus_find_driver(&rte_vdev_bus, drv, &dev->device);
+		if (drv == NULL) {
+			VDEV_LOG(ERR, "no driver found for %s", name);
+			ret = -1;
+		} else if (rte_dev_is_probed(&dev->device)) {
+			ret = -EEXIST;
+		} else {
+			dev->device.driver = drv;
+			ret = rte_vdev_bus.probe_device(drv, &dev->device);
+			if (ret != 0)
+				dev->device.driver = NULL;
+		}
+		if (ret < 0) {
 			/* If fails, remove it from vdev list */
-			TAILQ_REMOVE(&vdev_device_list, dev, next);
+			rte_bus_remove_device(&rte_vdev_bus, &dev->device);
 			rte_devargs_remove(dev->device.devargs);
 			free(dev);
+		} else if (ret > 0) {
+			goto next_driver;
 		}
 	}
 	rte_spinlock_recursive_unlock(&vdev_device_list_lock);
@@ -346,19 +343,15 @@ rte_vdev_init(const char *name, const char *args)
 }
 
 static int
-vdev_remove_driver(struct rte_vdev_device *dev)
+vdev_unplug_device(struct rte_device *rte_dev)
 {
-	const char *name = rte_vdev_device_name(dev);
-	const struct rte_vdev_driver *driver;
+	const struct rte_vdev_driver *driver = RTE_BUS_DRIVER(rte_dev->driver, *driver);
+	struct rte_vdev_device *dev = RTE_BUS_DEVICE(rte_dev, *dev);
 
-	if (!dev->device.driver) {
-		VDEV_LOG(DEBUG, "no driver attach to device %s", name);
-		return 1;
-	}
+	if (driver->remove)
+		return driver->remove(dev);
 
-	driver = container_of(dev->device.driver, const struct rte_vdev_driver,
-		driver);
-	return driver->remove(dev);
+	return 0;
 }
 
 RTE_EXPORT_SYMBOL(rte_vdev_uninit)
@@ -379,11 +372,16 @@ rte_vdev_uninit(const char *name)
 		goto unlock;
 	}
 
-	ret = vdev_remove_driver(dev);
+	if (rte_dev_is_probed(&dev->device)) {
+		ret = vdev_unplug_device(&dev->device);
+	} else {
+		VDEV_LOG(DEBUG, "no driver attach to device %s", name);
+		ret = 1;
+	}
 	if (ret)
 		goto unlock;
 
-	TAILQ_REMOVE(&vdev_device_list, dev, next);
+	rte_bus_remove_device(&rte_vdev_bus, &dev->device);
 	rte_devargs_remove(dev->device.devargs);
 	free(dev);
 
@@ -400,8 +398,6 @@ struct vdev_param {
 	int num;
 	char name[RTE_DEV_NAME_MAX_LEN];
 };
-
-static int vdev_plug(struct rte_device *dev);
 
 /**
  * This function works as the action for both primary and secondary process
@@ -434,7 +430,7 @@ vdev_action(const struct rte_mp_msg *mp_msg, const void *peer)
 		num = 0;
 
 		rte_spinlock_recursive_lock(&vdev_device_list_lock);
-		TAILQ_FOREACH(dev, &vdev_device_list, next) {
+		RTE_BUS_FOREACH_DEV(dev, &rte_vdev_bus) {
 			devname = rte_vdev_device_name(dev);
 			if (strlen(devname) == 0) {
 				VDEV_LOG(INFO, "vdev with no name is not sent");
@@ -526,7 +522,7 @@ scan:
 	rte_spinlock_unlock(&vdev_custom_scan_lock);
 
 	/* for virtual devices we scan the devargs_list populated via cmdline */
-	RTE_EAL_DEVARGS_FOREACH("vdev", devargs) {
+	RTE_EAL_DEVARGS_FOREACH(rte_vdev_bus.name, devargs) {
 
 		dev = calloc(1, sizeof(*dev));
 		if (!dev)
@@ -540,12 +536,11 @@ scan:
 			continue;
 		}
 
-		dev->device.bus = &rte_vdev_bus;
 		dev->device.devargs = devargs;
 		dev->device.numa_node = SOCKET_ID_ANY;
 		dev->device.name = devargs->name;
 
-		TAILQ_INSERT_TAIL(&vdev_device_list, dev, next);
+		rte_bus_add_device(&rte_vdev_bus, &dev->device);
 
 		rte_spinlock_recursive_unlock(&vdev_device_list_lock);
 	}
@@ -553,97 +548,35 @@ scan:
 	return 0;
 }
 
-static int
-vdev_probe(void)
+static void
+vdev_free_device(struct rte_device *dev)
 {
-	struct rte_vdev_device *dev;
-	int r, ret = 0;
-
-	/* call the init function for each virtual device */
-	TAILQ_FOREACH(dev, &vdev_device_list, next) {
-		/* we don't use the vdev lock here, as it's only used in DPDK
-		 * initialization; and we don't want to hold such a lock when
-		 * we call each driver probe.
-		 */
-
-		r = vdev_probe_all_drivers(dev);
-		if (r != 0) {
-			if (r == -EEXIST)
-				continue;
-			VDEV_LOG(ERR, "failed to initialize %s device",
-				rte_vdev_device_name(dev));
-			ret = -1;
-		}
-	}
-
-	return ret;
+	free(RTE_BUS_DEVICE(dev, struct rte_vdev_device));
 }
 
 static int
-vdev_cleanup(void)
+vdev_cleanup(struct rte_bus *bus)
 {
-	struct rte_vdev_device *dev, *tmp_dev;
-	int error = 0;
+	int error;
 
-	RTE_TAILQ_FOREACH_SAFE(dev, &vdev_device_list, next, tmp_dev) {
-		const struct rte_vdev_driver *drv;
-		int ret = 0;
-
-		if (dev->device.driver == NULL)
-			goto free;
-
-		drv = container_of(dev->device.driver, const struct rte_vdev_driver, driver);
-
-		if (drv->remove == NULL)
-			goto free;
-
-		ret = drv->remove(dev);
-		if (ret < 0)
-			error = -1;
-
-		dev->device.driver = NULL;
-free:
-		TAILQ_REMOVE(&vdev_device_list, dev, next);
-		free(dev);
-	}
+	rte_spinlock_recursive_lock(&vdev_device_list_lock);
+	error = rte_bus_generic_cleanup(bus);
+	rte_spinlock_recursive_unlock(&vdev_device_list_lock);
 
 	return error;
 }
 
-struct rte_device *
-rte_vdev_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
-		     const void *data)
+static struct rte_device *
+vdev_find_device(const struct rte_bus *bus, const struct rte_device *start,
+	rte_dev_cmp_t cmp, const void *data)
 {
-	const struct rte_vdev_device *vstart;
-	struct rte_vdev_device *dev;
+	struct rte_device *dev;
 
 	rte_spinlock_recursive_lock(&vdev_device_list_lock);
-	if (start != NULL) {
-		vstart = RTE_DEV_TO_VDEV_CONST(start);
-		dev = TAILQ_NEXT(vstart, next);
-	} else {
-		dev = TAILQ_FIRST(&vdev_device_list);
-	}
-	while (dev != NULL) {
-		if (cmp(&dev->device, data) == 0)
-			break;
-		dev = TAILQ_NEXT(dev, next);
-	}
+	dev = rte_bus_generic_find_device(bus, start, cmp, data);
 	rte_spinlock_recursive_unlock(&vdev_device_list_lock);
 
-	return dev ? &dev->device : NULL;
-}
-
-static int
-vdev_plug(struct rte_device *dev)
-{
-	return vdev_probe_all_drivers(RTE_DEV_TO_VDEV(dev));
-}
-
-static int
-vdev_unplug(struct rte_device *dev)
-{
-	return rte_vdev_uninit(dev->name);
+	return dev;
 }
 
 static enum rte_iova_mode
@@ -653,7 +586,7 @@ vdev_get_iommu_class(void)
 	struct rte_vdev_device *dev;
 	struct rte_vdev_driver *driver;
 
-	TAILQ_FOREACH(dev, &vdev_device_list, next) {
+	RTE_BUS_FOREACH_DEV(dev, &rte_vdev_bus) {
 		name = rte_vdev_device_name(dev);
 		if (vdev_parse(name, &driver))
 			continue;
@@ -667,16 +600,18 @@ vdev_get_iommu_class(void)
 
 static struct rte_bus rte_vdev_bus = {
 	.scan = vdev_scan,
-	.probe = vdev_probe,
+	.probe = rte_bus_generic_probe,
+	.free_device = vdev_free_device,
 	.cleanup = vdev_cleanup,
-	.find_device = rte_vdev_find_device,
-	.plug = vdev_plug,
-	.unplug = vdev_unplug,
+	.find_device = vdev_find_device,
+	.match = vdev_bus_match,
+	.probe_device = vdev_probe_device,
+	.unplug_device = vdev_unplug_device,
 	.parse = vdev_parse,
 	.dma_map = vdev_dma_map,
 	.dma_unmap = vdev_dma_unmap,
 	.get_iommu_class = vdev_get_iommu_class,
-	.dev_iterate = rte_vdev_dev_iterate,
+	.dev_iterate = rte_bus_generic_dev_iterate,
 };
 
 RTE_REGISTER_BUS(vdev, rte_vdev_bus);

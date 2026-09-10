@@ -30,8 +30,6 @@ In order to keep the application simple the following assumptions are made:
 How the Application Works
 -------------------------
 
-.. _figure_ptpclient_highlevel:
-
 .. figure:: img/ptpclient.*
 
    PTP Synchronization Protocol
@@ -118,8 +116,8 @@ used by the application:
     :end-before:  >8 End of a new mempool in memory to hold the mbufs.
     :dedent: 1
 
-Mbufs are the packet buffer structure used by DPDK. They are explained in
-detail in the "Mbuf Library" section of the *DPDK Programmer's Guide*.
+Mbufs are the packet buffer structure used by DPDK.
+They are explained in detail in the :doc:`/prog_guide/mbuf_lib`.
 
 The ``main()`` function also initializes all the ports using the user defined
 ``port_init()`` function with portmask provided by user:

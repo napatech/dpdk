@@ -64,7 +64,7 @@ static uint32_t l2fwd_dst_ports[RTE_MAX_ETHPORTS];
 static unsigned int l2fwd_rx_queue_per_lcore = 1;
 
 #define MAX_RX_QUEUE_PER_LCORE 16
-#define MAX_TX_QUEUE_PER_PORT 16
+
 /* List of queues to be polled for given lcore. 8< */
 struct __rte_cache_aligned lcore_queue_conf {
 	unsigned n_rx_port;
@@ -515,7 +515,6 @@ l2fwd_main_loop(void)
 			uint64_t repeats = 0;
 
 			do {
-				uint8_t i;
 				uint64_t now = rte_get_timer_cycles();
 
 				repeats++;
@@ -526,8 +525,9 @@ l2fwd_main_loop(void)
 					rte_memory_order_relaxed);
 				need_manage |= stats_read_pending;
 
-				for (i = 0; i < qconf->n_rx_port && !need_manage; i++)
-					need_manage = qconf->rx_timers[i].expire < now;
+				for (uint16_t port_id = 0;
+				     port_id < qconf->n_rx_port && !need_manage; port_id++)
+					need_manage = qconf->rx_timers[port_id].expire < now;
 
 			} while (!need_manage);
 

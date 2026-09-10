@@ -32,16 +32,14 @@ The ip address of host_server_1 is 10.237.212.46
 
 The ip address of host_server_2 is 10.237.212.131
 
-.. _figure_lm_vhost_user:
-
 .. figure:: img/lm_vhost_user.*
 
 Live Migration steps
 --------------------
 
 The sample scripts mentioned in the steps below can be found in the
-:ref:`Sample host scripts <lm_virtio_vhost_user_host_scripts>` and
-:ref:`Sample VM scripts <lm_virtio_vhost_user_vm_scripts>` sections.
+:ref:`lm_virtio_vhost_user_host_scripts` and
+:ref:`lm_virtio_vhost_user_vm_scripts` sections.
 
 On host_server_1: Terminal 1
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -73,7 +73,7 @@ AEAD algorithms:
 * ``RTE_CRYPTO_AEAD_AES_GCM``
 
 Supported DPAA SoCs
---------------------
+-------------------
 
 * LS1046A/LS1026A
 * LS1043A/LS1023A
@@ -107,7 +107,7 @@ Currently supported by DPDK:
 * NXP SDK **18.09+**.
 * Supported architectures:  **arm64 LE**.
 
-* Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
+* Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
 
 Enabling logs

@@ -23,6 +23,7 @@
 #else
 #include "roc_io_generic.h"
 #endif
+#include "roc_re_ml_tables.h"
 
 #include "cnxk_ae.h"
 #include "cnxk_cryptodev.h"
@@ -41,6 +42,14 @@
 
 #define CNXK_CPT_MAX_ASYM_OP_NUM_PARAMS	 5
 #define CNXK_CPT_MAX_ASYM_OP_MOD_LEN	 1024
+
+/*
+ * PQC requests currently use a shared metabuf region for concatenated input
+ * and output. ML-DSA-87 SIGN requires at least 9523 bytes for private key
+ * input plus signature output, along with additional space for message and
+ * context parameters, so set it for the possible max.
+ */
+#define CNXK_CPT_MAX_ASYM_OP_PQC_LEN	 16384
 #define CNXK_CPT_META_BUF_MAX_CACHE_SIZE 128
 
 static_assert((uint16_t)RTE_PMD_CNXK_AE_EC_ID_P192 == (uint16_t)ROC_AE_EC_ID_P192,
@@ -82,6 +91,9 @@ cnxk_cpt_get_mlen(void)
 			       (RTE_ALIGN_CEIL(ROC_MAX_SG_IN_OUT_CNT, 4) >> 2) * ROC_SG_ENTRY_SIZE),
 			      8);
 
+	/* Space for discarding AAD bytes from output stream in GCM OOP */
+	len += ROC_SE_MAX_AAD_SIZE;
+
 	return len;
 }
 
@@ -107,7 +119,10 @@ cnxk_cpt_asym_get_mlen(void)
 	len = sizeof(uint64_t);
 
 	/* Get meta len for asymmetric operations */
-	len += CNXK_CPT_MAX_ASYM_OP_NUM_PARAMS * CNXK_CPT_MAX_ASYM_OP_MOD_LEN;
+	if (roc_model_is_cn20k())
+		len += CNXK_CPT_MAX_ASYM_OP_PQC_LEN;
+	else
+		len += CNXK_CPT_MAX_ASYM_OP_NUM_PARAMS * CNXK_CPT_MAX_ASYM_OP_MOD_LEN;
 
 	return len;
 }
@@ -121,6 +136,8 @@ cnxk_cpt_dev_clear(struct rte_cryptodev *dev)
 	if (dev->feature_flags & RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO) {
 		roc_ae_fpm_put();
 		roc_ae_ec_grp_put();
+		if (roc_model_is_cn20k())
+			roc_re_ml_zeta_put();
 	}
 
 	ret = roc_cpt_int_misc_cb_unregister(cnxk_cpt_int_misc_cb, NULL);
@@ -182,8 +199,15 @@ cnxk_cpt_dev_config(struct rte_cryptodev *dev, struct rte_cryptodev_config *conf
 		ret = roc_ae_ec_grp_get(vf->ec_grp);
 		if (ret) {
 			plt_err("Could not get EC grp table");
-			roc_ae_fpm_put();
-			return ret;
+			goto fpm_put;
+		}
+
+		if (roc_model_is_cn20k()) {
+			ret = roc_re_ml_zeta_get(vf->cnxk_ml_iova);
+			if (ret) {
+				plt_err("Could not initialize RE ML lookup table");
+				goto ec_grp_put;
+			}
 		}
 	}
 	roc_cpt->opaque = dev;
@@ -191,6 +215,12 @@ cnxk_cpt_dev_config(struct rte_cryptodev *dev, struct rte_cryptodev_config *conf
 	roc_cpt_int_misc_cb_register(cnxk_cpt_int_misc_cb, NULL);
 
 	return 0;
+
+ec_grp_put:
+	roc_ae_ec_grp_put();
+fpm_put:
+	roc_ae_fpm_put();
+	return ret;
 }
 
 int
@@ -481,7 +511,7 @@ cnxk_cpt_queue_pair_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	if (dev->data->queue_pairs[qp_id] != NULL)
 		cnxk_cpt_queue_pair_release(dev, qp_id);
 
-	pci_dev = RTE_DEV_TO_PCI(dev->device);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 
 	if (pci_dev->mem_resource[2].addr == NULL) {
 		plt_err("Invalid PCI mem address");
@@ -992,7 +1022,16 @@ cnxk_ae_session_cfg(struct rte_cryptodev *dev, struct rte_crypto_asym_xform *xfo
 	priv->lf = roc_cpt->lf[0];
 
 	w7.u64 = 0;
-	w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_AE];
+	if (xform->xform_type == RTE_CRYPTO_ASYM_XFORM_ML_KEM) {
+		w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_RE];
+		w7.s.cptr = rte_cpu_to_be_64(vf->cnxk_ml_iova[ROC_RE_ML_ZETA_IDX_KEM]);
+	} else if (xform->xform_type == RTE_CRYPTO_ASYM_XFORM_ML_DSA) {
+		w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_RE];
+		w7.s.cptr = rte_cpu_to_be_64(vf->cnxk_ml_iova[ROC_RE_ML_ZETA_IDX_DSA]);
+	} else {
+		w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_AE];
+		w7.s.cptr = 0;
+	}
 
 	if (roc_errata_cpt_hang_on_mixed_ctx_val()) {
 		hwc = &priv->hw_ctx;
@@ -1007,6 +1046,7 @@ cnxk_ae_session_cfg(struct rte_cryptodev *dev, struct rte_crypto_asym_xform *xfo
 
 	priv->cpt_inst_w7 = w7.u64;
 	priv->cnxk_fpm_iova = vf->cnxk_fpm_iova;
+	priv->cnxk_ml_iova = vf->cnxk_ml_iova;
 	priv->ec_grp = vf->ec_grp;
 
 	return 0;

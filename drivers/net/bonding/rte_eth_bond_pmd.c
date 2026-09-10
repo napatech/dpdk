@@ -57,6 +57,33 @@ get_vlan_offset(struct rte_ether_hdr *eth_hdr, uint16_t *proto)
 }
 
 static uint16_t
+bond_ethdev_rx_secondary(void *queue __rte_unused,
+			 struct rte_mbuf **bufs __rte_unused, uint16_t nb_pkts __rte_unused)
+{
+	static bool once = true;
+
+	if (once) {
+		/* once per process is enough of a notice */
+		RTE_BOND_LOG(ERR, "receive not supported in secondary");
+		once = false;
+	}
+	return 0;
+}
+
+static uint16_t
+bond_ethdev_tx_secondary(void *queue __rte_unused, struct rte_mbuf **bufs, uint16_t nb_pkts)
+{
+	static bool once = true;
+
+	if (once) {
+		RTE_BOND_LOG(ERR, "transmit not supported in secondary");
+		once = false;
+	}
+	rte_pktmbuf_free_bulk(bufs, nb_pkts);
+	return nb_pkts;
+}
+
+static uint16_t
 bond_ethdev_rx_burst(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 {
 	struct bond_dev_private *internals;
@@ -183,8 +210,8 @@ bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
 	int ret = rte_flow_validate(member_port, &flow_attr_8023ad,
 			flow_item_8023ad, actions, &error);
 	if (ret < 0) {
-		RTE_BOND_LOG(ERR, "%s: %s (member_port=%d queue_id=%d)",
-				__func__, error.message, member_port,
+		RTE_BOND_LOG(ERR, "%s (member_port=%u queue_id=%u)",
+				error.message, member_port,
 				internals->mode4.dedicated_queues.rx_qid);
 		return -1;
 	}
@@ -192,8 +219,8 @@ bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
 	ret = rte_eth_dev_info_get(member_port, &member_info);
 	if (ret != 0) {
 		RTE_BOND_LOG(ERR,
-			"%s: Error during getting device (port %u) info: %s",
-			__func__, member_port, strerror(-ret));
+			"Error getting device (port %u) info: %s",
+			member_port, strerror(-ret));
 
 		return ret;
 	}
@@ -201,8 +228,8 @@ bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
 	if (member_info.max_rx_queues < bond_dev->data->nb_rx_queues ||
 			member_info.max_tx_queues < bond_dev->data->nb_tx_queues) {
 		RTE_BOND_LOG(ERR,
-			"%s: Member %d capabilities doesn't allow allocating additional queues",
-			__func__, member_port);
+			"Member %u capabilities doesn't allow allocating additional queues",
+			member_port);
 		return -1;
 	}
 
@@ -222,9 +249,8 @@ bond_8023ad_slow_pkt_hw_filter_supported(uint16_t port_id) {
 		ret = rte_eth_dev_info_get(bond_dev->data->port_id, &bond_info);
 		if (ret != 0) {
 			RTE_BOND_LOG(ERR,
-				"%s: Error during getting device (port %u) info: %s",
-				__func__, bond_dev->data->port_id,
-				strerror(-ret));
+				"Error getting device (port %u) info: %s",
+				bond_dev->data->port_id, strerror(-ret));
 
 			return ret;
 		}
@@ -1599,6 +1625,11 @@ bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, uint8_t mode)
 {
 	struct bond_dev_private *internals;
 
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		RTE_BOND_LOG(ERR, "Setting mode in secondary not allowed");
+		return -1;
+	}
+
 	internals = eth_dev->data->dev_private;
 
 	switch (mode) {
@@ -1619,8 +1650,7 @@ bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, uint8_t mode)
 		eth_dev->rx_pkt_burst = bond_ethdev_rx_burst;
 		break;
 	case BONDING_MODE_8023AD:
-		if (bond_mode_8023ad_enable(eth_dev) != 0)
-			return -1;
+		bond_mode_8023ad_enable(eth_dev);
 
 		if (internals->mode4.dedicated_queues.enabled == 0) {
 			eth_dev->rx_pkt_burst = bond_ethdev_rx_burst_8023ad;
@@ -1641,13 +1671,13 @@ bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, uint8_t mode)
 		eth_dev->rx_pkt_burst = bond_ethdev_rx_burst_active_backup;
 		break;
 	case BONDING_MODE_ALB:
-		if (bond_mode_alb_enable(eth_dev) != 0)
-			return -1;
+		bond_mode_alb_enable(eth_dev);
 
 		eth_dev->tx_pkt_burst = bond_ethdev_tx_burst_alb;
 		eth_dev->rx_pkt_burst = bond_ethdev_rx_burst_alb;
 		break;
 	default:
+		RTE_BOND_LOG(ERR, "Invalid mode %#x", mode);
 		return -1;
 	}
 
@@ -2315,10 +2345,8 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 			ret = rte_eth_dev_info_get(member.port_id, &member_info);
 			if (ret != 0) {
 				RTE_BOND_LOG(ERR,
-					"%s: Error during getting device (port %u) info: %s",
-					__func__,
-					member.port_id,
-					strerror(-ret));
+					"Error getting device (port %u) info: %s",
+					member.port_id, strerror(-ret));
 
 				return ret;
 			}
@@ -3799,9 +3827,18 @@ bond_probe(struct rte_vdev_device *dev)
 			RTE_BOND_LOG(ERR, "Failed to probe %s", name);
 			return -1;
 		}
-		/* TODO: request info from primary to set up Rx and Tx */
+
 		eth_dev->dev_ops = &default_dev_ops;
 		eth_dev->device = &dev->device;
+
+		/*
+		 * Propagation of bond mode would require adding
+		 * MP client/server support and lots of error handling.
+		 *
+		 * For now just install a black hole.
+		 */
+		eth_dev->tx_pkt_burst = bond_ethdev_tx_secondary;
+		eth_dev->rx_pkt_burst = bond_ethdev_rx_secondary;
 		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}

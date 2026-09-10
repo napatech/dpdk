@@ -1,8 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright(c) 2016 Intel Corporation.
 
-.. _virtio_user_as_exception_path:
-
 Virtio_user as Exception Path
 =============================
 
@@ -41,9 +39,9 @@ This solution has a number of advantages over alternatives such as KNI:
     which minimises the impact on the polling DPDK threads.
 
 The overview of an application using virtio-user as exception path is shown
-in :numref:`figure_virtio_user_as_exception_path`.
+in :numref:`virtio_user_exception_path_figure_overview`.
 
-.. _figure_virtio_user_as_exception_path:
+.. _virtio_user_exception_path_figure_overview:
 
 .. figure:: img/virtio_user_as_exception_path.*
 
@@ -51,7 +49,7 @@ in :numref:`figure_virtio_user_as_exception_path`.
 
 
 Example Usage With Testpmd
----------------------------
+--------------------------
 
 .. note::
 
@@ -61,7 +59,7 @@ Example Usage With Testpmd
 
 To run a simple test of virtio-user as exception path using testpmd:
 
-#. Compile DPDK and bind a NIC to vfio-pci as documented in :ref:`linux_gsg_linux_drivers`.
+#. Compile DPDK and bind a NIC to vfio-pci as documented in :doc:`/linux_gsg/linux_drivers`.
 
    This physical NIC is for communicating with the outside world,
    and serves as a packet source in this example.

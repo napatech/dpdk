@@ -25,6 +25,28 @@
 extern "C" {
 #endif
 
+#define RTE_BPF_EXEC_FLAG_JIT	RTE_BIT64(0)	/**< use JIT-compiled version */
+
+/** Mask with all supported `RTE_BPF_EXEC_FLAG_*` flags set. */
+#define RTE_BPF_EXEC_FLAG_MASK  RTE_BPF_EXEC_FLAG_JIT
+
+/* Format instructions as assembler. */
+#define RTE_BPF_FORMAT_FLAG_DISASSEMBLY		0
+/* Format instructions as hexadecimal. */
+#define RTE_BPF_FORMAT_FLAG_HEXADECIMAL		RTE_BIT32(0)
+
+/* Only valid in disassembly mode. */
+/* Format jump offsets relative to the next instruction. */
+#define RTE_BPF_FORMAT_FLAG_RELATIVE_JUMPS	0
+/* Format jump targets relative to the start of the program. */
+#define RTE_BPF_FORMAT_FLAG_ABSOLUTE_JUMPS	RTE_BIT32(1)
+
+/* Only valid in hexadecimal mode. */
+/* Format full hexadecimal representation of wide instructions. */
+#define RTE_BPF_FORMAT_FLAG_AUTO_WIDE		0
+/* Format as hexadecimal only first half of wide instructions. */
+#define RTE_BPF_FORMAT_FLAG_NEVER_WIDE		RTE_BIT32(2)
+
 /**
  * Possible types for function/BPF program arguments.
  */
@@ -86,7 +108,64 @@ struct rte_bpf_xsym {
 };
 
 /**
- * Input parameters for loading eBPF code.
+ * Possible origins of eBPF program code.
+ */
+enum rte_bpf_origin {
+	RTE_BPF_ORIGIN_RAW,		/**< code loaded from raw array */
+	RTE_BPF_ORIGIN_CBPF,		/**< code converted from cbpf */
+	RTE_BPF_ORIGIN_ELF_FILE,	/**< code loaded from elf_file */
+	RTE_BPF_ORIGIN_ELF_MEMORY,	/**< code loaded from elf_memory */
+};
+
+struct bpf_insn;
+struct rte_bpf_validate_debug;
+
+/**
+ * Input parameters for loading eBPF code, extensible version.
+ *
+ * Follows libbpf conventions for extensible structs.
+ */
+struct rte_bpf_prm_ex {
+	size_t sz;  /**< size of this struct for backward compatibility */
+
+	uint32_t flags;  /**< flags controlling eBPF load and other options */
+
+	enum rte_bpf_origin origin;  /**< origin of eBPF program code */
+
+	/** program origin parameters, member in use depends on origin */
+	union {
+		struct {
+			const struct ebpf_insn *ins;  /**< eBPF instructions */
+			uint32_t nb_ins;  /**< number of instructions in ins */
+		} raw;
+		struct {
+			const struct bpf_insn *ins;  /**< cBPF instructions */
+			uint32_t nb_ins;  /**< number of instructions in ins */
+		} cbpf;
+		struct {
+			const char *path;  /**< path to the ELF file */
+			const char *section;  /**< ELF section with the code */
+		} elf_file;
+		struct {
+			const void *data;  /**< pointer to the ELF image */
+			size_t size;  /**< size of the ELF image */
+			const char *section;  /**< ELF section with the code */
+		} elf_memory;
+	};
+
+	const struct rte_bpf_xsym *xsym;
+	/**< array of external symbols that eBPF code is allowed to reference */
+	uint32_t nb_xsym;  /**< number of elements in xsym */
+
+	struct rte_bpf_arg prog_arg[EBPF_FUNC_MAX_ARGS];  /**< program arguments */
+	uint32_t nb_prog_arg;  /**< program argument count */
+
+	/* Validate debug instance. */
+	struct rte_bpf_validate_debug *debug;
+};
+
+/**
+ * Input parameters for loading eBPF code, legacy version.
  */
 struct rte_bpf_prm {
 	const struct ebpf_insn *ins; /**< array of eBPF instructions */
@@ -98,11 +177,47 @@ struct rte_bpf_prm {
 };
 
 /**
- * Information about compiled into native ISA eBPF code.
+ * Information about compiled into native ISA eBPF code accepting 1 argument.
  */
 struct rte_bpf_jit {
 	uint64_t (*func)(void *); /**< JIT-ed native code */
 	size_t sz;                /**< size of JIT-ed code */
+};
+
+union rte_bpf_func_arg {
+	uint64_t u64;
+	void *ptr;
+};
+
+typedef uint64_t (*rte_bpf_jit_func0_t)(void);
+typedef uint64_t (*rte_bpf_jit_func1_t)(union rte_bpf_func_arg);
+typedef uint64_t (*rte_bpf_jit_func2_t)(union rte_bpf_func_arg, union rte_bpf_func_arg);
+typedef uint64_t (*rte_bpf_jit_func3_t)(union rte_bpf_func_arg, union rte_bpf_func_arg,
+	union rte_bpf_func_arg);
+typedef uint64_t (*rte_bpf_jit_func4_t)(union rte_bpf_func_arg, union rte_bpf_func_arg,
+	union rte_bpf_func_arg, union rte_bpf_func_arg);
+typedef uint64_t (*rte_bpf_jit_func5_t)(union rte_bpf_func_arg, union rte_bpf_func_arg,
+	union rte_bpf_func_arg, union rte_bpf_func_arg, union rte_bpf_func_arg);
+
+/**
+ * JIT-ed native code, member depends on number of program arguments.
+ */
+struct rte_bpf_jit_ex {
+	union {
+		void *raw;
+		rte_bpf_jit_func0_t func0;  /* nullary function */
+		rte_bpf_jit_func1_t func1;  /* unary function */
+		rte_bpf_jit_func2_t func2;  /* binary function */
+		rte_bpf_jit_func3_t func3;  /* ternary function */
+		rte_bpf_jit_func4_t func4;  /* quaternary function */
+		rte_bpf_jit_func5_t func5;  /* quinary function */
+	};
+	size_t sz;
+};
+
+/* Tuple of eBPF program arguments. */
+struct rte_bpf_prog_ctx {
+	union rte_bpf_func_arg arg[EBPF_FUNC_MAX_ARGS];
 };
 
 struct rte_bpf;
@@ -115,6 +230,32 @@ struct rte_bpf;
  */
 void
 rte_bpf_destroy(struct rte_bpf *bpf);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
+ *
+ * Create a new eBPF execution context, load code from specified origin into it.
+ *
+ * @param prm
+ *   Parameters used to create and initialise the BPF execution context.
+ *
+ *   Member sz must be set to the struct size as known to the application.
+ *   If it exceeds the size known to the library, and the extra part has
+ *   non-zero bytes, parameter is rejected. If it's smaller than the size known
+ *   to the library, defaults are used for the members that are not present.
+ * @return
+ *   BPF handle that is used in future BPF operations,
+ *   or NULL on error, with error code set in rte_errno.
+ *   Possible rte_errno errors include:
+ *   - EINVAL  - invalid parameter passed to function
+ *   - ENOMEM  - can't reserve enough memory
+ *   - ENOTSUP - requested feature is not supported (e.g. no libelf to load ELF)
+ */
+__rte_experimental
+struct rte_bpf *
+rte_bpf_load_ex(const struct rte_bpf_prm_ex *prm)
+	__rte_malloc __rte_dealloc(rte_bpf_destroy, 1);
 
 /**
  * Create a new eBPF execution context and load given BPF code into it.
@@ -158,7 +299,7 @@ rte_bpf_elf_load(const struct rte_bpf_prm *prm, const char *fname,
 	__rte_malloc __rte_dealloc(rte_bpf_destroy, 1);
 
 /**
- * Execute given BPF bytecode.
+ * Execute given BPF bytecode accepting 1 argument.
  *
  * @param bpf
  *   handle for the BPF code to execute.
@@ -171,7 +312,29 @@ uint64_t
 rte_bpf_exec(const struct rte_bpf *bpf, void *ctx);
 
 /**
- * Execute given BPF bytecode over a set of input contexts.
+ * @warning
+ * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
+ *
+ * Execute given BPF bytecode accepting any number of arguments.
+ *
+ * @param bpf
+ *   handle for the BPF code to execute.
+ * @param ctx
+ *   program arguments tuple.
+ * @param flags
+ *   bitwise OR of `RTE_BPF_EXEC_FLAG_*` values controlling execution.
+ *   Flag RTE_BPF_EXEC_FLAG_JIT requires presence of JIT version (can be checked
+ *   with rte_bpf_get_jit_ex).
+ * @return
+ *   BPF execution return value.
+ */
+__rte_experimental
+uint64_t
+rte_bpf_exec_ex(const struct rte_bpf *bpf, const struct rte_bpf_prog_ctx *ctx,
+		uint64_t flags);
+
+/**
+ * Execute given BPF bytecode accepting 1 argument over a set of input contexts.
  *
  * @param bpf
  *   handle for the BPF code to execute.
@@ -189,7 +352,35 @@ rte_bpf_exec_burst(const struct rte_bpf *bpf, void *ctx[], uint64_t rc[],
 		uint32_t num);
 
 /**
- * Provide information about natively compiled code for given BPF handle.
+ * @warning
+ * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
+ *
+ * Execute given BPF program accepting any number of arguments over a set of
+ * input contexts.
+ *
+ * @param bpf
+ *   handle for the BPF code to execute.
+ * @param ctx
+ *   pointer to array of program argument tuples, can be NULL for nullary programs.
+ * @param rc
+ *   array of return values (one per input).
+ * @param num
+ *   number executions, number of elements in arrays ctx and rc[].
+ * @param flags
+ *   bitwise OR of `RTE_BPF_EXEC_FLAG_*` values controlling execution.
+ *   Flag RTE_BPF_EXEC_FLAG_JIT requires presence of JIT version (can be checked
+ *   with rte_bpf_get_jit_ex).
+ * @return
+ *   number of successfully processed inputs.
+ */
+__rte_experimental
+uint32_t
+rte_bpf_exec_burst_ex(const struct rte_bpf *bpf, const struct rte_bpf_prog_ctx *ctx,
+		uint64_t rc[], uint32_t num, uint64_t flags);
+
+/**
+ * Provide information about natively compiled code for given BPF program
+ * accepting 1 argument.
  *
  * @param bpf
  *   handle for the BPF code.
@@ -201,6 +392,59 @@ rte_bpf_exec_burst(const struct rte_bpf *bpf, void *ctx[], uint64_t rc[],
  */
 int
 rte_bpf_get_jit(const struct rte_bpf *bpf, struct rte_bpf_jit *jit);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: This API may change, or be removed, without prior notice.
+ *
+ * Get function JIT-compiled from the BPF program.
+ *
+ * @param bpf
+ *   handle for the BPF code.
+ * @param jit
+ *   pointer to the struct rte_bpf_jit_ex.
+ * @return
+ *   - -EINVAL if the parameters are invalid.
+ *   - -ENOENT if there is no JIT-compiled version.
+ *   - Zero if operation completed successfully.
+ */
+__rte_experimental
+int
+rte_bpf_get_jit_ex(const struct rte_bpf *bpf, struct rte_bpf_jit_ex *jit);
+
+/**
+ * Determine instruction width.
+ *
+ * @return
+ *   True if ins points to a wide (128-bit) instruction.
+ */
+__rte_experimental
+bool
+rte_bpf_insn_is_wide(const struct ebpf_insn *ins);
+
+/**
+ * Print eBPF instruction into a buffer.
+ *
+ * Semantics of handling buffer size repeats those of snprintf.
+ *
+ * @param buffer
+ *   Output buffer (may be NULL if bufsz is zero).
+ * @param bufsz
+ *   Output buffer size.
+ * @param ins
+ *   Narrow or wide (depending on opcode) eBPF instruction. That is, when
+ *   `rte_bpf_insn_is_wide` is true `ins[1]` is also accessed.
+ * @param pc
+ *   Current instruction number for displaying absolute jump targets.
+ * @param flags
+ *   Bitwise-OR combination of `RTE_BPF_FORMAT_FLAG_*` values.
+ * @return
+ *   Number of characters to be written excluding terminating zero.
+ */
+__rte_experimental
+int
+rte_bpf_format(char *buffer, size_t bufsz, const struct ebpf_insn *ins,
+	uint32_t pc, uint32_t flags);
 
 /**
  * Dump epf instructions to a file.

@@ -38,13 +38,14 @@ This application demonstrates the following features:
   policy independent of the VM application. For example, the
   policy can contain time-of-day information for busy/quiet
   periods, and the host application can scale up/down the relevant
-  cores when required. See :ref:`sending_policy` for information on
-  setting policy values.
+  cores when required.
+  See :ref:`vm_power_sending_policy` for information on setting policy values.
 
 - **Out-of-band monitoring of workloads using core hardware event counters.**
   The host application can manage power for an application by looking
   at the event counters of the cores and taking action based on the
-  branch miss/hit ratio. See :ref:`enabling_out_of_band`.
+  branch miss/hit ratio.
+  See :ref:`vm_power_enabling_out_of_band`.
 
   **Note**: This functionality also applies in non-virtualised environments.
 
@@ -53,8 +54,6 @@ application uses a special version of ``librte_power`` on each VM, which
 directs frequency changes and policies to the host monitor rather than
 the APCI ``cpufreq`` ``sysfs`` interface used on the host in non-virtualised
 environments.
-
-.. _figure_vm_power_mgr_highlevel:
 
 .. figure:: img/vm_power_mgr_highlevel.*
 
@@ -108,9 +107,6 @@ determined automatically at runtime based on the environment. On
 receiving a request, the host translates the vCPU to a pCPU using the
 libvirt API before forwarding it to the host ``librte_power``.
 
-
-.. _figure_vm_power_mgr_vm_request_seq:
-
 .. figure:: img/vm_power_mgr_vm_request_seq.*
 
 In addition to the ability to send power management requests to the
@@ -121,8 +117,8 @@ management requests. Once the VM sends the policy to the host, the VM no
 longer needs to worry about power management, because the host now
 manages the power for the VM based on the policy. The policy can specify
 power behavior that is based on incoming traffic rates or time-of-day
-power adjustment (busy/quiet hour power adjustment for example). See
-:ref:`sending_policy` for more information.
+power adjustment (busy/quiet hour power adjustment for example).
+See :ref:`vm_power_sending_policy` for more information.
 
 One method of power management is to sense how busy a core is when
 processing packets and adjusting power accordingly. One technique for
@@ -132,13 +128,14 @@ on the premise that when a core is not processing packets, the ratio of
 branch misses to branch hits is very low, but when the core is
 processing packets, it is measurably higher. The implementation of this
 capability is as a policy of type ``BRANCH_RATIO``.
-See :ref:`sending_policy` for more information on using the
+See :ref:`vm_power_sending_policy` for more information on using the
 BRANCH_RATIO policy option.
 
 A JSON interface enables the specification of power management requests
 and policies in JSON format. The JSON interfaces provide a more
 convenient and more easily interpreted interface for the specification
-of requests and policies. See :ref:`power_man_requests` for more information.
+of requests and policies.
+See :ref:`vm_power_requests` for more information.
 
 Performance Considerations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -398,7 +395,7 @@ Set the current frequency for the specified core by scaling up/down/min/max:
 
    set_cpu_freq {core_num} up|down|min|max
 
-.. _enabling_out_of_band:
+.. _vm_power_enabling_out_of_band:
 
 Command Line Options for Enabling Out-of-band Branch Ratio Monitoring
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -518,7 +515,7 @@ run on cores 0, 1, 2 and 3:
 
    ./<build_dir>/examples/dpdk-guest_vm_power_mgr -l 0-3
 
-.. _sending_policy:
+.. _vm_power_sending_policy:
 
 Command Line Options Available When Sending a Policy to the Host
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -599,7 +596,7 @@ will send the policy to the host:
 Once the policy is sent to the host, the host application takes over the power monitoring
 of the specified cores in the policy.
 
-.. _power_man_requests:
+.. _vm_power_requests:
 
 JSON Interface for Power Management Requests and Policies
 ---------------------------------------------------------
@@ -638,11 +635,11 @@ pairs are different depending on which type is sent.
 
 The pairs are in the format of standard JSON name-value pairs. The value
 type varies between the different name-value pairs, and may be integers,
-strings, arrays, and so on. See :ref:`json_interface_ex`
-for examples of policies and instructions and
-:ref:`json_name_value_pair` for the supported names and value types.
+strings, arrays, and so on.
+See :ref:`vm_power_json_interface_examples` for examples of policies and instructions
+and :ref:`vm_power_json_name_value_pairs` for the supported names and value types.
 
-.. _json_interface_ex:
+.. _vm_power_json_interface_examples:
 
 JSON Interface Examples
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -713,7 +710,7 @@ will send the policy to the host:
 Once the policy is sent to the host, the host application takes over the power monitoring
 of the specified cores in the policy.
 
-.. _json_name_value_pair:
+.. _vm_power_json_name_value_pairs:
 
 JSON Name-value Pairs
 ~~~~~~~~~~~~~~~~~~~~~

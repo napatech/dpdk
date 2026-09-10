@@ -34,9 +34,9 @@ Supported DPAA2 SoCs
 Prerequisites
 -------------
 
-See :doc:`../platform/dpaa2` for setup information
+See :doc:`/platform/dpaa2` for setup information
 
-- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
+- Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
 .. note::
 

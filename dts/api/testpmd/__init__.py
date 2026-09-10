@@ -76,7 +76,9 @@ def _requires_stopped_ports(func: TestPmdMethod) -> TestPmdMethod:
     """
 
     @functools.wraps(func)
-    def _wrapper(self: "TestPmd", *args: P.args, **kwargs: P.kwargs) -> Any:
+    def _wrapper(
+        self: "TestPmd", *args: P.args, **kwargs: P.kwargs
+    ) -> Callable[Concatenate["TestPmd", P], Any]:
         if self.ports_started:
             self._logger.debug("Ports need to be stopped to continue.")
             self.stop_all_ports()
@@ -100,7 +102,9 @@ def _requires_started_ports(func: TestPmdMethod) -> TestPmdMethod:
     """
 
     @functools.wraps(func)
-    def _wrapper(self: "TestPmd", *args: P.args, **kwargs: P.kwargs) -> Any:
+    def _wrapper(
+        self: "TestPmd", *args: P.args, **kwargs: P.kwargs
+    ) -> Callable[Concatenate["TestPmd", P], Any]:
         if not self.ports_started:
             self._logger.debug("Ports need to be started to continue.")
             self.start_all_ports()
@@ -128,7 +132,9 @@ def _add_remove_mtu(mtu: int = 1500) -> Callable[[TestPmdMethod], TestPmdMethod]
 
     def decorator(func: TestPmdMethod) -> TestPmdMethod:
         @functools.wraps(func)
-        def wrapper(self: "TestPmd", *args: P.args, **kwargs: P.kwargs) -> Any:
+        def wrapper(
+            self: "TestPmd", *args: P.args, **kwargs: P.kwargs
+        ) -> Callable[Concatenate["TestPmd", P], Any]:
             original_mtu = self.ports[0].mtu
             self.set_port_mtu_all(mtu=mtu, verify=False)
             retval = func(self, *args, **kwargs)
@@ -1293,9 +1299,15 @@ class TestPmd(DPDKShell):
                 )
 
     def get_queue_ring_size(self, port_id: int, queue_id: int, is_rx_queue: bool) -> int:
-        """Returns the current size of the ring on the specified queue."""
+        """Returns the current size of the ring on the specified queue.
+
+        Raises:
+            ValueError: If ring size could not be parsed from test pmd.
+        """
         command = f"show {'rxq' if is_rx_queue else 'txq'} info {port_id} {queue_id}"
         queue_info = TestPmdQueueInfo.parse(self.send_command(command))
+        if queue_info.ring_size is None:
+            raise ValueError("Ring size could not be gathered from test pmd.")
         return queue_info.ring_size
 
     def set_queue_ring_size(
@@ -1408,6 +1420,23 @@ class TestPmd(DPDKShell):
             DeviceCapabilitiesFlag,
             self.ports[0].device_capabilities,
         )
+
+    def get_capabilities_selective_rx(
+        self,
+        supported_capabilities: MutableSet["NicCapability"],
+        unsupported_capabilities: MutableSet["NicCapability"],
+    ) -> None:
+        """Get selective Rx capability from show port info.
+
+        Args:
+            supported_capabilities: Supported capabilities will be added to this set.
+            unsupported_capabilities: Unsupported capabilities will be added to this set.
+        """
+        port_info = self.show_port_info(self.ports[0].id)
+        if port_info.selective_rx:
+            supported_capabilities.add(NicCapability.SELECTIVE_RX)
+        else:
+            unsupported_capabilities.add(NicCapability.SELECTIVE_RX)
 
     def get_capabilities_mcast_filtering(
         self,

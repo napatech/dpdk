@@ -144,6 +144,18 @@ Runtime Config Options
   so all queues on a device will either have this enabled or disabled.
   This option should only be provided once per device.
 
+* Signal end-of-file via link status change
+
+  In case ``rx_pcap=`` configuration is set, the user may want to be notified
+  when all packets in the pcap file have been read.
+  This can be done with the ``eof`` devarg, for example::
+
+     --vdev 'net_pcap0,rx_pcap=file_rx.pcap,eof=1'
+
+  When enabled, the driver sets link down and generates an LSC event at end of file.
+  If the device is stopped and restarted, the EOF state is reset.
+  This option cannot be combined with ``infinite_rx``.
+
 * Drop all packets on transmit
 
   To drop all packets on transmit for a device,
@@ -161,6 +173,24 @@ Runtime Config Options
      --vdev 'net_pcap0,tx_pcap=file_tx.pcap'
 
   In this case, one dummy Rx queue is created for each Tx queue argument passed.
+
+* Set the snapshot length for packet capture
+
+  The snapshot length controls the maximum number of bytes captured per packet.
+  This affects both interface capture and pcap file output.
+  The default value is 65535 bytes,
+  which captures complete packets up to the maximum Ethernet jumbo frame size.
+  Reducing this value can improve performance when only packet headers are needed.
+
+  The ``snaplen`` argument is used when opening capture handles,
+  so it should be specified before the interface or file arguments.
+  Example::
+
+     --vdev 'net_pcap0,snaplen=1518,iface=eth0'
+     --vdev 'net_pcap0,snaplen=9000,rx_pcap=in.pcap,tx_pcap=out.pcap'
+
+  The snapshot length also determines the reported ``max_rx_pktlen``
+  and ``max_mtu`` in device info.
 
 Examples of Usage
 ~~~~~~~~~~~~~~~~~
@@ -247,3 +277,22 @@ will be discarded by the Rx flushing operation.
    The network interface provided to the PMD should be up.
    The PMD will return an error if the interface is down,
    and the PMD itself won't change the status of the external network interface.
+
+Features and Limitations
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+* When ``RTE_ETH_RX_OFFLOAD_VLAN_STRIP`` is enabled,
+  the driver removes the outermost VLAN tag
+  from received packets via ``rte_vlan_strip()``.
+  The strip setting can be changed at runtime through ``vlan_offload_set``.
+
+* The PMD will transparently insert a VLAN tag to transmitted packets
+  if the mbuf has ``RTE_MBUF_F_TX_VLAN`` set.
+
+* If ``RTE_ETH_RX_OFFLOAD_TIMESTAMP`` is enabled
+  then the timestamp from the pcap file is converted to DPDK format.
+
+* In ``iface`` mode, the PMD supports link status change (LSC) notifications.
+  When the application enables ``intr_conf.lsc`` in the port configuration,
+  the driver polls the underlying network interface once per second
+  and generates a ``RTE_ETH_EVENT_INTR_LSC`` callback when the link state changes.

@@ -439,7 +439,7 @@ idpf_init_rss(struct idpf_vport *vport)
 			     vport->rss_key_size);
 		return -EINVAL;
 	} else {
-		rte_memcpy(vport->rss_key, rss_conf->rss_key,
+		memcpy(vport->rss_key, rss_conf->rss_key,
 			   vport->rss_key_size);
 	}
 
@@ -558,7 +558,7 @@ idpf_rss_hash_update(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	rte_memcpy(vport->rss_key, rss_conf->rss_key,
+	memcpy(vport->rss_key, rss_conf->rss_key,
 		   vport->rss_key_size);
 	ret = idpf_vc_rss_key_set(vport);
 	if (ret != 0) {
@@ -631,7 +631,7 @@ idpf_rss_hash_conf_get(struct rte_eth_dev *dev,
 	if (rss_conf->rss_key_len > vport->rss_key_size)
 		rss_conf->rss_key_len = vport->rss_key_size;
 
-	rte_memcpy(rss_conf->rss_key, vport->rss_key, rss_conf->rss_key_len);
+	memcpy(rss_conf->rss_key, vport->rss_key, rss_conf->rss_key_len);
 
 	return 0;
 }
@@ -1005,42 +1005,64 @@ idpf_timesync_adjust_freq(struct rte_eth_dev *dev, int64_t ppm)
 	struct idpf_vport *vport = dev->data->dev_private;
 	struct idpf_adapter *adapter = vport->adapter;
 	struct idpf_ptp *ptp = adapter->ptp;
-	int64_t incval, diff = 0;
-	bool negative = false;
-	uint64_t div, rem;
-	uint64_t divisor = 1000000ULL << 16;
-	int shift;
+	uint64_t incval;
 	int ret;
 
 	incval = ptp->base_incval;
 
-	if (ppm < 0) {
-		negative = true;
-		ppm = -ppm;
+#ifdef RTE_ARCH_64
+	/* ppm is scaled by 2^16 to match Linux adjfine. */
+	{
+		__int128 diff;
+
+		diff = ((__int128)incval * ppm) / (1000000LL << 16);
+		incval += (int64_t)diff;
 	}
+#else
+	{
+		int64_t diff = 0;
+		bool negative = false;
+		uint64_t abs_ppm, div, rem;
+		uint64_t divisor = 1000000ULL << 16;
+		int shift;
 
-	/* can incval * ppm overflow ? */
-	if (rte_log2_u64(incval) + rte_log2_u64(ppm) > 62) {
-		rem = ppm % divisor;
-		div = ppm / divisor;
-		diff = div * incval;
-		ppm = rem;
-
-		shift = rte_log2_u64(incval) + rte_log2_u64(ppm) - 62;
-		if (shift > 0) {
-			/* drop precision */
-			ppm >>= shift;
-			divisor >>= shift;
+		if (ppm < 0) {
+			negative = true;
+			abs_ppm = ppm == INT64_MIN ? (uint64_t)INT64_MAX + 1 :
+				(uint64_t)(-ppm);
+		} else {
+			abs_ppm = (uint64_t)ppm;
 		}
+
+		/* can incval * ppm overflow ? */
+		if (rte_log2_u64(incval) + rte_log2_u64(abs_ppm) > 62) {
+			rem = abs_ppm % divisor;
+			div = abs_ppm / divisor;
+			diff = div * incval;
+			abs_ppm = rem;
+
+			if (abs_ppm != 0) {
+				uint32_t log_sum;
+
+				log_sum = rte_log2_u64(incval) + rte_log2_u64(abs_ppm);
+				if (log_sum > 62) {
+					shift = log_sum - 62;
+					/* drop precision */
+					abs_ppm >>= shift;
+					divisor >>= shift;
+				}
+			}
+		}
+
+		if (divisor)
+			diff += incval * abs_ppm / divisor;
+
+		if (negative)
+			incval -= diff;
+		else
+			incval += diff;
 	}
-
-	if (divisor)
-		diff = diff + incval * ppm / divisor;
-
-	if (negative)
-		incval -= diff;
-	else
-		incval += diff;
+#endif
 
 	ret = idpf_ptp_adj_dev_clk_fine(adapter, incval);
 	if (ret) {
@@ -1363,7 +1385,7 @@ idpf_handle_virtchnl_msg(struct idpf_adapter_ext *adapter_ex)
 			return;
 		}
 
-		rte_memcpy(adapter->mbx_resp, ctlq_msg.ctx.indirect.payload->va,
+		memcpy(adapter->mbx_resp, ctlq_msg.ctx.indirect.payload->va,
 			   IDPF_DFLT_MBX_BUF_SIZE);
 
 		mbx_op = rte_le_to_cpu_16(ctlq_msg.opcode);
@@ -1475,9 +1497,9 @@ idpf_adapter_ext_init(struct rte_pci_device *pci_dev, struct idpf_adapter_ext *a
 	hw->device_id = pci_dev->id.device_id;
 	hw->subsystem_vendor_id = pci_dev->id.subsystem_vendor_id;
 
-	strncpy(adapter->name, pci_dev->device.name, PCI_PRI_STR_SIZE);
+	strlcpy(adapter->name, pci_dev->device.name, sizeof(adapter->name));
 
-	rte_memcpy(&base->caps, &req_caps, sizeof(struct virtchnl2_get_capabilities));
+	memcpy(&base->caps, &req_caps, sizeof(struct virtchnl2_get_capabilities));
 
 	ret = idpf_adapter_init(base);
 	if (ret != 0) {

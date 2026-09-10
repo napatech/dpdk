@@ -4,22 +4,24 @@
 Packet (Mbuf) Library
 =====================
 
-The Packet (MBuf) library provides the ability to allocate and free buffers (mbufs)
+The Packet (Mbuf) library provides the ability to allocate and free buffers (mbufs)
 that may be used by the DPDK application to store message buffers.
 The message buffers are stored in a mempool, using the :doc:`mempool_lib`.
 
-A rte_mbuf struct generally carries network packet buffers, but it can actually
-be any data (control data, events, ...).
-The rte_mbuf header structure is kept as small as possible and currently uses
-just two cache lines, with the most frequently used fields being on the first
-of the two cache lines.
+A ``struct rte_mbuf`` generally carries network packet buffers,
+but it can actually be any data (control data, events, etc).
+The ``rte_mbuf`` header structure is
+`kept as small as possible <https://doc.dpdk.org/struct/mbuf/history.html>`_
+and currently uses just two 64-byte cache lines,
+with the most frequently used fields being on the first of the two cache lines.
 
 Design of Packet Buffers
 ------------------------
 
 For the storage of the packet data (including protocol headers), two approaches were considered:
 
-#.  Embed metadata within a single memory buffer the structure followed by a fixed size area for the packet data.
+#.  Embed metadata within a single memory buffer,
+    with the structure followed by a fixed-size area for the packet data.
 
 #.  Use separate memory buffers for the metadata structure and for the packet data.
 
@@ -41,16 +43,16 @@ Message buffers may be used to carry control information, packets, events,
 and so on between different entities in the system.
 Message buffers may also use their buffer pointers to point to other message buffer data sections or other structures.
 
-:numref:`figure_mbuf1` and :numref:`figure_mbuf2` show some of these scenarios.
+:numref:`mbuf_figure_1` and :numref:`mbuf_figure_2` show some of these scenarios.
 
-.. _figure_mbuf1:
+.. _mbuf_figure_1:
 
 .. figure:: img/mbuf1.*
 
    An mbuf with One Segment
 
 
-.. _figure_mbuf2:
+.. _mbuf_figure_2:
 
 .. figure:: img/mbuf2.*
 
@@ -79,10 +81,10 @@ Allocating and Freeing mbufs
 ----------------------------
 
 Allocating a new mbuf requires the user to specify the mempool from which the mbuf should be taken.
-For any newly-allocated mbuf, it contains one segment, with a length of 0.
+Any newly-allocated mbuf contains one segment, with a length of 0.
 The offset to data is initialized to have some bytes of headroom in the buffer (RTE_PKTMBUF_HEADROOM).
 
-Freeing a mbuf means returning it into its original mempool.
+Freeing an mbuf means returning it into its original mempool.
 The content of an mbuf is not modified when it is stored in a pool (as a free mbuf).
 Fields initialized by the constructor do not need to be re-initialized at mbuf allocation.
 
@@ -93,17 +95,19 @@ Manipulating mbufs
 
 This library provides some functions for manipulating the data in a packet mbuf. For instance:
 
-    *  Get data length
+    *   Get data length
 
-    *  Get a pointer to the start of data
+    *   Get a pointer to the start of data
 
-    *  Prepend data before data
+    *   Prepend data before the payload
 
-    *   Append data after data
+    *   Append data after the payload
 
     *   Remove data at the beginning of the buffer (rte_pktmbuf_adj())
 
-    *   Remove data at the end of the buffer (rte_pktmbuf_trim()) Refer to the *DPDK API Reference* for details.
+    *   Remove data at the end of the buffer (rte_pktmbuf_trim())
+
+Refer to the *DPDK API Reference* for details.
 
 .. _mbuf_meta:
 
@@ -123,7 +127,7 @@ timestamp mechanism, the VLAN tagging and the IP checksum computation.
 
 On TX side, it is also possible for an application to delegate some
 processing to the hardware if it supports it. For instance, the
-RTE_MBUF_F_TX_IP_CKSUM flag allows to offload the computation of the IPv4
+RTE_MBUF_F_TX_IP_CKSUM flag allows offloading the computation of the IPv4
 checksum.
 
 The following examples explain how to configure different TX offloads on
@@ -212,7 +216,7 @@ Dynamic fields and flags
 
 The size of the mbuf is constrained and limited;
 while the amount of metadata to save for each packet is quite unlimited.
-The most basic networking information already find their place
+The most basic networking information already finds its place
 in the existing mbuf fields and flags.
 
 If new features need to be added, the new fields and flags should fit
@@ -286,4 +290,4 @@ by the script ``dpdk-mbuf-history-parser.py``.
 Use Cases
 ---------
 
-All networking application should use mbufs to transport network packets.
+All networking applications should use mbufs to transport network packets.

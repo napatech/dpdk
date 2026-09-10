@@ -975,6 +975,8 @@ int __roc_api roc_nix_mac_link_info_set(struct roc_nix *roc_nix,
 					struct roc_nix_link_info *link_info);
 int __roc_api roc_nix_mac_link_info_get(struct roc_nix *roc_nix,
 					struct roc_nix_link_info *link_info);
+int __roc_api roc_nix_mac_fec_set(struct roc_nix *roc_nix, int fec);
+int __roc_api roc_nix_mac_fec_supported_get(struct roc_nix *roc_nix, uint64_t *supported_fec);
 int __roc_api roc_nix_mac_mtu_set(struct roc_nix *roc_nix, uint16_t mtu);
 int __roc_api roc_nix_mac_max_rx_len_set(struct roc_nix *roc_nix,
 					 uint16_t maxlen);
@@ -990,18 +992,14 @@ int __roc_api roc_nix_mac_stats_reset(struct roc_nix *roc_nix);
 int __roc_api roc_nix_mac_fwdata_get(struct roc_nix *roc_nix, struct roc_nix_mac_fwdata *fwdata);
 
 /* Ops */
-int __roc_api roc_nix_switch_hdr_set(struct roc_nix *roc_nix,
-				     uint64_t switch_header_type,
-				     uint8_t pre_l2_size_offset,
-				     uint8_t pre_l2_size_offset_mask,
-				     uint8_t pre_l2_size_shift_dir);
+int __roc_api roc_nix_switch_hdr_set(struct roc_nix *roc_nix, uint64_t switch_header_type,
+				     uint8_t pre_l2_size_offset, uint8_t pre_l2_size_offset_mask,
+				     uint8_t pre_l2_size_shift_dir, uint8_t skip_size);
 int __roc_api roc_nix_lso_fmt_setup(struct roc_nix *roc_nix);
-int __roc_api roc_nix_lso_fmt_get(struct roc_nix *roc_nix,
-				  uint8_t udp_tun[ROC_NIX_LSO_TUN_MAX],
+int __roc_api roc_nix_lso_fmt_get(struct roc_nix *roc_nix, uint8_t udp_tun[ROC_NIX_LSO_TUN_MAX],
 				  uint8_t tun[ROC_NIX_LSO_TUN_MAX]);
 int __roc_api roc_nix_lso_fmt_ipv4_frag_get(struct roc_nix *roc_nix);
-int __roc_api roc_nix_lso_custom_fmt_setup(struct roc_nix *roc_nix,
-					   struct nix_lso_format *fields,
+int __roc_api roc_nix_lso_custom_fmt_setup(struct roc_nix *roc_nix, struct nix_lso_format *fields,
 					   uint16_t nb_fields);
 int __roc_api roc_nix_lso_alt_flags_profile_setup(struct roc_nix *roc_nix,
 						  nix_lso_alt_flg_format_t *fmt);
@@ -1094,6 +1092,8 @@ int __roc_api roc_nix_rq_modify(struct roc_nix *roc_nix, struct roc_nix_rq *rq,
 				bool ena);
 int __roc_api roc_nix_rq_cman_config(struct roc_nix *roc_nix, struct roc_nix_rq *rq);
 int __roc_api roc_nix_rq_ena_dis(struct roc_nix_rq *rq, bool enable);
+int __roc_api roc_nix_rq_multi_ena_dis(struct roc_nix *roc_nix, struct roc_nix_rq *rqs,
+				       int nb_rx_queues, bool enable);
 int __roc_api roc_nix_rq_is_sso_enable(struct roc_nix *roc_nix, uint32_t qid);
 int __roc_api roc_nix_rq_fini(struct roc_nix_rq *rq);
 int __roc_api roc_nix_cq_init(struct roc_nix *roc_nix, struct roc_nix_cq *cq);

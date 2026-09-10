@@ -784,6 +784,8 @@ int nbl_promiscuous_enable(struct rte_eth_dev *eth_dev)
 	struct nbl_common_info *common = &adapter->common;
 
 	if (!common->is_vf) {
+		disp_ops->cfg_multi_mcast(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt),
+					  dev_mgt->net_dev->vsi_id, 1);
 		disp_ops->set_promisc_mode(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt),
 					   dev_mgt->net_dev->vsi_id, 1);
 		dev_mgt->net_dev->promisc = 1;
@@ -802,6 +804,8 @@ int nbl_promiscuous_disable(struct rte_eth_dev *eth_dev)
 	struct nbl_common_info *common = &adapter->common;
 
 	if (!common->is_vf) {
+		disp_ops->cfg_multi_mcast(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt),
+					  dev_mgt->net_dev->vsi_id, 0);
 		disp_ops->set_promisc_mode(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt),
 					   dev_mgt->net_dev->vsi_id, 0);
 		dev_mgt->net_dev->promisc = 0;
@@ -868,7 +872,7 @@ static int nbl_dev_common_start(struct nbl_dev_mgt *dev_mgt)
 	struct nbl_dev_net_mgt *net_dev = NBL_DEV_MGT_TO_NET_DEV(dev_mgt);
 	struct nbl_common_info *common = NBL_DEV_MGT_TO_COMMON(dev_mgt);
 	struct nbl_board_port_info *board_info;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(net_dev->eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(net_dev->eth_dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	u8 *mac;
 	int ret;
@@ -991,7 +995,7 @@ static void nbl_dev_leonis_stop(void *p)
 	const struct nbl_common_info *common = NBL_DEV_MGT_TO_COMMON(dev_mgt);
 	const struct nbl_dispatch_ops *disp_ops = NBL_DEV_MGT_TO_DISP_OPS(dev_mgt);
 	const struct nbl_channel_ops *chan_ops = NBL_DEV_MGT_TO_CHAN_OPS(dev_mgt);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(net_dev->eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(net_dev->eth_dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	u8 *mac;
 
@@ -1012,6 +1016,7 @@ static void nbl_dev_leonis_stop(void *p)
 		disp_ops->del_multi_rule(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt), net_dev->vsi_id);
 		disp_ops->del_macvlan(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt), mac, 0, net_dev->vsi_id);
 	}
+	disp_ops->cfg_multi_mcast(NBL_DEV_MGT_TO_DISP_PRIV(dev_mgt), net_dev->vsi_id, 0);
 }
 
 static void nbl_dev_remove_ops(struct nbl_dev_ops_tbl **dev_ops_tbl)
@@ -1105,7 +1110,7 @@ static int nbl_dev_setup_net_dev(struct nbl_dev_mgt *dev_mgt,
 	struct nbl_register_net_param register_param = { 0 };
 	struct nbl_register_net_result register_result = { 0 };
 	struct nbl_dev_ring_mgt *ring_mgt;
-	const struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	const struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	int ret = 0;
 
 	net_dev = rte_zmalloc("nbl_dev_net", sizeof(struct nbl_dev_net_mgt), 0);

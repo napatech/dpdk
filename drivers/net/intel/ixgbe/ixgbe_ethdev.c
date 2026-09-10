@@ -302,9 +302,9 @@ static int ixgbevf_add_mac_addr(struct rte_eth_dev *dev,
 static void ixgbevf_remove_mac_addr(struct rte_eth_dev *dev, uint32_t index);
 static int ixgbevf_set_default_mac_addr(struct rte_eth_dev *dev,
 					     struct rte_ether_addr *mac_addr);
-static int ixgbe_add_5tuple_filter(struct rte_eth_dev *dev,
+static int ixgbe_add_5tuple_filter(struct ixgbe_adapter *adapter,
 			struct ixgbe_5tuple_filter *filter);
-static void ixgbe_remove_5tuple_filter(struct rte_eth_dev *dev,
+static void ixgbe_remove_5tuple_filter(struct ixgbe_adapter *adapter,
 			struct ixgbe_5tuple_filter *filter);
 static int ixgbe_dev_flow_ops_get(struct rte_eth_dev *dev,
 				  const struct rte_flow_ops **ops);
@@ -1084,8 +1084,8 @@ ixgbe_parse_devargs(struct ixgbe_adapter *adapter,
 static int
 eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 {
-	struct ixgbe_adapter *ad = eth_dev->data->dev_private;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct ixgbe_adapter *ad = IXGBE_DEV_PRIVATE_TO_ADAPTER(eth_dev->data->dev_private);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -1151,6 +1151,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	hw->vendor_id = pci_dev->id.vendor_id;
 	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
 	hw->allow_unsupported_sfp = 1;
+	ad->max_vfs = pci_dev->max_vfs;
 
 	/* Initialize the shared code (base driver) */
 #ifdef RTE_LIBRTE_IXGBE_BYPASS
@@ -1334,7 +1335,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 		goto err_l2_tn_filter_init;
 
 	/* initialize flow filter lists */
-	ixgbe_filterlist_init();
+	ixgbe_filterlist_init(eth_dev);
 
 	/* initialize bandwidth configuration info */
 	memset(bw_conf, 0, sizeof(struct ixgbe_bw_conf));
@@ -1464,7 +1465,11 @@ static int ixgbe_fdir_filter_init(struct rte_eth_dev *eth_dev)
 		rte_hash_free(fdir_info->hash_handle);
 		return -ENOMEM;
 	}
+	fdir_info->n_flows = 0;
 	fdir_info->mask_added = FALSE;
+
+	/* drop queue is always fixed */
+	IXGBE_DEV_FDIR_CONF(eth_dev)->drop_queue = IXGBE_FDIR_DROP_QUEUE;
 
 	return 0;
 }
@@ -1598,7 +1603,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	int diag;
 	uint32_t tc, tcs;
 	struct ixgbe_adapter *ad = eth_dev->data->dev_private;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(eth_dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
@@ -1818,7 +1823,7 @@ eth_ixgbe_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 		representor.vf_id = eth_da.representor_ports[i];
 		representor.switch_domain_id = vfinfo->switch_domain_id;
-		representor.pf_ethdev = pf_ethdev;
+		representor.pf_port_id = pf_ethdev->data->port_id;
 
 		/* representor port net_bdf_port */
 		snprintf(name, sizeof(name), "net_%s_representor_%d",
@@ -2264,7 +2269,7 @@ ixgbe_vmdq_vlan_hw_filter_enable(struct rte_eth_dev *dev)
 static int
 ixgbe_check_vf_rss_rxq_num(struct rte_eth_dev *dev, uint16_t nb_rx_q)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 
 	switch (nb_rx_q) {
 	case 1:
@@ -2506,7 +2511,7 @@ ixgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
 	struct rte_pci_device *pci_dev;
 	int ret;
 
-	pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	ret = rte_eth_link_get_nowait(dev->data->port_id, &link);
 	if (ret < 0)
 		return ret;
@@ -2610,11 +2615,13 @@ ixgbe_flow_ctrl_enable(struct rte_eth_dev *dev, struct ixgbe_hw *hw)
 static int
 ixgbe_dev_start(struct rte_eth_dev *dev)
 {
-	struct ixgbe_hw *hw =
-		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_adapter *adapter =
+		IXGBE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
+	struct rte_eth_fdir_conf *fdir_conf = IXGBE_DEV_FDIR_CONF(dev);
 	struct ixgbe_vf_info *vfinfo =
 		*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t intr_vector = 0;
 	int err;
@@ -2716,8 +2723,10 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	/* Configure DCB hw */
 	ixgbe_configure_dcb(dev);
 
-	if (IXGBE_DEV_FDIR_CONF(dev)->mode != RTE_FDIR_MODE_NONE) {
-		err = ixgbe_fdir_configure(dev);
+	if (fdir_conf->mode != RTE_FDIR_MODE_NONE) {
+		struct ixgbe_hw_fdir_info *info =
+			IXGBE_DEV_PRIVATE_TO_FDIR_INFO(adapter);
+		err = ixgbe_fdir_configure(adapter, fdir_conf, &info->mask);
 		if (err)
 			goto error;
 	}
@@ -2921,7 +2930,7 @@ ixgbe_dev_stop(struct rte_eth_dev *dev)
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ixgbe_vf_info *vfinfo =
 		*IXGBE_DEV_PRIVATE_TO_P_VFDATA(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int vf;
 	struct ixgbe_tm_conf *tm_conf =
@@ -3082,7 +3091,7 @@ ixgbe_dev_close(struct rte_eth_dev *dev)
 {
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int retries = 0;
 	int ret;
@@ -3137,7 +3146,7 @@ ixgbe_dev_close(struct rte_eth_dev *dev)
 	ixgbe_ntuple_filter_uninit(dev);
 
 	/* clear all the filters list */
-	ixgbe_filterlist_flush();
+	ixgbe_filterlist_flush(dev);
 
 	/* Remove all Traffic Manager configuration */
 	ixgbe_tm_conf_uninit(dev);
@@ -3181,8 +3190,9 @@ ixgbe_read_stats_registers(struct ixgbe_hw *hw,
 			   uint64_t *total_missed_rx, uint64_t *total_qbrc,
 			   uint64_t *total_qprc, uint64_t *total_qprdc)
 {
-	uint32_t bprc, lxon, lxoff, total;
-	uint32_t delta_gprc = 0;
+	uint32_t bprc, lxon, lxoff;
+	uint64_t total;
+	uint64_t delta_gprc = 0;
 	unsigned i;
 	/* Workaround for RX byte count not including CRC bytes when CRC
 	 * strip is enabled. CRC bytes are removed from counters when crc_strip
@@ -3237,7 +3247,7 @@ ixgbe_read_stats_registers(struct ixgbe_hw *hw,
 		hw_stats->qbrc[i] +=
 		    ((uint64_t)IXGBE_READ_REG(hw, IXGBE_QBRC_H(i)) << 32);
 		if (crc_strip == 0)
-			hw_stats->qbrc[i] -= delta_qprc * RTE_ETHER_CRC_LEN;
+			hw_stats->qbrc[i] -= (uint64_t)delta_qprc * RTE_ETHER_CRC_LEN;
 
 		hw_stats->qbtc[i] += IXGBE_READ_REG(hw, IXGBE_QBTC_L(i));
 		hw_stats->qbtc[i] +=
@@ -3310,7 +3320,7 @@ ixgbe_read_stats_registers(struct ixgbe_hw *hw,
 	hw_stats->lxontxc += lxon;
 	lxoff = IXGBE_READ_REG(hw, IXGBE_LXOFFTXC);
 	hw_stats->lxofftxc += lxoff;
-	total = lxon + lxoff;
+	total = (uint64_t)lxon + lxoff;
 
 	hw_stats->mptc += IXGBE_READ_REG(hw, IXGBE_MPTC);
 	hw_stats->ptc64 += IXGBE_READ_REG(hw, IXGBE_PTC64);
@@ -3625,8 +3635,9 @@ static int ixgbe_dev_xstats_get_names_by_id(
 			PMD_INIT_LOG(ERR, "id value isn't valid");
 			return -1;
 		}
-		strcpy(xstats_names[i].name,
-				xstats_names_copy[ids[i]].name);
+		strlcpy(xstats_names[i].name,
+				xstats_names_copy[ids[i]].name,
+				sizeof(xstats_names[i].name));
 	}
 	return limit;
 }
@@ -3970,7 +3981,7 @@ ixgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 static int
 ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
 
@@ -4100,7 +4111,7 @@ static int
 ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 		     struct rte_eth_dev_info *dev_info)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	dev_info->max_rx_queues = (uint16_t)hw->mac.max_rx_queues;
@@ -4668,7 +4679,7 @@ ixgbe_dev_interrupt_get_status(struct rte_eth_dev *dev)
 static void
 ixgbe_dev_link_status_print(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_eth_link link;
 
 	rte_eth_linkstatus_get(dev, &link);
@@ -4780,7 +4791,7 @@ static void
 ixgbe_dev_interrupt_delayed_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
@@ -5344,7 +5355,7 @@ ixgbe_remove_rar(struct rte_eth_dev *dev, uint32_t index)
 static int
 ixgbe_set_default_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *addr)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 
 	/*
 	 * This function calls into the base driver, which in turn will use
@@ -5508,7 +5519,7 @@ ixgbevf_dev_start(struct rte_eth_dev *dev)
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t intr_vector = 0;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	int err, mask = 0;
@@ -5621,7 +5632,7 @@ ixgbevf_dev_stop(struct rte_eth_dev *dev)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ixgbe_adapter *adapter = dev->data->dev_private;
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 
 	/*
@@ -5669,7 +5680,7 @@ static int
 ixgbevf_dev_close(struct rte_eth_dev *dev)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	int ret;
 
@@ -5975,7 +5986,7 @@ ixgbe_convert_vm_rx_mask_to_val(uint16_t rx_mask, uint32_t orig_val)
 static int
 ixgbevf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_interrupt *intr =
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
@@ -6005,7 +6016,7 @@ ixgbevf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 		IXGBE_DEV_PRIVATE_TO_INTR(dev->data->dev_private);
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t vec = IXGBE_MISC_VEC_ID;
 
@@ -6025,7 +6036,7 @@ ixgbevf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 static int
 ixgbe_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	uint32_t mask;
 	struct ixgbe_hw *hw =
@@ -6162,7 +6173,7 @@ ixgbe_set_ivar_map(struct ixgbe_hw *hw, int8_t direction,
 static void
 ixgbevf_configure_msix(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -6213,7 +6224,7 @@ ixgbevf_configure_msix(struct rte_eth_dev *dev)
 static void
 ixgbe_configure_msix(struct rte_eth_dev *dev)
 {
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct ixgbe_hw *hw =
 		IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -6443,13 +6454,13 @@ ixgbevf_set_default_mac_addr(struct rte_eth_dev *dev,
 }
 
 int
-ixgbe_syn_filter_set(struct rte_eth_dev *dev,
+ixgbe_syn_filter_set(struct ixgbe_adapter *adapter,
 			struct rte_eth_syn_filter *filter,
 			bool add)
 {
-	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
 	struct ixgbe_filter_info *filter_info =
-		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(adapter);
 	uint32_t syn_info;
 	uint32_t synqf;
 
@@ -6497,10 +6508,10 @@ convert_protocol_type(uint8_t protocol_value)
 
 /* inject a 5-tuple filter to HW */
 static inline void
-ixgbe_inject_5tuple_filter(struct rte_eth_dev *dev,
+ixgbe_inject_5tuple_filter(struct ixgbe_adapter *adapter,
 			   struct ixgbe_5tuple_filter *filter)
 {
-	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
 	int i;
 	uint32_t ftqf, sdpqf;
 	uint32_t l34timir = 0;
@@ -6555,11 +6566,11 @@ ixgbe_inject_5tuple_filter(struct rte_eth_dev *dev,
  *    - On failure, a negative value.
  */
 static int
-ixgbe_add_5tuple_filter(struct rte_eth_dev *dev,
+ixgbe_add_5tuple_filter(struct ixgbe_adapter *adapter,
 			struct ixgbe_5tuple_filter *filter)
 {
 	struct ixgbe_filter_info *filter_info =
-		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(adapter);
 	int i, idx, shift;
 
 	/*
@@ -6583,7 +6594,7 @@ ixgbe_add_5tuple_filter(struct rte_eth_dev *dev,
 		return -ENOSYS;
 	}
 
-	ixgbe_inject_5tuple_filter(dev, filter);
+	ixgbe_inject_5tuple_filter(adapter, filter);
 
 	return 0;
 }
@@ -6596,12 +6607,12 @@ ixgbe_add_5tuple_filter(struct rte_eth_dev *dev,
  * filter: the pointer of the filter will be removed.
  */
 static void
-ixgbe_remove_5tuple_filter(struct rte_eth_dev *dev,
+ixgbe_remove_5tuple_filter(struct ixgbe_adapter *adapter,
 			struct ixgbe_5tuple_filter *filter)
 {
-	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
 	struct ixgbe_filter_info *filter_info =
-		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(adapter);
 	uint16_t index = filter->index;
 
 	filter_info->fivetuple_mask[index / (sizeof(uint32_t) * NBBY)] &=
@@ -6769,12 +6780,12 @@ ntuple_filter_to_5tuple(struct rte_eth_ntuple_filter *filter,
  *    - On failure, a negative value.
  */
 int
-ixgbe_add_del_ntuple_filter(struct rte_eth_dev *dev,
+ixgbe_add_del_ntuple_filter(struct ixgbe_adapter *adapter,
 			struct rte_eth_ntuple_filter *ntuple_filter,
 			bool add)
 {
 	struct ixgbe_filter_info *filter_info =
-		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(adapter);
 	struct ixgbe_5tuple_filter_info filter_5tuple;
 	struct ixgbe_5tuple_filter *filter;
 	int ret;
@@ -6805,29 +6816,29 @@ ixgbe_add_del_ntuple_filter(struct rte_eth_dev *dev,
 				sizeof(struct ixgbe_5tuple_filter), 0);
 		if (filter == NULL)
 			return -ENOMEM;
-		rte_memcpy(&filter->filter_info,
+		memcpy(&filter->filter_info,
 				 &filter_5tuple,
 				 sizeof(struct ixgbe_5tuple_filter_info));
 		filter->queue = ntuple_filter->queue;
-		ret = ixgbe_add_5tuple_filter(dev, filter);
+		ret = ixgbe_add_5tuple_filter(adapter, filter);
 		if (ret < 0) {
 			rte_free(filter);
 			return ret;
 		}
 	} else
-		ixgbe_remove_5tuple_filter(dev, filter);
+		ixgbe_remove_5tuple_filter(adapter, filter);
 
 	return 0;
 }
 
 int
-ixgbe_add_del_ethertype_filter(struct rte_eth_dev *dev,
+ixgbe_add_del_ethertype_filter(struct ixgbe_adapter *adapter,
 			struct rte_eth_ethertype_filter *filter,
 			bool add)
 {
-	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
 	struct ixgbe_filter_info *filter_info =
-		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(adapter);
 	uint32_t etqf = 0;
 	uint32_t etqs = 0;
 	int ret;
@@ -7414,6 +7425,12 @@ ixgbe_get_module_info(struct rte_eth_dev *dev,
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return -E_RTE_SECONDARY;
 
+	if (hw->phy.media_type == ixgbe_media_type_copper) {
+		PMD_DRV_LOG(DEBUG, "Port %u is Base-T (copper), no SFF module info.",
+				dev->data->port_id);
+		return -ENOTSUP;
+	}
+
 	/* Check whether we support SFF-8472 or not */
 	status = hw->phy.ops.read_i2c_eeprom(hw,
 					     IXGBE_SFF_SFF_8472_COMP,
@@ -7466,6 +7483,12 @@ ixgbe_get_module_eeprom(struct rte_eth_dev *dev,
 	 */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return -E_RTE_SECONDARY;
+
+	if (hw->phy.media_type == ixgbe_media_type_copper) {
+		PMD_DRV_LOG(DEBUG, "Port %u is Base-T (copper), cannot read module EEPROM.",
+				dev->data->port_id);
+		return -ENOTSUP;
+	}
 
 	for (i = info->offset; i < info->offset + info->length; i++) {
 		if (i < RTE_ETH_MODULE_SFF_8079_LEN)
@@ -7697,11 +7720,11 @@ ixgbe_e_tag_enable(struct ixgbe_hw *hw)
 }
 
 static int
-ixgbe_e_tag_filter_del(struct rte_eth_dev *dev,
+ixgbe_e_tag_filter_del(struct ixgbe_adapter *adapter,
 		       struct ixgbe_l2_tunnel_conf *l2_tunnel)
 {
 	int ret = 0;
-	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
 	uint32_t i, rar_entries;
 	uint32_t rar_low, rar_high;
 
@@ -7734,11 +7757,11 @@ ixgbe_e_tag_filter_del(struct rte_eth_dev *dev,
 }
 
 static int
-ixgbe_e_tag_filter_add(struct rte_eth_dev *dev,
+ixgbe_e_tag_filter_add(struct ixgbe_adapter *adapter,
 		       struct ixgbe_l2_tunnel_conf *l2_tunnel)
 {
 	int ret = 0;
-	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(adapter);
 	uint32_t i, rar_entries;
 	uint32_t rar_low, rar_high;
 
@@ -7750,7 +7773,7 @@ ixgbe_e_tag_filter_add(struct rte_eth_dev *dev,
 	}
 
 	/* One entry for one tunnel. Try to remove potential existing entry. */
-	ixgbe_e_tag_filter_del(dev, l2_tunnel);
+	ixgbe_e_tag_filter_del(adapter, l2_tunnel);
 
 	rar_entries = ixgbe_get_num_rx_addrs(hw);
 
@@ -7839,13 +7862,13 @@ ixgbe_remove_l2_tn_filter(struct ixgbe_l2_tn_info *l2_tn_info,
 
 /* Add l2 tunnel filter */
 int
-ixgbe_dev_l2_tunnel_filter_add(struct rte_eth_dev *dev,
+ixgbe_dev_l2_tunnel_filter_add(struct ixgbe_adapter *adapter,
 			       struct ixgbe_l2_tunnel_conf *l2_tunnel,
 			       bool restore)
 {
 	int ret;
 	struct ixgbe_l2_tn_info *l2_tn_info =
-		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(adapter);
 	struct ixgbe_l2_tn_key key;
 	struct ixgbe_l2_tn_filter *node;
 
@@ -7867,7 +7890,7 @@ ixgbe_dev_l2_tunnel_filter_add(struct rte_eth_dev *dev,
 		if (!node)
 			return -ENOMEM;
 
-		rte_memcpy(&node->key,
+		memcpy(&node->key,
 				 &key,
 				 sizeof(struct ixgbe_l2_tn_key));
 		node->pool = l2_tunnel->pool;
@@ -7880,7 +7903,7 @@ ixgbe_dev_l2_tunnel_filter_add(struct rte_eth_dev *dev,
 
 	switch (l2_tunnel->l2_tunnel_type) {
 	case RTE_ETH_L2_TUNNEL_TYPE_E_TAG:
-		ret = ixgbe_e_tag_filter_add(dev, l2_tunnel);
+		ret = ixgbe_e_tag_filter_add(adapter, l2_tunnel);
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Invalid tunnel type");
@@ -7896,12 +7919,12 @@ ixgbe_dev_l2_tunnel_filter_add(struct rte_eth_dev *dev,
 
 /* Delete l2 tunnel filter */
 int
-ixgbe_dev_l2_tunnel_filter_del(struct rte_eth_dev *dev,
+ixgbe_dev_l2_tunnel_filter_del(struct ixgbe_adapter *adapter,
 			       struct ixgbe_l2_tunnel_conf *l2_tunnel)
 {
 	int ret;
 	struct ixgbe_l2_tn_info *l2_tn_info =
-		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(adapter);
 	struct ixgbe_l2_tn_key key;
 
 	key.l2_tn_type = l2_tunnel->l2_tunnel_type;
@@ -7912,7 +7935,7 @@ ixgbe_dev_l2_tunnel_filter_del(struct rte_eth_dev *dev,
 
 	switch (l2_tunnel->l2_tunnel_type) {
 	case RTE_ETH_L2_TUNNEL_TYPE_E_TAG:
-		ret = ixgbe_e_tag_filter_del(dev, l2_tunnel);
+		ret = ixgbe_e_tag_filter_del(adapter, l2_tunnel);
 		break;
 	default:
 		PMD_DRV_LOG(ERR, "Invalid tunnel type");
@@ -8309,12 +8332,14 @@ int ixgbe_enable_sec_tx_path_generic(struct ixgbe_hw *hw)
 static inline void
 ixgbe_ntuple_filter_restore(struct rte_eth_dev *dev)
 {
+	struct ixgbe_adapter *adapter =
+		IXGBE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct ixgbe_filter_info *filter_info =
 		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
 	struct ixgbe_5tuple_filter *node;
 
 	TAILQ_FOREACH(node, &filter_info->fivetuple_list, entries) {
-		ixgbe_inject_5tuple_filter(dev, node);
+		ixgbe_inject_5tuple_filter(adapter, node);
 	}
 }
 
@@ -8359,8 +8384,10 @@ ixgbe_syn_filter_restore(struct rte_eth_dev *dev)
 static inline void
 ixgbe_l2_tn_filter_restore(struct rte_eth_dev *dev)
 {
+	struct ixgbe_adapter *adapter =
+		IXGBE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct ixgbe_l2_tn_info *l2_tn_info =
-		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(adapter);
 	struct ixgbe_l2_tn_filter *node;
 	struct ixgbe_l2_tunnel_conf l2_tn_conf;
 
@@ -8368,7 +8395,8 @@ ixgbe_l2_tn_filter_restore(struct rte_eth_dev *dev)
 		l2_tn_conf.l2_tunnel_type = node->key.l2_tn_type;
 		l2_tn_conf.tunnel_id      = node->key.tn_id;
 		l2_tn_conf.pool           = node->pool;
-		(void)ixgbe_dev_l2_tunnel_filter_add(dev, &l2_tn_conf, TRUE);
+		(void)ixgbe_dev_l2_tunnel_filter_add(adapter,
+						     &l2_tn_conf, TRUE);
 	}
 }
 
@@ -8376,11 +8404,13 @@ ixgbe_l2_tn_filter_restore(struct rte_eth_dev *dev)
 static inline void
 ixgbe_rss_filter_restore(struct rte_eth_dev *dev)
 {
+	struct ixgbe_adapter *adapter =
+		IXGBE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct ixgbe_filter_info *filter_info =
-		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
+		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(adapter);
 
 	if (filter_info->rss_info.conf.queue_num)
-		ixgbe_config_rss_filter(dev,
+		ixgbe_config_rss_filter(adapter,
 			&filter_info->rss_info, TRUE);
 }
 
@@ -8417,12 +8447,14 @@ ixgbe_l2_tunnel_conf(struct rte_eth_dev *dev)
 void
 ixgbe_clear_all_ntuple_filter(struct rte_eth_dev *dev)
 {
+	struct ixgbe_adapter *adapter =
+		IXGBE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct ixgbe_filter_info *filter_info =
 		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
 	struct ixgbe_5tuple_filter *p_5tuple;
 
 	while ((p_5tuple = TAILQ_FIRST(&filter_info->fivetuple_list)))
-		ixgbe_remove_5tuple_filter(dev, p_5tuple);
+		ixgbe_remove_5tuple_filter(adapter, p_5tuple);
 }
 
 /* remove all the ether type filters */
@@ -8466,6 +8498,8 @@ ixgbe_clear_syn_filter(struct rte_eth_dev *dev)
 int
 ixgbe_clear_all_l2_tn_filter(struct rte_eth_dev *dev)
 {
+	struct ixgbe_adapter *adapter =
+			IXGBE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct ixgbe_l2_tn_info *l2_tn_info =
 		IXGBE_DEV_PRIVATE_TO_L2_TN_INFO(dev->data->dev_private);
 	struct ixgbe_l2_tn_filter *l2_tn_filter;
@@ -8476,7 +8510,7 @@ ixgbe_clear_all_l2_tn_filter(struct rte_eth_dev *dev)
 		l2_tn_conf.l2_tunnel_type = l2_tn_filter->key.l2_tn_type;
 		l2_tn_conf.tunnel_id      = l2_tn_filter->key.tn_id;
 		l2_tn_conf.pool           = l2_tn_filter->pool;
-		ret = ixgbe_dev_l2_tunnel_filter_del(dev, &l2_tn_conf);
+		ret = ixgbe_dev_l2_tunnel_filter_del(adapter, &l2_tn_conf);
 		if (ret < 0)
 			return ret;
 	}

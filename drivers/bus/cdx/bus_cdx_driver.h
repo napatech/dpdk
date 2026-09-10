@@ -25,7 +25,6 @@ extern "C" {
 /* Forward declarations */
 struct rte_cdx_device;
 struct rte_cdx_driver;
-struct rte_cdx_bus;
 
 #define RTE_CDX_BUS_DEVICES_PATH "/sys/bus/cdx/devices"
 
@@ -53,27 +52,13 @@ struct rte_cdx_id {
  * A structure describing a CDX device.
  */
 struct rte_cdx_device {
-	RTE_TAILQ_ENTRY(rte_cdx_device) next;	/**< Next probed CDX device. */
 	struct rte_device device;		/**< Inherit core device */
-	struct rte_cdx_driver *driver;		/**< CDX driver used in probing */
 	char name[RTE_DEV_NAME_MAX_LEN];	/**< Device name */
 	struct rte_cdx_id id;			/**< CDX ID. */
 	struct rte_mem_resource mem_resource[RTE_CDX_MAX_RESOURCE];
 						/**< CDX Memory Resource */
 	struct rte_intr_handle *intr_handle;	/**< Interrupt handle */
 };
-
-/**
- * @internal
- * Helper macro for drivers that need to convert to struct rte_cdx_device.
- */
-#define RTE_DEV_TO_CDX_DEV(ptr) \
-	container_of(ptr, struct rte_cdx_device, device)
-
-#define RTE_DEV_TO_CDX_DEV_CONST(ptr) \
-	container_of(ptr, const struct rte_cdx_device, device)
-
-#define RTE_ETH_DEV_TO_CDX_DEV(eth_dev)	RTE_DEV_TO_CDX_DEV((eth_dev)->device)
 
 #ifdef __cplusplus
 /** C++ macro used to help building up tables of device IDs. */
@@ -101,9 +86,7 @@ typedef int (rte_cdx_remove_t)(struct rte_cdx_device *);
  * A structure describing a CDX driver.
  */
 struct rte_cdx_driver {
-	RTE_TAILQ_ENTRY(rte_cdx_driver) next;	/**< Next in list. */
 	struct rte_driver driver;		/**< Inherit core driver. */
-	struct rte_cdx_bus *bus;		/**< CDX bus reference. */
 	rte_cdx_probe_t *probe;			/**< Device probe function. */
 	rte_cdx_remove_t *remove;		/**< Device remove function. */
 	const struct rte_cdx_id *id_table;	/**< ID table, NULL terminated. */

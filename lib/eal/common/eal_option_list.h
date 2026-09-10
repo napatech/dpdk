@@ -32,6 +32,7 @@
  * Format of each entry: long name, short name, help string, struct member name.
  */
 /* (Alphabetical) List of common options first */
+BOOL_ARG("--auto-probing", NULL, "Let EAL probe all available devices unless some -a/-b option is set.", auto_probing)
 LIST_ARG("--allow", "-a", "Add device to allow-list, causing DPDK to only use specified devices", allow)
 STR_ARG("--base-virtaddr", NULL, "Base virtual address to reserve memory", base_virtaddr)
 LIST_ARG("--block", "-b", "Add device to block-list, preventing DPDK from using the device", block)
@@ -51,11 +52,13 @@ STR_ARG("--mbuf-pool-ops-name", NULL, "User defined mbuf default pool ops name",
 STR_ARG("--memory-channels", "-n", "Number of memory channels per socket", memory_channels)
 STR_ARG("--memory-ranks", "-r", "Force number of memory ranks (don't detect)", memory_ranks)
 STR_ARG("--memory-size", "-m", "Total size of memory to allocate initially", memory_size)
+BOOL_ARG("--no-auto-probing", "-A", "Do not probe any devices unless some -a option is set", no_auto_probing)
 BOOL_ARG("--no-hpet", NULL, "Disable HPET timer", no_hpet)
 BOOL_ARG("--no-huge", NULL, "Disable hugetlbfs support", no_huge)
 BOOL_ARG("--no-pci", NULL, "Disable all PCI devices", no_pci)
 BOOL_ARG("--no-shconf", NULL, "Disable shared config file generation", no_shconf)
 BOOL_ARG("--no-telemetry", NULL, "Disable telemetry", no_telemetry)
+LIST_ARG("--pagesz-mem", NULL, "Memory allocation per hugepage size (format: <pagesz>:<limit>, e.g. 2M:32G). Repeat option for multiple page sizes.", pagesz_mem)
 STR_ARG("--proc-type", NULL, "Type of process (primary|secondary|auto)", proc_type)
 OPT_STR_ARG("--remap-lcore-ids", "-R", "Remap lcore IDs to be contiguous starting from 0, or supplied value", remap_lcore_ids)
 STR_ARG("--service-corelist", "-S", "List of cores to use for service threads", service_corelist)

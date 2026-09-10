@@ -1,8 +1,6 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
     Copyright 2018 The DPDK contributors
 
-.. _doc_guidelines:
-
 DPDK Documentation Guidelines
 =============================
 
@@ -39,7 +37,8 @@ The main directories that contain files related to documentation are shown below
        |-- ...
 
 
-The API documentation is built from `Doxygen <http://www.doxygen.nl>`_ comments in the header files.
+Doxygen comments in header files generate the API documentation.
+These are built from `Doxygen <http://www.doxygen.nl>`_ comments in the header files.
 These files are mainly in the ``lib/*`` directories although some of the Poll Mode Drivers in ``drivers/net``
 are also documented with Doxygen.
 
@@ -57,6 +56,8 @@ Role of the Documentation
 
 The following items outline the roles of the different parts of the documentation and when they need to be updated or
 added to by the developer.
+
+.. _style_release_notes_guidelines:
 
 * **Release Notes**
 
@@ -84,7 +85,7 @@ added to by the developer.
   The API documentation explains how to use the public DPDK functions.
   The `API index page <https://doc.dpdk.org/api/>`_ shows the generated API documentation with related groups of functions.
 
-  The API documentation should be updated via Doxygen comments when new functions are added.
+  Update API documentation via Doxygen comments when adding new functions.
 
 * **Getting Started Guides**
 
@@ -133,8 +134,6 @@ added to by the developer.
 Building the Documentation
 --------------------------
 
-.. _doc_dependencies:
-
 Dependencies
 ~~~~~~~~~~~~
 
@@ -182,7 +181,7 @@ To build the documentation::
 
    ninja -C build doc
 
-See :doc:`../linux_gsg/build_dpdk` for more detail on compiling DPDK with meson.
+See :doc:`/linux_gsg/build_dpdk` for more detail on compiling DPDK with meson.
 
 The output is generated in the directory ``build/doc/``, with:
 
@@ -214,6 +213,9 @@ Here are some guidelines in relation to the style of the documentation:
   This can be checked using the ``aspell`` utility::
 
        aspell --lang=en_US --check doc/guides/sample_app_ug/mydoc.rst
+
+The documentation can be reviewed with AI help
+using the script ``devtools/ai/review-doc.py``.
 
 
 RST Guidelines
@@ -488,8 +490,10 @@ Images
 
 * Images in the documentation should be formatted as follows:
 
-   * The image should be preceded by a label in the format ``.. _figure_XXXX:`` with a leading underscore and
-     where ``XXXX`` is a unique descriptive name.
+   * The image should be preceded by a label
+     in the format ``.. _prefix_figure_name:`` with a leading underscore,
+     where ``prefix`` is the document or component name,
+     and ``name`` makes it unique and descriptive.
 
    * Images should be included using the ``.. figure::`` directive and the file type should be set to ``*`` (not ``.svg``).
      This allows the format of the image to be changed if required, without updating the documentation.
@@ -498,28 +502,29 @@ Images
 
 * Here is an example of the previous three guidelines::
 
-     .. _figure_mempool:
+     .. _mempool_figure_cache:
 
      .. figure:: img/mempool.*
 
         A mempool in memory with its associated ring.
 
-.. _mock_label:
+.. _style_mock_label:
 
 * Images can then be linked to using the ``:numref:`` directive::
 
-     The mempool layout is shown in :numref:`figure_mempool`.
+     The mempool layout is shown in :numref:`mempool_figure_cache`.
 
-  This would be rendered as: *The mempool layout is shown in* :ref:`Fig 6.3 <mock_label>`.
+  This would be rendered as: *The mempool layout is shown in* :ref:`Fig 6.3 <style_mock_label>`.
 
   **Note**: The ``:numref:`` directive requires Sphinx 1.3.1 or later.
   With earlier versions it will still be rendered as a link but won't have an automatically generated number.
 
 * The caption of the image can be generated, with a link, using the ``:ref:`` directive::
 
-     :ref:`figure_mempool`
+     :ref:`mempool_figure_cache`
 
   This would be rendered as: *A mempool in memory with its associated ring.*
+
 
 Tables
 ~~~~~~
@@ -528,35 +533,10 @@ Tables
   They are hard to format and to edit, and the same information
   can usually be shown just as clearly with a definition or bullet list.
 
-* Tables in the documentation should be formatted as follows:
-
-   * The table should be preceded by a label in the format ``.. _table_XXXX:`` with a leading underscore and where
-     ``XXXX`` is a unique descriptive name.
-
-   * Tables should be included using the ``.. table::`` directive and must have a caption.
-
-* Here is an example of the previous two guidelines::
-
-     .. _table_qos_pipes:
-
-     .. table:: Sample configuration for QOS pipes.
-
-        +----------+----------+----------+
-        | Header 1 | Header 2 | Header 3 |
-        |          |          |          |
-        +==========+==========+==========+
-        | Text     | Text     | Text     |
-        +----------+----------+----------+
-        | ...      | ...      | ...      |
-        +----------+----------+----------+
-
-* Tables can be linked to using the ``:numref:`` and ``:ref:`` directives, as shown in the previous section for images.
-  For example::
-
-     The QOS configuration is shown in :numref:`table_qos_pipes`.
+* Tables should be included using the ``.. table::`` directive and must have a caption.
 
 
-.. _links:
+.. _style_links:
 
 Hyperlinks
 ~~~~~~~~~~
@@ -573,14 +553,14 @@ Hyperlinks
 
 * An internal link can be generated by placing labels in the document with the format ``.. _label_name``.
 
-* The following links to the top of this section: :ref:`links`::
+* The following links to the top of this section: :ref:`style_links`::
 
      .. _links:
 
      Hyperlinks
      ~~~~~~~~~~
 
-     * The following links to the top of this section: :ref:`links`:
+     * The following links to the top of this section: :ref:`style_links`:
 
 .. Note::
 
@@ -590,7 +570,7 @@ Hyperlinks
 * The use of a label is preferred since it works across files and will still work if the header text changes.
 
 
-.. _doxygen_guidelines:
+.. _style_doxygen_guidelines:
 
 Doxygen Guidelines
 ------------------
@@ -606,7 +586,7 @@ The following are some guidelines for use of Doxygen in the DPDK API documentati
   It isn't necessary to explicitly name each file since the configuration matches all ``rte_*.h`` files in the directory.
 
 * Use proper capitalization and punctuation in the Doxygen comments since they will become sentences in the documentation.
-  This in particular applies to single line comments, which is the case the is most often forgotten.
+  This applies particularly to single-line comments, which developers most often forget.
 
 * Use ``@`` style Doxygen commands instead of ``\`` style commands.
 
@@ -706,7 +686,7 @@ The following are some guidelines for use of Doxygen in the DPDK API documentati
      }
 
   Note: postfix comments should be aligned with spaces not tabs in accordance
-  with the :ref:`coding_style`.
+  with the :doc:`coding_style`.
 
 * If a single comment type can't be used, due to line length limitations then
   prefix comments should be preferred.

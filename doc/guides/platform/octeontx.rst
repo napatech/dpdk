@@ -16,15 +16,15 @@ Common Offload HW Block Drivers
 -------------------------------
 
 #. **Crypto Driver**
-   See :doc:`../cryptodevs/octeontx` for octeontx crypto driver
+   See :doc:`/cryptodevs/octeontx` for octeontx crypto driver
    information.
 
 #. **Eventdev Driver**
-   See :doc:`../eventdevs/octeontx` for octeontx ssovf eventdev driver
+   See :doc:`/eventdevs/octeontx` for octeontx ssovf eventdev driver
    information.
 
 #. **Mempool Driver**
-   See :doc:`../mempool/octeontx` for octeontx fpavf mempool driver
+   See :doc:`/mempool/octeontx` for octeontx fpavf mempool driver
    information.
 
 Steps To Setup Platform
@@ -43,7 +43,7 @@ OCTEON TX compatible board:
 
       The PF driver and the required microcode for the crypto offload block will be
       available with OCTEON TX SDK only. So for using crypto offload, follow the steps
-      mentioned in :ref:`setup_platform_using_OCTEON_TX_SDK`.
+      mentioned in :ref:`octeontx_setup_platform_using_octeon_tx_sdk`.
 
 #. **ARM64 Tool Chain**
 
@@ -58,11 +58,12 @@ OCTEON TX compatible board:
 
    As an alternative method, Platform drivers can also be executed using images provided
    as part of SDK from Cavium. The SDK includes all the above prerequisites necessary
-   to bring up a OCTEON TX board. Please refer :ref:`setup_platform_using_OCTEON_TX_SDK`.
+   to bring up a OCTEON TX board.
+   Please refer :ref:`octeontx_setup_platform_using_octeon_tx_sdk`.
 
-#. Follow the DPDK :doc:`../linux_gsg/index` to setup the basic DPDK environment.
+#. Follow the DPDK :doc:`/linux_gsg/index` to setup the basic DPDK environment.
 
-.. _setup_platform_using_OCTEON_TX_SDK:
+.. _octeontx_setup_platform_using_octeon_tx_sdk:
 
 Setup Platform Using OCTEON TX SDK
 ----------------------------------
@@ -111,7 +112,7 @@ The DPDK applications can be cross-compiled on any x86 based platform. The
 OCTEON TX SDK need to be installed on the build system. The SDK package will
 provide the required toolchain etc.
 
-Refer to :doc:`../linux_gsg/cross_build_dpdk_for_arm64` for generic arm64 details.
+Refer to :doc:`/linux_gsg/cross_build_dpdk_for_arm64` for generic arm64 details.
 
 The following steps can be used to perform cross-compilation with OCTEON TX
 SDK 6.2.0 patch 3:

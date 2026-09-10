@@ -34,45 +34,30 @@ struct dsa_wq_addr {
 /** a DSA device instance */
 struct rte_dsa_device {
 	struct rte_device device;           /**< Inherit core device */
-	TAILQ_ENTRY(rte_dsa_device) next;   /**< next dev in list */
 
 	char wq_name[32];                   /**< the workqueue name/number e.g. wq0.1 */
 	struct dsa_wq_addr addr;            /**< Identifies the specific WQ */
 };
 
 /* forward prototypes */
-struct dsa_bus;
 static int dsa_scan(void);
-static int dsa_probe(void);
-static struct rte_device *dsa_find_device(const struct rte_device *start,
-		rte_dev_cmp_t cmp,  const void *data);
+static bool dsa_match(const struct rte_driver *drv, const struct rte_device *dev);
+static int dsa_probe_device(struct rte_driver *drv, struct rte_device *dev);
 static enum rte_iova_mode dsa_get_iommu_class(void);
 static int dsa_addr_parse(const char *name, void *addr);
 
-/** List of devices */
-TAILQ_HEAD(dsa_device_list, rte_dsa_device);
-
-/**
- * Structure describing the DSA bus
- */
-struct dsa_bus {
-	struct rte_bus bus;               /**< Inherit the generic class */
-	struct rte_driver driver;         /**< Driver struct for devices to point to */
-	struct dsa_device_list device_list;  /**< List of PCI devices */
+struct rte_bus dsa_bus = {
+	.scan = dsa_scan,
+	.probe = rte_bus_generic_probe,
+	.match = dsa_match,
+	.probe_device = dsa_probe_device,
+	.find_device = rte_bus_generic_find_device,
+	.get_iommu_class = dsa_get_iommu_class,
+	.parse = dsa_addr_parse,
 };
 
-struct dsa_bus dsa_bus = {
-	.bus = {
-		.scan = dsa_scan,
-		.probe = dsa_probe,
-		.find_device = dsa_find_device,
-		.get_iommu_class = dsa_get_iommu_class,
-		.parse = dsa_addr_parse,
-	},
-	.driver = {
-		.name = "dmadev_idxd"
-	},
-	.device_list = TAILQ_HEAD_INITIALIZER(dsa_bus.device_list),
+struct rte_driver dsa_driver = {
+	.name = "dmadev_idxd",
 };
 
 static inline const char *
@@ -133,7 +118,7 @@ idxd_bus_mmap_wq(struct rte_dsa_device *dev)
 }
 
 static int
-read_wq_string(struct rte_dsa_device *dev, const char *filename,
+read_wq_string(const struct rte_dsa_device *dev, const char *filename,
 		char *value, size_t valuelen)
 {
 	char sysfs_node[PATH_MAX];
@@ -215,50 +200,41 @@ read_device_int(struct rte_dsa_device *dev, const char *filename,
 }
 
 static int
-idxd_probe_dsa(struct rte_dsa_device *dev)
+dsa_probe_device(__rte_unused struct rte_driver *drv, struct rte_device *dev)
 {
+	struct rte_dsa_device *dsa_dev = RTE_BUS_DEVICE(dev, *dsa_dev);
 	struct idxd_dmadev idxd = {0};
 	int ret = 0;
 
 	IDXD_PMD_INFO("Probing device %s on numa node %d",
-			dev->wq_name, dev->device.numa_node);
-	if (read_wq_int(dev, "size", &ret) < 0)
+			dsa_dev->wq_name, dsa_dev->device.numa_node);
+	if (read_wq_int(dsa_dev, "size", &ret) < 0)
 		return -1;
 	idxd.max_batches = ret;
-	if (read_wq_int(dev, "max_batch_size", &ret) < 0)
+	if (read_wq_int(dsa_dev, "max_batch_size", &ret) < 0)
 		return -1;
 	idxd.max_batch_size = ret;
-	idxd.qid = dev->addr.wq_id;
-	idxd.u.bus.dsa_id = dev->addr.device_id;
+	idxd.qid = dsa_dev->addr.wq_id;
+	idxd.u.bus.dsa_id = dsa_dev->addr.device_id;
 	idxd.sva_support = 1;
 
-	idxd.portal = idxd_bus_mmap_wq(dev);
+	idxd.portal = idxd_bus_mmap_wq(dsa_dev);
 	if (idxd.portal == NULL) {
 		IDXD_PMD_ERR("WQ mmap failed");
 		return -ENOENT;
 	}
 
-	ret = idxd_dmadev_create(dev->wq_name, &dev->device, &idxd, &idxd_bus_ops);
+	ret = idxd_dmadev_create(dsa_dev->wq_name, dev, &idxd, &idxd_bus_ops);
 	if (ret) {
-		IDXD_PMD_ERR("Failed to create dmadev %s", dev->wq_name);
+		IDXD_PMD_ERR("Failed to create dmadev %s", dsa_dev->wq_name);
 		return ret;
 	}
 
 	return 0;
 }
 
-static int search_devargs(const char *name)
-{
-	struct rte_devargs *devargs;
-	RTE_EAL_DEVARGS_FOREACH(dsa_bus.bus.name, devargs) {
-		if (strcmp(devargs->name, name) == 0)
-			return 1;
-	}
-	return 0;
-}
-
 static int
-is_for_this_process_use(struct rte_dsa_device *dev, const char *name)
+is_for_this_process_use(const char *name)
 {
 	char prefix[256];
 	int retval = 0;
@@ -273,38 +249,23 @@ is_for_this_process_use(struct rte_dsa_device *dev, const char *name)
 	if (strncmp(name, prefix, prefixlen) == 0 && name[prefixlen] == '_')
 		retval = 1;
 
-	if (retval && dsa_bus.bus.conf.scan_mode != RTE_BUS_SCAN_UNDEFINED) {
-		if (dsa_bus.bus.conf.scan_mode == RTE_BUS_SCAN_ALLOWLIST)
-			retval = search_devargs(dev->device.name);
-		else
-			retval = !search_devargs(dev->device.name);
-	}
-
 	return retval;
 }
 
-static int
-dsa_probe(void)
+static bool dsa_match(const struct rte_driver *drv, const struct rte_device *dev)
 {
-	struct rte_dsa_device *dev;
+	const struct rte_dsa_device *dsa_dev = RTE_BUS_DEVICE(dev, *dsa_dev);
 
-	TAILQ_FOREACH(dev, &dsa_bus.device_list, next) {
+	if (drv == &dsa_driver) {
 		char type[64], name[64];
 
-		if (read_wq_string(dev, "type", type, sizeof(type)) < 0 ||
-				read_wq_string(dev, "name", name, sizeof(name)) < 0)
-			continue;
-
-		if (strncmp(type, "user", 4) == 0 &&
-				is_for_this_process_use(dev, name)) {
-			dev->device.driver = &dsa_bus.driver;
-			idxd_probe_dsa(dev);
-			continue;
+		if (read_wq_string(dsa_dev, "type", type, sizeof(type)) >= 0 &&
+				read_wq_string(dsa_dev, "name", name, sizeof(name)) >= 0) {
+			return strncmp(type, "user", 4) == 0 && is_for_this_process_use(name);
 		}
-		IDXD_PMD_DEBUG("WQ '%s', not allocated to DPDK", dev->wq_name);
 	}
 
-	return 0;
+	return false;
 }
 
 static int
@@ -336,7 +297,7 @@ dsa_scan(void)
 		}
 		IDXD_PMD_DEBUG("%s(): found %s/%s", __func__, path, wq->d_name);
 
-		dev = malloc(sizeof(*dev));
+		dev = calloc(1, sizeof(*dev));
 		if (dev == NULL) {
 			closedir(dev_dir);
 			return -ENOMEM;
@@ -346,9 +307,8 @@ dsa_scan(void)
 			free(dev);
 			continue;
 		}
-		dev->device.bus = &dsa_bus.bus;
 		strlcpy(dev->wq_name, wq->d_name, sizeof(dev->wq_name));
-		TAILQ_INSERT_TAIL(&dsa_bus.device_list, dev, next);
+		rte_bus_add_device(&dsa_bus, &dev->device);
 		devcount++;
 
 		read_device_int(dev, "numa_node", &numa_node);
@@ -358,25 +318,6 @@ dsa_scan(void)
 
 	closedir(dev_dir);
 	return 0;
-}
-
-static struct rte_device *
-dsa_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
-			 const void *data)
-{
-	struct rte_dsa_device *dev = TAILQ_FIRST(&dsa_bus.device_list);
-
-	/* the rte_device struct must be at start of dsa structure */
-	RTE_BUILD_BUG_ON(offsetof(struct rte_dsa_device, device) != 0);
-
-	if (start != NULL) /* jump to start point if given */
-		dev = TAILQ_NEXT((const struct rte_dsa_device *)start, next);
-	while (dev != NULL) {
-		if (cmp(&dev->device, data) == 0)
-			return &dev->device;
-		dev = TAILQ_NEXT(dev, next);
-	}
-	return NULL;
 }
 
 static enum rte_iova_mode
@@ -405,4 +346,8 @@ dsa_addr_parse(const char *name, void *addr)
 	return 0;
 }
 
-RTE_REGISTER_BUS(dsa, dsa_bus.bus);
+RTE_REGISTER_BUS(dsa, dsa_bus);
+RTE_INIT(dsa_bus_init)
+{
+	rte_bus_add_driver(&dsa_bus, &dsa_driver);
+}

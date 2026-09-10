@@ -9,7 +9,7 @@ The application provides the ability to test insertion rate of specific
 rte_flow rule, by stressing it to the NIC, and calculates the insertion
 and deletion rates.
 
-The application allows to configure which rule to apply through several
+The application allows configuring which rule to apply through several
 options of the command line.
 
 After that the application will start producing rules with same pattern
@@ -44,8 +44,8 @@ Running the Application
 EAL Command-line Options
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-Please refer to :doc:`EAL parameters (Linux) <../linux_gsg/linux_eal_parameters>`
-or :doc:`EAL parameters (FreeBSD) <../freebsd_gsg/freebsd_eal_parameters>` for
+Please refer to :doc:`EAL parameters (Linux) </linux_gsg/linux_eal_parameters>`
+or :doc:`EAL parameters (FreeBSD) </freebsd_gsg/freebsd_eal_parameters>` for
 a list of available EAL command-line options.
 
 

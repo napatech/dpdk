@@ -289,7 +289,7 @@ ixgbe_shaper_profile_add(struct rte_eth_dev *dev,
 	if (!shaper_profile)
 		return -ENOMEM;
 	shaper_profile->shaper_profile_id = shaper_profile_id;
-	rte_memcpy(&shaper_profile->profile, profile,
+	memcpy(&shaper_profile->profile, profile,
 			 sizeof(struct rte_tm_shaper_params));
 	TAILQ_INSERT_TAIL(&tm_conf->shaper_profile_list,
 			  shaper_profile, node);
@@ -365,7 +365,7 @@ ixgbe_queue_base_nb_get(struct rte_eth_dev *dev, uint16_t tc_node_no,
 			uint16_t *base, uint16_t *nb)
 {
 	uint8_t nb_tcs = ixgbe_tc_nb_get(dev);
-	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_pci_device *pci_dev = RTE_CLASS_TO_BUS_DEVICE(dev, *pci_dev);
 	uint16_t vf_num = pci_dev->max_vfs;
 
 	*base = 0;
@@ -637,7 +637,7 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 		tm_node->no = 0;
 		tm_node->parent = NULL;
 		tm_node->shaper_profile = shaper_profile;
-		rte_memcpy(&tm_node->params, params,
+		memcpy(&tm_node->params, params,
 				 sizeof(struct rte_tm_node_params));
 		tm_conf->root = tm_node;
 
@@ -718,7 +718,7 @@ ixgbe_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	tm_node->reference_count = 0;
 	tm_node->parent = parent_node;
 	tm_node->shaper_profile = shaper_profile;
-	rte_memcpy(&tm_node->params, params,
+	memcpy(&tm_node->params, params,
 			 sizeof(struct rte_tm_node_params));
 	if (parent_node_type == IXGBE_TM_NODE_TYPE_PORT) {
 		tm_node->no = parent_node->reference_count;

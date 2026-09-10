@@ -171,7 +171,8 @@ mlx5_os_capabilities_prepare(struct mlx5_dev_ctx_shared *sh)
 	}
 	memset(&sh->dev_cap, 0, sizeof(struct mlx5_dev_cap));
 	if (mlx5_dev_is_pci(cdev->dev))
-		sh->dev_cap.vf = mlx5_dev_is_vf_pci(RTE_DEV_TO_PCI(cdev->dev));
+		sh->dev_cap.vf = mlx5_dev_is_vf_pci(RTE_BUS_DEVICE(cdev->dev,
+			struct rte_pci_device));
 	else
 		sh->dev_cap.sf = 1;
 	sh->dev_cap.max_qp_wr = attr_ex.orig_attr.max_qp_wr;
@@ -377,6 +378,7 @@ mlx5_os_capabilities_prepare(struct mlx5_dev_ctx_shared *sh)
 					hca_attr->scatter_fcs_w_decap_disable;
 	sh->dev_cap.rq_delay_drop_en = hca_attr->rq_delay_drop;
 	mlx5_rt_timestamp_config(sh, hca_attr);
+	sh->dev_cap.esw_info.vhca_id = hca_attr->vhca_id;
 #ifdef HAVE_IBV_DEVICE_ATTR_ESW_MGR_REG_C0
 	if (dv_attr.comp_mask & MLX5DV_CONTEXT_MASK_REG_C0) {
 		sh->dev_cap.esw_info.regc_value = dv_attr.reg_c0.value;
@@ -386,6 +388,7 @@ mlx5_os_capabilities_prepare(struct mlx5_dev_ctx_shared *sh)
 	sh->dev_cap.esw_info.regc_value = 0;
 	sh->dev_cap.esw_info.regc_mask = 0;
 #endif
+	sh->dev_cap.esw_info.is_set = 1;
 	return 0;
 }
 
@@ -1186,7 +1189,7 @@ representor_match_port(const struct mlx5_dev_spawn_data *spawn,
 
 		/* Uplink ports should not be matched against representor_ports. */
 		if (spawn->info.name_type == MLX5_PHYS_PORT_NAME_TYPE_UPLINK)
-			return false;
+			continue;
 
 		for (uint16_t f = 0; f < eth_da->nb_representor_ports; ++f) {
 			uint16_t port_num = eth_da->representor_ports[f];
@@ -1524,6 +1527,8 @@ err_secondary:
 			goto error;
 		}
 	}
+	if (vport_info.query_flags & MLX5_PORT_QUERY_VPORT_VHCA_ID)
+		priv->vport_vhca_id = vport_info.vport_vhca_id;
 	if (vport_info.query_flags & MLX5_PORT_QUERY_VPORT) {
 		priv->vport_id = vport_info.vport_id;
 	} else if (spawn->pf_bond >= 0 && sh->esw_mode) {
@@ -1673,9 +1678,13 @@ err_secondary:
 		err = ENOMEM;
 		goto error;
 	}
+	priv->port_info.type = spawn->info.name_type;
+	priv->port_info.ctrl_num = spawn->info.ctrl_num;
+	priv->port_info.pf_num = spawn->info.pf_num;
+	priv->port_info.port_num = spawn->info.port_name;
 	if (priv->representor) {
 		eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
-		eth_dev->data->representor_id = priv->representor_id;
+		eth_dev->data->representor_id = eth_dev->data->port_id;
 		MLX5_ETH_FOREACH_DEV(port_id, dpdk_dev) {
 			struct mlx5_priv *opriv =
 				rte_eth_devices[port_id].data->dev_private;
@@ -1862,7 +1871,9 @@ err_secondary:
 		 *   3. with unsupported FW
 		 *   4. all representors in HWS
 		 */
-		priv->unified_fdb_en = !!priv->master && sh->cdev->config.hca_attr.fdb_unified_en;
+		priv->unified_fdb_en = sh->cdev->config.hca_attr.fdb_unified_en &&
+				       priv->master &&
+				       priv->vport_meta_mask != 0;
 		/* Jump FDB Rx works only with unified FDB enabled. */
 		if (priv->unified_fdb_en)
 			priv->jump_fdb_rx_en = sh->cdev->config.hca_attr.jump_fdb_rx_en;
@@ -1870,32 +1881,10 @@ err_secondary:
 			eth_dev->data->port_id,
 			priv->unified_fdb_en ? "is" : "isn't",
 			priv->jump_fdb_rx_en ? "is" : "isn't");
-		if (priv->sh->config.dv_esw_en) {
-			uint32_t usable_bits;
-			uint32_t required_bits;
-
-			if (priv->sh->dv_regc0_mask == UINT32_MAX) {
-				DRV_LOG(ERR, "E-Switch port metadata is required when using HWS "
-					     "but it is disabled (configure it through devlink)");
-				err = ENOTSUP;
-				goto error;
-			}
-			if (priv->sh->dv_regc0_mask == 0) {
-				DRV_LOG(ERR, "E-Switch with HWS is not supported "
-					     "(no available bits in reg_c[0])");
-				err = ENOTSUP;
-				goto error;
-			}
-			usable_bits = rte_popcount32(priv->sh->dv_regc0_mask);
-			required_bits = rte_popcount32(priv->vport_meta_mask);
-			if (usable_bits < required_bits) {
-				DRV_LOG(ERR, "Not enough bits available in reg_c[0] to provide "
-					     "representor matching.");
-				err = ENOTSUP;
-				goto error;
-			}
-		}
-		if (priv->vport_meta_mask)
+		/* Without vport metadata, PMD must rely on source_vport match. */
+		if (priv->sh->config.dv_esw_en && priv->vport_meta_mask == 0)
+			priv->vport_match = 1;
+		if (priv->sh->config.dv_esw_en)
 			mlx5_flow_hw_set_port_info(eth_dev);
 		if (priv->sh->config.dv_esw_en &&
 		    priv->sh->config.dv_xmeta_en != MLX5_XMETA_MODE_LEGACY &&
@@ -2504,7 +2493,7 @@ mlx5_os_pci_probe_pf(struct mlx5_common_device *cdev,
 	 *  >= 0 - MPESW device. Value is the port index of the MPESW owner.
 	 */
 	int mpesw = MLX5_MPESW_PORT_INVALID;
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(cdev->dev);
+	struct rte_pci_device *pci_dev = RTE_BUS_DEVICE(cdev->dev, *pci_dev);
 	struct mlx5_dev_spawn_data *list = NULL;
 	struct rte_eth_devargs eth_da = *req_eth_da;
 	struct rte_pci_addr owner_pci = pci_dev->addr; /* Owner PF. */
@@ -3067,7 +3056,7 @@ static int
 mlx5_os_pci_probe(struct mlx5_common_device *cdev,
 		  struct mlx5_kvargs_ctrl *mkvlist)
 {
-	struct rte_pci_device *pci_dev = RTE_DEV_TO_PCI(cdev->dev);
+	struct rte_pci_device *pci_dev = RTE_BUS_DEVICE(cdev->dev, *pci_dev);
 	struct rte_eth_devargs eth_da = { .nb_ports = 0 };
 	int ret = 0;
 	uint16_t p;
@@ -3109,7 +3098,7 @@ mlx5_os_auxiliary_probe(struct mlx5_common_device *cdev,
 		.mpesw_port = MLX5_MPESW_PORT_INVALID,
 	};
 	struct rte_device *dev = cdev->dev;
-	struct rte_auxiliary_device *adev = RTE_DEV_TO_AUXILIARY(dev);
+	struct rte_auxiliary_device *adev = RTE_BUS_DEVICE(dev, *adev);
 	struct rte_eth_dev *eth_dev;
 	int ret = 0;
 

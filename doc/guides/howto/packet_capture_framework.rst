@@ -19,16 +19,16 @@ There are two sample applications: ``dpdk-dumpcap`` and older ``dpdk-pdump``.
 Introduction
 ------------
 
-The :doc:`librte_pdump <../prog_guide/pdump_lib>` library provides the API
+The :doc:`librte_pdump </prog_guide/pdump_lib>` library provides the API
 required to allow users to initialize the packet capture framework
 and to enable or disable packet capture.
 The library works on a multi-process communication model
 and its usage is recommended for debugging purposes.
 
-The :doc:`librte_pcapng <../prog_guide/pcapng_lib>` library provides the API
+The :doc:`librte_pcapng </prog_guide/pcapng_lib>` library provides the API
 to format packets and write them to a file in Pcapng format.
 
-The :doc:`dpdk-dumpcap <../tools/dumpcap>` is a tool that captures packets in
+The :doc:`/tools/dumpcap` is a tool that captures packets in
 like Wireshark dumpcap does for Linux.
 It runs as a DPDK secondary process and captures packets
 from one or more interfaces and writes them to a file in Pcapng format.
@@ -70,10 +70,9 @@ Test Environment
 ----------------
 
 The overview of using the Packet Capture Framework and the ``dpdk-dumpcap`` utility
-for packet capturing on the DPDK port in
-:numref:`figure_packet_capture_framework`.
+for packet capturing on the DPDK port in :numref:`packet_capture_framework_figure_overview`.
 
-.. _figure_packet_capture_framework:
+.. _packet_capture_framework_figure_overview:
 
 .. figure:: img/packet_capture_framework.*
 
@@ -84,7 +83,7 @@ Running the Application
 -----------------------
 
 The following steps demonstrate how to run the ``dpdk-dumpcap`` tool to capture
-Rx side packets on dpdk_port0 in :numref:`figure_packet_capture_framework` and
+Rx side packets on dpdk_port0 in :numref:`packet_capture_framework_figure_overview` and
 inspect them using ``tcpdump``.
 
 #. Launch testpmd as the primary application::

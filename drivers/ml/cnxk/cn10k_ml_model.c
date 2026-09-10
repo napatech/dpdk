@@ -33,6 +33,10 @@ cn10k_ml_io_type_map(uint8_t type)
 		return RTE_ML_IO_TYPE_FP16;
 	case 8:
 		return RTE_ML_IO_TYPE_FP32;
+	case 9:
+		return RTE_ML_IO_TYPE_INT64;
+	case 10:
+		return RTE_ML_IO_TYPE_UINT64;
 	}
 
 	return RTE_ML_IO_TYPE_UNKNOWN;
@@ -725,7 +729,7 @@ int
 cn10k_ml_model_get_layer_id(struct cnxk_ml_model *model, const char *layer_name, uint16_t *layer_id)
 {
 	if (model->type == ML_CNXK_MODEL_TYPE_TVM)
-		return mvtvm_ml_model_get_layer_id(model, layer_name, layer_id);
+		return tvmrt_ml_model_get_layer_id(model, layer_name, layer_id);
 
 	*layer_id = 0;
 

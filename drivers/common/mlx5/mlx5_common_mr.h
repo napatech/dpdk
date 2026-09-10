@@ -21,6 +21,8 @@
 #include "mlx5_common_mp.h"
 #include "mlx5_common_defs.h"
 
+struct rte_device;
+
 /* mlx5 PMD MR struct. */
 struct mlx5_pmd_mr {
 	uint32_t	     lkey;
@@ -29,13 +31,6 @@ struct mlx5_pmd_mr {
 	void		     *obj;  /* verbs mr object or devx umem object. */
 	struct mlx5_devx_obj *mkey; /* devx mkey object. */
 };
-
-/**
- * mr operations typedef
- */
-typedef int (*mlx5_reg_mr_t)(void *pd, void *addr, size_t length,
-			     struct mlx5_pmd_mr *pmd_mr);
-typedef void (*mlx5_dereg_mr_t)(struct mlx5_pmd_mr *pmd_mr);
 
 /* Memory Region object. */
 struct mlx5_mr {
@@ -86,8 +81,6 @@ struct __rte_packed_begin mlx5_mr_share_cache {
 	struct mlx5_mr_list mr_list; /* Registered MR list. */
 	struct mlx5_mr_list mr_free_list; /* Freed MR list. */
 	struct mlx5_mempool_reg_list mempool_reg_list; /* Mempool database. */
-	mlx5_reg_mr_t reg_mr_cb; /* Callback to reg_mr func */
-	mlx5_dereg_mr_t dereg_mr_cb; /* Callback to dereg_mr func */
 } __rte_packed_end;
 
 /* Multi-Packet RQ buffer header. */
@@ -231,9 +224,8 @@ struct mlx5_mr *
 mlx5_mr_lookup_list(struct mlx5_mr_share_cache *share_cache,
 		    struct mr_cache_entry *entry, uintptr_t addr);
 struct mlx5_mr *
-mlx5_create_mr_ext(void *pd, uintptr_t addr, size_t len, int socket_id,
-		   mlx5_reg_mr_t reg_mr_cb);
-void mlx5_mr_free(struct mlx5_mr *mr, mlx5_dereg_mr_t dereg_mr_cb);
+mlx5_create_mr_ext(void *pd, uintptr_t addr, size_t len, int socket_id);
+void mlx5_mr_free(struct mlx5_mr *mr);
 __rte_internal
 uint32_t
 mlx5_mr_create(struct mlx5_common_device *cdev,
@@ -244,19 +236,20 @@ __rte_internal
 uint32_t
 mlx5_mr_addr2mr_bh(struct mlx5_mr_ctrl *mr_ctrl, uintptr_t addr);
 
-/* mlx5_common_verbs.c */
-
 __rte_internal
 int
-mlx5_common_verbs_reg_mr(void *pd, void *addr, size_t length,
-			 struct mlx5_pmd_mr *pmd_mr);
+mlx5_os_reg_mr(void *pd, void *addr, size_t length,
+		struct mlx5_pmd_mr *pmd_mr);
 __rte_internal
 void
-mlx5_common_verbs_dereg_mr(struct mlx5_pmd_mr *pmd_mr);
+mlx5_os_dereg_mr(struct mlx5_pmd_mr *pmd_mr);
 
 __rte_internal
+struct mlx5_pmd_mr *
+mlx5_os_alloc_null_mr(struct rte_device *dev, void *pd);
+__rte_internal
 void
-mlx5_os_set_reg_mr_cb(mlx5_reg_mr_t *reg_mr_cb, mlx5_dereg_mr_t *dereg_mr_cb);
+mlx5_os_free_null_mr(struct mlx5_pmd_mr *null_mr);
 
 __rte_internal
 int

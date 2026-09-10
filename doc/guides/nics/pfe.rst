@@ -2,7 +2,7 @@
    Copyright 2019 NXP
 
 PFE Poll Mode Driver
-======================
+====================
 
 The PFE NIC PMD (**librte_net_pfe**) provides poll mode driver
 support for the inbuilt NIC found in the **NXP LS1012** SoC.
@@ -156,9 +156,7 @@ separately:
 Driver compilation and testing
 ------------------------------
 
-Follow instructions available in the document
-:ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
-to launch **testpmd**
+Follow instructions available in the document :doc:`build_and_test` to launch **testpmd**
 
 Additionally, PFE driver needs `--vdev` as an input with value `net_pfe`
 to execute DPDK application. There is an optional parameter `intf` available

@@ -346,8 +346,8 @@ struct rte_port {
 	uint16_t		parse_tunnel:1; /**< Parse internal headers */
 	uint16_t                tso_segsz;  /**< Segmentation offload MSS for non-tunneled packets. */
 	uint16_t                tunnel_tso_segsz; /**< Segmentation offload MSS for tunneled pkts. */
-	uint16_t                tx_vlan_id;/**< The tag ID */
-	uint16_t                tx_vlan_id_outer;/**< The outer tag ID */
+	uint16_t                tx_vlan_tci;/**< The TCI */
+	uint16_t                tx_vlan_tci_outer;/**< The outer TCI */
 	volatile uint16_t        port_status;    /**< port started or not */
 	uint8_t                 need_setup;     /**< port just attached */
 	uint8_t                 need_reconfig;  /**< need reconfiguring port or not */
@@ -873,6 +873,17 @@ current_fwd_lcore(void)
 void
 parse_fwd_portlist(const char *port);
 
+/* Format a socket id for display, SOCKET_ID_ANY as "any". */
+static inline const char *
+socket_id_str(unsigned int socket_id, char *buf, size_t size)
+{
+	if (socket_id == (unsigned int)SOCKET_ID_ANY)
+		snprintf(buf, size, "any");
+	else
+		snprintf(buf, size, "%u", socket_id);
+	return buf;
+}
+
 /* Mbuf Pools */
 static inline void
 mbuf_poolname_build(unsigned int sock_id, char *mp_name,
@@ -893,6 +904,22 @@ mbuf_pool_find(unsigned int sock_id, uint16_t idx)
 
 	mbuf_poolname_build(sock_id, pool_name, sizeof(pool_name), idx);
 	return rte_mempool_lookup((const char *)pool_name);
+}
+
+static inline struct rte_mempool *
+mbuf_pool_find_first(unsigned int sock_id)
+{
+	struct rte_mempool *mp;
+	uint16_t idx;
+
+	for (idx = 0; idx < mbuf_data_size_n; idx++) {
+		if (mbuf_data_size[idx] == 0) /* no mempool with this index */
+			continue;
+		mp = mbuf_pool_find(sock_id, idx);
+		if (mp != NULL)
+			return mp;
+	}
+	return NULL;
 }
 
 static inline uint16_t
@@ -1085,7 +1112,7 @@ int port_flow_update(portid_t port_id, uint32_t rule,
 int port_flow_flush(portid_t port_id);
 int port_flow_dump(portid_t port_id, bool dump_all,
 			uint64_t rule, const char *file_name,
-			bool is_user_id);
+			bool is_user_id, bool file_mode);
 int port_flow_query(portid_t port_id, uint64_t rule,
 		    const struct rte_flow_action *action, bool is_user_id);
 void port_flow_list(portid_t port_id, uint32_t n, const uint32_t *group);
@@ -1126,8 +1153,8 @@ int rx_vft_set(portid_t port_id, uint16_t vlan_id, int on);
 void vlan_extend_set(portid_t port_id, int on);
 void vlan_tpid_set(portid_t port_id, enum rte_vlan_type vlan_type,
 		   uint16_t tp_id);
-void tx_vlan_set(portid_t port_id, uint16_t vlan_id);
-void tx_qinq_set(portid_t port_id, uint16_t vlan_id, uint16_t vlan_id_outer);
+void tx_vlan_set(portid_t port_id, uint16_t vlan_tci);
+void tx_qinq_set(portid_t port_id, uint16_t vlan_tci, uint16_t vlan_tci_outer);
 void tx_vlan_reset(portid_t port_id);
 void tx_vlan_pvid_set(portid_t port_id, uint16_t vlan_id, int on);
 

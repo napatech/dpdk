@@ -36,8 +36,6 @@ the kernel driver while a DPDK application can receive specific traffic
 bypassing the Linux kernel by using drivers like VFIO or the DPDK ``igb_uio``
 module.
 
-.. _figure_flow_bifurcation_overview:
-
 .. figure:: img/flow_bifurcation_overview.*
 
    Flow Bifurcation Overview
@@ -46,7 +44,7 @@ module.
 Using Flow Bifurcation on NVIDIA ConnectX
 -----------------------------------------
 
-The NVIDIA devices are :ref:`natively bifurcated <bifurcated_driver>`,
+The NVIDIA devices are :ref:`natively bifurcated <linux_gsg_bifurcated_driver>`,
 so there is no need to split into SR-IOV PF/VF
 in order to get the flow bifurcation mechanism.
 The full device is already shared with the kernel driver.
@@ -58,7 +56,7 @@ the :ref:`flow_isolated_mode` must be configured,
 so there is no default rule routing traffic to userspace.
 
 There is no specific instructions to follow.
-The recommended reading is the :doc:`../prog_guide/ethdev/flow_offload` guide.
+The recommended reading is the :doc:`/prog_guide/ethdev/flow_offload` guide.
 Below is an example of testpmd commands
 for receiving VXLAN 42 in 4 queues of the DPDK port 0,
 while all other packets go to the kernel:

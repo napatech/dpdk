@@ -491,7 +491,7 @@ mlx5_dev_to_pci_str(const struct rte_device *dev, char *addr, size_t size)
 		return 0;
 	}
 #ifdef RTE_EXEC_ENV_LINUX
-	return mlx5_auxiliary_get_pci_str(RTE_DEV_TO_AUXILIARY_CONST(dev),
+	return mlx5_auxiliary_get_pci_str(RTE_BUS_DEVICE(dev, const struct rte_auxiliary_device),
 			addr, size);
 #else
 	rte_errno = ENODEV;
@@ -1135,7 +1135,7 @@ mlx5_common_dev_dma_map(struct rte_device *rte_dev, void *addr,
 		return -1;
 	}
 	mr = mlx5_create_mr_ext(dev->pd, (uintptr_t)addr, len,
-				SOCKET_ID_ANY, dev->mr_scache.reg_mr_cb);
+				SOCKET_ID_ANY);
 	if (!mr) {
 		DRV_LOG(WARNING, "Device %s unable to DMA map", rte_dev->name);
 		rte_errno = EINVAL;
@@ -1165,7 +1165,7 @@ try_insert:
 		ret = mlx5_mr_expand_cache(&dev->mr_scache, size,
 					   rte_dev->numa_node);
 		if (ret < 0) {
-			mlx5_mr_free(mr, dev->mr_scache.dereg_mr_cb);
+			mlx5_mr_free(mr);
 			rte_errno = ret;
 			return -1;
 		}
@@ -1221,7 +1221,7 @@ mlx5_common_dev_dma_unmap(struct rte_device *rte_dev, void *addr,
 	}
 	LIST_REMOVE(mr, mr);
 	DRV_LOG(DEBUG, "MR(%p) is removed from list.", (void *)mr);
-	mlx5_mr_free(mr, dev->mr_scache.dereg_mr_cb);
+	mlx5_mr_free(mr);
 	mlx5_mr_rebuild_cache(&dev->mr_scache);
 	/*
 	 * No explicit wmb is needed after updating dev_gen due to

@@ -25,6 +25,7 @@
 #include <rte_debug.h>
 #include <rte_interrupts.h>
 #include <dev_driver.h>
+#include <bus_driver.h>
 #include <rte_tailq.h>
 #include <rte_devargs.h>
 #include <rte_mbuf.h>
@@ -67,9 +68,6 @@ dpaa2_seqn(struct rte_mbuf *mbuf)
 
 struct rte_dpaa2_driver;
 
-#define RTE_DEV_TO_FSLMC_CONST(ptr) \
-	container_of(ptr, const struct rte_dpaa2_device, device)
-
 enum rte_dpaa2_dev_type {
 	/* Devices backed by DPDK driver */
 	DPAA2_ETH,	/**< DPNI type device*/
@@ -95,7 +93,6 @@ enum rte_dpaa2_dev_type {
  * A structure describing a DPAA2 device.
  */
 struct rte_dpaa2_device {
-	TAILQ_ENTRY(rte_dpaa2_device) next; /**< Next probed DPAA2 device. */
 	struct rte_device device;           /**< Inherit core device */
 	enum rte_dpaa2_dev_type dev_type;   /**< Device Type */
 	uint16_t object_id;                 /**< DPAA2 Object ID */
@@ -104,7 +101,6 @@ struct rte_dpaa2_device {
 	uint16_t ep_object_id;                 /**< Endpoint DPAA2 Object ID */
 	char ep_name[RTE_DEV_NAME_MAX_LEN];
 	struct rte_intr_handle *intr_handle; /**< Interrupt handle */
-	struct rte_dpaa2_driver *driver;    /**< Associated driver */
 	char name[FSLMC_OBJECT_MAX_LEN];    /**< DPAA2 Object name*/
 };
 
@@ -140,7 +136,6 @@ rte_fslmc_vfio_mem_dmaunmap(uint64_t iova, uint64_t size);
  * A structure describing a DPAA2 driver.
  */
 struct rte_dpaa2_driver {
-	TAILQ_ENTRY(rte_dpaa2_driver) next; /**< Next in list. */
 	struct rte_driver driver;           /**< Inherit core driver. */
 	uint32_t drv_flags;                 /**< Flags for controlling device.*/
 	enum rte_dpaa2_dev_type drv_type;   /**< Driver Type */
